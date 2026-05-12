@@ -15,7 +15,6 @@ const DEFAULT_OPENCLAW_BIN = "openclaw";
 const DEFAULT_CMO_AGENT_ID = "cmo";
 const DEFAULT_CMO_RUN_TIMEOUT_SECONDS = 900;
 const DEFAULT_CMO_CRON_RUN_TIMEOUT_MS = 180_000;
-const OPENCLAW_CRON_ONE_SHOT_AT = "+2m";
 const MAX_BODY_BYTES = 1_000_000;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -514,6 +513,10 @@ function pickOpenClawJobIdFromOutput(output, fallbackName) {
   return idMatch?.[1] ?? fallbackName;
 }
 
+function createNearFutureCronAt() {
+  return new Date(Date.now() + 2 * 60 * 1000).toISOString();
+}
+
 async function execOpenClaw(args, timeoutMs, phase) {
   const config = getConfig();
   const cwd = process.cwd();
@@ -550,11 +553,12 @@ async function runOpenClawCronBrief({ runId, rawPath, normalizedPath, workspace 
   const config = getConfig();
   const jobName = `cmo-dashboard-${runId}`;
   const prompt = buildCmoDashboardPrompt({ runId, rawPath, normalizedPath, workspace });
+  const scheduleAt = createNearFutureCronAt();
   const cronSpec = {
     name: jobName,
     oneShot: true,
     enabled: true,
-    at: OPENCLAW_CRON_ONE_SHOT_AT,
+    at: scheduleAt,
     agentId: config.cmoAgentId,
     sessionTarget: "isolated",
     payload: {
