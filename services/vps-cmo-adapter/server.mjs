@@ -15,6 +15,7 @@ const DEFAULT_OPENCLAW_BIN = "openclaw";
 const DEFAULT_CMO_AGENT_ID = "cmo";
 const DEFAULT_CMO_RUN_TIMEOUT_SECONDS = 900;
 const DEFAULT_CMO_CRON_RUN_TIMEOUT_MS = 180_000;
+const OPENCLAW_CRON_ONE_SHOT_AT = "+2m";
 const MAX_BODY_BYTES = 1_000_000;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -444,11 +445,24 @@ function buildCmoDashboardPrompt({ runId, rawPath, normalizedPath, workspace }) 
   ].join("\n");
 }
 
+function sanitizeCommandArgs(args) {
+  if (!Array.isArray(args)) {
+    return null;
+  }
+
+  return args.map((arg, index) => (args[index - 1] === "--message" ? "[omitted cmo prompt]" : arg));
+}
+
 function summarizeExecError(error) {
   return {
     message: error.message,
     code: error.code ?? null,
     signal: error.signal ?? null,
+    phase: error.openclaw?.phase ?? null,
+    command: error.openclaw?.command ?? null,
+    args: sanitizeCommandArgs(error.openclaw?.args),
+    cwd: error.openclaw?.cwd ?? null,
+    timeout_ms: error.openclaw?.timeoutMs ?? null,
     stdout: typeof error.stdout === "string" ? error.stdout.slice(0, 4000) : "",
     stderr: typeof error.stderr === "string" ? error.stderr.slice(0, 4000) : "",
   };
@@ -500,14 +514,29 @@ function pickOpenClawJobIdFromOutput(output, fallbackName) {
   return idMatch?.[1] ?? fallbackName;
 }
 
-async function execOpenClaw(args, timeoutMs) {
+async function execOpenClaw(args, timeoutMs, phase) {
   const config = getConfig();
-  const result = await execFileAsync(config.openclawBin, args, {
-    cwd: process.cwd(),
-    windowsHide: true,
-    timeout: timeoutMs,
-    maxBuffer: 1024 * 1024,
-  });
+  const cwd = process.cwd();
+  const command = config.openclawBin;
+  let result;
+
+  try {
+    result = await execFileAsync(command, args, {
+      cwd,
+      windowsHide: true,
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024,
+    });
+  } catch (error) {
+    error.openclaw = {
+      phase,
+      command,
+      args,
+      cwd,
+      timeoutMs,
+    };
+    throw error;
+  }
 
   return {
     args,
@@ -525,7 +554,7 @@ async function runOpenClawCronBrief({ runId, rawPath, normalizedPath, workspace 
     name: jobName,
     oneShot: true,
     enabled: true,
-    at: "2099-01-01T00:00:00Z",
+    at: OPENCLAW_CRON_ONE_SHOT_AT,
     agentId: config.cmoAgentId,
     sessionTarget: "isolated",
     payload: {
@@ -566,15 +595,17 @@ async function runOpenClawCronBrief({ runId, rawPath, normalizedPath, workspace 
       "--delete-after-run",
     ],
     config.cmoCronRunTimeoutMs,
+    "cron_add",
   );
   const jobId = pickOpenClawJobIdFromOutput(addResult.stdout, jobName);
-  const runResult = await execOpenClaw(["cron", "run", jobId], config.cmoCronRunTimeoutMs);
+  const runResult = await execOpenClaw(["cron", "run", jobId], config.cmoCronRunTimeoutMs, "cron_run");
 
   return {
     mode: "openclaw-cron",
     agent_id: config.cmoAgentId,
     job_id: jobId,
     job_name: jobName,
+    schedule_at: cronSpec.at,
     spec_path: specPath,
     add_stdout: addResult.stdout.slice(0, 4000),
     add_stderr: addResult.stderr.slice(0, 4000),
