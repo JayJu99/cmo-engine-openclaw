@@ -2,6 +2,7 @@ import {
   CMO_SCHEMA_VERSION,
   type CmoAction,
   type CmoAgent,
+  type CmoCampaign,
   type CmoPriority,
   type CmoReport,
   type CmoRun,
@@ -14,6 +15,7 @@ import {
 import {
   actions as fallbackActions,
   agents as fallbackAgents,
+  campaigns as fallbackCampaigns,
   reports as fallbackReports,
   signals as fallbackSignals,
   vaultItems as fallbackVault,
@@ -32,6 +34,26 @@ function stringValue(value: unknown, fallback: string): string {
 
 function numberValue(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : fallback;
+}
+
+function campaignProgressValue(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(6, value)) : fallback;
+}
+
+function stringListValue(value: unknown, fallback: string[]): string[] {
+  if (Array.isArray(value)) {
+    const values = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+    return values.length ? values : fallback;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    return value
+      .split(/\s{2,}|,\s*/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return fallback;
 }
 
 function priorityValue(value: unknown, fallback: CmoPriority): CmoPriority {
@@ -147,6 +169,32 @@ export function normalizeVault(value: unknown): CmoVaultItem[] {
   });
 }
 
+export function normalizeCampaigns(value: unknown): CmoCampaign[] {
+  const source = Array.isArray(value) && value.length ? value : fallbackCampaigns;
+  return source.map((item, index) => {
+    const record = isRecord(item) ? item : {};
+    const fallback = fallbackCampaigns[index % fallbackCampaigns.length];
+    const fallbackChannels = stringListValue(fallback.channels, ["Facebook"]);
+    const name = stringValue(record.name ?? record.title, fallback.name);
+    const ownerAgent = stringValue(record.owner_agent, `${fallback.owner} (${fallback.agent})`);
+
+    return withVersion({
+      id: stringValue(record.id, `campaign_${String(index + 1).padStart(3, "0")}`),
+      name,
+      title: stringValue(record.title, name),
+      channels: stringListValue(record.channels, fallbackChannels),
+      stage: stringValue(record.stage, fallback.stage),
+      owner_agent: ownerAgent,
+      status: statusValue(record.status, fallback.status as CmoStatus),
+      progress: campaignProgressValue(record.progress, fallback.progress),
+      last_updated: stringValue(record.last_updated ?? record.updated, fallback.updated),
+      summary: stringValue(record.summary, `${name} is moving through the ${fallback.stage.toLowerCase()} stage.`),
+      next_action: stringValue(record.next_action, "Review campaign progress and approve the next step"),
+      tone: toneValue(record.tone, fallback.tone as CmoTone),
+    });
+  });
+}
+
 export function normalizeRun(value: unknown): CmoRun {
   const record = isRecord(value) ? value : {};
   const createdAt = stringValue(record.created_at, new Date(0).toISOString());
@@ -160,6 +208,7 @@ export function normalizeRun(value: unknown): CmoRun {
     actions: normalizeActions(record.actions),
     signals: normalizeSignals(record.signals),
     agents: normalizeAgents(record.agents),
+    campaigns: normalizeCampaigns(record.campaigns),
     reports: normalizeReports(record.reports),
     vault: normalizeVault(record.vault),
   });
@@ -186,6 +235,10 @@ export function validateNormalizedRun(run: CmoRun): { valid: boolean; errors: st
 
   if (!Array.isArray(run.actions) || !Array.isArray(run.signals)) {
     errors.push("actions and signals must be arrays");
+  }
+
+  if (!Array.isArray(run.campaigns)) {
+    errors.push("campaigns must be an array");
   }
 
   return {

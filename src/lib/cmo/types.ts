@@ -88,6 +88,21 @@ export interface CmoVaultItem extends CmoVersioned {
   tone: CmoTone;
 }
 
+export interface CmoCampaign extends CmoVersioned {
+  id: string;
+  name: string;
+  title: string;
+  channels: string[];
+  stage: string;
+  owner_agent: string;
+  status: CmoStatus;
+  progress: number;
+  last_updated: string;
+  summary: string;
+  next_action: string;
+  tone: CmoTone;
+}
+
 export interface CmoRun extends CmoVersioned {
   run_id: string;
   created_at: string;
@@ -97,6 +112,7 @@ export interface CmoRun extends CmoVersioned {
   actions: CmoAction[];
   signals: CmoSignal[];
   agents: CmoAgent[];
+  campaigns: CmoCampaign[];
   reports: CmoReport[];
   vault: CmoVaultItem[];
 }

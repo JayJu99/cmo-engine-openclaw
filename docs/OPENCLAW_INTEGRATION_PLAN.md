@@ -52,6 +52,7 @@ Every CMO run should include:
 - `actions`
 - `signals`
 - `agents`
+- `campaigns`
 - `reports`
 - `vault`
 
@@ -84,6 +85,7 @@ Read routes:
 - `GET /api/cmo/actions`
 - `GET /api/cmo/signals`
 - `GET /api/cmo/agents`
+- `GET /api/cmo/campaigns`
 - `GET /api/cmo/reports`
 - `GET /api/cmo/vault`
 

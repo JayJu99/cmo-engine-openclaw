@@ -10,7 +10,7 @@ import { MiniProgress, Sparkline } from "@/components/dashboard/charts";
 import {
   actions as fallbackActions,
   agents as fallbackAgents,
-  campaigns,
+  campaigns as fallbackCampaigns,
   reports as fallbackReports,
   signals as fallbackSignals,
   vaultItems as fallbackVaultItems,
@@ -62,19 +62,67 @@ type UIVaultItem = {
   count: string;
   tone: string;
 };
+type UICampaign = {
+  name?: string;
+  title?: string;
+  channels: string[] | string;
+  stage: string;
+  owner?: string;
+  agent?: string;
+  owner_agent?: string;
+  status: string;
+  progress: number;
+  updated?: string;
+  last_updated?: string;
+  summary?: string;
+  next_action?: string;
+  tone: string;
+};
 type DashboardViewData = Partial<{
   actions: UIAction[];
   signals: UISignal[];
   agents: UIAgent[];
+  campaigns: UICampaign[];
   reports: UIReport[];
   vault: UIVaultItem[];
 }>;
+
+function splitOwnerAgent(campaign: UICampaign) {
+  if (campaign.owner && campaign.agent) {
+    return { owner: campaign.owner, agent: campaign.agent };
+  }
+
+  const match = campaign.owner_agent?.match(/^(.*?)\s*\((.*?)\)$/);
+
+  if (match) {
+    return { owner: match[1], agent: match[2] };
+  }
+
+  return {
+    owner: campaign.owner_agent ?? campaign.owner ?? "CMO Agent",
+    agent: campaign.agent ?? "CMO",
+  };
+}
+
+function normalizeUICampaign(campaign: UICampaign) {
+  const owner = splitOwnerAgent(campaign);
+
+  return {
+    ...campaign,
+    name: campaign.name ?? campaign.title ?? "Untitled Campaign",
+    channels: Array.isArray(campaign.channels) ? campaign.channels.join("  ") : campaign.channels,
+    owner: owner.owner,
+    agent: owner.agent,
+    updated: campaign.last_updated ?? campaign.updated ?? "Just now",
+  };
+}
 
 function resolveDashboardData(data?: DashboardViewData) {
   return {
     actions: data?.actions?.length ? data.actions : fallbackActions,
     signals: data?.signals?.length ? data.signals : fallbackSignals,
     agents: data?.agents?.length ? data.agents : fallbackAgents,
+    campaigns: data?.campaigns?.length ? data.campaigns.map(normalizeUICampaign) : fallbackCampaigns,
     reports: data?.reports?.length ? data.reports : fallbackReports,
     vault: data?.vault?.length ? data.vault : fallbackVaultItems,
   };
@@ -526,7 +574,7 @@ export function OverviewView({ data }: { data?: DashboardViewData }) {
         <Card className="p-8">
           <SectionTitle icon={<icons.Target />} title="Active Campaigns" color="green" />
           <div className="mt-7 grid gap-6 md:grid-cols-3">
-            {campaigns.slice(0, 3).map((campaign) => (
+            {dashboard.campaigns.slice(0, 3).map((campaign) => (
               <div key={campaign.name}>
                 <div className="flex items-center gap-4">
                   <CampaignMark name={campaign.name} color={campaign.tone as Tone} />
@@ -759,7 +807,7 @@ export function PipelineView({ data }: { data?: DashboardViewData }) {
             <MetricCard icon={<icons.Send />} label="Published This Week" value="8" delta="+33% vs last week" color="green" />
             <MetricCard icon={<icons.TrendingUp />} label="Completion Rate" value="76%" delta="+12% vs last week" />
           </div>
-          <CampaignTable />
+          <CampaignTable campaigns={dashboard.campaigns} />
         </div>
         <div className="min-w-0">
           <DetailPanel actions={dashboard.actions} signals={dashboard.signals} mode="pipeline" />
@@ -769,7 +817,7 @@ export function PipelineView({ data }: { data?: DashboardViewData }) {
   );
 }
 
-function CampaignTable() {
+function CampaignTable({ campaigns }: { campaigns: ReturnType<typeof resolveDashboardData>["campaigns"] }) {
   return (
     <Card className="overflow-hidden">
       <div className="grid grid-cols-[minmax(210px,1fr)_96px_130px_116px_132px_88px_24px] gap-3 border-b border-slate-100 bg-slate-50/80 px-5 py-4 text-xs font-semibold text-slate-500 max-xl:hidden">

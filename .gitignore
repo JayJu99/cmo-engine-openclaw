@@ -49,3 +49,6 @@ output/playwright/
 data/raw/
 data/runs/run_*.json
 !data/runs/run_seed_*.json
+
+# Local adapter runtime data
+.tmp/
