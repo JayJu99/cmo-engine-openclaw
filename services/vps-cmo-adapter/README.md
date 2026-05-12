@@ -8,7 +8,9 @@ The service serves normalized dashboard JSON only. It keeps the Windows dashboar
 
 `CMO_TRIGGER_MODE=mock` is the default. In mock mode, `POST /cmo/run-brief` writes mock raw JSON, a normalized run JSON file, `latest.json`, and `latest_successful.json` when the mock run is completed. This mode works on Windows and does not require the `openclaw` binary.
 
-`CMO_TRIGGER_MODE=openclaw-cron` enables the Phase 5A trigger scaffold for the VPS. In this mode, `POST /cmo/run-brief` creates a normalized `running` run, updates `latest.json`, writes trigger status metadata, and starts a local OpenClaw one-shot cron trigger for `agentId: "cmo"` with isolated session delivery mode `none`. The HTTP request returns the running run; Phase 5B will complete file polling, final validation, timeout promotion, and `latest_successful.json` updates after CMO writes the normalized JSON.
+`CMO_TRIGGER_MODE=openclaw-cron` enables the VPS OpenClaw cron trigger path. In this mode, `POST /cmo/run-brief` creates a normalized `running` run, updates `latest.json`, writes trigger status metadata, and starts a local OpenClaw one-shot cron trigger for `agentId: "cmo"` with isolated session delivery mode `none`. The HTTP request returns the running run.
+
+Phase 5B finalization now happens when `GET /cmo/runs/:runId` or `GET /cmo/latest` is read. If CMO has written `runs/{runId}.json` with `status: "completed"`, the adapter validates the dashboard contract, promotes the completed run to `latest.json`, updates `latest_successful.json`, and returns the completed run. If the run is still running, the adapter returns the running run until `CMO_RUN_TIMEOUT_SECONDS` is exceeded. Timed-out or invalid completed runs update `latest.json` but do not overwrite `latest_successful.json`.
 
 ## Run Locally
 
@@ -65,6 +67,25 @@ Authorization: Bearer <CMO_ADAPTER_API_KEY>
 - `GET /cmo/latest`
 - `GET /cmo/runs/:runId`
 - `POST /cmo/run-brief`
+
+`GET /cmo/latest` attempts finalization before responding. This covers the case where `latest.json` still contains the initial `running` state but `runs/{runId}.json` has already been replaced by completed CMO output.
+
+## OpenClaw Metadata Safety
+
+Public run JSON and API responses expose only safe OpenClaw metadata:
+
+- `mode`
+- `agent_id`
+- `job_id`
+- `job_name`
+- `schedule_at`
+- `openclaw_run_id`
+- `trigger_status`
+- `raw_markdown_path`
+- `normalized_json_path`
+- `spec_path`
+
+Full cron payloads, CMO prompts, stdout, and stderr are not written to public run JSON. Private CLI debug output is stored under `status/{runId}.debug.json` for VPS operators.
 
 ## Curl Examples
 

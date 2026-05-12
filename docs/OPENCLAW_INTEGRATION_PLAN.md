@@ -175,6 +175,7 @@ Rules:
 - Failed, timeout, or invalid runs may update `latest.json` because it represents the newest run state.
 - Failed, timeout, or invalid runs must not overwrite `latest_successful.json`.
 - Local JSON/mock mode should keep using `data/raw`, `data/runs`, `data/latest.json`, and `data/latest_successful.json`.
+- In OpenClaw cron mode, `GET /cmo/runs/:runId` and `GET /cmo/latest` finalize runs opportunistically. If `latest.json` still contains a `running` run but `runs/{runId}.json` has since become completed, the read request validates and promotes the completed run before responding.
 
 ## 7. Error Handling Strategy
 
@@ -265,6 +266,14 @@ Returns the normalized run JSON for a specific run from:
 /home/ju/.openclaw/workspace/data/cmo-dashboard/runs/{runId}.json
 ```
 
+In OpenClaw cron mode, this endpoint is also the finalization boundary:
+
+- Completed CMO-written JSON is validated against the dashboard contract.
+- Valid completed JSON is promoted to `latest.json` and `latest_successful.json`.
+- Running JSON is returned as running until `CMO_RUN_TIMEOUT_SECONDS` is exceeded.
+- Timed-out runs are marked `timeout`, promoted to `latest.json`, and do not update `latest_successful.json`.
+- Invalid completed JSON returns a `partial` run with validation error metadata and does not update `latest_successful.json`.
+
 ### `GET /cmo/latest`
 
 Returns the newest normalized run from:
@@ -274,6 +283,8 @@ Returns the newest normalized run from:
 ```
 
 Overview-style dashboard views may request or locally prefer `latest_successful.json` semantics when failed or partial newest runs should not replace stable completed results.
+
+This endpoint attempts the same OpenClaw cron finalization as `GET /cmo/runs/:runId` before responding. This prevents stale `running` state from persisting in `latest.json` after CMO has already written a completed `runs/{runId}.json`.
 
 ### `GET /cmo/status`
 
@@ -408,15 +419,18 @@ Status: implemented as a VPS Adapter scaffold.
 
 ### Phase 5B: OpenClaw Output Polling And Validation
 
-Planned.
+Status: implemented for read-time finalization and safe metadata.
 
-- Poll for CMO-written raw markdown and normalized JSON after the cron trigger is dispatched.
-- Validate the final normalized run against the dashboard contract before serving it as completed.
-- Promote timed-out runs to `status: "timeout"`.
-- Handle partial CMO output as `status: "partial"` with useful sections preserved.
-- Update `/home/ju/.openclaw/workspace/data/cmo-dashboard/latest_successful.json` only after a completed valid run.
-- Add trigger/result fixtures from real OpenClaw runs.
-- Add adapter tests for failed, partial, timeout, and invalid normalized output.
+- Finalize CMO-written normalized JSON from `GET /cmo/runs/:runId`.
+- Make `GET /cmo/latest` attempt finalization when `latest.json` still points at a running run.
+- Validate completed output against the dashboard contract before serving it as completed.
+- Promote valid completed output to `latest.json` and `latest_successful.json`.
+- Promote timed-out runs to `status: "timeout"` and preserve the previous `latest_successful.json`.
+- Return invalid completed output as `status: "partial"` with validation error metadata and preserve the previous `latest_successful.json`.
+- Keep public OpenClaw metadata sanitized to `mode`, `agent_id`, `job_id`, `job_name`, `schedule_at`, `openclaw_run_id`, `trigger_status`, `raw_markdown_path`, `normalized_json_path`, and `spec_path`.
+- Preserve full CLI stdout/stderr only in private `status/{runId}.debug.json`.
+- Planned follow-up: add trigger/result fixtures from real OpenClaw runs.
+- Planned follow-up: add adapter tests for failed, partial, timeout, and invalid normalized output.
 
 ### Phase 6: Validation Hardening
 

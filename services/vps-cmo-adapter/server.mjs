@@ -16,6 +16,20 @@ const DEFAULT_CMO_AGENT_ID = "cmo";
 const DEFAULT_CMO_RUN_TIMEOUT_SECONDS = 900;
 const DEFAULT_CMO_CRON_RUN_TIMEOUT_MS = 180_000;
 const MAX_BODY_BYTES = 1_000_000;
+const SAFE_OPENCLAW_METADATA_KEYS = [
+  "mode",
+  "agent_id",
+  "job_id",
+  "job_name",
+  "schedule_at",
+  "openclaw_run_id",
+  "trigger_status",
+  "raw_markdown_path",
+  "normalized_json_path",
+  "spec_path",
+];
+const VALID_RUN_STATUSES = new Set(["completed", "running", "failed", "partial", "timeout", "mock"]);
+const FORBIDDEN_PUBLIC_KEYS = new Set(["runId", "createdAt", "succeeded", "vault_notes", "prompt", "add_stdout", "add_stderr", "run_stdout", "run_stderr"]);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -117,7 +131,8 @@ async function pathExists(filePath) {
 
 async function readJsonFile(filePath) {
   try {
-    return JSON.parse(await readFile(filePath, "utf8"));
+    const text = await readFile(filePath, "utf8");
+    return JSON.parse(text.replace(/^\uFEFF/, ""));
   } catch (error) {
     if (error && error.code === "ENOENT") {
       return null;
@@ -167,6 +182,241 @@ function versioned(payload = {}) {
   return {
     schema_version: getConfig().schemaVersion,
     ...payload,
+  };
+}
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function safeString(value, fallback) {
+  return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function pickFields(value, fields) {
+  const source = isRecord(value) ? value : {};
+  const output = {};
+
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(source, field)) {
+      output[field] = cloneJson(source[field]);
+    }
+  }
+
+  return output;
+}
+
+function sanitizeOpenClawMetadata(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const output = {};
+
+  for (const key of SAFE_OPENCLAW_METADATA_KEYS) {
+    const candidate = value[key];
+
+    if (typeof candidate === "string" || typeof candidate === "number" || typeof candidate === "boolean") {
+      output[key] = candidate;
+    }
+  }
+
+  return Object.keys(output).length ? output : null;
+}
+
+function sanitizeErrorMetadata(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const output = {};
+  const allowedFields = ["code", "message", "phase", "command", "args", "cwd", "timeout_ms", "validation_errors", "original_status", "checked_at"];
+
+  for (const key of allowedFields) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      output[key] = cloneJson(value[key]);
+    }
+  }
+
+  return Object.keys(output).length ? output : null;
+}
+
+function sanitizePublicRun(run) {
+  if (!isRecord(run)) {
+    return run;
+  }
+
+  const sanitized = pickFields(run, ["schema_version", "run_id", "created_at", "workspace", "status"]);
+  sanitized.summary = pickFields(run.summary, [
+    "schema_version",
+    "title",
+    "market_sentiment",
+    "content_momentum",
+    "top_opportunity",
+    "risk",
+    "next_action",
+  ]);
+  sanitized.actions = Array.isArray(run.actions)
+    ? run.actions.map((item) => pickFields(item, ["schema_version", "id", "title", "summary", "priority", "source", "agent", "time", "type"]))
+    : [];
+  sanitized.signals = Array.isArray(run.signals)
+    ? run.signals.map((item) => pickFields(item, ["schema_version", "id", "title", "summary", "category", "source", "severity", "time"]))
+    : [];
+  sanitized.agents = Array.isArray(run.agents)
+    ? run.agents.map((item) =>
+        pickFields(item, ["schema_version", "id", "name", "codename", "status", "tone", "progress", "description", "activity", "metricA", "metricB"]),
+      )
+    : [];
+  sanitized.campaigns = Array.isArray(run.campaigns)
+    ? run.campaigns.map((item) =>
+        pickFields(item, [
+          "schema_version",
+          "id",
+          "name",
+          "title",
+          "channels",
+          "stage",
+          "owner_agent",
+          "status",
+          "progress",
+          "last_updated",
+          "summary",
+          "next_action",
+          "tone",
+        ]),
+      )
+    : [];
+  sanitized.reports = Array.isArray(run.reports)
+    ? run.reports.map((item) => pickFields(item, ["schema_version", "id", "title", "type", "meta", "stats", "tone"]))
+    : [];
+  sanitized.vault = Array.isArray(run.vault)
+    ? run.vault.map((item) => pickFields(item, ["schema_version", "id", "name", "type", "status", "count", "tone"]))
+    : [];
+
+  const openclaw = sanitizeOpenClawMetadata(run.openclaw);
+  const error = sanitizeErrorMetadata(run.error);
+
+  if (openclaw) {
+    sanitized.openclaw = openclaw;
+  }
+
+  if (error) {
+    sanitized.error = error;
+  }
+
+  return sanitized;
+}
+
+function collectForbiddenPublicKeys(value, pathName = "$", errors = []) {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectForbiddenPublicKeys(item, `${pathName}[${index}]`, errors));
+    return errors;
+  }
+
+  if (!isRecord(value)) {
+    return errors;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (FORBIDDEN_PUBLIC_KEYS.has(key)) {
+      errors.push(`${pathName}.${key} is not allowed in public run JSON`);
+    }
+
+    collectForbiddenPublicKeys(nestedValue, `${pathName}.${key}`, errors);
+  }
+
+  return errors;
+}
+
+function validateStringField(record, key, errors, pathName) {
+  if (typeof record[key] !== "string" || !record[key].trim()) {
+    errors.push(`${pathName}.${key} is required`);
+  }
+}
+
+function validateVersionedItemArray(run, key, minItems, maxItems, errors) {
+  const value = run[key];
+
+  if (!Array.isArray(value)) {
+    errors.push(`${key} must be an array`);
+    return;
+  }
+
+  if (run.status === "completed" && value.length < minItems) {
+    errors.push(`${key} must include at least ${minItems} item${minItems === 1 ? "" : "s"} for completed runs`);
+  }
+
+  if (run.status === "completed" && Number.isFinite(maxItems) && value.length > maxItems) {
+    errors.push(`${key} must include no more than ${maxItems} items for completed runs`);
+  }
+
+  value.forEach((item, index) => {
+    if (!isRecord(item)) {
+      errors.push(`${key}[${index}] must be an object`);
+      return;
+    }
+
+    validateStringField(item, "id", errors, `${key}[${index}]`);
+  });
+}
+
+function validateDashboardRunContract(run) {
+  const errors = collectForbiddenPublicKeys(run);
+  const config = getConfig();
+
+  if (!isRecord(run)) {
+    return {
+      valid: false,
+      errors: ["run must be a JSON object"],
+    };
+  }
+
+  for (const key of ["schema_version", "run_id", "created_at", "workspace", "status", "summary", "actions", "signals", "agents", "reports", "vault", "campaigns"]) {
+    if (!Object.prototype.hasOwnProperty.call(run, key)) {
+      errors.push(`${key} is required`);
+    }
+  }
+
+  if (run.schema_version !== config.schemaVersion) {
+    errors.push(`schema_version must be ${config.schemaVersion}`);
+  }
+
+  validateStringField(run, "run_id", errors, "$");
+  validateStringField(run, "created_at", errors, "$");
+  validateStringField(run, "workspace", errors, "$");
+
+  if (typeof run.created_at === "string" && Number.isNaN(Date.parse(run.created_at))) {
+    errors.push("created_at must be a valid ISO-8601 timestamp");
+  }
+
+  if (run.status === "succeeded") {
+    errors.push("status must not use succeeded; use completed");
+  } else if (typeof run.status !== "string" || !VALID_RUN_STATUSES.has(run.status)) {
+    errors.push("status must be one of completed, running, failed, partial, timeout, or mock");
+  }
+
+  if (!isRecord(run.summary)) {
+    errors.push("summary must be an object");
+  } else {
+    for (const key of ["title", "market_sentiment", "content_momentum", "top_opportunity", "risk", "next_action"]) {
+      validateStringField(run.summary, key, errors, "$.summary");
+    }
+  }
+
+  validateVersionedItemArray(run, "actions", 3, 5, errors);
+  validateVersionedItemArray(run, "signals", 3, 5, errors);
+  validateVersionedItemArray(run, "agents", 5, Infinity, errors);
+  validateVersionedItemArray(run, "campaigns", 2, 3, errors);
+  validateVersionedItemArray(run, "reports", 1, 3, errors);
+  validateVersionedItemArray(run, "vault", 1, 3, errors);
+
+  return {
+    valid: errors.length === 0,
+    errors,
   };
 }
 
@@ -397,6 +647,77 @@ function createFailedOpenClawRun({ runId, createdAt, workspace, error, openclaw 
   });
 }
 
+function createTimeoutOpenClawRun({ runId, createdAt, workspace, openclaw }) {
+  return createAdapterRun({
+    runId,
+    createdAt,
+    workspace,
+    status: "timeout",
+    summary: {
+      title: "CMO Brief Timed Out",
+      market_sentiment: "Unavailable",
+      content_momentum: "Unavailable",
+      top_opportunity: "Retry the CMO brief after checking OpenClaw runtime health",
+      risk: "CMO did not write completed dashboard JSON before the timeout",
+      next_action: "Inspect private adapter status files and run a fresh brief",
+    },
+    agents: [
+      versioned({
+        id: "agent_cmo",
+        name: "CMO",
+        codename: "OpenClaw",
+        status: "Need Review",
+        tone: "orange",
+        progress: 0,
+        description: "OpenClaw CMO agent",
+        activity: "Run timed out",
+        metricA: getConfig().cmoAgentId,
+        metricB: "timeout",
+      }),
+    ],
+    openclaw,
+  });
+}
+
+function createInvalidOpenClawRun({ runId, createdAt, workspace, validationErrors, openclaw, originalStatus }) {
+  return createAdapterRun({
+    runId,
+    createdAt,
+    workspace,
+    status: "partial",
+    summary: {
+      title: "CMO Brief Needs Validation",
+      market_sentiment: "Unavailable",
+      content_momentum: "Needs review",
+      top_opportunity: "Fix the normalized dashboard JSON and rerun validation",
+      risk: "CMO wrote completed output that did not match the dashboard contract",
+      next_action: "Review validation errors in the adapter response metadata",
+    },
+    agents: [
+      versioned({
+        id: "agent_cmo",
+        name: "CMO",
+        codename: "OpenClaw",
+        status: "Need Review",
+        tone: "red",
+        progress: 25,
+        description: "OpenClaw CMO agent",
+        activity: "Output validation failed",
+        metricA: getConfig().cmoAgentId,
+        metricB: "partial",
+      }),
+    ],
+    error: {
+      code: "cmo_run_validation_failed",
+      message: "Completed CMO output failed dashboard contract validation",
+      validation_errors: validationErrors,
+      original_status: originalStatus ?? "unknown",
+      checked_at: new Date().toISOString(),
+    },
+    openclaw,
+  });
+}
+
 function buildCmoDashboardPrompt({ runId, rawPath, normalizedPath, workspace }) {
   return [
     "You are the Holdstation CMO agent producing one dashboard brief for the CMO Engine.",
@@ -440,7 +761,17 @@ function buildCmoDashboardPrompt({ runId, rawPath, normalizedPath, workspace }) 
       2,
     ),
     "",
-    "Use snake_case keys only. Do not use runId, createdAt, status value succeeded, or vault_notes.",
+    "The completed dashboard JSON must include useful non-empty sections:",
+    "- actions: 3-5 action items.",
+    "- signals: 3-5 market, content, audience, or product signals.",
+    "- agents: include at least CMO, Adapter, Researcher/Radar, Content/Echo, and Vault/Mind.",
+    "- campaigns: 2-3 workstream or campaign items.",
+    "- reports: 1-3 report cards.",
+    "- vault: 1-3 memory or knowledge items.",
+    "",
+    "Use only the top-level schema keys shown above: schema_version, run_id, created_at, workspace, status, summary, actions, signals, agents, reports, vault, campaigns.",
+    "Use snake_case keys for run metadata. Do not use runId, createdAt, status value succeeded, or vault_notes.",
+    "Do not include this prompt, cron payload, OpenClaw stdout, OpenClaw stderr, or Gateway details in the normalized JSON.",
   ].join("\n");
 }
 
@@ -452,7 +783,7 @@ function sanitizeCommandArgs(args) {
   return args.map((arg, index) => (args[index - 1] === "--message" ? "[omitted cmo prompt]" : arg));
 }
 
-function summarizeExecError(error) {
+function summarizeExecError(error, { includeOutput = false } = {}) {
   return {
     message: error.message,
     code: error.code ?? null,
@@ -462,9 +793,21 @@ function summarizeExecError(error) {
     args: sanitizeCommandArgs(error.openclaw?.args),
     cwd: error.openclaw?.cwd ?? null,
     timeout_ms: error.openclaw?.timeoutMs ?? null,
-    stdout: typeof error.stdout === "string" ? error.stdout.slice(0, 4000) : "",
-    stderr: typeof error.stderr === "string" ? error.stderr.slice(0, 4000) : "",
+    ...(includeOutput
+      ? {
+          stdout: typeof error.stdout === "string" ? error.stdout.slice(0, 4000) : "",
+          stderr: typeof error.stderr === "string" ? error.stderr.slice(0, 4000) : "",
+        }
+      : {}),
   };
+}
+
+function pickOpenClawRunId(payload) {
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    return payload.openclaw_run_id ?? payload.run_id ?? payload.runId ?? payload.task_id ?? payload.taskId ?? payload.id ?? null;
+  }
+
+  return null;
 }
 
 function parseJsonFromText(text) {
@@ -603,6 +946,27 @@ async function runOpenClawCronBrief({ runId, rawPath, normalizedPath, workspace 
   );
   const jobId = pickOpenClawJobIdFromOutput(addResult.stdout, jobName);
   const runResult = await execOpenClaw(["cron", "run", jobId], config.cmoCronRunTimeoutMs, "cron_run");
+  const debugPath = dataPath("status", `${runId}.debug.json`);
+  const openclawRunId = pickOpenClawRunId(runResult.json);
+  const triggerStatus = runResult.json?.enqueued === true ? "enqueued" : "triggered";
+
+  await writeJsonFile(debugPath, versioned({
+    run_id: runId,
+    captured_at: new Date().toISOString(),
+    note: "Private OpenClaw CLI debug output. Do not serve this file through dashboard APIs.",
+    add: {
+      args: sanitizeCommandArgs(addResult.args),
+      stdout: addResult.stdout,
+      stderr: addResult.stderr,
+      json: addResult.json,
+    },
+    run: {
+      args: sanitizeCommandArgs(runResult.args),
+      stdout: runResult.stdout,
+      stderr: runResult.stderr,
+      json: runResult.json,
+    },
+  }));
 
   return {
     mode: "openclaw-cron",
@@ -610,12 +974,11 @@ async function runOpenClawCronBrief({ runId, rawPath, normalizedPath, workspace 
     job_id: jobId,
     job_name: jobName,
     schedule_at: cronSpec.at,
+    openclaw_run_id: openclawRunId ? String(openclawRunId) : "",
+    trigger_status: triggerStatus,
+    raw_markdown_path: rawPath,
+    normalized_json_path: normalizedPath,
     spec_path: specPath,
-    add_stdout: addResult.stdout.slice(0, 4000),
-    add_stderr: addResult.stderr.slice(0, 4000),
-    run_stdout: runResult.stdout.slice(0, 4000),
-    run_stderr: runResult.stderr.slice(0, 4000),
-    run_json: runResult.json,
   };
 }
 
@@ -623,12 +986,12 @@ async function triggerOpenClawCronInBackground({ runId, createdAt, workspace, ra
   const statusPath = dataPath("status", `${runId}.trigger.json`);
 
   try {
-    const metadata = await runOpenClawCronBrief({ runId, rawPath, normalizedPath, workspace });
+    const metadata = sanitizeOpenClawMetadata(await runOpenClawCronBrief({ runId, rawPath, normalizedPath, workspace }));
     const currentRun = (await readJsonFile(normalizedPath)) ?? createRunningOpenClawRun({ runId, createdAt, workspace });
-    const runningRun = {
+    const runningRun = sanitizePublicRun({
       ...currentRun,
       openclaw: metadata,
-    };
+    });
 
     await writeJsonFile(normalizedPath, runningRun);
     await writeJsonFile(dataPath("latest.json"), runningRun);
@@ -638,10 +1001,11 @@ async function triggerOpenClawCronInBackground({ runId, createdAt, workspace, ra
       updated_at: new Date().toISOString(),
       openclaw: metadata,
     }));
-    // Phase 5B completes file polling, final normalized JSON validation, timeout
-    // promotion, and latest_successful.json updates after CMO writes output.
+    // Phase 5B finalization happens when run/latest endpoints are read, after
+    // CMO has had time to write the completed normalized dashboard JSON.
   } catch (error) {
     const failure = summarizeExecError(error);
+    const privateFailure = summarizeExecError(error, { includeOutput: true });
     const failedRun = createFailedOpenClawRun({
       runId,
       createdAt,
@@ -663,8 +1027,154 @@ async function triggerOpenClawCronInBackground({ runId, createdAt, workspace, ra
       updated_at: new Date().toISOString(),
       error: failure,
     }));
+    await writeJsonFile(dataPath("status", `${runId}.debug.json`), versioned({
+      run_id: runId,
+      captured_at: new Date().toISOString(),
+      note: "Private OpenClaw CLI failure debug output. Do not serve this file through dashboard APIs.",
+      error: privateFailure,
+    }));
     console.error("OpenClaw CMO trigger failed", failure);
   }
+}
+
+async function readSafeOpenClawMetadata(runId, run) {
+  const direct = sanitizeOpenClawMetadata(run?.openclaw);
+
+  if (direct) {
+    return direct;
+  }
+
+  const status = await readJsonFile(dataPath("status", `${runId}.trigger.json`));
+  return sanitizeOpenClawMetadata(status?.openclaw);
+}
+
+function isRunTimedOut(run) {
+  if (!isRecord(run) || run.status !== "running") {
+    return false;
+  }
+
+  const createdAtMs = Date.parse(String(run.created_at ?? ""));
+
+  if (Number.isNaN(createdAtMs)) {
+    return false;
+  }
+
+  return Date.now() - createdAtMs > getConfig().cmoRunTimeoutSeconds * 1000;
+}
+
+async function writePublicRunState(run, { successful = false } = {}) {
+  const sanitized = sanitizePublicRun(run);
+
+  await writeJsonFile(dataPath("runs", `${sanitized.run_id}.json`), sanitized);
+  await writeJsonFile(dataPath("latest.json"), sanitized);
+
+  if (successful) {
+    await writeJsonFile(dataPath("latest_successful.json"), sanitized);
+  }
+
+  return sanitized;
+}
+
+async function writePublicRunFileAndCurrentLatest(run) {
+  const sanitized = sanitizePublicRun(run);
+
+  await writeJsonFile(dataPath("runs", `${sanitized.run_id}.json`), sanitized);
+
+  try {
+    const latest = await readJsonFile(dataPath("latest.json"));
+
+    if (isRecord(latest) && latest.run_id === sanitized.run_id) {
+      await writeJsonFile(dataPath("latest.json"), sanitized);
+    }
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) {
+      throw error;
+    }
+  }
+
+  return sanitized;
+}
+
+async function readRunCandidate(runId, fallbackRun = null) {
+  try {
+    return (await readJsonFile(dataPath("runs", `${runId}.json`))) ?? fallbackRun;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return {
+        schema_version: getConfig().schemaVersion,
+        run_id: runId,
+        created_at: safeString(fallbackRun?.created_at, new Date().toISOString()),
+        workspace: safeString(fallbackRun?.workspace, "Holdstation"),
+        status: "completed",
+        summary: {},
+        actions: [],
+        signals: [],
+        agents: [],
+        reports: [],
+        vault: [],
+        campaigns: [],
+        error: {
+          code: "invalid_json",
+          message: `runs/${runId}.json is not valid JSON`,
+        },
+      };
+    }
+
+    throw error;
+  }
+}
+
+async function finalizeRun(runId, { fallbackRun = null } = {}) {
+  const run = await readRunCandidate(runId, fallbackRun);
+
+  if (!run) {
+    return null;
+  }
+
+  const openclaw = await readSafeOpenClawMetadata(runId, run);
+
+  if (!openclaw) {
+    return sanitizePublicRun(run);
+  }
+
+  const runWithMetadata = sanitizePublicRun({
+    ...run,
+    openclaw,
+  });
+  const createdAt = safeString(runWithMetadata.created_at, new Date().toISOString());
+  const workspace = safeString(runWithMetadata.workspace, "Holdstation");
+
+  if (runWithMetadata.status === "completed") {
+    const validation = validateDashboardRunContract(runWithMetadata);
+
+    if (validation.valid) {
+      return writePublicRunState(runWithMetadata, { successful: true });
+    }
+
+    const invalidRun = createInvalidOpenClawRun({
+      runId,
+      createdAt,
+      workspace,
+      validationErrors: validation.errors,
+      originalStatus: run.status,
+      openclaw,
+    });
+
+    return writePublicRunState(invalidRun);
+  }
+
+  if (isRunTimedOut(runWithMetadata)) {
+    const timeoutRun = createTimeoutOpenClawRun({
+      runId,
+      createdAt,
+      workspace,
+      openclaw,
+    });
+
+    return writePublicRunState(timeoutRun);
+  }
+
+  return writePublicRunFileAndCurrentLatest(runWithMetadata);
 }
 
 async function handleStatus(res) {
@@ -696,7 +1206,13 @@ async function handleLatest(res) {
     return;
   }
 
-  jsonResponse(res, 200, latest);
+  if (isRecord(latest) && typeof latest.run_id === "string" && isSafeRunId(latest.run_id)) {
+    const finalized = await finalizeRun(latest.run_id, { fallbackRun: latest });
+    jsonResponse(res, 200, finalized ?? sanitizePublicRun(latest));
+    return;
+  }
+
+  jsonResponse(res, 200, sanitizePublicRun(latest));
 }
 
 async function handleRun(res, runId) {
@@ -708,7 +1224,7 @@ async function handleRun(res, runId) {
     return;
   }
 
-  const run = await readJsonFile(dataPath("runs", `${runId}.json`));
+  const run = await finalizeRun(runId);
 
   if (!run) {
     notFound(res, `CMO run not found: ${runId}`);
