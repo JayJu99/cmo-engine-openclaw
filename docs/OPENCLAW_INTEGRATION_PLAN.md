@@ -213,6 +213,11 @@ OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 CMO_DASHBOARD_DATA_DIR=/home/ju/.openclaw/workspace/data/cmo-dashboard
 OPENCLAW_TIMEOUT_MS=120000
 CMO_SCHEMA_VERSION=cmo.dashboard.v1
+CMO_TRIGGER_MODE=mock|openclaw-cron
+OPENCLAW_BIN=openclaw
+CMO_AGENT_ID=cmo
+CMO_RUN_TIMEOUT_SECONDS=900
+CMO_CRON_RUN_TIMEOUT_MS=180000
 ```
 
 Notes:
@@ -382,22 +387,36 @@ Status: implemented as a mock/skeleton service. Real OpenClaw trigger wiring rem
 - Keep raw OpenClaw output private except for operator debugging.
 - Keep OpenClaw Gateway private and loopback-only.
 
-### Phase 5: Real OpenClaw CMO Trigger
+### Phase 5A: OpenClaw CMO Trigger Scaffold
 
-Planned.
+Status: implemented as a VPS Adapter scaffold.
 
-- Implement the VPS Adapter trigger path close to OpenClaw.
-- Trigger `agentId: "cmo"`.
+- Add `CMO_TRIGGER_MODE=mock|openclaw-cron`, defaulting to `mock`.
+- Keep mock mode as the local development and recovery path.
+- Add a VPS-only `openclaw-cron` path in `services/vps-cmo-adapter/server.mjs`.
+- Trigger `agentId: "cmo"` through local `openclaw cron add` and `openclaw cron run` calls using Node child process argument arrays.
 - Use `sessionTarget: "isolated"`.
 - Use `payload.kind: "agentTurn"`.
 - Use delivery mode `none`.
-- Capture raw CMO output to `/home/ju/.openclaw/workspace/data/cmo-dashboard/raw/{runId}.json`.
-- Normalize returned output into the dashboard schema.
-- Validate and write `/home/ju/.openclaw/workspace/data/cmo-dashboard/runs/{runId}.json`.
-- Update `/home/ju/.openclaw/workspace/data/cmo-dashboard/latest.json` for every run state.
-- Update `/home/ju/.openclaw/workspace/data/cmo-dashboard/latest_successful.json` only for completed valid runs.
-- Return final run or accepted run status depending on execution time.
-- Do not expose direct Gateway trigger details to the Windows dashboard.
+- Write an initial normalized run with `status: "running"` to `/home/ju/.openclaw/workspace/data/cmo-dashboard/runs/{runId}.json`.
+- Update `/home/ju/.openclaw/workspace/data/cmo-dashboard/latest.json` when the run starts and when trigger metadata or failure state is available.
+- Prompt CMO to write raw markdown to `/home/ju/.openclaw/workspace/data/cmo-dashboard/raw/{runId}.md`.
+- Prompt CMO to write normalized dashboard JSON to `/home/ju/.openclaw/workspace/data/cmo-dashboard/runs/{runId}.json`.
+- Preserve `latest_successful.json` on trigger failures.
+- Keep OpenClaw Gateway loopback-only and private.
+- Keep the Windows dashboard disconnected from direct OpenClaw calls.
+
+### Phase 5B: OpenClaw Output Polling And Validation
+
+Planned.
+
+- Poll for CMO-written raw markdown and normalized JSON after the cron trigger is dispatched.
+- Validate the final normalized run against the dashboard contract before serving it as completed.
+- Promote timed-out runs to `status: "timeout"`.
+- Handle partial CMO output as `status: "partial"` with useful sections preserved.
+- Update `/home/ju/.openclaw/workspace/data/cmo-dashboard/latest_successful.json` only after a completed valid run.
+- Add trigger/result fixtures from real OpenClaw runs.
+- Add adapter tests for failed, partial, timeout, and invalid normalized output.
 
 ### Phase 6: Validation Hardening
 

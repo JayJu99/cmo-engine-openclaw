@@ -1,8 +1,14 @@
 # VPS CMO Adapter Service
 
-Phase 4C skeleton service for the remote dashboard adapter contract.
+VPS-side service for the remote dashboard adapter contract.
 
-This service serves normalized dashboard JSON only. It does not call OpenClaw Gateway yet, does not trigger the CMO agent yet, and does not expose raw output through HTTP.
+The service serves normalized dashboard JSON only. It keeps the Windows dashboard behind the adapter API and does not expose OpenClaw Gateway.
+
+## Trigger Modes
+
+`CMO_TRIGGER_MODE=mock` is the default. In mock mode, `POST /cmo/run-brief` writes mock raw JSON, a normalized run JSON file, `latest.json`, and `latest_successful.json` when the mock run is completed. This mode works on Windows and does not require the `openclaw` binary.
+
+`CMO_TRIGGER_MODE=openclaw-cron` enables the Phase 5A trigger scaffold for the VPS. In this mode, `POST /cmo/run-brief` creates a normalized `running` run, updates `latest.json`, writes trigger status metadata, and starts a local OpenClaw one-shot cron trigger for `agentId: "cmo"` with isolated session delivery mode `none`. The HTTP request returns the running run; Phase 5B will complete file polling, final validation, timeout promotion, and `latest_successful.json` updates after CMO writes the normalized JSON.
 
 ## Run Locally
 
@@ -26,13 +32,26 @@ The service listens on `CMO_ADAPTER_PORT` or `PORT`, defaulting to `8787`.
 CMO_ADAPTER_API_KEY=change-me
 CMO_DASHBOARD_DATA_DIR=/home/ju/.openclaw/workspace/data/cmo-dashboard
 CMO_SCHEMA_VERSION=cmo.dashboard.v1
+CMO_TRIGGER_MODE=mock
+OPENCLAW_BIN=openclaw
+CMO_AGENT_ID=cmo
+CMO_RUN_TIMEOUT_SECONDS=900
+CMO_CRON_RUN_TIMEOUT_MS=180000
 OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 OPENCLAW_TIMEOUT_MS=120000
 CMO_ADAPTER_HOST=0.0.0.0
 CMO_ADAPTER_PORT=8787
 ```
 
-For local testing on Windows, point `CMO_DASHBOARD_DATA_DIR` at a writable local folder.
+For local testing on Windows, keep `CMO_TRIGGER_MODE=mock` and point `CMO_DASHBOARD_DATA_DIR` at a writable local folder.
+
+For VPS OpenClaw trigger testing, set:
+
+```bash
+CMO_TRIGGER_MODE=openclaw-cron
+OPENCLAW_BIN=openclaw
+CMO_AGENT_ID=cmo
+```
 
 ## Endpoints
 
@@ -77,4 +96,4 @@ Run this service on the VPS close to the OpenClaw runtime, behind HTTPS and a pr
 
 ## Security Note
 
-Never expose OpenClaw Gateway directly. `OPENCLAW_GATEWAY_URL` is reserved for a future internal Phase 5 trigger path and should remain loopback-only, for example `ws://127.0.0.1:18789`.
+Never expose OpenClaw Gateway directly. `OPENCLAW_GATEWAY_URL` is VPS-internal and should remain loopback-only, for example `ws://127.0.0.1:18789`. The Windows dashboard must not call OpenClaw directly.

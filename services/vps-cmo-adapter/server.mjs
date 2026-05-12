@@ -1,24 +1,40 @@
 import { createServer } from "node:http";
+import { execFile } from "node:child_process";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const DEFAULT_DATA_DIR = "/home/ju/.openclaw/workspace/data/cmo-dashboard";
 const DEFAULT_SCHEMA_VERSION = "cmo.dashboard.v1";
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 const DEFAULT_OPENCLAW_TIMEOUT_MS = 120_000;
+const DEFAULT_TRIGGER_MODE = "mock";
+const DEFAULT_OPENCLAW_BIN = "openclaw";
+const DEFAULT_CMO_AGENT_ID = "cmo";
+const DEFAULT_CMO_RUN_TIMEOUT_SECONDS = 900;
+const DEFAULT_CMO_CRON_RUN_TIMEOUT_MS = 180_000;
 const MAX_BODY_BYTES = 1_000_000;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const execFileAsync = promisify(execFile);
 
 function getConfig() {
+  const triggerMode = process.env.CMO_TRIGGER_MODE ?? DEFAULT_TRIGGER_MODE;
+
   return {
     apiKey: process.env.CMO_ADAPTER_API_KEY ?? "",
     dataDir: process.env.CMO_DASHBOARD_DATA_DIR ?? DEFAULT_DATA_DIR,
     schemaVersion: process.env.CMO_SCHEMA_VERSION ?? DEFAULT_SCHEMA_VERSION,
     gatewayUrl: process.env.OPENCLAW_GATEWAY_URL ?? DEFAULT_GATEWAY_URL,
     openclawTimeoutMs: Number.parseInt(process.env.OPENCLAW_TIMEOUT_MS ?? String(DEFAULT_OPENCLAW_TIMEOUT_MS), 10),
+    triggerMode,
+    openclawBin: process.env.OPENCLAW_BIN ?? DEFAULT_OPENCLAW_BIN,
+    cmoAgentId: process.env.CMO_AGENT_ID ?? DEFAULT_CMO_AGENT_ID,
+    cmoRunTimeoutSeconds: Number.parseInt(process.env.CMO_RUN_TIMEOUT_SECONDS ?? String(DEFAULT_CMO_RUN_TIMEOUT_SECONDS), 10),
+    cmoCronRunTimeoutMs: Number.parseInt(process.env.CMO_CRON_RUN_TIMEOUT_MS ?? String(DEFAULT_CMO_CRON_RUN_TIMEOUT_MS), 10),
+    openclawTriggerEnabled: triggerMode === "openclaw-cron",
     port: Number.parseInt(process.env.CMO_ADAPTER_PORT ?? process.env.PORT ?? "8787", 10),
     host: process.env.CMO_ADAPTER_HOST ?? "0.0.0.0",
   };
@@ -114,6 +130,12 @@ async function readJsonFile(filePath) {
 async function writeJsonFile(filePath, payload) {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+}
+
+async function ensureDashboardDirs() {
+  await mkdir(dataPath("raw"), { recursive: true });
+  await mkdir(dataPath("runs"), { recursive: true });
+  await mkdir(dataPath("status"), { recursive: true });
 }
 
 async function readRequestJson(req) {
@@ -276,6 +298,340 @@ function createMockRun({ runId, createdAt, workspace, status }) {
   });
 }
 
+function createAdapterRun({ runId, createdAt, workspace, status, summary, agents, openclaw, error }) {
+  return versioned({
+    run_id: runId,
+    created_at: createdAt,
+    workspace,
+    status,
+    summary: versioned({
+      title: summary.title,
+      market_sentiment: summary.market_sentiment,
+      content_momentum: summary.content_momentum,
+      top_opportunity: summary.top_opportunity,
+      risk: summary.risk,
+      next_action: summary.next_action,
+    }),
+    actions: [],
+    signals: [],
+    agents,
+    campaigns: [],
+    reports: [
+      versioned({
+        id: "rep_openclaw_trigger",
+        title: "OpenClaw CMO Trigger",
+        type: "Integration",
+        meta: `Phase 5A ${status}`,
+        stats: ["cron one-shot", getConfig().cmoAgentId, status],
+        tone: status === "failed" ? "red" : "blue",
+      }),
+    ],
+    vault: [],
+    ...(openclaw ? { openclaw } : {}),
+    ...(error ? { error } : {}),
+  });
+}
+
+function createRunningOpenClawRun({ runId, createdAt, workspace, openclaw }) {
+  return createAdapterRun({
+    runId,
+    createdAt,
+    workspace,
+    status: "running",
+    summary: {
+      title: "CMO Brief Running",
+      market_sentiment: "Pending",
+      content_momentum: "Pending",
+      top_opportunity: "Pending CMO output",
+      risk: "CMO run is still in progress",
+      next_action: "Wait for the normalized dashboard JSON to be written",
+    },
+    agents: [
+      versioned({
+        id: "agent_cmo",
+        name: "CMO",
+        codename: "OpenClaw",
+        status: "Running",
+        tone: "blue",
+        progress: 10,
+        description: "OpenClaw CMO agent",
+        activity: "Generating dashboard brief",
+        metricA: getConfig().cmoAgentId,
+        metricB: "openclaw-cron",
+      }),
+    ],
+    openclaw,
+  });
+}
+
+function createFailedOpenClawRun({ runId, createdAt, workspace, error, openclaw }) {
+  return createAdapterRun({
+    runId,
+    createdAt,
+    workspace,
+    status: "failed",
+    summary: {
+      title: "CMO Brief Trigger Failed",
+      market_sentiment: "Unavailable",
+      content_momentum: "Unavailable",
+      top_opportunity: "Retry after checking the VPS OpenClaw runtime",
+      risk: "OpenClaw cron trigger failed before CMO completed",
+      next_action: "Check adapter status and OpenClaw CLI availability on the VPS",
+    },
+    agents: [
+      versioned({
+        id: "agent_cmo",
+        name: "CMO",
+        codename: "OpenClaw",
+        status: "Need Review",
+        tone: "red",
+        progress: 0,
+        description: "OpenClaw CMO agent",
+        activity: "Trigger failed",
+        metricA: getConfig().cmoAgentId,
+        metricB: "failed",
+      }),
+    ],
+    error,
+    openclaw,
+  });
+}
+
+function buildCmoDashboardPrompt({ runId, rawPath, normalizedPath, workspace }) {
+  return [
+    "You are the Holdstation CMO agent producing one dashboard brief for the CMO Engine.",
+    "",
+    `Run ID: ${runId}`,
+    `Workspace: ${workspace}`,
+    `Raw markdown path: ${rawPath}`,
+    `Normalized JSON path: ${normalizedPath}`,
+    "",
+    "Execution rules:",
+    "1. Write the raw markdown brief first to the raw markdown path.",
+    "2. Write the normalized dashboard JSON second to the normalized JSON path.",
+    "3. Do not send Discord, Telegram, chat, email, or other external messages.",
+    "4. Keep your final response short after files are written.",
+    "",
+    "The normalized JSON must match this dashboard contract exactly:",
+    JSON.stringify(
+      {
+        schema_version: "cmo.dashboard.v1",
+        run_id: runId,
+        created_at: "ISO-8601 timestamp",
+        workspace,
+        status: "completed | running | failed | partial | timeout",
+        summary: {
+          schema_version: "cmo.dashboard.v1",
+          title: "string",
+          market_sentiment: "string",
+          content_momentum: "string",
+          top_opportunity: "string",
+          risk: "string",
+          next_action: "string",
+        },
+        actions: [],
+        signals: [],
+        agents: [],
+        reports: [],
+        vault: [],
+        campaigns: [],
+      },
+      null,
+      2,
+    ),
+    "",
+    "Use snake_case keys only. Do not use runId, createdAt, status value succeeded, or vault_notes.",
+  ].join("\n");
+}
+
+function summarizeExecError(error) {
+  return {
+    message: error.message,
+    code: error.code ?? null,
+    signal: error.signal ?? null,
+    stdout: typeof error.stdout === "string" ? error.stdout.slice(0, 4000) : "",
+    stderr: typeof error.stderr === "string" ? error.stderr.slice(0, 4000) : "",
+  };
+}
+
+function parseJsonFromText(text) {
+  const trimmed = text.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const firstBrace = trimmed.indexOf("{");
+    const lastBrace = trimmed.lastIndexOf("}");
+
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+      } catch {
+        return null;
+      }
+    }
+
+    return null;
+  }
+}
+
+function pickOpenClawJobId(payload, fallbackName) {
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    return payload.id ?? payload.job_id ?? payload.jobId ?? payload.cron_id ?? payload.cronId ?? payload.name ?? fallbackName;
+  }
+
+  return fallbackName;
+}
+
+function pickOpenClawJobIdFromOutput(output, fallbackName) {
+  const payload = parseJsonFromText(output);
+  const jsonJobId = pickOpenClawJobId(payload, null);
+
+  if (jsonJobId) {
+    return String(jsonJobId);
+  }
+
+  const idMatch = output.match(/\b(?:job_id|jobId|cron_id|cronId|id)\b[^A-Za-z0-9_.-]+([A-Za-z0-9_.-]+)/i);
+
+  return idMatch?.[1] ?? fallbackName;
+}
+
+async function execOpenClaw(args, timeoutMs) {
+  const config = getConfig();
+  const result = await execFileAsync(config.openclawBin, args, {
+    cwd: process.cwd(),
+    windowsHide: true,
+    timeout: timeoutMs,
+    maxBuffer: 1024 * 1024,
+  });
+
+  return {
+    args,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    json: parseJsonFromText(result.stdout),
+  };
+}
+
+async function runOpenClawCronBrief({ runId, rawPath, normalizedPath, workspace }) {
+  const config = getConfig();
+  const jobName = `cmo-dashboard-${runId}`;
+  const prompt = buildCmoDashboardPrompt({ runId, rawPath, normalizedPath, workspace });
+  const cronSpec = {
+    name: jobName,
+    oneShot: true,
+    enabled: true,
+    at: "2099-01-01T00:00:00Z",
+    agentId: config.cmoAgentId,
+    sessionTarget: "isolated",
+    payload: {
+      kind: "agentTurn",
+      prompt,
+      dashboard: {
+        schema_version: config.schemaVersion,
+        run_id: runId,
+        raw_markdown_path: rawPath,
+        normalized_json_path: normalizedPath,
+        workspace,
+      },
+    },
+    delivery: {
+      mode: "none",
+    },
+    timeoutSeconds: config.cmoRunTimeoutSeconds,
+  };
+  const specPath = dataPath("status", `${runId}.openclaw-cron-spec.json`);
+
+  await writeJsonFile(specPath, cronSpec);
+
+  const addResult = await execOpenClaw(
+    [
+      "cron",
+      "add",
+      "--name",
+      jobName,
+      "--at",
+      cronSpec.at,
+      "--session",
+      "isolated",
+      "--message",
+      prompt,
+      "--agent",
+      config.cmoAgentId,
+      "--no-deliver",
+      "--delete-after-run",
+    ],
+    config.cmoCronRunTimeoutMs,
+  );
+  const jobId = pickOpenClawJobIdFromOutput(addResult.stdout, jobName);
+  const runResult = await execOpenClaw(["cron", "run", jobId], config.cmoCronRunTimeoutMs);
+
+  return {
+    mode: "openclaw-cron",
+    agent_id: config.cmoAgentId,
+    job_id: jobId,
+    job_name: jobName,
+    spec_path: specPath,
+    add_stdout: addResult.stdout.slice(0, 4000),
+    add_stderr: addResult.stderr.slice(0, 4000),
+    run_stdout: runResult.stdout.slice(0, 4000),
+    run_stderr: runResult.stderr.slice(0, 4000),
+    run_json: runResult.json,
+  };
+}
+
+async function triggerOpenClawCronInBackground({ runId, createdAt, workspace, rawPath, normalizedPath }) {
+  const statusPath = dataPath("status", `${runId}.trigger.json`);
+
+  try {
+    const metadata = await runOpenClawCronBrief({ runId, rawPath, normalizedPath, workspace });
+    const currentRun = (await readJsonFile(normalizedPath)) ?? createRunningOpenClawRun({ runId, createdAt, workspace });
+    const runningRun = {
+      ...currentRun,
+      openclaw: metadata,
+    };
+
+    await writeJsonFile(normalizedPath, runningRun);
+    await writeJsonFile(dataPath("latest.json"), runningRun);
+    await writeJsonFile(statusPath, versioned({
+      run_id: runId,
+      status: "triggered",
+      updated_at: new Date().toISOString(),
+      openclaw: metadata,
+    }));
+    // Phase 5B completes file polling, final normalized JSON validation, timeout
+    // promotion, and latest_successful.json updates after CMO writes output.
+  } catch (error) {
+    const failure = summarizeExecError(error);
+    const failedRun = createFailedOpenClawRun({
+      runId,
+      createdAt,
+      workspace,
+      error: failure,
+      openclaw: {
+        mode: "openclaw-cron",
+        agent_id: getConfig().cmoAgentId,
+        raw_markdown_path: rawPath,
+        normalized_json_path: normalizedPath,
+      },
+    });
+
+    await writeJsonFile(normalizedPath, failedRun);
+    await writeJsonFile(dataPath("latest.json"), failedRun);
+    await writeJsonFile(statusPath, versioned({
+      run_id: runId,
+      status: "failed",
+      updated_at: new Date().toISOString(),
+      error: failure,
+    }));
+    console.error("OpenClaw CMO trigger failed", failure);
+  }
+}
+
 async function handleStatus(res) {
   const config = getConfig();
   const dataDirExists = await pathExists(config.dataDir);
@@ -287,8 +643,13 @@ async function handleStatus(res) {
     data_dir: config.dataDir,
     data_dir_exists: dataDirExists,
     gateway_mode: "loopback",
+    trigger_mode: config.triggerMode,
+    cmo_agent_id: config.cmoAgentId,
+    openclaw_trigger_enabled: config.openclawTriggerEnabled,
     openclaw_runtime: "not_checked",
     openclaw_timeout_ms: config.openclawTimeoutMs,
+    cmo_run_timeout_seconds: config.cmoRunTimeoutSeconds,
+    cmo_cron_run_timeout_ms: config.cmoCronRunTimeoutMs,
   }));
 }
 
@@ -323,6 +684,7 @@ async function handleRun(res, runId) {
 }
 
 async function handleRunBrief(req, res) {
+  const config = getConfig();
   const body = await readRequestJson(req);
   const requestedRunId = typeof body.run_id === "string" && body.run_id.trim() ? body.run_id.trim() : null;
   const runId = requestedRunId ?? `run_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
@@ -338,6 +700,52 @@ async function handleRunBrief(req, res) {
   const createdAt = new Date().toISOString();
   const workspace = typeof body.workspace === "string" && body.workspace.trim() ? body.workspace.trim() : "Holdstation";
   const status = typeof body.status === "string" && body.status.trim() ? body.status.trim() : "completed";
+
+  if (config.triggerMode !== "mock" && config.triggerMode !== "openclaw-cron") {
+    jsonResponse(res, 400, {
+      error: `Unsupported CMO_TRIGGER_MODE: ${config.triggerMode}`,
+      code: "unsupported_trigger_mode",
+    });
+    return;
+  }
+
+  if (config.triggerMode === "openclaw-cron") {
+    await ensureDashboardDirs();
+
+    const rawPath = dataPath("raw", `${runId}.md`);
+    const normalizedPath = dataPath("runs", `${runId}.json`);
+    const run = createRunningOpenClawRun({
+      runId,
+      createdAt,
+      workspace,
+      openclaw: {
+        mode: "openclaw-cron",
+        agent_id: config.cmoAgentId,
+        raw_markdown_path: rawPath,
+        normalized_json_path: normalizedPath,
+        trigger_status: "pending",
+      },
+    });
+
+    await writeJsonFile(normalizedPath, run);
+    await writeJsonFile(dataPath("latest.json"), run);
+    await writeJsonFile(dataPath("status", `${runId}.trigger.json`), versioned({
+      run_id: runId,
+      status: "running",
+      created_at: createdAt,
+      trigger_mode: config.triggerMode,
+      cmo_agent_id: config.cmoAgentId,
+      raw_markdown_path: rawPath,
+      normalized_json_path: normalizedPath,
+    }));
+
+    void triggerOpenClawCronInBackground({ runId, createdAt, workspace, rawPath, normalizedPath }).catch((error) => {
+      console.error("OpenClaw CMO trigger background task failed", error);
+    });
+
+    jsonResponse(res, 202, run);
+    return;
+  }
 
   await mkdir(dataPath("raw"), { recursive: true });
   await mkdir(dataPath("runs"), { recursive: true });
