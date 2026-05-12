@@ -348,7 +348,7 @@ Status: implemented.
 
 ### Phase 4A: Remote VPS Adapter Contract
 
-Planned.
+Status: implemented for dashboard configuration and documentation. VPS service implementation remains planned for Phase 4C.
 
 - Define the VPS Adapter HTTPS/API-key boundary.
 - Add dashboard configuration for `CMO_ADAPTER_MODE=local|remote`.
@@ -359,13 +359,13 @@ Planned.
 
 ### Phase 4B: Dashboard Remote Adapter Client
 
-Planned.
+Status: implemented.
 
 - Update dashboard server-side CMO adapter code to support `local` and `remote` modes.
 - In `local` mode, keep the existing JSON/mock behavior.
 - In `remote` mode, call the VPS Adapter API.
 - Proxy or map `POST /cmo/run-brief`, `GET /cmo/runs/:runId`, `GET /cmo/latest`, and `GET /cmo/status` through existing dashboard API boundaries where useful.
-- Implement timeout and retry policy for remote HTTPS calls.
+- Implement timeout handling for remote HTTPS calls.
 - Keep secrets server-side only.
 
 ### Phase 4C: VPS Adapter Service Skeleton

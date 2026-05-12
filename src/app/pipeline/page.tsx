@@ -1,8 +1,8 @@
 import { PipelineView } from "@/components/dashboard/views";
-import { readLatestRun } from "@/lib/cmo/store";
+import { readDashboardLatestRun } from "@/lib/cmo/adapter";
 
 export const dynamic = "force-dynamic";
 
 export default async function PipelinePage() {
-  return <PipelineView data={await readLatestRun()} />;
+  return <PipelineView data={await readDashboardLatestRun()} />;
 }

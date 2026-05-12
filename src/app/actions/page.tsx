@@ -1,8 +1,8 @@
 import { ActionsView } from "@/components/dashboard/views";
-import { readLatestRun } from "@/lib/cmo/store";
+import { readDashboardLatestRun } from "@/lib/cmo/adapter";
 
 export const dynamic = "force-dynamic";
 
 export default async function ActionsPage() {
-  return <ActionsView data={await readLatestRun()} />;
+  return <ActionsView data={await readDashboardLatestRun()} />;
 }

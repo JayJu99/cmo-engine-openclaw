@@ -37,6 +37,10 @@ function rawPath(runId: string) {
   return path.join(RAW_DIR, `${runId}.json`);
 }
 
+function isSafeRunId(runId: string) {
+  return /^[A-Za-z0-9_.-]+$/.test(runId);
+}
+
 function summarizeRun(run: CmoRun): CmoRunIndexItem {
   return {
     schema_version: CMO_SCHEMA_VERSION,
@@ -59,7 +63,20 @@ export async function readLatestSuccessfulRun(): Promise<CmoRun> {
   return latestSuccessful ? normalizeRun(latestSuccessful) : readLatestRun();
 }
 
+export async function readRun(runId: string): Promise<CmoRun | null> {
+  if (!isSafeRunId(runId)) {
+    return null;
+  }
+
+  const run = await readJsonFile(runPath(runId));
+  return run ? normalizeRun(run) : null;
+}
+
 export async function readRawOutput(runId: string): Promise<CmoRawOutput | null> {
+  if (!isSafeRunId(runId)) {
+    return null;
+  }
+
   const rawOutput = await readJsonFile(rawPath(runId));
   return rawOutput as CmoRawOutput | null;
 }

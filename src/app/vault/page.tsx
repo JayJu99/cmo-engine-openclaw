@@ -1,8 +1,8 @@
 import { VaultView } from "@/components/dashboard/views";
-import { readLatestRun } from "@/lib/cmo/store";
+import { readDashboardLatestRun } from "@/lib/cmo/adapter";
 
 export const dynamic = "force-dynamic";
 
 export default async function VaultPage() {
-  return <VaultView data={await readLatestRun()} />;
+  return <VaultView data={await readDashboardLatestRun()} />;
 }

@@ -1,8 +1,8 @@
 import { ReportsView } from "@/components/dashboard/views";
-import { readLatestRun } from "@/lib/cmo/store";
+import { readDashboardLatestRun } from "@/lib/cmo/adapter";
 
 export const dynamic = "force-dynamic";
 
 export default async function ReportsPage() {
-  return <ReportsView data={await readLatestRun()} />;
+  return <ReportsView data={await readDashboardLatestRun()} />;
 }
