@@ -370,7 +370,7 @@ Status: implemented.
 
 ### Phase 4C: VPS Adapter Service Skeleton
 
-Planned.
+Status: implemented as a mock/skeleton service. Real OpenClaw trigger wiring remains planned for Phase 5.
 
 - Add a VPS-side service that exposes `POST /cmo/run-brief`, `GET /cmo/runs/:runId`, `GET /cmo/latest`, and `GET /cmo/status`.
 - Authenticate requests with `CMO_ADAPTER_API_KEY`.
