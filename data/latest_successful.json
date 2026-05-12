@@ -1,0 +1,252 @@
+{
+  "schema_version": "cmo.dashboard.v1",
+  "run_id": "run_20260512064712_6c9de82d",
+  "created_at": "2026-05-12T06:47:12.410Z",
+  "workspace": "Holdstation",
+  "status": "completed",
+  "summary": {
+    "schema_version": "cmo.dashboard.v1",
+    "title": "Mock CMO Brief",
+    "market_sentiment": "Bullish",
+    "content_momentum": "Improving",
+    "top_opportunity": "Stock trading campaign",
+    "risk": "Low engagement on educational posts",
+    "next_action": "Review generated mock run before OpenClaw gateway integration"
+  },
+  "actions": [
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "act_001",
+      "title": "Approve Facebook post angle",
+      "summary": "Meme-based angle showing missed opportunity in stock market.",
+      "priority": "High",
+      "source": "Content Agent",
+      "agent": "Echo",
+      "time": "12 min ago",
+      "type": "Facebook Post"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "act_002",
+      "title": "Check campaign hook",
+      "summary": "Validate hook effectiveness for Stock Trading Campaign.",
+      "priority": "Medium",
+      "source": "Research Agent",
+      "agent": "Radar",
+      "time": "38 min ago",
+      "type": "Campaign Hook"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "act_003",
+      "title": "Weekly report ready",
+      "summary": "Weekly performance report is generated and ready to review.",
+      "priority": "Low",
+      "source": "Lens Agent",
+      "agent": "Vista",
+      "time": "1 hr ago",
+      "type": "Weekly Report"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "act_004",
+      "title": "Approve ad variation",
+      "summary": "New creative variation for HSPay referral campaign.",
+      "priority": "Medium",
+      "source": "Content Agent",
+      "agent": "Echo",
+      "time": "1 hr ago",
+      "type": "Ad Variation"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "act_005",
+      "title": "New insight from Reddit",
+      "summary": "Reddit discussion shows rising interest in day trading apps.",
+      "priority": "Low",
+      "source": "Research Agent",
+      "agent": "Radar",
+      "time": "2 hr ago",
+      "type": "Market Insight"
+    }
+  ],
+  "signals": [
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "sig_001",
+      "title": "Meme content is outperforming market news by 2.4x engagement",
+      "summary": "Meme-based angle driving significantly higher engagement across platforms.",
+      "category": "Opportunity",
+      "source": "Social Listening",
+      "severity": "High",
+      "time": "12 min ago"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "sig_002",
+      "title": "Educational posts have high reach but low comment depth",
+      "summary": "Strong visibility but low interaction quality on educational content.",
+      "category": "Audience",
+      "source": "Lens Agent",
+      "severity": "Medium",
+      "time": "38 min ago"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "sig_003",
+      "title": "Facebook link click behavior remains weak",
+      "summary": "CTR on Facebook links is 35% below platform benchmark.",
+      "category": "Risk",
+      "source": "Performance Data",
+      "severity": "High",
+      "time": "1 hr ago"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "sig_004",
+      "title": "Audience reacts better to hidden opportunity hooks",
+      "summary": "Hooks with curiosity framing drive higher saves and shares.",
+      "category": "Opportunity",
+      "source": "Research Agent",
+      "severity": "Opportunity",
+      "time": "2 hr ago"
+    }
+  ],
+  "agents": [
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "agent_radar",
+      "name": "Researcher",
+      "codename": "Radar",
+      "status": "Running",
+      "tone": "green",
+      "progress": 68,
+      "description": "Scanning market and social trends",
+      "activity": "Collecting signal from 23 sources...",
+      "metricA": "23 / 50",
+      "metricB": "47 new"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "agent_echo",
+      "name": "Content Agent",
+      "codename": "Echo",
+      "status": "Running",
+      "tone": "violet",
+      "progress": 72,
+      "description": "Creating content and drafts",
+      "activity": "Generating variations for 3 briefs...",
+      "metricA": "3",
+      "metricB": "3"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "agent_vista",
+      "name": "Lens Agent",
+      "codename": "Vista",
+      "status": "Idle",
+      "tone": "blue",
+      "progress": 28,
+      "description": "Analyzing performance",
+      "activity": "Waiting for new data request",
+      "metricA": "1 ready",
+      "metricB": "0"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "agent_mind",
+      "name": "Vault",
+      "codename": "Mind",
+      "status": "Need Review",
+      "tone": "orange",
+      "progress": 46,
+      "description": "Indexing and managing knowledge",
+      "activity": "12 new memories require review",
+      "metricA": "12",
+      "metricB": "1,248"
+    }
+  ],
+  "reports": [
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "rep_daily",
+      "title": "Daily Brief",
+      "type": "Daily",
+      "meta": "May 19, 2024 Lens Agent",
+      "stats": [
+        "12",
+        "8",
+        "3"
+      ],
+      "tone": "blue"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "rep_weekly",
+      "title": "Weekly Performance",
+      "type": "Weekly",
+      "meta": "May 12 - May 18, 2024 Lens Agent",
+      "stats": [
+        "1.2M",
+        "4.7%",
+        "2.1%"
+      ],
+      "tone": "green"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "rep_campaign",
+      "title": "Campaign Report",
+      "type": "Campaign",
+      "meta": "New Year Stonk Echo Agent",
+      "stats": [
+        "652K",
+        "2.3%",
+        "1,842"
+      ],
+      "tone": "violet"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "rep_monthly",
+      "title": "Monthly Overview",
+      "type": "Monthly",
+      "meta": "April 2024 Lens Agent",
+      "stats": [
+        "4.8M",
+        "4.2%",
+        "$1.24"
+      ],
+      "tone": "orange"
+    }
+  ],
+  "vault": [
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "vault_audience_memory",
+      "name": "Audience Memory Graph",
+      "type": "Knowledge Base",
+      "status": "Indexed",
+      "count": "1,248 nodes",
+      "tone": "violet"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "vault_campaign_learnings",
+      "name": "Campaign Learnings",
+      "type": "Reusable Insights",
+      "status": "Fresh",
+      "count": "86 memories",
+      "tone": "green"
+    },
+    {
+      "schema_version": "cmo.dashboard.v1",
+      "id": "vault_brand_guardrails",
+      "name": "Brand Guardrails",
+      "type": "Policy Pack",
+      "status": "Locked",
+      "count": "14 rules",
+      "tone": "blue"
+    }
+  ]
+}
