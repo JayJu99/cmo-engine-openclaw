@@ -360,14 +360,34 @@ function ActionRows({ actions, selected = false }: { actions: UIAction[]; select
 function DetailPanel({
   actions,
   signals,
+  selectedCampaign,
   mode,
 }: {
   actions: UIAction[];
   signals: UISignal[];
+  selectedCampaign?: UICampaign;
   mode: "actions" | "signals" | "pipeline";
 }) {
   const isSignal = mode === "signals";
   const isPipeline = mode === "pipeline";
+  const campaignName = selectedCampaign?.name ?? selectedCampaign?.title ?? "New Year Stonk";
+  const campaignChannels = selectedCampaign
+    ? Array.isArray(selectedCampaign.channels)
+      ? selectedCampaign.channels.join("  ")
+      : selectedCampaign.channels
+    : "Facebook  X  Reddit";
+  const campaignOwnerAgent = selectedCampaign?.owner_agent ?? `${selectedCampaign?.owner ?? "Content Agent"} (${selectedCampaign?.agent ?? "Echo"})`;
+  const campaignStage = selectedCampaign?.stage ?? "Content";
+  const campaignStatus = selectedCampaign?.status ?? "Running";
+  const campaignProgress = selectedCampaign?.progress ?? 3;
+  const campaignSummary =
+    selectedCampaign?.summary ??
+    "A New Year themed trading campaign to drive engagement with retail traders and promote platform activity.";
+  const campaignNextAction =
+    selectedCampaign?.next_action ?? "Review campaign progress and approve the next step";
+  const campaignLastUpdated = selectedCampaign?.last_updated ?? selectedCampaign?.updated ?? "12 min ago";
+  const campaignTone = (selectedCampaign?.tone ?? "violet") as Tone;
+  const campaignStageIndex = Math.max(0, Math.min(5, Math.round(campaignProgress) - 1));
 
   return (
     <Card className="h-fit p-6">
@@ -376,16 +396,16 @@ function DetailPanel({
           <icons.ChevronRight className="size-4 rotate-180" />
           Back to {isPipeline ? "pipeline" : "list"}
         </button>
-        <Badge variant={isSignal ? "red" : isPipeline ? "default" : "red"}>{isPipeline ? "Content" : isSignal ? "High Opportunity" : "High Priority"}</Badge>
+        <Badge variant={isSignal ? "red" : isPipeline ? "default" : "red"}>{isPipeline ? campaignStage : isSignal ? "High Opportunity" : "High Priority"}</Badge>
       </div>
 
       {isPipeline ? (
         <div className="flex items-center gap-5">
-          <CampaignMark name="New Year Stonk" color="violet" />
+          <CampaignMark name={campaignName} color={campaignTone} />
           <div>
-            <h2 className="text-2xl font-bold text-slate-950">New Year Stonk</h2>
-            <p className="mt-1 text-sm text-slate-500">Facebook  X  Reddit</p>
-            <p className="mt-2 text-sm font-semibold text-violet-700">Owned by Content Agent (Echo)</p>
+            <h2 className="text-2xl font-bold text-slate-950">{campaignName}</h2>
+            <p className="mt-1 text-sm text-slate-500">{campaignChannels}</p>
+            <p className="mt-2 text-sm font-semibold text-violet-700">Owned by {campaignOwnerAgent}</p>
           </div>
         </div>
       ) : (
@@ -408,7 +428,7 @@ function DetailPanel({
           <h3 className="text-sm font-bold text-slate-950">Summary</h3>
           <p className="mt-3 text-sm leading-7 text-slate-600">
             {isPipeline
-              ? "A New Year themed trading campaign to drive engagement with retail traders and promote platform activity."
+              ? campaignSummary
               : isSignal
                 ? "Meme-based angle is driving significantly higher engagement across Facebook, X, and Reddit compared to market news posts."
                 : "Meme-based angle highlighting the risk of missing early stock opportunities in the market."}
@@ -430,8 +450,15 @@ function DetailPanel({
           </div>
         ) : isPipeline ? (
           <div>
-            <h3 className="text-sm font-bold text-slate-950">Campaign Progress</h3>
-            <StageRail active={2} />
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-sm font-bold text-slate-950">Campaign Progress</h3>
+              <div className="flex flex-wrap items-center gap-3 text-xs font-semibold text-slate-500">
+                <StatusBadge value={campaignStatus} />
+                <span>{campaignProgress} / 6</span>
+                <span>{campaignLastUpdated}</span>
+              </div>
+            </div>
+            <StageRail active={campaignStageIndex} />
           </div>
         ) : (
           <div>
@@ -464,7 +491,7 @@ function DetailPanel({
             <icons.Sparkles className="size-4" />
             Agent Note
           </div>
-          This signal is outperforming baseline campaign patterns and should be converted into a brief.
+          {isPipeline ? campaignNextAction : "This signal is outperforming baseline campaign patterns and should be converted into a brief."}
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
@@ -810,7 +837,7 @@ export function PipelineView({ data }: { data?: DashboardViewData }) {
           <CampaignTable campaigns={dashboard.campaigns} />
         </div>
         <div className="min-w-0">
-          <DetailPanel actions={dashboard.actions} signals={dashboard.signals} mode="pipeline" />
+          <DetailPanel actions={dashboard.actions} signals={dashboard.signals} selectedCampaign={dashboard.campaigns[0]} mode="pipeline" />
         </div>
       </div>
     </PageChrome>
