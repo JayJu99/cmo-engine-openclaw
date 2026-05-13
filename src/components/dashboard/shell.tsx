@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { navItems } from "@/components/dashboard/data";
 import { Sparkline } from "@/components/dashboard/charts";
 import { icons, type IconName } from "@/components/dashboard/icons";
+import { RunBriefButton } from "@/components/dashboard/run-brief-button";
 import { cn } from "@/lib/utils";
 
 function Logo() {
@@ -135,10 +136,7 @@ export function PageChrome({
           <p className="mt-2 text-base text-slate-500">{description}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <Button variant="outline">
-            <icons.Play />
-            Run Brief
-          </Button>
+          <RunBriefButton />
           <Button>
             <icons.Rocket />
             {primary}
