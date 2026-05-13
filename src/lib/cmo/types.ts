@@ -22,6 +22,7 @@ export type CmoStatus =
   | "invalid"
   | "mock";
 export type CmoTone = "violet" | "green" | "blue" | "orange" | "pink" | "slate" | "red";
+export type CmoChatRunStatus = "running" | "completed" | "failed" | "timeout";
 
 export interface CmoVersioned {
   schema_version: CmoSchemaVersion;
@@ -140,4 +141,19 @@ export interface CmoCollectionResponse<T> extends CmoVersioned {
   run_id: string;
   created_at: string;
   data: T[];
+}
+
+export interface CmoChatRun extends CmoVersioned {
+  chat_run_id: string;
+  created_at: string;
+  updated_at: string;
+  status: CmoChatRunStatus;
+  question: string;
+  answer: string;
+  context_run_id: string | null;
+  raw_markdown_path: string;
+  error?: {
+    code: string;
+    message: string;
+  };
 }

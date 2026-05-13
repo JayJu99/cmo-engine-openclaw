@@ -14,8 +14,10 @@ const DEFAULT_TRIGGER_MODE = "mock";
 const DEFAULT_OPENCLAW_BIN = "openclaw";
 const DEFAULT_CMO_AGENT_ID = "cmo";
 const DEFAULT_CMO_RUN_TIMEOUT_SECONDS = 900;
+const DEFAULT_CMO_CHAT_TIMEOUT_SECONDS = 900;
 const DEFAULT_CMO_CRON_RUN_TIMEOUT_MS = 180_000;
 const MAX_BODY_BYTES = 1_000_000;
+const MOCK_CHAT_MIN_RUNNING_MS = 1_500;
 const SAFE_OPENCLAW_METADATA_KEYS = [
   "mode",
   "agent_id",
@@ -50,6 +52,7 @@ function getConfig() {
     openclawBin: process.env.OPENCLAW_BIN ?? DEFAULT_OPENCLAW_BIN,
     cmoAgentId: process.env.CMO_AGENT_ID ?? DEFAULT_CMO_AGENT_ID,
     cmoRunTimeoutSeconds: Number.parseInt(process.env.CMO_RUN_TIMEOUT_SECONDS ?? String(DEFAULT_CMO_RUN_TIMEOUT_SECONDS), 10),
+    cmoChatTimeoutSeconds: Number.parseInt(process.env.CMO_CHAT_TIMEOUT_SECONDS ?? String(DEFAULT_CMO_CHAT_TIMEOUT_SECONDS), 10),
     cmoCronRunTimeoutMs: Number.parseInt(process.env.CMO_CRON_RUN_TIMEOUT_MS ?? String(DEFAULT_CMO_CRON_RUN_TIMEOUT_MS), 10),
     openclawTriggerEnabled: triggerMode === "openclaw-cron",
     port: Number.parseInt(process.env.CMO_ADAPTER_PORT ?? process.env.PORT ?? "8787", 10),
@@ -154,6 +157,7 @@ async function ensureDashboardDirs() {
   await mkdir(dataPath("raw"), { recursive: true });
   await mkdir(dataPath("runs"), { recursive: true });
   await mkdir(dataPath("status"), { recursive: true });
+  await mkdir(dataPath("chat", "raw"), { recursive: true });
 }
 
 async function readRequestJson(req) {
@@ -361,6 +365,40 @@ function sanitizePublicRun(run) {
   if (openclaw) {
     sanitized.openclaw = openclaw;
   }
+
+  if (error) {
+    sanitized.error = error;
+  }
+
+  return sanitized;
+}
+
+function sanitizeChatError(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return {
+    code: safeString(value.code, "cmo_chat_error"),
+    message: safeString(value.message, "CMO chat failed"),
+  };
+}
+
+function sanitizePublicChat(chatRun) {
+  const record = isRecord(chatRun) ? chatRun : {};
+  const chatRunId = safeString(record.chat_run_id, "chat_unknown");
+  const status = ["running", "completed", "failed", "timeout"].includes(record.status) ? record.status : "failed";
+  const sanitized = versioned({
+    chat_run_id: chatRunId,
+    created_at: safeString(record.created_at, new Date().toISOString()),
+    updated_at: safeString(record.updated_at, new Date().toISOString()),
+    status,
+    question: safeString(record.question, ""),
+    answer: typeof record.answer === "string" ? record.answer : "",
+    context_run_id: typeof record.context_run_id === "string" ? record.context_run_id : null,
+    raw_markdown_path: safeString(record.raw_markdown_path, dataPath("chat", "raw", `${chatRunId}.md`)),
+  });
+  const error = sanitizeChatError(record.error);
 
   if (error) {
     sanitized.error = error;
@@ -1110,6 +1148,191 @@ function buildCmoDashboardPrompt({ runId, rawPath, normalizedPath, workspace }) 
   ].join("\n");
 }
 
+function chatQuestionFromBody(body) {
+  if (typeof body === "string") {
+    return body.trim();
+  }
+
+  if (isRecord(body)) {
+    const value = body.question ?? body.message ?? body.input;
+
+    if (typeof value === "string") {
+      return value.trim();
+    }
+  }
+
+  return "";
+}
+
+async function readLatestDashboardContext() {
+  const latestSuccessful = await readJsonFile(dataPath("latest_successful.json"));
+  const latest = latestSuccessful ?? (await readJsonFile(dataPath("latest.json")));
+
+  return latest ? sanitizePublicRun(latest) : null;
+}
+
+function compactContextItems(items, fields, limit) {
+  return Array.isArray(items) ? items.slice(0, limit).map((item) => pickFields(item, fields)) : [];
+}
+
+function compactDashboardContext(context) {
+  if (!isRecord(context)) {
+    return null;
+  }
+
+  return {
+    run_id: context.run_id ?? null,
+    created_at: context.created_at ?? null,
+    status: context.status ?? null,
+    summary: pickFields(context.summary, ["title", "market_sentiment", "content_momentum", "top_opportunity", "risk", "next_action"]),
+    actions: compactContextItems(context.actions, ["title", "summary", "priority", "source", "agent", "type"], 5),
+    signals: compactContextItems(context.signals, ["title", "summary", "category", "source", "severity"], 5),
+    campaigns: compactContextItems(context.campaigns, ["name", "title", "channels", "stage", "owner_agent", "status", "summary", "next_action"], 4),
+    vault: compactContextItems(context.vault, ["name", "type", "status", "count"], 4),
+  };
+}
+
+function buildMockChatAnswer(question, context) {
+  const summary = isRecord(context?.summary) ? context.summary : {};
+  const actions = Array.isArray(context?.actions) ? context.actions : [];
+  const signals = Array.isArray(context?.signals) ? context.signals : [];
+  const campaigns = Array.isArray(context?.campaigns) ? context.campaigns : [];
+  const vault = Array.isArray(context?.vault) ? context.vault : [];
+  const action = actions.find((item) => item.priority === "High") ?? actions[0];
+  const signal = signals[0];
+  const campaign = campaigns[0];
+  const vaultItem = vault[0];
+
+  return [
+    `For "${question}", focus on ${safeString(summary.top_opportunity, "the highest-impact CMO opportunity now")}.`,
+    action ? `Next action: ${safeString(action.title, "Review priority action")} - ${safeString(action.summary, "Confirm the next practical step")}.` : `Next action: ${safeString(summary.next_action, "Review the latest dashboard brief")}.`,
+    signal ? `Watch signal: ${safeString(signal.title, "Latest signal")}.` : `Risk to watch: ${safeString(summary.risk, "No risk context available")}.`,
+    campaign ? `Campaign priority: ${safeString(campaign.name ?? campaign.title, "Active campaign")} - ${safeString(campaign.next_action, "Confirm campaign owner and next step")}.` : null,
+    vaultItem ? `Use vault context from ${safeString(vaultItem.name, "Vault")} before publishing.` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function createRunningChatRun({ chatRunId, createdAt, question, context, rawPath }) {
+  return sanitizePublicChat({
+    chat_run_id: chatRunId,
+    created_at: createdAt,
+    updated_at: createdAt,
+    status: "running",
+    question,
+    answer: "",
+    context_run_id: typeof context?.run_id === "string" ? context.run_id : null,
+    raw_markdown_path: rawPath,
+  });
+}
+
+function createFailedChatRun({ chatRun, message, code = "cmo_chat_failed" }) {
+  return sanitizePublicChat({
+    ...chatRun,
+    updated_at: new Date().toISOString(),
+    status: "failed",
+    error: {
+      code,
+      message,
+    },
+  });
+}
+
+function createTimeoutChatRun(chatRun) {
+  return sanitizePublicChat({
+    ...chatRun,
+    updated_at: new Date().toISOString(),
+    status: "timeout",
+    error: {
+      code: "cmo_chat_timeout",
+      message: "CMO chat timed out before completion",
+    },
+  });
+}
+
+function isChatTimedOut(chatRun) {
+  if (!isRecord(chatRun) || chatRun.status !== "running") {
+    return false;
+  }
+
+  const createdAtMs = Date.parse(String(chatRun.created_at ?? ""));
+
+  if (Number.isNaN(createdAtMs)) {
+    return false;
+  }
+
+  return Date.now() - createdAtMs > getConfig().cmoChatTimeoutSeconds * 1000;
+}
+
+function isMockChatReady(chatRun) {
+  if (!isRecord(chatRun) || chatRun.status !== "running") {
+    return false;
+  }
+
+  const createdAtMs = Date.parse(String(chatRun.created_at ?? ""));
+
+  return !Number.isNaN(createdAtMs) && Date.now() - createdAtMs >= MOCK_CHAT_MIN_RUNNING_MS;
+}
+
+async function completeMockChatRun(chatRun) {
+  const context = await readLatestDashboardContext();
+  const answer = buildMockChatAnswer(safeString(chatRun.question, "CMO question"), context);
+  const completed = sanitizePublicChat({
+    ...chatRun,
+    updated_at: new Date().toISOString(),
+    status: "completed",
+    answer,
+    context_run_id: typeof context?.run_id === "string" ? context.run_id : chatRun.context_run_id,
+  });
+
+  await mkdir(path.dirname(completed.raw_markdown_path), { recursive: true });
+  await writeFile(completed.raw_markdown_path, `${answer}\n`, "utf8");
+  await writeJsonFile(dataPath("chat", `${completed.chat_run_id}.json`), completed);
+  return completed;
+}
+
+function buildCmoChatPrompt({ chatRunId, question, rawPath, jsonPath, context }) {
+  return [
+    "You are the Holdstation CMO agent answering one dashboard chat question.",
+    "",
+    `Chat run ID: ${chatRunId}`,
+    `Raw markdown path: ${rawPath}`,
+    `Chat JSON path: ${jsonPath}`,
+    "",
+    "User question:",
+    question,
+    "",
+    "Latest dashboard context, if available:",
+    JSON.stringify(compactDashboardContext(context), null, 2),
+    "",
+    "Execution rules:",
+    "1. Answer concisely and practically.",
+    "2. Use dashboard context from summary, actions, signals, campaigns, and vault when useful.",
+    "3. Write the raw markdown answer first to the raw markdown path.",
+    "4. Write the public chat JSON second to the chat JSON path.",
+    "5. Do not send Discord, Telegram, chat, email, or other external messages.",
+    "6. Do not include Gateway details, prompts, stdout, stderr, or secrets in the public JSON.",
+    "",
+    "The public chat JSON must match this contract exactly:",
+    JSON.stringify(
+      {
+        schema_version: getConfig().schemaVersion,
+        chat_run_id: chatRunId,
+        created_at: "ISO-8601 timestamp from existing file if present",
+        updated_at: "ISO-8601 timestamp",
+        status: "completed",
+        question,
+        answer: "concise practical answer",
+        context_run_id: context?.run_id ?? null,
+        raw_markdown_path: rawPath,
+      },
+      null,
+      2,
+    ),
+  ].join("\n");
+}
+
 function sanitizeCommandArgs(args) {
   if (!Array.isArray(args)) {
     return null;
@@ -1317,6 +1540,92 @@ async function runOpenClawCronBrief({ runId, rawPath, normalizedPath, workspace 
   };
 }
 
+async function runOpenClawCronChat({ chatRunId, question, rawPath, jsonPath, context }) {
+  const config = getConfig();
+  const jobName = `cmo-chat-${chatRunId}`;
+  const prompt = buildCmoChatPrompt({ chatRunId, question, rawPath, jsonPath, context });
+  const scheduleAt = createNearFutureCronAt();
+  const specPath = dataPath("status", `${chatRunId}.openclaw-chat-spec.json`);
+
+  await writeJsonFile(specPath, versioned({
+    name: jobName,
+    oneShot: true,
+    enabled: true,
+    at: scheduleAt,
+    agentId: config.cmoAgentId,
+    sessionTarget: "isolated",
+    payload: {
+      kind: "agentTurn",
+      prompt,
+      dashboard_chat: {
+        schema_version: config.schemaVersion,
+        chat_run_id: chatRunId,
+        raw_markdown_path: rawPath,
+        chat_json_path: jsonPath,
+      },
+    },
+    delivery: {
+      mode: "none",
+    },
+    timeoutSeconds: config.cmoChatTimeoutSeconds,
+  }));
+
+  const addResult = await execOpenClaw(
+    [
+      "cron",
+      "add",
+      "--name",
+      jobName,
+      "--at",
+      scheduleAt,
+      "--session",
+      "isolated",
+      "--message",
+      prompt,
+      "--agent",
+      config.cmoAgentId,
+      "--no-deliver",
+      "--delete-after-run",
+    ],
+    config.cmoCronRunTimeoutMs,
+    "chat_cron_add",
+  );
+  const jobId = pickOpenClawJobIdFromOutput(addResult.stdout, jobName);
+  const runResult = await execOpenClaw(["cron", "run", jobId], config.cmoCronRunTimeoutMs, "chat_cron_run");
+  const openclawRunId = pickOpenClawRunId(runResult.json);
+
+  await writeJsonFile(dataPath("status", `${chatRunId}.chat-debug.json`), versioned({
+    chat_run_id: chatRunId,
+    captured_at: new Date().toISOString(),
+    note: "Private OpenClaw CLI chat debug output. Do not serve this file through dashboard APIs.",
+    add: {
+      args: sanitizeCommandArgs(addResult.args),
+      stdout: addResult.stdout,
+      stderr: addResult.stderr,
+      json: addResult.json,
+    },
+    run: {
+      args: sanitizeCommandArgs(runResult.args),
+      stdout: runResult.stdout,
+      stderr: runResult.stderr,
+      json: runResult.json,
+    },
+  }));
+
+  return {
+    mode: "openclaw-cron",
+    agent_id: config.cmoAgentId,
+    job_id: jobId,
+    job_name: jobName,
+    schedule_at: scheduleAt,
+    openclaw_run_id: openclawRunId ? String(openclawRunId) : "",
+    trigger_status: runResult.json?.enqueued === true ? "enqueued" : "triggered",
+    raw_markdown_path: rawPath,
+    normalized_json_path: jsonPath,
+    spec_path: specPath,
+  };
+}
+
 async function triggerOpenClawCronInBackground({ runId, createdAt, workspace, rawPath, normalizedPath }) {
   const statusPath = dataPath("status", `${runId}.trigger.json`);
 
@@ -1369,6 +1678,48 @@ async function triggerOpenClawCronInBackground({ runId, createdAt, workspace, ra
       error: privateFailure,
     }));
     console.error("OpenClaw CMO trigger failed", failure);
+  }
+}
+
+async function triggerOpenClawChatInBackground({ chatRunId, question, rawPath, jsonPath, context }) {
+  try {
+    const metadata = sanitizeOpenClawMetadata(await runOpenClawCronChat({ chatRunId, question, rawPath, jsonPath, context }));
+    await writeJsonFile(dataPath("status", `${chatRunId}.chat-trigger.json`), versioned({
+      chat_run_id: chatRunId,
+      status: "triggered",
+      updated_at: new Date().toISOString(),
+      openclaw: metadata,
+    }));
+  } catch (error) {
+    const failure = summarizeExecError(error);
+    const privateFailure = summarizeExecError(error, { includeOutput: true });
+    const currentChat = (await readJsonFile(jsonPath)) ?? createRunningChatRun({
+      chatRunId,
+      createdAt: new Date().toISOString(),
+      question,
+      context,
+      rawPath,
+    });
+    const failedChat = createFailedChatRun({
+      chatRun: currentChat,
+      message: failure.message,
+      code: "cmo_chat_openclaw_trigger_failed",
+    });
+
+    await writeJsonFile(jsonPath, failedChat);
+    await writeJsonFile(dataPath("status", `${chatRunId}.chat-trigger.json`), versioned({
+      chat_run_id: chatRunId,
+      status: "failed",
+      updated_at: new Date().toISOString(),
+      error: failure,
+    }));
+    await writeJsonFile(dataPath("status", `${chatRunId}.chat-debug.json`), versioned({
+      chat_run_id: chatRunId,
+      captured_at: new Date().toISOString(),
+      note: "Private OpenClaw CLI chat failure debug output. Do not serve this file through dashboard APIs.",
+      error: privateFailure,
+    }));
+    console.error("OpenClaw CMO chat trigger failed", failure);
   }
 }
 
@@ -1536,6 +1887,7 @@ async function handleStatus(res) {
     openclaw_runtime: "not_checked",
     openclaw_timeout_ms: config.openclawTimeoutMs,
     cmo_run_timeout_seconds: config.cmoRunTimeoutSeconds,
+    cmo_chat_timeout_seconds: config.cmoChatTimeoutSeconds,
     cmo_cron_run_timeout_ms: config.cmoCronRunTimeoutMs,
   }));
 }
@@ -1670,9 +2022,141 @@ async function handleRunBrief(req, res) {
   jsonResponse(res, 201, run);
 }
 
+async function handleChat(req, res) {
+  const config = getConfig();
+  const body = await readRequestJson(req);
+  const question = chatQuestionFromBody(body);
+
+  if (!question) {
+    jsonResponse(res, 400, {
+      error: "Question is required",
+      code: "question_required",
+    });
+    return;
+  }
+
+  if (config.triggerMode !== "mock" && config.triggerMode !== "openclaw-cron") {
+    jsonResponse(res, 400, {
+      error: `Unsupported CMO_TRIGGER_MODE: ${config.triggerMode}`,
+      code: "unsupported_trigger_mode",
+    });
+    return;
+  }
+
+  await ensureDashboardDirs();
+
+  const createdAt = new Date().toISOString();
+  const requestedChatRunId = isRecord(body) && typeof body.chat_run_id === "string" && body.chat_run_id.trim() ? body.chat_run_id.trim() : null;
+  const chatRunId = requestedChatRunId ?? `chat_${createdAt.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
+
+  if (!isSafeRunId(chatRunId)) {
+    jsonResponse(res, 400, {
+      error: "Invalid chat_run_id",
+      code: "invalid_chat_run_id",
+    });
+    return;
+  }
+
+  const context = await readLatestDashboardContext();
+  const rawPath = dataPath("chat", "raw", `${chatRunId}.md`);
+  const jsonPath = dataPath("chat", `${chatRunId}.json`);
+  const chatRun = createRunningChatRun({
+    chatRunId,
+    createdAt,
+    question,
+    context,
+    rawPath,
+  });
+
+  await writeJsonFile(jsonPath, chatRun);
+
+  if (config.triggerMode === "openclaw-cron") {
+    await writeJsonFile(dataPath("status", `${chatRunId}.chat-trigger.json`), versioned({
+      chat_run_id: chatRunId,
+      status: "running",
+      created_at: createdAt,
+      trigger_mode: config.triggerMode,
+      cmo_agent_id: config.cmoAgentId,
+      raw_markdown_path: rawPath,
+      chat_json_path: jsonPath,
+    }));
+
+    void triggerOpenClawChatInBackground({ chatRunId, question, rawPath, jsonPath, context }).catch((error) => {
+      console.error("OpenClaw CMO chat background task failed", error);
+    });
+  }
+
+  jsonResponse(res, 202, chatRun);
+}
+
+async function finalizeChat(chatRunId) {
+  const jsonPath = dataPath("chat", `${chatRunId}.json`);
+  const chatRun = await readJsonFile(jsonPath);
+
+  if (!chatRun) {
+    return null;
+  }
+
+  const sanitized = sanitizePublicChat(chatRun);
+
+  if (sanitized.status === "completed") {
+    if (sanitized.answer.trim()) {
+      await writeJsonFile(jsonPath, sanitized);
+      return sanitized;
+    }
+
+    const failed = createFailedChatRun({
+      chatRun: sanitized,
+      message: "CMO chat completed without an answer",
+      code: "cmo_chat_empty_answer",
+    });
+
+    await writeJsonFile(jsonPath, failed);
+    return failed;
+  }
+
+  if (sanitized.status !== "running") {
+    await writeJsonFile(jsonPath, sanitized);
+    return sanitized;
+  }
+
+  if (isChatTimedOut(sanitized)) {
+    const timeout = createTimeoutChatRun(sanitized);
+
+    await writeJsonFile(jsonPath, timeout);
+    return timeout;
+  }
+
+  if (getConfig().triggerMode === "mock" && isMockChatReady(sanitized)) {
+    return completeMockChatRun(sanitized);
+  }
+
+  return sanitized;
+}
+
+async function handleChatRun(res, chatRunId) {
+  if (!isSafeRunId(chatRunId)) {
+    jsonResponse(res, 400, {
+      error: "Invalid chat_run_id",
+      code: "invalid_chat_run_id",
+    });
+    return;
+  }
+
+  const chatRun = await finalizeChat(chatRunId);
+
+  if (!chatRun) {
+    notFound(res, `CMO chat run not found: ${chatRunId}`);
+    return;
+  }
+
+  jsonResponse(res, 200, chatRun);
+}
+
 async function routeRequest(req, res) {
   const url = new URL(req.url ?? "/", "http://localhost");
   const runMatch = url.pathname.match(/^\/cmo\/runs\/([^/]+)$/);
+  const chatMatch = url.pathname.match(/^\/cmo\/chat\/([^/]+)$/);
 
   if (!url.pathname.startsWith("/cmo/")) {
     notFound(res);
@@ -1717,6 +2201,26 @@ async function routeRequest(req, res) {
       }
 
       await handleRun(res, decodeURIComponent(runMatch[1]));
+      return;
+    }
+
+    if (url.pathname === "/cmo/chat") {
+      if (req.method !== "POST") {
+        methodNotAllowed(res);
+        return;
+      }
+
+      await handleChat(req, res);
+      return;
+    }
+
+    if (chatMatch) {
+      if (req.method !== "GET") {
+        methodNotAllowed(res);
+        return;
+      }
+
+      await handleChatRun(res, decodeURIComponent(chatMatch[1]));
       return;
     }
 

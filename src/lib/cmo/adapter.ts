@@ -1,19 +1,24 @@
-import { CMO_SCHEMA_VERSION, type CmoRun, type CmoRunIndexItem } from "@/lib/cmo/types";
+import { CMO_SCHEMA_VERSION, type CmoChatRun, type CmoRun, type CmoRunIndexItem } from "@/lib/cmo/types";
 import { getCmoAdapterMode, isRemoteCmoAdapter } from "@/lib/cmo/config";
 import {
+  createLocalChatRun,
   createMockRun,
+  readLocalChatRun,
   readLatestRun,
   readRun,
   readRuns,
 } from "@/lib/cmo/store";
 import {
+  getRemoteChat,
   getRemoteLatestRun,
   getRemoteRun,
   getRemoteStatus,
+  postRemoteChat,
   postRemoteRunBrief,
   type CmoRemoteStatus,
   type CmoRunBriefResponse,
 } from "@/lib/cmo/remote-client";
+import { CmoAdapterError } from "@/lib/cmo/errors";
 
 export async function readDashboardLatestRun(): Promise<CmoRun> {
   return isRemoteCmoAdapter() ? getRemoteLatestRun() : readLatestRun();
@@ -36,6 +41,33 @@ export async function runDashboardBrief(body: unknown): Promise<{ data: CmoRun |
     data: await createMockRun(),
     status: 201,
   };
+}
+
+export async function startDashboardChat(body: unknown): Promise<{ data: CmoChatRun; status: number }> {
+  if (isRemoteCmoAdapter()) {
+    return postRemoteChat(body);
+  }
+
+  try {
+    return {
+      data: await createLocalChatRun(body),
+      status: 202,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message === "Question is required") {
+      throw new CmoAdapterError("Question is required", 400, "cmo_chat_question_required");
+    }
+
+    throw error;
+  }
+}
+
+export async function readDashboardChat(chatRunId: string): Promise<CmoChatRun | null> {
+  if (isRemoteCmoAdapter()) {
+    return getRemoteChat(chatRunId);
+  }
+
+  return readLocalChatRun(chatRunId);
 }
 
 export async function readDashboardStatus(): Promise<CmoRemoteStatus> {

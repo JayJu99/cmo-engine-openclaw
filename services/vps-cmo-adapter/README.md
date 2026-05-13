@@ -12,6 +12,8 @@ The service serves normalized dashboard JSON only. It keeps the Windows dashboar
 
 Finalization happens when `GET /cmo/runs/:runId` or `GET /cmo/latest` is read. If CMO has written `runs/{runId}.json` with `status: "completed"`, the adapter first repairs sparse nested dashboard objects, then validates the dashboard contract. Valid completed output is promoted to `latest.json` and `latest_successful.json`. If the run is still running, the adapter returns the running run until `CMO_RUN_TIMEOUT_SECONDS` is exceeded. Timed-out or still-invalid completed runs update `latest.json` but do not overwrite `latest_successful.json`.
 
+`POST /cmo/chat` starts an async CMO chat run and returns `status: "running"` with a `chat_run_id`. `GET /cmo/chat/:chatRunId` returns the current chat run and finalizes mock or timed-out runs. In `openclaw-cron` mode, the private CMO prompt includes the latest dashboard summary, actions, signals, campaigns, and vault context when available.
+
 ## Run Locally
 
 From the repository root:
@@ -38,6 +40,7 @@ CMO_TRIGGER_MODE=mock
 OPENCLAW_BIN=openclaw
 CMO_AGENT_ID=cmo
 CMO_RUN_TIMEOUT_SECONDS=900
+CMO_CHAT_TIMEOUT_SECONDS=900
 CMO_CRON_RUN_TIMEOUT_MS=180000
 OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 OPENCLAW_TIMEOUT_MS=120000
@@ -67,6 +70,8 @@ Authorization: Bearer <CMO_ADAPTER_API_KEY>
 - `GET /cmo/latest`
 - `GET /cmo/runs/:runId`
 - `POST /cmo/run-brief`
+- `POST /cmo/chat`
+- `GET /cmo/chat/:chatRunId`
 
 `GET /cmo/latest` attempts finalization before responding. This covers the case where `latest.json` still contains the initial `running` state but `runs/{runId}.json` has already been replaced by completed CMO output.
 
@@ -117,6 +122,36 @@ curl -H "Authorization: Bearer $CMO_ADAPTER_API_KEY" \
 ```bash
 curl -H "Authorization: Bearer $CMO_ADAPTER_API_KEY" \
   http://localhost:8787/cmo/runs/run_20260512000100_example
+```
+
+```bash
+curl -X POST http://localhost:8787/cmo/chat \
+  -H "Authorization: Bearer $CMO_ADAPTER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What should the CMO prioritize today?"}'
+```
+
+```bash
+curl -H "Authorization: Bearer $CMO_ADAPTER_API_KEY" \
+  http://localhost:8787/cmo/chat/chat_20260513000100_example
+```
+
+## Chat Data Format
+
+Chat outputs are stored under `chat/{chatRunId}.json` and `chat/raw/{chatRunId}.md` inside `CMO_DASHBOARD_DATA_DIR`.
+
+```json
+{
+  "schema_version": "cmo.dashboard.v1",
+  "chat_run_id": "chat_20260513000100_example",
+  "created_at": "2026-05-13T00:01:00.000Z",
+  "updated_at": "2026-05-13T00:01:04.000Z",
+  "status": "completed",
+  "question": "What should the CMO prioritize today?",
+  "answer": "Concise practical answer.",
+  "context_run_id": "run_20260512000100_example",
+  "raw_markdown_path": "/home/ju/.openclaw/workspace/data/cmo-dashboard/chat/raw/chat_20260513000100_example.md"
+}
 ```
 
 ## VPS Deployment Note

@@ -1,4 +1,4 @@
-import { CMO_SCHEMA_VERSION, type CmoRun } from "@/lib/cmo/types";
+import { CMO_SCHEMA_VERSION, type CmoChatRun, type CmoChatRunStatus, type CmoRun } from "@/lib/cmo/types";
 import { getRemoteAdapterApiKey, getRemoteAdapterUrl } from "@/lib/cmo/config";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import { normalizeRun, validateNormalizedRun } from "@/lib/cmo/validation";
@@ -177,6 +177,38 @@ function normalizeRunBriefResponse(payload: unknown): CmoRunBriefResponse {
   };
 }
 
+function normalizeChatStatus(value: unknown): CmoChatRunStatus {
+  return value === "completed" || value === "failed" || value === "timeout" || value === "running" ? value : "failed";
+}
+
+function normalizeRemoteChatRun(payload: unknown): CmoChatRun {
+  if (!isRecord(payload) || typeof payload.chat_run_id !== "string" || !payload.chat_run_id.trim()) {
+    throw new CmoAdapterError("Remote CMO Adapter chat response did not include a valid chat_run_id", 502, "cmo_remote_invalid_chat");
+  }
+
+  const error = isRecord(payload.error) ? payload.error : null;
+
+  return {
+    schema_version: CMO_SCHEMA_VERSION,
+    chat_run_id: payload.chat_run_id,
+    created_at: typeof payload.created_at === "string" ? payload.created_at : new Date().toISOString(),
+    updated_at: typeof payload.updated_at === "string" ? payload.updated_at : new Date().toISOString(),
+    status: normalizeChatStatus(payload.status),
+    question: typeof payload.question === "string" ? payload.question : "",
+    answer: typeof payload.answer === "string" ? payload.answer : "",
+    context_run_id: typeof payload.context_run_id === "string" ? payload.context_run_id : null,
+    raw_markdown_path: typeof payload.raw_markdown_path === "string" ? payload.raw_markdown_path : "",
+    ...(error
+      ? {
+          error: {
+            code: typeof error.code === "string" ? error.code : "cmo_remote_chat_error",
+            message: typeof error.message === "string" ? error.message : "Remote CMO chat failed",
+          },
+        }
+      : {}),
+  };
+}
+
 export async function postRemoteRunBrief(body: unknown): Promise<RemoteJsonResponse<CmoRunBriefResponse>> {
   const response = await requestRemoteJson<unknown>("/cmo/run-brief", {
     method: "POST",
@@ -187,6 +219,23 @@ export async function postRemoteRunBrief(body: unknown): Promise<RemoteJsonRespo
     data: normalizeRunBriefResponse(response.data),
     status: response.status,
   };
+}
+
+export async function postRemoteChat(body: unknown): Promise<RemoteJsonResponse<CmoChatRun>> {
+  const response = await requestRemoteJson<unknown>("/cmo/chat", {
+    method: "POST",
+    body,
+  });
+
+  return {
+    data: normalizeRemoteChatRun(response.data),
+    status: response.status,
+  };
+}
+
+export async function getRemoteChat(chatRunId: string): Promise<CmoChatRun> {
+  const response = await requestRemoteJson<unknown>(`/cmo/chat/${encodeURIComponent(chatRunId)}`);
+  return normalizeRemoteChatRun(response.data);
 }
 
 export async function getRemoteLatestRun(): Promise<CmoRun> {
