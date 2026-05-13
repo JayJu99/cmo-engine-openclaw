@@ -12,6 +12,8 @@ The service serves normalized dashboard JSON only. It keeps the Windows dashboar
 
 Finalization happens when `GET /cmo/runs/:runId` or `GET /cmo/latest` is read. If CMO has written `runs/{runId}.json` with `status: "completed"`, the adapter first repairs sparse nested dashboard objects, then validates the dashboard contract. Valid completed output is promoted to `latest.json` and `latest_successful.json`. If the run is still running, the adapter returns the running run until `CMO_RUN_TIMEOUT_SECONDS` is exceeded. Timed-out or still-invalid completed runs update `latest.json` but do not overwrite `latest_successful.json`.
 
+`GET /cmo/runs?limit=20` lists compact normalized run history newest first, defaulting to 20 items and capping at 100. It only reads `runs/*.json`, skips malformed JSON, and does not expose raw, status, debug, or latest files.
+
 `GET /cmo/chat` lists recent chat runs newest first, defaulting to 20 items. `POST /cmo/chat` starts an async CMO chat run and returns `status: "running"` with a `chat_run_id`. `GET /cmo/chat/:chatRunId` returns the current chat run and finalizes mock or timed-out runs. In `openclaw-cron` mode, the private CMO prompt includes the latest dashboard summary, actions, signals, campaigns, and vault context when available.
 
 ## Run Locally
@@ -68,6 +70,7 @@ Authorization: Bearer <CMO_ADAPTER_API_KEY>
 
 - `GET /cmo/status`
 - `GET /cmo/latest`
+- `GET /cmo/runs?limit=20`
 - `GET /cmo/runs/:runId`
 - `POST /cmo/run-brief`
 - `GET /cmo/chat`
@@ -123,6 +126,11 @@ curl -H "Authorization: Bearer $CMO_ADAPTER_API_KEY" \
 ```bash
 curl -H "Authorization: Bearer $CMO_ADAPTER_API_KEY" \
   http://localhost:8787/cmo/runs/run_20260512000100_example
+```
+
+```bash
+curl -H "Authorization: Bearer $CMO_ADAPTER_API_KEY" \
+  "http://localhost:8787/cmo/runs?limit=20"
 ```
 
 ```bash

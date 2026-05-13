@@ -16,6 +16,8 @@ const DEFAULT_CMO_AGENT_ID = "cmo";
 const DEFAULT_CMO_RUN_TIMEOUT_SECONDS = 900;
 const DEFAULT_CMO_CHAT_TIMEOUT_SECONDS = 900;
 const DEFAULT_CMO_CRON_RUN_TIMEOUT_MS = 180_000;
+const DEFAULT_RUN_LIST_LIMIT = 20;
+const MAX_RUN_LIST_LIMIT = 100;
 const MAX_BODY_BYTES = 1_000_000;
 const MOCK_CHAT_MIN_RUNNING_MS = 1_500;
 const SAFE_OPENCLAW_METADATA_KEYS = [
@@ -62,6 +64,30 @@ function getConfig() {
 
 function isSafeRunId(runId) {
   return /^[A-Za-z0-9_.-]+$/.test(runId);
+}
+
+function safeRunListLimit(limit) {
+  return Number.isFinite(limit) ? Math.max(1, Math.min(MAX_RUN_LIST_LIMIT, Math.floor(limit))) : DEFAULT_RUN_LIST_LIMIT;
+}
+
+function isNormalizedRunFile(fileName) {
+  if (!fileName.endsWith(".json")) {
+    return false;
+  }
+
+  const lowerName = fileName.toLowerCase();
+
+  if (
+    lowerName === "latest.json" ||
+    lowerName === "latest_successful.json" ||
+    lowerName.includes("raw") ||
+    lowerName.includes("status") ||
+    lowerName.includes("debug")
+  ) {
+    return false;
+  }
+
+  return isSafeRunId(fileName.replace(/\.json$/i, ""));
 }
 
 function dataPath(...segments) {
@@ -371,6 +397,31 @@ function sanitizePublicRun(run) {
   }
 
   return sanitized;
+}
+
+function summarizePublicRunForList(run) {
+  const sanitized = sanitizePublicRun(run);
+
+  if (!isRecord(sanitized) || typeof sanitized.run_id !== "string" || !isSafeRunId(sanitized.run_id)) {
+    return null;
+  }
+
+  const status = safeString(sanitized.status, "mock");
+
+  return versioned({
+    run_id: sanitized.run_id,
+    created_at: safeString(sanitized.created_at, new Date(0).toISOString()),
+    workspace: safeString(sanitized.workspace, "Holdstation"),
+    status,
+    title: safeString(sanitized.summary?.title, "CMO Brief"),
+    actions_count: Array.isArray(sanitized.actions) ? sanitized.actions.length : 0,
+    signals_count: Array.isArray(sanitized.signals) ? sanitized.signals.length : 0,
+    agents_count: Array.isArray(sanitized.agents) ? sanitized.agents.length : 0,
+    campaigns_count: Array.isArray(sanitized.campaigns) ? sanitized.campaigns.length : 0,
+    reports_count: Array.isArray(sanitized.reports) ? sanitized.reports.length : 0,
+    vault_count: Array.isArray(sanitized.vault) ? sanitized.vault.length : 0,
+    has_error: Boolean(sanitized.error) || ["failed", "timeout", "partial", "invalid"].includes(status),
+  });
 }
 
 function sanitizeChatError(value) {
@@ -1941,6 +1992,48 @@ async function handleRun(res, runId) {
   jsonResponse(res, 200, run);
 }
 
+async function readRunForList(fileName) {
+  try {
+    const run = await readJsonFile(dataPath("runs", fileName));
+    return summarizePublicRunForList(run);
+  } catch {
+    return null;
+  }
+}
+
+async function handleRunList(res, limit) {
+  const safeLimit = safeRunListLimit(limit);
+
+  try {
+    const files = await readdir(dataPath("runs"), { withFileTypes: true });
+    const runs = await Promise.all(
+      files
+        .filter((file) => file.isFile() && isNormalizedRunFile(file.name))
+        .map((file) => readRunForList(file.name)),
+    );
+    const data = runs
+      .filter(Boolean)
+      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+
+    jsonResponse(res, 200, versioned({
+      data: data.slice(0, safeLimit),
+      total: data.length,
+      limit: safeLimit,
+    }));
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      jsonResponse(res, 200, versioned({
+        data: [],
+        total: 0,
+        limit: safeLimit,
+      }));
+      return;
+    }
+
+    throw error;
+  }
+}
+
 async function handleRunBrief(req, res) {
   const config = getConfig();
   const body = await readRequestJson(req);
@@ -2245,6 +2338,16 @@ async function routeRequest(req, res) {
       }
 
       await handleLatest(res);
+      return;
+    }
+
+    if (url.pathname === "/cmo/runs") {
+      if (req.method !== "GET") {
+        methodNotAllowed(res);
+        return;
+      }
+
+      await handleRunList(res, Number.parseInt(url.searchParams.get("limit") ?? String(DEFAULT_RUN_LIST_LIMIT), 10));
       return;
     }
 

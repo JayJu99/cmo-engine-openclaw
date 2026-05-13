@@ -5,6 +5,9 @@ import {
   type CmoChatRunListResponse,
   type CmoChatRunStatus,
   type CmoRun,
+  type CmoRunIndexItem,
+  type CmoRunListResponse,
+  type CmoStatus,
 } from "@/lib/cmo/types";
 import { getRemoteAdapterApiKey, getRemoteAdapterUrl } from "@/lib/cmo/config";
 import { CmoAdapterError } from "@/lib/cmo/errors";
@@ -248,6 +251,54 @@ function normalizeRemoteChatList(payload: unknown): CmoChatRunListResponse {
   };
 }
 
+function countValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+function safeListLimit(limit: number): number {
+  return Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 20;
+}
+
+function normalizeRemoteRunIndexItem(payload: unknown): CmoRunIndexItem | null {
+  if (!isRecord(payload) || typeof payload.run_id !== "string" || !payload.run_id.trim()) {
+    return null;
+  }
+
+  return {
+    schema_version: CMO_SCHEMA_VERSION,
+    run_id: payload.run_id,
+    created_at: typeof payload.created_at === "string" ? payload.created_at : new Date(0).toISOString(),
+    workspace: typeof payload.workspace === "string" && payload.workspace.trim() ? payload.workspace : "Holdstation",
+    status: (typeof payload.status === "string" && payload.status.trim() ? payload.status : "mock") as CmoStatus,
+    title: typeof payload.title === "string" && payload.title.trim() ? payload.title : "CMO Brief",
+    actions_count: countValue(payload.actions_count),
+    signals_count: countValue(payload.signals_count),
+    agents_count: countValue(payload.agents_count),
+    campaigns_count: countValue(payload.campaigns_count),
+    reports_count: countValue(payload.reports_count),
+    vault_count: countValue(payload.vault_count),
+    has_error: payload.has_error === true,
+  };
+}
+
+function normalizeRemoteRunList(payload: unknown, fallbackLimit: number): CmoRunListResponse {
+  if (!isRecord(payload) || !Array.isArray(payload.data)) {
+    throw new CmoAdapterError("Remote CMO Adapter run list response was not a valid object", 502, "cmo_remote_invalid_run_list");
+  }
+
+  const data = payload.data
+    .map(normalizeRemoteRunIndexItem)
+    .filter((item): item is CmoRunIndexItem => Boolean(item))
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+
+  return {
+    schema_version: CMO_SCHEMA_VERSION,
+    data,
+    total: typeof payload.total === "number" && Number.isFinite(payload.total) ? Math.max(0, Math.floor(payload.total)) : data.length,
+    limit: typeof payload.limit === "number" && Number.isFinite(payload.limit) ? Math.max(1, Math.min(100, Math.floor(payload.limit))) : fallbackLimit,
+  };
+}
+
 export async function postRemoteRunBrief(body: unknown): Promise<RemoteJsonResponse<CmoRunBriefResponse>> {
   const response = await requestRemoteJson<unknown>("/cmo/run-brief", {
     method: "POST",
@@ -291,6 +342,12 @@ export async function getRemoteLatestRun(): Promise<CmoRun> {
 export async function getRemoteRun(runId: string): Promise<CmoRun> {
   const response = await requestRemoteJson<unknown>(`/cmo/runs/${encodeURIComponent(runId)}`);
   return normalizeRemoteRun(response.data, `runs/${runId}`);
+}
+
+export async function getRemoteRuns(limit = 20): Promise<CmoRunListResponse> {
+  const safeLimit = safeListLimit(limit);
+  const response = await requestRemoteJson<unknown>(`/cmo/runs?limit=${safeLimit}`);
+  return normalizeRemoteRunList(response.data, safeLimit);
 }
 
 export async function getRemoteStatus(): Promise<CmoRemoteStatus> {

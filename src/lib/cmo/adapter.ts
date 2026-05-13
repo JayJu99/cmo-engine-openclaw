@@ -1,4 +1,4 @@
-import { CMO_SCHEMA_VERSION, type CmoChatRun, type CmoChatRunListResponse, type CmoRun, type CmoRunIndexItem } from "@/lib/cmo/types";
+import { CMO_SCHEMA_VERSION, type CmoChatRun, type CmoChatRunListResponse, type CmoRun, type CmoRunListResponse } from "@/lib/cmo/types";
 import { getCmoAdapterMode, isRemoteCmoAdapter } from "@/lib/cmo/config";
 import {
   createLocalChatRun,
@@ -14,6 +14,7 @@ import {
   getRemoteChats,
   getRemoteLatestRun,
   getRemoteRun,
+  getRemoteRuns,
   getRemoteStatus,
   postRemoteChat,
   postRemoteRunBrief,
@@ -30,8 +31,8 @@ export async function readDashboardRun(runId: string): Promise<CmoRun | null> {
   return isRemoteCmoAdapter() ? getRemoteRun(runId) : readRun(runId);
 }
 
-export async function readDashboardRuns(): Promise<CmoRunIndexItem[]> {
-  return readRuns();
+export async function readDashboardRuns(limit = 20): Promise<CmoRunListResponse> {
+  return isRemoteCmoAdapter() ? getRemoteRuns(limit) : readRuns(limit);
 }
 
 export async function runDashboardBrief(body: unknown): Promise<{ data: CmoRun | CmoRunBriefResponse; status: number }> {

@@ -133,8 +133,20 @@ export interface CmoRunIndexItem extends CmoVersioned {
   created_at: string;
   workspace: string;
   status: CmoStatus;
-  action_count: number;
-  signal_count: number;
+  title: string;
+  actions_count: number;
+  signals_count: number;
+  agents_count: number;
+  campaigns_count: number;
+  reports_count: number;
+  vault_count: number;
+  has_error: boolean;
+}
+
+export interface CmoRunListResponse extends CmoVersioned {
+  data: CmoRunIndexItem[];
+  total: number;
+  limit: number;
 }
 
 export interface CmoCollectionResponse<T> extends CmoVersioned {

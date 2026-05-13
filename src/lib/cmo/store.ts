@@ -9,6 +9,7 @@ import {
   type CmoRawOutput,
   type CmoRun,
   type CmoRunIndexItem,
+  type CmoRunListResponse,
 } from "@/lib/cmo/types";
 import { createFallbackRun, normalizeRun, validateNormalizedRun } from "@/lib/cmo/validation";
 
@@ -23,6 +24,8 @@ const LATEST_SUCCESSFUL_PATH = path.join(DATA_DIR, "latest_successful.json");
 const LOCAL_CHAT_MIN_RUNNING_MS = 1_500;
 const LOCAL_CHAT_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_CHAT_LIST_LIMIT = 20;
+const DEFAULT_RUN_LIST_LIMIT = 20;
+const MAX_RUN_LIST_LIMIT = 100;
 
 async function readJsonFile(filePath: string): Promise<unknown | null> {
   try {
@@ -66,6 +69,29 @@ function isSafeRunId(runId: string) {
   return /^[A-Za-z0-9_.-]+$/.test(runId);
 }
 
+function safeListLimit(limit: number): number {
+  return Number.isFinite(limit) ? Math.max(1, Math.min(MAX_RUN_LIST_LIMIT, Math.floor(limit))) : DEFAULT_RUN_LIST_LIMIT;
+}
+
+function isNormalizedRunFile(fileName: string): boolean {
+  if (!fileName.endsWith(".json")) {
+    return false;
+  }
+
+  const lowerName = fileName.toLowerCase();
+  if (
+    lowerName === "latest.json" ||
+    lowerName === "latest_successful.json" ||
+    lowerName.includes("raw") ||
+    lowerName.includes("status") ||
+    lowerName.includes("debug")
+  ) {
+    return false;
+  }
+
+  return isSafeRunId(fileName.replace(/\.json$/i, ""));
+}
+
 function isSafeChatRunId(chatRunId: string) {
   return /^[A-Za-z0-9_.-]+$/.test(chatRunId);
 }
@@ -77,8 +103,14 @@ function summarizeRun(run: CmoRun): CmoRunIndexItem {
     created_at: run.created_at,
     workspace: run.workspace,
     status: run.status,
-    action_count: run.actions.length,
-    signal_count: run.signals.length,
+    title: run.summary.title,
+    actions_count: run.actions.length,
+    signals_count: run.signals.length,
+    agents_count: run.agents.length,
+    campaigns_count: run.campaigns.length,
+    reports_count: run.reports.length,
+    vault_count: run.vault.length,
+    has_error: ["failed", "timeout", "partial", "invalid"].includes(run.status),
   };
 }
 
@@ -139,20 +171,48 @@ async function writeNormalizedRun(run: CmoRun): Promise<void> {
   }
 }
 
-export async function readRuns(): Promise<CmoRunIndexItem[]> {
+async function readRunForList(fileName: string): Promise<CmoRun | null> {
   try {
-    const files = await readdir(RUNS_DIR);
+    const value = JSON.parse(await readFile(path.join(RUNS_DIR, fileName), "utf8")) as unknown;
+    const run = normalizeRun(value);
+    const validation = validateNormalizedRun(run);
+
+    return validation.valid ? run : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function readRuns(limit = DEFAULT_RUN_LIST_LIMIT): Promise<CmoRunListResponse> {
+  const safeLimit = safeListLimit(limit);
+
+  try {
+    const files = await readdir(RUNS_DIR, { withFileTypes: true });
     const runs = await Promise.all(
       files
-        .filter((file) => file.endsWith(".json"))
-        .map(async (file) => normalizeRun(await readJsonFile(path.join(RUNS_DIR, file)))),
+        .filter((file) => file.isFile() && isNormalizedRunFile(file.name))
+        .map((file) => readRunForList(file.name)),
     );
-
-    return runs
+    const data = runs
+      .filter((run): run is CmoRun => Boolean(run))
       .map(summarizeRun)
       .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+
+    return {
+      schema_version: CMO_SCHEMA_VERSION,
+      data: data.slice(0, safeLimit),
+      total: data.length,
+      limit: safeLimit,
+    };
   } catch {
-    return [summarizeRun(await readLatestRun())];
+    const latest = summarizeRun(await readLatestRun());
+
+    return {
+      schema_version: CMO_SCHEMA_VERSION,
+      data: [latest].slice(0, safeLimit),
+      total: 1,
+      limit: safeLimit,
+    };
   }
 }
 
