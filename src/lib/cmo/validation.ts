@@ -85,7 +85,7 @@ function normalizeSummary(value: unknown): CmoSummary {
 }
 
 export function normalizeActions(value: unknown): CmoAction[] {
-  const source = Array.isArray(value) && value.length ? value : fallbackActions;
+  const source = Array.isArray(value) ? value : fallbackActions;
   return source.map((item, index) => {
     const record = isRecord(item) ? item : {};
     return withVersion({
@@ -102,7 +102,7 @@ export function normalizeActions(value: unknown): CmoAction[] {
 }
 
 export function normalizeSignals(value: unknown): CmoSignal[] {
-  const source = Array.isArray(value) && value.length ? value : fallbackSignals;
+  const source = Array.isArray(value) ? value : fallbackSignals;
   return source.map((item, index) => {
     const record = isRecord(item) ? item : {};
     return withVersion({
@@ -118,7 +118,7 @@ export function normalizeSignals(value: unknown): CmoSignal[] {
 }
 
 export function normalizeAgents(value: unknown): CmoAgent[] {
-  const source = Array.isArray(value) && value.length ? value : fallbackAgents;
+  const source = Array.isArray(value) ? value : fallbackAgents;
   return source.map((item, index) => {
     const record = isRecord(item) ? item : {};
     return withVersion({
@@ -137,7 +137,7 @@ export function normalizeAgents(value: unknown): CmoAgent[] {
 }
 
 export function normalizeReports(value: unknown): CmoReport[] {
-  const source = Array.isArray(value) && value.length ? value : fallbackReports;
+  const source = Array.isArray(value) ? value : fallbackReports;
   return source.map((item, index) => {
     const record = isRecord(item) ? item : {};
     const fallback = fallbackReports[index % fallbackReports.length];
@@ -154,7 +154,7 @@ export function normalizeReports(value: unknown): CmoReport[] {
 }
 
 export function normalizeVault(value: unknown): CmoVaultItem[] {
-  const source = Array.isArray(value) && value.length ? value : fallbackVault;
+  const source = Array.isArray(value) ? value : fallbackVault;
   return source.map((item, index) => {
     const record = isRecord(item) ? item : {};
     const fallback = fallbackVault[index % fallbackVault.length];
@@ -170,7 +170,7 @@ export function normalizeVault(value: unknown): CmoVaultItem[] {
 }
 
 export function normalizeCampaigns(value: unknown): CmoCampaign[] {
-  const source = Array.isArray(value) && value.length ? value : fallbackCampaigns;
+  const source = Array.isArray(value) ? value : fallbackCampaigns;
   return source.map((item, index) => {
     const record = isRecord(item) ? item : {};
     const fallback = fallbackCampaigns[index % fallbackCampaigns.length];
@@ -198,6 +198,7 @@ export function normalizeCampaigns(value: unknown): CmoCampaign[] {
 export function normalizeRun(value: unknown): CmoRun {
   const record = isRecord(value) ? value : {};
   const createdAt = stringValue(record.created_at, new Date(0).toISOString());
+  const error = isRecord(record.error) ? record.error : null;
 
   return withVersion({
     run_id: stringValue(record.run_id, "run_fallback"),
@@ -211,6 +212,15 @@ export function normalizeRun(value: unknown): CmoRun {
     campaigns: normalizeCampaigns(record.campaigns),
     reports: normalizeReports(record.reports),
     vault: normalizeVault(record.vault),
+    ...(error
+      ? {
+          error: {
+            ...error,
+            code: typeof error.code === "string" ? error.code : undefined,
+            message: typeof error.message === "string" ? error.message : "CMO run reported an error",
+          },
+        }
+      : {}),
   });
 }
 

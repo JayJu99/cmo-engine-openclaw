@@ -18,9 +18,12 @@ type ChatMessage = {
 };
 
 export type ChatContextPreview = {
-  type: "action" | "signal" | "campaign";
+  type: "action" | "signal" | "campaign" | "run";
   title: string;
   meta?: string;
+  status?: string;
+  createdAt?: string;
+  contextRunId?: string;
 };
 
 type ChatViewProps = {
@@ -96,7 +99,7 @@ function displayDate(value: string) {
     return value;
   }
 
-  return date.toLocaleString(undefined, {
+  return date.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     hour: "2-digit",
@@ -309,7 +312,10 @@ export function ChatView({ initialQuestion = "", initialContext = null }: ChatVi
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ question }),
+          body: JSON.stringify({
+            question,
+            ...(activeContext?.contextRunId ? { context_run_id: activeContext.contextRunId } : {}),
+          }),
         }),
       );
 
@@ -410,6 +416,8 @@ export function ChatView({ initialQuestion = "", initialContext = null }: ChatVi
                   {activeContext.type}
                 </span>
                 <span className="font-bold text-slate-950">{activeContext.title}</span>
+                {activeContext.status ? <span className="text-xs font-semibold text-slate-500">{activeContext.status}</span> : null}
+                {activeContext.createdAt ? <span className="text-xs font-semibold text-slate-500">{displayDate(activeContext.createdAt)}</span> : null}
                 {activeContext.meta ? <span className="text-xs font-semibold text-slate-500">{activeContext.meta}</span> : null}
               </div>
             ) : null}

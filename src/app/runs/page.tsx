@@ -1,6 +1,6 @@
 import { RunsView } from "@/components/dashboard/runs-view";
-import { readDashboardRuns } from "@/lib/cmo/adapter";
-import type { CmoRunListResponse } from "@/lib/cmo/types";
+import { readDashboardRun, readDashboardRuns } from "@/lib/cmo/adapter";
+import type { CmoRun, CmoRunListResponse } from "@/lib/cmo/types";
 
 export const dynamic = "force-dynamic";
 
@@ -26,10 +26,42 @@ async function loadRuns(): Promise<CmoRunListResponse & { error?: string }> {
   }
 }
 
+async function loadSelectedRun(runId: string): Promise<{ data: CmoRun | null; error?: string }> {
+  if (!runId) {
+    return { data: null };
+  }
+
+  try {
+    const run = await readDashboardRun(runId);
+
+    return run
+      ? { data: run }
+      : {
+          data: null,
+          error: "Selected CMO run was not found.",
+        };
+  } catch (error) {
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "Selected CMO run detail is unavailable.",
+    };
+  }
+}
+
 export default async function RunsPage({ searchParams }: { searchParams: RunsPageSearchParams }) {
   const params = await searchParams;
-  const runs = await loadRuns();
   const selectedRunId = firstParam(params.runId).trim();
+  const [runs, selectedRun] = await Promise.all([loadRuns(), loadSelectedRun(selectedRunId)]);
 
-  return <RunsView runs={runs.data} total={runs.total} limit={runs.limit} selectedRunId={selectedRunId} error={runs.error} />;
+  return (
+    <RunsView
+      runs={runs.data}
+      total={runs.total}
+      limit={runs.limit}
+      selectedRunId={selectedRunId}
+      selectedRunDetail={selectedRun.data}
+      selectedRunDetailError={selectedRun.error}
+      error={runs.error}
+    />
+  );
 }

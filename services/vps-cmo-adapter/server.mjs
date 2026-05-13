@@ -1228,11 +1228,33 @@ function chatQuestionFromBody(body) {
   return "";
 }
 
+function contextRunIdFromBody(body) {
+  if (!isRecord(body)) {
+    return null;
+  }
+
+  const value = body.context_run_id ?? body.contextRunId;
+
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 async function readLatestDashboardContext() {
   const latestSuccessful = await readJsonFile(dataPath("latest_successful.json"));
   const latest = latestSuccessful ?? (await readJsonFile(dataPath("latest.json")));
 
   return latest ? sanitizePublicRun(latest) : null;
+}
+
+async function readDashboardContextForChat(contextRunId = null) {
+  if (contextRunId && isSafeRunId(contextRunId)) {
+    const run = await finalizeRun(contextRunId);
+
+    if (run) {
+      return run;
+    }
+  }
+
+  return readLatestDashboardContext();
 }
 
 function compactContextItems(items, fields, limit) {
@@ -1340,7 +1362,7 @@ function isMockChatReady(chatRun) {
 }
 
 async function completeMockChatRun(chatRun) {
-  const context = await readLatestDashboardContext();
+  const context = await readDashboardContextForChat(chatRun.context_run_id);
   const answer = buildMockChatAnswer(safeString(chatRun.question, "CMO question"), context);
   const completed = sanitizePublicChat({
     ...chatRun,
@@ -1367,7 +1389,7 @@ function buildCmoChatPrompt({ chatRunId, question, rawPath, jsonPath, context })
     "User question:",
     question,
     "",
-    "Latest dashboard context, if available:",
+    "Selected dashboard context, if available:",
     JSON.stringify(compactDashboardContext(context), null, 2),
     "",
     "Execution rules:",
@@ -2153,6 +2175,7 @@ async function handleChat(req, res) {
 
   const createdAt = new Date().toISOString();
   const requestedChatRunId = isRecord(body) && typeof body.chat_run_id === "string" && body.chat_run_id.trim() ? body.chat_run_id.trim() : null;
+  const requestedContextRunId = contextRunIdFromBody(body);
   const chatRunId = requestedChatRunId ?? `chat_${createdAt.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
 
   if (!isSafeRunId(chatRunId)) {
@@ -2163,7 +2186,15 @@ async function handleChat(req, res) {
     return;
   }
 
-  const context = await readLatestDashboardContext();
+  if (requestedContextRunId && !isSafeRunId(requestedContextRunId)) {
+    jsonResponse(res, 400, {
+      error: "Invalid context_run_id",
+      code: "invalid_context_run_id",
+    });
+    return;
+  }
+
+  const context = await readDashboardContextForChat(requestedContextRunId);
   const rawPath = dataPath("chat", "raw", `${chatRunId}.md`);
   const jsonPath = dataPath("chat", `${chatRunId}.json`);
   const chatRun = createRunningChatRun({

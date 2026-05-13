@@ -287,6 +287,19 @@ function questionFromPayload(body: unknown): string {
   return "";
 }
 
+function contextRunIdFromPayload(body: unknown): string | null {
+  if (typeof body === "object" && body !== null && !Array.isArray(body)) {
+    const record = body as Record<string, unknown>;
+    const value = record.context_run_id ?? record.contextRunId;
+
+    if (typeof value === "string" && value.trim() && isSafeRunId(value.trim())) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
 function conciseLocalAnswer(question: string, context: CmoRun): string {
   const highAction = context.actions.find((action) => action.priority === "High") ?? context.actions[0];
   const signal = context.signals[0];
@@ -346,6 +359,18 @@ function normalizeChatRun(value: unknown): CmoChatRun | null {
   };
 }
 
+async function readChatContextRun(contextRunId: string | null): Promise<CmoRun> {
+  if (contextRunId) {
+    const contextRun = await readRun(contextRunId);
+
+    if (contextRun) {
+      return contextRun;
+    }
+  }
+
+  return readLatestSuccessfulRun();
+}
+
 async function finalizeLocalChatRun(chatRun: CmoChatRun): Promise<CmoChatRun> {
   if (chatRun.status !== "running") {
     return chatRun;
@@ -376,7 +401,7 @@ async function finalizeLocalChatRun(chatRun: CmoChatRun): Promise<CmoChatRun> {
   }
 
   try {
-    const context = await readLatestSuccessfulRun();
+    const context = await readChatContextRun(chatRun.context_run_id);
     const answer = conciseLocalAnswer(chatRun.question, context);
     const completedRun: CmoChatRun = {
       ...chatRun,
@@ -414,7 +439,7 @@ export async function createLocalChatRun(body: unknown): Promise<CmoChatRun> {
 
   const now = new Date().toISOString();
   const chatRunId = `chat_${now.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
-  const latest = await readLatestRun();
+  const context = await readChatContextRun(contextRunIdFromPayload(body));
   const chatRun: CmoChatRun = {
     schema_version: CMO_SCHEMA_VERSION,
     chat_run_id: chatRunId,
@@ -423,7 +448,7 @@ export async function createLocalChatRun(body: unknown): Promise<CmoChatRun> {
     status: "running",
     question,
     answer: "",
-    context_run_id: latest.run_id,
+    context_run_id: context.run_id,
     raw_markdown_path: relativeDataPath(chatRawPath(chatRunId)),
   };
 

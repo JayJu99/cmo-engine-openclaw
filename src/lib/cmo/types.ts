@@ -116,6 +116,11 @@ export interface CmoRun extends CmoVersioned {
   campaigns: CmoCampaign[];
   reports: CmoReport[];
   vault: CmoVaultItem[];
+  error?: {
+    code?: string;
+    message?: string;
+    [key: string]: unknown;
+  };
 }
 
 export interface CmoRawOutput extends CmoVersioned {
