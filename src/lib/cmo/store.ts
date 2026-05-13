@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { mkdir, readdir, readFile, writeFile } from "fs/promises";
+import { access, mkdir, readdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 
 import {
@@ -129,6 +129,22 @@ function summarizeChatRun(chatRun: CmoChatRun): CmoChatRunIndexItem {
 export async function readLatestRun(): Promise<CmoRun> {
   const latest = await readJsonFile(LATEST_PATH);
   return latest ? normalizeRun(latest) : createFallbackRun();
+}
+
+export async function readLocalDataDirStatus(): Promise<{ dataDir: string; exists: boolean }> {
+  try {
+    await access(DATA_DIR);
+
+    return {
+      dataDir: relativeDataPath(DATA_DIR),
+      exists: true,
+    };
+  } catch {
+    return {
+      dataDir: relativeDataPath(DATA_DIR),
+      exists: false,
+    };
+  }
 }
 
 export async function readLatestSuccessfulRun(): Promise<CmoRun> {

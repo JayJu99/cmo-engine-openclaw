@@ -8,6 +8,7 @@ export const navItems = [
   { label: "Pipeline", href: "/pipeline", icon: "Workflow" },
   { label: "Reports", href: "/reports", icon: "FileText" },
   { label: "Vault", href: "/vault", icon: "Package" },
+  { label: "Ops", href: "/ops", icon: "Settings" },
 ] as const;
 
 export const agents = [

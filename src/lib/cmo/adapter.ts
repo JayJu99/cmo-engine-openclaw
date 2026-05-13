@@ -3,6 +3,7 @@ import { getCmoAdapterMode, isRemoteCmoAdapter } from "@/lib/cmo/config";
 import {
   createLocalChatRun,
   createMockRun,
+  readLocalDataDirStatus,
   readLocalChatRun,
   readLocalChatRuns,
   readLatestRun,
@@ -89,11 +90,18 @@ export async function readDashboardStatus(): Promise<CmoRemoteStatus> {
     return getRemoteStatus();
   }
 
+  const dataDir = await readLocalDataDirStatus();
+
   return {
     schema_version: CMO_SCHEMA_VERSION,
     ok: true,
     mode: getCmoAdapterMode(),
     adapter: "local",
-    data_dir: "data",
+    data_dir: dataDir.dataDir,
+    data_dir_exists: dataDir.exists,
+    gateway_mode: "not_configured",
+    trigger_mode: "local",
+    openclaw_trigger_enabled: false,
+    openclaw_runtime: "not_checked",
   };
 }
