@@ -16,6 +16,20 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Dashboard Basic Auth
+
+Basic Auth is disabled by default so local development continues to work without credentials.
+
+To protect the dashboard before exposing it publicly, set these environment variables on the Next.js dashboard host:
+
+```bash
+DASHBOARD_BASIC_AUTH_ENABLED=true
+DASHBOARD_BASIC_AUTH_USERNAME=your-username
+DASHBOARD_BASIC_AUTH_PASSWORD=your-strong-password
+```
+
+When enabled, the server requires Basic Auth for all dashboard pages and `/api/cmo/*` routes. Next.js static assets and `favicon.ico` are excluded. Browser clients call the local `/api/cmo/*` routes with the same Basic Auth session; the VPS Adapter API key remains server-side in `CMO_REMOTE_ADAPTER_API_KEY` and is never exposed through `NEXT_PUBLIC_*`.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
