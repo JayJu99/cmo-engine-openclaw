@@ -30,6 +30,10 @@ DASHBOARD_BASIC_AUTH_PASSWORD=your-strong-password
 
 When enabled, the server requires Basic Auth for all dashboard pages and `/api/cmo/*` routes. Next.js static assets and `favicon.ico` are excluded. Browser clients call the local `/api/cmo/*` routes with the same Basic Auth session; the VPS Adapter API key remains server-side in `CMO_REMOTE_ADAPTER_API_KEY` and is never exposed through `NEXT_PUBLIC_*`.
 
+## Production Runbook
+
+For production maintenance, deploy/update steps, health checks, troubleshooting, backups, and the security checklist, see [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md).
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
