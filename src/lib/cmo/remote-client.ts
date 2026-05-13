@@ -1,4 +1,11 @@
-import { CMO_SCHEMA_VERSION, type CmoChatRun, type CmoChatRunStatus, type CmoRun } from "@/lib/cmo/types";
+import {
+  CMO_SCHEMA_VERSION,
+  type CmoChatRun,
+  type CmoChatRunIndexItem,
+  type CmoChatRunListResponse,
+  type CmoChatRunStatus,
+  type CmoRun,
+} from "@/lib/cmo/types";
 import { getRemoteAdapterApiKey, getRemoteAdapterUrl } from "@/lib/cmo/config";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import { normalizeRun, validateNormalizedRun } from "@/lib/cmo/validation";
@@ -209,6 +216,38 @@ function normalizeRemoteChatRun(payload: unknown): CmoChatRun {
   };
 }
 
+function normalizeRemoteChatIndexItem(payload: unknown): CmoChatRunIndexItem | null {
+  if (!isRecord(payload) || typeof payload.chat_run_id !== "string" || !payload.chat_run_id.trim()) {
+    return null;
+  }
+
+  return {
+    schema_version: CMO_SCHEMA_VERSION,
+    chat_run_id: payload.chat_run_id,
+    created_at: typeof payload.created_at === "string" ? payload.created_at : new Date().toISOString(),
+    updated_at: typeof payload.updated_at === "string" ? payload.updated_at : new Date().toISOString(),
+    status: normalizeChatStatus(payload.status),
+    question: typeof payload.question === "string" ? payload.question : "",
+    context_run_id: typeof payload.context_run_id === "string" ? payload.context_run_id : null,
+  };
+}
+
+function normalizeRemoteChatList(payload: unknown): CmoChatRunListResponse {
+  const data = isRecord(payload) && Array.isArray(payload.data) ? payload.data : Array.isArray(payload) ? payload : null;
+
+  if (!data) {
+    throw new CmoAdapterError("Remote CMO Adapter chat list response was not an array", 502, "cmo_remote_invalid_chat_list");
+  }
+
+  return {
+    schema_version: CMO_SCHEMA_VERSION,
+    data: data
+      .map(normalizeRemoteChatIndexItem)
+      .filter((item): item is CmoChatRunIndexItem => Boolean(item))
+      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)),
+  };
+}
+
 export async function postRemoteRunBrief(body: unknown): Promise<RemoteJsonResponse<CmoRunBriefResponse>> {
   const response = await requestRemoteJson<unknown>("/cmo/run-brief", {
     method: "POST",
@@ -236,6 +275,12 @@ export async function postRemoteChat(body: unknown): Promise<RemoteJsonResponse<
 export async function getRemoteChat(chatRunId: string): Promise<CmoChatRun> {
   const response = await requestRemoteJson<unknown>(`/cmo/chat/${encodeURIComponent(chatRunId)}`);
   return normalizeRemoteChatRun(response.data);
+}
+
+export async function getRemoteChats(limit = 20): Promise<CmoChatRunListResponse> {
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+  const response = await requestRemoteJson<unknown>(`/cmo/chat?limit=${safeLimit}`);
+  return normalizeRemoteChatList(response.data);
 }
 
 export async function getRemoteLatestRun(): Promise<CmoRun> {

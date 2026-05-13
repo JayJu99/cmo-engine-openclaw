@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { icons } from "@/components/dashboard/icons";
 import { PageChrome } from "@/components/dashboard/shell";
-import type { CmoChatRun } from "@/lib/cmo/types";
+import type { CmoChatRun, CmoChatRunIndexItem, CmoChatRunListResponse } from "@/lib/cmo/types";
 import { cn } from "@/lib/utils";
 
 type ChatMessage = {
@@ -18,6 +18,11 @@ type ChatMessage = {
 
 const POLL_INTERVAL_MS = 4_000;
 const MAX_POLLS = 45;
+const welcomeMessage: ChatMessage = {
+  id: "welcome",
+  role: "assistant",
+  content: "Ask a practical CMO question. I will use the latest dashboard context when it is available.",
+};
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as unknown;
@@ -56,20 +61,68 @@ function statusLabel(status: CmoChatRun["status"] | undefined) {
   return "Ready";
 }
 
+function statusClass(status: CmoChatRun["status"]) {
+  if (status === "completed") {
+    return "bg-emerald-50 text-emerald-700 ring-emerald-100";
+  }
+
+  if (status === "running") {
+    return "bg-blue-50 text-blue-700 ring-blue-100";
+  }
+
+  if (status === "timeout") {
+    return "bg-orange-50 text-orange-700 ring-orange-100";
+  }
+
+  return "bg-red-50 text-red-700 ring-red-100";
+}
+
+function displayDate(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function messagesFromRun(chatRun: CmoChatRun): ChatMessage[] {
+  return [
+    {
+      id: `user_${chatRun.chat_run_id}`,
+      role: "user",
+      content: chatRun.question,
+    },
+    {
+      id: `assistant_${chatRun.chat_run_id}`,
+      role: "assistant",
+      status: chatRun.status,
+      content:
+        chatRun.answer ||
+        chatRun.error?.message ||
+        (chatRun.status === "running" ? "CMO is preparing a concise answer..." : "No answer was returned."),
+    },
+  ];
+}
+
 export function ChatView() {
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content: "Ask a practical CMO question. I will use the latest dashboard context when it is available.",
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([welcomeMessage]);
+  const [history, setHistory] = useState<CmoChatRunIndexItem[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollCount = useRef(0);
+  const messageCounter = useRef(0);
 
   const clearPollTimer = useCallback(() => {
     if (pollTimer.current) {
@@ -81,6 +134,32 @@ export function ChatView() {
   useEffect(() => {
     return () => clearPollTimer();
   }, [clearPollTimer]);
+
+  const refreshHistory = useCallback(async () => {
+    setIsHistoryLoading(true);
+
+    try {
+      const response = await readJsonResponse<CmoChatRunListResponse>(await fetch("/api/cmo/chat?limit=20", { cache: "no-store" }));
+      setHistory(response.data);
+    } catch (historyError) {
+      setError(historyError instanceof Error ? historyError.message : "CMO chat history failed to load");
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void refreshHistory();
+    }, 0);
+
+    return () => clearTimeout(timer);
+  }, [refreshHistory]);
+
+  function nextMessageId(prefix: string) {
+    messageCounter.current += 1;
+    return `${prefix}_${messageCounter.current}`;
+  }
 
   function updateAssistantMessage(messageId: string, chatRun: CmoChatRun) {
     setMessages((current) =>
@@ -99,6 +178,53 @@ export function ChatView() {
     );
   }
 
+  function resetChat() {
+    clearPollTimer();
+    pollCount.current = 0;
+    setInput("");
+    setMessages([welcomeMessage]);
+    setSelectedRunId(null);
+    setActiveRunId(null);
+    setIsLoading(false);
+    setError(null);
+  }
+
+  async function loadChat(chatRunId: string) {
+    clearPollTimer();
+    setError(null);
+    setIsLoading(true);
+    setSelectedRunId(chatRunId);
+    setActiveRunId(null);
+
+    try {
+      const chatRun = await readJsonResponse<CmoChatRun>(await fetch(`/api/cmo/chat/${encodeURIComponent(chatRunId)}`, { cache: "no-store" }));
+      const assistantMessageId = `assistant_${chatRun.chat_run_id}`;
+
+      setMessages(messagesFromRun(chatRun));
+
+      if (chatRun.status === "running") {
+        setActiveRunId(chatRun.chat_run_id);
+        pollCount.current = 0;
+        pollTimer.current = setTimeout(() => {
+          void pollChat(chatRun.chat_run_id, assistantMessageId);
+        }, POLL_INTERVAL_MS);
+        return;
+      }
+
+      setIsLoading(false);
+
+      if (chatRun.status !== "completed") {
+        setError(chatRun.error?.message ?? `CMO chat ${chatRun.status}`);
+      }
+
+      await refreshHistory();
+    } catch (loadError) {
+      setSelectedRunId(null);
+      setIsLoading(false);
+      setError(loadError instanceof Error ? loadError.message : "CMO chat failed to load");
+    }
+  }
+
   async function pollChat(chatRunId: string, assistantMessageId: string) {
     clearPollTimer();
 
@@ -110,6 +236,8 @@ export function ChatView() {
       if (isTerminalStatus(chatRun.status)) {
         setActiveRunId(null);
         setIsLoading(false);
+        setSelectedRunId(chatRun.chat_run_id);
+        await refreshHistory();
 
         if (chatRun.status !== "completed") {
           setError(chatRun.error?.message ?? `CMO chat ${chatRun.status}`);
@@ -149,8 +277,8 @@ export function ChatView() {
     setInput("");
     setIsLoading(true);
 
-    const userMessageId = `user_${Date.now()}`;
-    const assistantMessageId = `assistant_${Date.now()}`;
+    const userMessageId = nextMessageId("user");
+    const assistantMessageId = nextMessageId("assistant");
 
     setMessages((current) => [
       ...current,
@@ -171,10 +299,13 @@ export function ChatView() {
 
       updateAssistantMessage(assistantMessageId, chatRun);
       setActiveRunId(chatRun.chat_run_id);
+      setSelectedRunId(chatRun.chat_run_id);
+      await refreshHistory();
 
       if (isTerminalStatus(chatRun.status)) {
         setIsLoading(false);
         setActiveRunId(null);
+        await refreshHistory();
 
         if (chatRun.status !== "completed") {
           setError(chatRun.error?.message ?? `CMO chat ${chatRun.status}`);
@@ -206,7 +337,7 @@ export function ChatView() {
   }
 
   return (
-    <PageChrome title="CMO Chat" description="Ask the CMO agent direct questions using the latest dashboard context" primary="New Chat">
+    <PageChrome title="CMO Chat" description="Ask the CMO agent direct questions using the latest dashboard context" primary="New Chat" onPrimaryClick={resetChat}>
       <Card className="grid min-h-[calc(100vh-220px)] overflow-hidden lg:grid-cols-[minmax(0,1fr)_320px]">
         <section className="flex min-h-[620px] flex-col">
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
@@ -216,7 +347,9 @@ export function ChatView() {
               </div>
               <div>
                 <div className="font-bold text-slate-950">CMO Direct</div>
-                <div className="text-xs font-medium text-slate-500">{activeRunId ? `Run ${activeRunId}` : statusLabel(isLoading ? "running" : undefined)}</div>
+                <div className="text-xs font-medium text-slate-500">
+                  {activeRunId ? `Run ${activeRunId}` : selectedRunId ? `Viewing ${selectedRunId}` : statusLabel(isLoading ? "running" : undefined)}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-500">
@@ -278,6 +411,50 @@ export function ChatView() {
         </section>
 
         <aside className="border-t border-slate-100 bg-white p-5 lg:border-l lg:border-t-0">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="grid size-10 place-items-center rounded-xl bg-indigo-50 text-indigo-700 ring-1 ring-indigo-100">
+                <icons.Clock3 />
+              </div>
+              <div>
+                <div className="font-bold text-slate-950">Recent Chats</div>
+                <div className="text-xs font-medium text-slate-500">{isHistoryLoading ? "Loading..." : `${history.length} saved`}</div>
+              </div>
+            </div>
+            <Button variant="outline" size="icon" onClick={() => void refreshHistory()} aria-label="Refresh chat history">
+              <icons.RefreshCw className={cn(isHistoryLoading && "animate-spin")} />
+            </Button>
+          </div>
+          <div className="mt-5 max-h-80 space-y-3 overflow-y-auto pr-1">
+            {history.length ? (
+              history.map((chat) => (
+                <button
+                  key={chat.chat_run_id}
+                  onClick={() => void loadChat(chat.chat_run_id)}
+                  className={cn(
+                    "w-full rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-left transition hover:border-indigo-200 hover:bg-indigo-50",
+                    selectedRunId === chat.chat_run_id && "border-indigo-200 bg-indigo-50 ring-1 ring-indigo-100",
+                  )}
+                >
+                  <div className="max-h-10 overflow-hidden text-sm font-bold leading-5 text-slate-900">{chat.question || "Untitled chat"}</div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className={cn("rounded-lg px-2 py-0.5 text-[11px] font-bold ring-1", statusClass(chat.status))}>{chat.status}</span>
+                    <span className="text-[11px] font-medium text-slate-500">{displayDate(chat.created_at)}</span>
+                  </div>
+                  <div className="mt-2 truncate text-[11px] font-medium text-slate-500">
+                    Context: {chat.context_run_id ?? "none"}
+                  </div>
+                </button>
+              ))
+            ) : (
+              <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+                No saved chats yet.
+              </div>
+            )}
+          </div>
+
+          <div className="my-6 h-px bg-slate-100" />
+
           <div className="flex items-center gap-3">
             <div className="grid size-10 place-items-center rounded-xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100">
               <icons.Database />

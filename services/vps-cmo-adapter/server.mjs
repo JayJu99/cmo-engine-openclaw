@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -405,6 +405,19 @@ function sanitizePublicChat(chatRun) {
   }
 
   return sanitized;
+}
+
+function summarizePublicChat(chatRun) {
+  const sanitized = sanitizePublicChat(chatRun);
+
+  return versioned({
+    chat_run_id: sanitized.chat_run_id,
+    created_at: sanitized.created_at,
+    updated_at: sanitized.updated_at,
+    status: sanitized.status,
+    question: sanitized.question,
+    context_run_id: sanitized.context_run_id,
+  });
 }
 
 function normalizeSummaryForValidation(value) {
@@ -2153,6 +2166,47 @@ async function handleChatRun(res, chatRunId) {
   jsonResponse(res, 200, chatRun);
 }
 
+async function readChatForList(fileName) {
+  const chatRunId = fileName.replace(/\.json$/i, "");
+
+  if (!isSafeRunId(chatRunId)) {
+    return null;
+  }
+
+  try {
+    const chatRun = await finalizeChat(chatRunId);
+    return chatRun ? summarizePublicChat(chatRun) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function handleChatList(res, limit) {
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 20;
+
+  try {
+    const files = await readdir(dataPath("chat"), { withFileTypes: true });
+    const chats = await Promise.all(
+      files
+        .filter((file) => file.isFile() && file.name.endsWith(".json"))
+        .map((file) => readChatForList(file.name)),
+    );
+    const data = chats
+      .filter(Boolean)
+      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+      .slice(0, safeLimit);
+
+    jsonResponse(res, 200, versioned({ data }));
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      jsonResponse(res, 200, versioned({ data: [] }));
+      return;
+    }
+
+    throw error;
+  }
+}
+
 async function routeRequest(req, res) {
   const url = new URL(req.url ?? "/", "http://localhost");
   const runMatch = url.pathname.match(/^\/cmo\/runs\/([^/]+)$/);
@@ -2205,6 +2259,12 @@ async function routeRequest(req, res) {
     }
 
     if (url.pathname === "/cmo/chat") {
+      if (req.method === "GET") {
+        const limit = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
+        await handleChatList(res, limit);
+        return;
+      }
+
       if (req.method !== "POST") {
         methodNotAllowed(res);
         return;

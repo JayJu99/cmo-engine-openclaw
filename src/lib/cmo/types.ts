@@ -157,3 +157,16 @@ export interface CmoChatRun extends CmoVersioned {
     message: string;
   };
 }
+
+export interface CmoChatRunIndexItem extends CmoVersioned {
+  chat_run_id: string;
+  created_at: string;
+  updated_at: string;
+  status: CmoChatRunStatus;
+  question: string;
+  context_run_id: string | null;
+}
+
+export interface CmoChatRunListResponse extends CmoVersioned {
+  data: CmoChatRunIndexItem[];
+}

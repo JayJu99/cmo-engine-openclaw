@@ -1,15 +1,17 @@
-import { CMO_SCHEMA_VERSION, type CmoChatRun, type CmoRun, type CmoRunIndexItem } from "@/lib/cmo/types";
+import { CMO_SCHEMA_VERSION, type CmoChatRun, type CmoChatRunListResponse, type CmoRun, type CmoRunIndexItem } from "@/lib/cmo/types";
 import { getCmoAdapterMode, isRemoteCmoAdapter } from "@/lib/cmo/config";
 import {
   createLocalChatRun,
   createMockRun,
   readLocalChatRun,
+  readLocalChatRuns,
   readLatestRun,
   readRun,
   readRuns,
 } from "@/lib/cmo/store";
 import {
   getRemoteChat,
+  getRemoteChats,
   getRemoteLatestRun,
   getRemoteRun,
   getRemoteStatus,
@@ -68,6 +70,17 @@ export async function readDashboardChat(chatRunId: string): Promise<CmoChatRun |
   }
 
   return readLocalChatRun(chatRunId);
+}
+
+export async function readDashboardChats(limit = 20): Promise<CmoChatRunListResponse> {
+  if (isRemoteCmoAdapter()) {
+    return getRemoteChats(limit);
+  }
+
+  return {
+    schema_version: CMO_SCHEMA_VERSION,
+    data: await readLocalChatRuns(limit),
+  };
 }
 
 export async function readDashboardStatus(): Promise<CmoRemoteStatus> {

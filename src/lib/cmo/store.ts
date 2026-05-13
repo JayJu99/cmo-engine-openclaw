@@ -5,6 +5,7 @@ import path from "path";
 import {
   CMO_SCHEMA_VERSION,
   type CmoChatRun,
+  type CmoChatRunIndexItem,
   type CmoRawOutput,
   type CmoRun,
   type CmoRunIndexItem,
@@ -21,6 +22,7 @@ const LATEST_PATH = path.join(DATA_DIR, "latest.json");
 const LATEST_SUCCESSFUL_PATH = path.join(DATA_DIR, "latest_successful.json");
 const LOCAL_CHAT_MIN_RUNNING_MS = 1_500;
 const LOCAL_CHAT_TIMEOUT_MS = 15 * 60 * 1000;
+const DEFAULT_CHAT_LIST_LIMIT = 20;
 
 async function readJsonFile(filePath: string): Promise<unknown | null> {
   try {
@@ -77,6 +79,18 @@ function summarizeRun(run: CmoRun): CmoRunIndexItem {
     status: run.status,
     action_count: run.actions.length,
     signal_count: run.signals.length,
+  };
+}
+
+function summarizeChatRun(chatRun: CmoChatRun): CmoChatRunIndexItem {
+  return {
+    schema_version: CMO_SCHEMA_VERSION,
+    chat_run_id: chatRun.chat_run_id,
+    created_at: chatRun.created_at,
+    updated_at: chatRun.updated_at,
+    status: chatRun.status,
+    question: chatRun.question,
+    context_run_id: chatRun.context_run_id,
   };
 }
 
@@ -370,4 +384,28 @@ export async function readLocalChatRun(chatRunId: string): Promise<CmoChatRun | 
   }
 
   return finalizeLocalChatRun(chatRun);
+}
+
+export async function readLocalChatRuns(limit = DEFAULT_CHAT_LIST_LIMIT): Promise<CmoChatRunIndexItem[]> {
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+
+  try {
+    const files = await readdir(CHAT_DIR, { withFileTypes: true });
+    const chatRuns = await Promise.all(
+      files
+        .filter((file) => file.isFile() && file.name.endsWith(".json"))
+        .map(async (file) => {
+          const chatRun = normalizeChatRun(await readJsonFile(path.join(CHAT_DIR, file.name)));
+          return chatRun ? finalizeLocalChatRun(chatRun) : null;
+        }),
+    );
+
+    return chatRuns
+      .filter((chatRun): chatRun is CmoChatRun => Boolean(chatRun))
+      .map(summarizeChatRun)
+      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+      .slice(0, safeLimit);
+  } catch {
+    return [];
+  }
 }

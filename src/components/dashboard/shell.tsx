@@ -117,11 +117,13 @@ export function PageChrome({
   description,
   children,
   primary = "Create Campaign",
+  onPrimaryClick,
 }: {
   title: string;
   description: string;
   children: React.ReactNode;
   primary?: string;
+  onPrimaryClick?: () => void;
 }) {
   return (
     <motion.div
@@ -137,7 +139,7 @@ export function PageChrome({
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <RunBriefButton />
-          <Button>
+          <Button onClick={onPrimaryClick}>
             <icons.Rocket />
             {primary}
           </Button>
