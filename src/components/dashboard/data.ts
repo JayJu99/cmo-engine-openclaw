@@ -1,6 +1,7 @@
 export const navItems = [
   { label: "Overview", href: "/", icon: "Home" },
   { label: "CMO Chat", href: "/chat", icon: "MessageSquare" },
+  { label: "Runs", href: "/runs", icon: "List" },
   { label: "Actions", href: "/actions", icon: "CirclePlus", count: 5 },
   { label: "Agents", href: "/agents", icon: "Bot" },
   { label: "Signals", href: "/signals", icon: "Radio" },
