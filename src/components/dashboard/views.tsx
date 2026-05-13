@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { motion } from "framer-motion";
 
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +22,7 @@ import { cn } from "@/lib/utils";
 
 type Tone = "violet" | "green" | "blue" | "orange" | "pink" | "slate" | "red";
 type UIAction = {
+  id?: string;
   title: string;
   summary: string;
   priority: string;
@@ -30,6 +32,7 @@ type UIAction = {
   type: string;
 };
 type UISignal = {
+  id?: string;
   title: string;
   summary: string;
   category: string;
@@ -63,6 +66,7 @@ type UIVaultItem = {
   tone: string;
 };
 type UICampaign = {
+  id?: string;
   name?: string;
   title?: string;
   channels: string[] | string;
@@ -115,6 +119,31 @@ function normalizeUICampaign(campaign: UICampaign) {
     agent: owner.agent,
     updated: campaign.last_updated ?? campaign.updated ?? "Just now",
   };
+}
+
+function askCmoQuestion(intent: "action" | "signal" | "campaign", title: string) {
+  if (intent === "action") {
+    return `Explain this action and recommend the next 3 concrete steps: ${title}`;
+  }
+
+  if (intent === "signal") {
+    return `Analyze this signal and tell me what campaign/content decision it should affect: ${title}`;
+  }
+
+  return `Review this campaign and tell me what to approve, change, or block next: ${title}`;
+}
+
+function askCmoHref(intent: "action" | "signal" | "campaign", id: string | undefined, title: string) {
+  const params = new URLSearchParams();
+
+  if (id) {
+    params.set("intent", intent);
+    params.set("id", id);
+  } else {
+    params.set("question", askCmoQuestion(intent, title));
+  }
+
+  return `/chat?${params.toString()}`;
 }
 
 function resolveDashboardData(data?: DashboardViewData) {
@@ -370,6 +399,8 @@ function DetailPanel({
 }) {
   const isSignal = mode === "signals";
   const isPipeline = mode === "pipeline";
+  const activeAction = actions[0];
+  const activeSignal = signals[0];
   const campaignName = selectedCampaign?.name ?? selectedCampaign?.title ?? "New Year Stonk";
   const campaignChannels = selectedCampaign
     ? Array.isArray(selectedCampaign.channels)
@@ -388,6 +419,9 @@ function DetailPanel({
   const campaignLastUpdated = selectedCampaign?.last_updated ?? selectedCampaign?.updated ?? "12 min ago";
   const campaignTone = (selectedCampaign?.tone ?? "violet") as Tone;
   const campaignStageIndex = Math.max(0, Math.min(5, Math.round(campaignProgress) - 1));
+  const askIntent = isPipeline ? "campaign" : isSignal ? "signal" : "action";
+  const askTitle = isPipeline ? campaignName : isSignal ? activeSignal?.title ?? "Selected signal" : activeAction?.title ?? "Selected action";
+  const askId = isPipeline ? selectedCampaign?.id : isSignal ? activeSignal?.id : activeAction?.id;
 
   return (
     <Card className="h-fit p-6">
@@ -396,7 +430,15 @@ function DetailPanel({
           <icons.ChevronRight className="size-4 rotate-180" />
           Back to {isPipeline ? "pipeline" : "list"}
         </button>
-        <Badge variant={isSignal ? "red" : isPipeline ? "default" : "red"}>{isPipeline ? campaignStage : isSignal ? "High Opportunity" : "High Priority"}</Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant={isSignal ? "red" : isPipeline ? "default" : "red"}>{isPipeline ? campaignStage : isSignal ? "High Opportunity" : "High Priority"}</Badge>
+          <Button asChild size="sm" variant="outline">
+            <Link href={askCmoHref(askIntent, askId, askTitle)}>
+              <icons.MessageSquare />
+              Ask CMO
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {isPipeline ? (
@@ -411,7 +453,7 @@ function DetailPanel({
       ) : (
         <>
           <h2 className="text-2xl font-bold leading-tight text-slate-950">
-            {isSignal ? signals[0]?.title : actions[0]?.title}
+            {isSignal ? activeSignal?.title : activeAction?.title}
           </h2>
           <div className="mt-4 flex items-center gap-2 text-sm font-semibold text-slate-500">
             <IconTile color={isSignal ? "violet" : "violet"} className="size-7 rounded-full">

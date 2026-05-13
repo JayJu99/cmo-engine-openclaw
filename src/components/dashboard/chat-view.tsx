@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -14,6 +15,17 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   status?: CmoChatRun["status"];
+};
+
+export type ChatContextPreview = {
+  type: "action" | "signal" | "campaign";
+  title: string;
+  meta?: string;
+};
+
+type ChatViewProps = {
+  initialQuestion?: string;
+  initialContext?: ChatContextPreview | null;
 };
 
 const POLL_INTERVAL_MS = 4_000;
@@ -111,10 +123,12 @@ function messagesFromRun(chatRun: CmoChatRun): ChatMessage[] {
   ];
 }
 
-export function ChatView() {
-  const [input, setInput] = useState("");
+export function ChatView({ initialQuestion = "", initialContext = null }: ChatViewProps) {
+  const router = useRouter();
+  const [input, setInput] = useState(initialQuestion);
   const [messages, setMessages] = useState<ChatMessage[]>([welcomeMessage]);
   const [history, setHistory] = useState<CmoChatRunIndexItem[]>([]);
+  const [activeContext, setActiveContext] = useState<ChatContextPreview | null>(initialContext);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -182,11 +196,13 @@ export function ChatView() {
     clearPollTimer();
     pollCount.current = 0;
     setInput("");
+    setActiveContext(null);
     setMessages([welcomeMessage]);
     setSelectedRunId(null);
     setActiveRunId(null);
     setIsLoading(false);
     setError(null);
+    router.replace("/chat");
   }
 
   async function loadChat(chatRunId: string) {
@@ -388,6 +404,15 @@ export function ChatView() {
           ) : null}
 
           <div className="border-t border-slate-100 bg-white p-4">
+            {activeContext ? (
+              <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm">
+                <span className="rounded-lg bg-white px-2 py-1 text-xs font-bold uppercase text-indigo-700 ring-1 ring-indigo-100">
+                  {activeContext.type}
+                </span>
+                <span className="font-bold text-slate-950">{activeContext.title}</span>
+                {activeContext.meta ? <span className="text-xs font-semibold text-slate-500">{activeContext.meta}</span> : null}
+              </div>
+            ) : null}
             <div className="flex flex-col gap-3 md:flex-row">
               <textarea
                 value={input}
