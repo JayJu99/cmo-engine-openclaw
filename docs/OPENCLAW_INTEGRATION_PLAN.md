@@ -268,7 +268,8 @@ Returns the normalized run JSON for a specific run from:
 
 In OpenClaw cron mode, this endpoint is also the finalization boundary:
 
-- Completed CMO-written JSON is validated against the dashboard contract.
+- Completed CMO-written JSON is normalized, then validated against the dashboard contract.
+- Nested `actions`, `signals`, `agents`, `campaigns`, `reports`, and `vault` items are repaired with `schema_version`, stable IDs, and safe UI defaults before strict validation.
 - Valid completed JSON is promoted to `latest.json` and `latest_successful.json`.
 - Running JSON is returned as running until `CMO_RUN_TIMEOUT_SECONDS` is exceeded.
 - Timed-out runs are marked `timeout`, promoted to `latest.json`, and do not update `latest_successful.json`.
@@ -431,6 +432,19 @@ Status: implemented for read-time finalization and safe metadata.
 - Preserve full CLI stdout/stderr only in private `status/{runId}.debug.json`.
 - Planned follow-up: add trigger/result fixtures from real OpenClaw runs.
 - Planned follow-up: add adapter tests for failed, partial, timeout, and invalid normalized output.
+
+### Phase 5C: Completed Output Normalization Before Validation
+
+Status: implemented for VPS Adapter finalization and CMO prompt guidance.
+
+- Repair sparse completed CMO-written nested dashboard arrays before validation.
+- Normalize `actions`, `signals`, `agents`, `campaigns`, `reports`, and `vault`.
+- Ensure nested `schema_version: "cmo.dashboard.v1"` and stable IDs derived from item type, index, and title or name.
+- Fill missing card fields with safe defaults so useful completed CMO output is not marked partial solely because nested objects are sparse.
+- Map agent `metric_a` and `metric_b` from snake_case CMO-authored JSON into the dashboard UI fields.
+- Keep strict validation after normalization; still-invalid output remains `partial` with concise `validation_errors`.
+- Expand the CMO prompt with explicit nested object examples and require every nested item to include `id`.
+- Keep `CMO_TRIGGER_MODE=mock` as the default and keep OpenClaw Gateway private.
 
 ### Phase 6: Validation Hardening
 

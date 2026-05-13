@@ -10,7 +10,7 @@ The service serves normalized dashboard JSON only. It keeps the Windows dashboar
 
 `CMO_TRIGGER_MODE=openclaw-cron` enables the VPS OpenClaw cron trigger path. In this mode, `POST /cmo/run-brief` creates a normalized `running` run, updates `latest.json`, writes trigger status metadata, and starts a local OpenClaw one-shot cron trigger for `agentId: "cmo"` with isolated session delivery mode `none`. The HTTP request returns the running run.
 
-Phase 5B finalization now happens when `GET /cmo/runs/:runId` or `GET /cmo/latest` is read. If CMO has written `runs/{runId}.json` with `status: "completed"`, the adapter validates the dashboard contract, promotes the completed run to `latest.json`, updates `latest_successful.json`, and returns the completed run. If the run is still running, the adapter returns the running run until `CMO_RUN_TIMEOUT_SECONDS` is exceeded. Timed-out or invalid completed runs update `latest.json` but do not overwrite `latest_successful.json`.
+Finalization happens when `GET /cmo/runs/:runId` or `GET /cmo/latest` is read. If CMO has written `runs/{runId}.json` with `status: "completed"`, the adapter first repairs sparse nested dashboard objects, then validates the dashboard contract. Valid completed output is promoted to `latest.json` and `latest_successful.json`. If the run is still running, the adapter returns the running run until `CMO_RUN_TIMEOUT_SECONDS` is exceeded. Timed-out or still-invalid completed runs update `latest.json` but do not overwrite `latest_successful.json`.
 
 ## Run Locally
 
@@ -69,6 +69,14 @@ Authorization: Bearer <CMO_ADAPTER_API_KEY>
 - `POST /cmo/run-brief`
 
 `GET /cmo/latest` attempts finalization before responding. This covers the case where `latest.json` still contains the initial `running` state but `runs/{runId}.json` has already been replaced by completed CMO output.
+
+## Completed Output Repair
+
+Before strict validation, completed OpenClaw CMO output is normalized for the nested arrays used by dashboard cards: `actions`, `signals`, `agents`, `campaigns`, `reports`, and `vault`.
+
+The repair layer ensures nested `schema_version` and `id` fields, derives stable IDs from item type, index, and title or name, and fills missing card fields with safe defaults. For example, an agent with only `name` and `status` is expanded with `codename`, `tone`, `progress`, `description`, `activity`, and metrics before validation.
+
+If repaired output passes validation, the run is completed and promoted. If it still fails, the adapter returns a concise `partial` run with `validation_errors` and leaves `latest_successful.json` unchanged.
 
 ## OpenClaw Metadata Safety
 

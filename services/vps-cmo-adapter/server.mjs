@@ -30,6 +30,9 @@ const SAFE_OPENCLAW_METADATA_KEYS = [
 ];
 const VALID_RUN_STATUSES = new Set(["completed", "running", "failed", "partial", "timeout", "mock"]);
 const FORBIDDEN_PUBLIC_KEYS = new Set(["runId", "createdAt", "succeeded", "vault_notes", "prompt", "add_stdout", "add_stderr", "run_stdout", "run_stderr"]);
+const PRIORITIES = new Set(["High", "Medium", "Low", "Opportunity"]);
+const TONES = ["violet", "green", "blue", "orange", "pink", "slate", "red"];
+const DEFAULT_AGENT_NAMES = ["CMO", "Adapter", "Researcher", "Content", "Vault"];
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -197,6 +200,61 @@ function safeString(value, fallback) {
   return typeof value === "string" && value.trim() ? value : fallback;
 }
 
+function safeNumber(value, fallback, min = 0, max = 100) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.max(min, Math.min(max, value));
+}
+
+function safePriority(value, fallback = "Medium") {
+  return typeof value === "string" && PRIORITIES.has(value) ? value : fallback;
+}
+
+function safeTone(value, index = 0) {
+  return typeof value === "string" && TONES.includes(value) ? value : TONES[index % TONES.length];
+}
+
+function safeStringList(value, fallback) {
+  if (Array.isArray(value)) {
+    const values = value.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim());
+    return values.length ? values : fallback;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const values = value
+      .split(/\s{2,}|,\s*/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return values.length ? values : fallback;
+  }
+
+  return fallback;
+}
+
+function slugifyIdPart(value, fallback) {
+  const source = safeString(value, fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  return source || fallback;
+}
+
+function stableItemId(prefix, index, record, fallbackLabel) {
+  const label = record.title ?? record.name ?? record.type ?? fallbackLabel;
+  return `${prefix}_${String(index + 1).padStart(3, "0")}_${slugifyIdPart(label, fallbackLabel)}`;
+}
+
+function withExpectedVersion(record, payload) {
+  return {
+    ...payload,
+    schema_version: getConfig().schemaVersion,
+    id: safeString(record.id, payload.id),
+  };
+}
+
 function pickFields(value, fields) {
   const source = isRecord(value) ? value : {};
   const output = {};
@@ -311,6 +369,167 @@ function sanitizePublicRun(run) {
   return sanitized;
 }
 
+function normalizeSummaryForValidation(value) {
+  const record = isRecord(value) ? value : {};
+
+  return {
+    schema_version: getConfig().schemaVersion,
+    title: safeString(record.title, "CMO Brief"),
+    market_sentiment: safeString(record.market_sentiment, "Unavailable"),
+    content_momentum: safeString(record.content_momentum, "Needs review"),
+    top_opportunity: safeString(record.top_opportunity, "Review the completed CMO brief"),
+    risk: safeString(record.risk, "Some CMO fields were repaired by the adapter"),
+    next_action: safeString(record.next_action, "Review normalized output before acting"),
+  };
+}
+
+function normalizeActionsForValidation(value) {
+  const source = Array.isArray(value) ? value : [];
+
+  return source.map((item, index) => {
+    const record = isRecord(item) ? item : {};
+    const title = safeString(record.title, `CMO action ${index + 1}`);
+
+    return withExpectedVersion(record, {
+      id: stableItemId("action", index, record, "cmo_action"),
+      title,
+      summary: safeString(record.summary, `Review and execute: ${title}`),
+      priority: safePriority(record.priority, "Medium"),
+      source: safeString(record.source, "CMO"),
+      agent: safeString(record.agent, "CMO"),
+      time: safeString(record.time, "Just now"),
+      type: safeString(record.type, "CMO Recommendation"),
+    });
+  });
+}
+
+function normalizeSignalsForValidation(value) {
+  const source = Array.isArray(value) ? value : [];
+
+  return source.map((item, index) => {
+    const record = isRecord(item) ? item : {};
+    const title = safeString(record.title, `CMO signal ${index + 1}`);
+
+    return withExpectedVersion(record, {
+      id: stableItemId("signal", index, record, "cmo_signal"),
+      title,
+      summary: safeString(record.summary, `Monitor signal: ${title}`),
+      category: safeString(record.category, "Market"),
+      source: safeString(record.source, "CMO"),
+      severity: safePriority(record.severity, "Medium"),
+      time: safeString(record.time, "Just now"),
+    });
+  });
+}
+
+function normalizeAgentsForValidation(value) {
+  const source = Array.isArray(value) ? value : [];
+
+  return source.map((item, index) => {
+    const record = isRecord(item) ? item : {};
+    const name = safeString(record.name, DEFAULT_AGENT_NAMES[index] ?? `Agent ${index + 1}`);
+    const codename = safeString(record.codename, slugifyIdPart(name, "agent").replace(/_/g, " "));
+
+    return withExpectedVersion(record, {
+      id: stableItemId("agent", index, record, "agent"),
+      name,
+      codename,
+      status: safeString(record.status, "Idle"),
+      tone: safeTone(record.tone, index),
+      progress: safeNumber(record.progress, record.status === "Done" ? 100 : 50),
+      description: safeString(record.description, `${name} supports the CMO dashboard workflow.`),
+      activity: safeString(record.activity, "Reviewing CMO brief output"),
+      metricA: safeString(record.metricA ?? record.metric_a, "Active"),
+      metricB: safeString(record.metricB ?? record.metric_b, "Normalized"),
+    });
+  });
+}
+
+function normalizeCampaignsForValidation(value) {
+  const source = Array.isArray(value) ? value : [];
+
+  return source.map((item, index) => {
+    const record = isRecord(item) ? item : {};
+    const name = safeString(record.name ?? record.title, `Campaign ${index + 1}`);
+    const ownerAgent = safeString(record.owner_agent, "CMO");
+
+    return withExpectedVersion(record, {
+      id: stableItemId("campaign", index, record, "campaign"),
+      name,
+      title: safeString(record.title, name),
+      channels: safeStringList(record.channels, ["X", "Telegram"]),
+      stage: safeString(record.stage, "Strategy"),
+      owner_agent: ownerAgent,
+      status: safeString(record.status, "In Progress"),
+      progress: safeNumber(record.progress, 3, 0, 6),
+      last_updated: safeString(record.last_updated ?? record.updated_at ?? record.updated, "Just now"),
+      summary: safeString(record.summary, `${name} is active and needs CMO review.`),
+      next_action: safeString(record.next_action, "Confirm owner, channel mix, and next delivery step"),
+      tone: safeTone(record.tone, index + 2),
+    });
+  });
+}
+
+function normalizeReportsForValidation(value) {
+  const source = Array.isArray(value) ? value : [];
+
+  return source.map((item, index) => {
+    const record = isRecord(item) ? item : {};
+    const title = safeString(record.title, `CMO report ${index + 1}`);
+    const stats = Array.isArray(record.stats)
+      ? record.stats.map((stat) => safeString(stat, "-")).filter((stat) => stat !== "-")
+      : [];
+
+    return withExpectedVersion(record, {
+      id: stableItemId("report", index, record, "report"),
+      title,
+      type: safeString(record.type, "Brief"),
+      meta: safeString(record.meta, "Generated by CMO"),
+      stats: stats.length ? stats.slice(0, 3) : ["Review", "CMO", "Now"],
+      tone: safeTone(record.tone, index + 4),
+    });
+  });
+}
+
+function normalizeVaultForValidation(value) {
+  const source = Array.isArray(value) ? value : [];
+
+  return source.map((item, index) => {
+    const record = isRecord(item) ? item : {};
+    const type = safeString(record.type, "Memory");
+    const name = safeString(record.name ?? record.title, `${type} ${index + 1}`);
+
+    return withExpectedVersion(record, {
+      id: stableItemId("vault", index, record, "vault"),
+      name,
+      type,
+      status: safeString(record.status, "Indexed"),
+      count: safeString(record.count, "1 item"),
+      tone: safeTone(record.tone, index + 5),
+    });
+  });
+}
+
+function normalizeCompletedRunForValidation(run) {
+  const record = isRecord(run) ? run : {};
+
+  return {
+    schema_version: getConfig().schemaVersion,
+    run_id: safeString(record.run_id, "run_fallback"),
+    created_at: safeString(record.created_at, new Date().toISOString()),
+    workspace: safeString(record.workspace, "Holdstation"),
+    status: "completed",
+    summary: normalizeSummaryForValidation(record.summary),
+    actions: normalizeActionsForValidation(record.actions),
+    signals: normalizeSignalsForValidation(record.signals),
+    agents: normalizeAgentsForValidation(record.agents),
+    campaigns: normalizeCampaignsForValidation(record.campaigns),
+    reports: normalizeReportsForValidation(record.reports),
+    vault: normalizeVaultForValidation(record.vault),
+    ...(sanitizeOpenClawMetadata(record.openclaw) ? { openclaw: sanitizeOpenClawMetadata(record.openclaw) } : {}),
+  };
+}
+
 function collectForbiddenPublicKeys(value, pathName = "$", errors = []) {
   if (Array.isArray(value)) {
     value.forEach((item, index) => collectForbiddenPublicKeys(item, `${pathName}[${index}]`, errors));
@@ -338,7 +557,7 @@ function validateStringField(record, key, errors, pathName) {
   }
 }
 
-function validateVersionedItemArray(run, key, minItems, maxItems, errors) {
+function validateVersionedItemArray(run, key, minItems, maxItems, requiredFields, errors) {
   const value = run[key];
 
   if (!Array.isArray(value)) {
@@ -360,7 +579,29 @@ function validateVersionedItemArray(run, key, minItems, maxItems, errors) {
       return;
     }
 
+    if (item.schema_version !== getConfig().schemaVersion) {
+      errors.push(`${key}[${index}].schema_version must be ${getConfig().schemaVersion}`);
+    }
+
     validateStringField(item, "id", errors, `${key}[${index}]`);
+
+    for (const field of requiredFields) {
+      if (field === "channels" || field === "stats") {
+        if (!Array.isArray(item[field]) || item[field].length === 0) {
+          errors.push(`${key}[${index}].${field} must be a non-empty array`);
+        }
+        continue;
+      }
+
+      if (field === "progress") {
+        if (typeof item[field] !== "number" || !Number.isFinite(item[field])) {
+          errors.push(`${key}[${index}].${field} must be a number`);
+        }
+        continue;
+      }
+
+      validateStringField(item, field, errors, `${key}[${index}]`);
+    }
   });
 }
 
@@ -402,17 +643,35 @@ function validateDashboardRunContract(run) {
   if (!isRecord(run.summary)) {
     errors.push("summary must be an object");
   } else {
+    if (run.summary.schema_version !== config.schemaVersion) {
+      errors.push(`summary.schema_version must be ${config.schemaVersion}`);
+    }
+
     for (const key of ["title", "market_sentiment", "content_momentum", "top_opportunity", "risk", "next_action"]) {
       validateStringField(run.summary, key, errors, "$.summary");
     }
   }
 
-  validateVersionedItemArray(run, "actions", 3, 5, errors);
-  validateVersionedItemArray(run, "signals", 3, 5, errors);
-  validateVersionedItemArray(run, "agents", 5, Infinity, errors);
-  validateVersionedItemArray(run, "campaigns", 2, 3, errors);
-  validateVersionedItemArray(run, "reports", 1, 3, errors);
-  validateVersionedItemArray(run, "vault", 1, 3, errors);
+  validateVersionedItemArray(run, "actions", 3, 5, ["title", "summary", "priority", "source", "agent", "time", "type"], errors);
+  validateVersionedItemArray(run, "signals", 3, 5, ["title", "summary", "category", "source", "severity", "time"], errors);
+  validateVersionedItemArray(
+    run,
+    "agents",
+    5,
+    Infinity,
+    ["name", "codename", "status", "tone", "progress", "description", "activity", "metricA", "metricB"],
+    errors,
+  );
+  validateVersionedItemArray(
+    run,
+    "campaigns",
+    2,
+    3,
+    ["name", "title", "channels", "stage", "owner_agent", "status", "progress", "last_updated", "summary", "next_action", "tone"],
+    errors,
+  );
+  validateVersionedItemArray(run, "reports", 1, 3, ["title", "type", "meta", "stats", "tone"], errors);
+  validateVersionedItemArray(run, "vault", 1, 3, ["name", "type", "status", "count", "tone"], errors);
 
   return {
     valid: errors.length === 0,
@@ -750,12 +1009,85 @@ function buildCmoDashboardPrompt({ runId, rawPath, normalizedPath, workspace }) 
           risk: "string",
           next_action: "string",
         },
-        actions: [],
-        signals: [],
-        agents: [],
-        reports: [],
-        vault: [],
-        campaigns: [],
+        actions: [
+          {
+            schema_version: "cmo.dashboard.v1",
+            id: "action_001_approve_trading_campaign",
+            title: "Approve trading campaign",
+            summary: "Approve the next campaign step and confirm launch channel priority.",
+            priority: "High",
+            source: "CMO",
+            agent: "Content",
+            time: "Just now",
+            type: "Approval",
+          },
+        ],
+        signals: [
+          {
+            schema_version: "cmo.dashboard.v1",
+            id: "signal_001_retail_trader_momentum",
+            title: "Retail trader momentum rising",
+            summary: "Audience activity increased around stock trading education topics.",
+            category: "Market",
+            source: "CMO",
+            severity: "Opportunity",
+            time: "Just now",
+          },
+        ],
+        agents: [
+          {
+            schema_version: "cmo.dashboard.v1",
+            id: "agent_001_cmo",
+            name: "CMO",
+            codename: "OpenClaw",
+            status: "Running",
+            tone: "blue",
+            progress: 72,
+            description: "Leads the dashboard brief and decides next marketing actions.",
+            activity: "Prioritizing campaign decisions",
+            metric_a: "5 actions",
+            metric_b: "3 risks",
+          },
+        ],
+        campaigns: [
+          {
+            schema_version: "cmo.dashboard.v1",
+            id: "campaign_001_stock_trading_push",
+            name: "Stock Trading Push",
+            title: "Stock Trading Push",
+            channels: ["X", "Telegram"],
+            stage: "Content",
+            owner_agent: "Content",
+            status: "In Progress",
+            progress: 3,
+            last_updated: "Just now",
+            summary: "Campaign is ready for CMO review before launch.",
+            next_action: "Approve message angle and channel order",
+            tone: "violet",
+          },
+        ],
+        reports: [
+          {
+            schema_version: "cmo.dashboard.v1",
+            id: "report_001_daily_cmo_brief",
+            title: "Daily CMO Brief",
+            type: "Brief",
+            meta: "Generated by CMO",
+            stats: ["3 signals", "5 actions", "2 campaigns"],
+            tone: "slate",
+          },
+        ],
+        vault: [
+          {
+            schema_version: "cmo.dashboard.v1",
+            id: "vault_001_brand_memory",
+            name: "Brand Memory",
+            type: "Memory",
+            status: "Indexed",
+            count: "12 notes",
+            tone: "green",
+          },
+        ],
       },
       null,
       2,
@@ -768,9 +1100,12 @@ function buildCmoDashboardPrompt({ runId, rawPath, normalizedPath, workspace }) 
     "- campaigns: 2-3 workstream or campaign items.",
     "- reports: 1-3 report cards.",
     "- vault: 1-3 memory or knowledge items.",
+    "- Every object inside actions, signals, agents, campaigns, reports, and vault must include a non-empty id.",
+    "- Every nested object should include schema_version: cmo.dashboard.v1.",
     "",
     "Use only the top-level schema keys shown above: schema_version, run_id, created_at, workspace, status, summary, actions, signals, agents, reports, vault, campaigns.",
-    "Use snake_case keys for run metadata. Do not use runId, createdAt, status value succeeded, or vault_notes.",
+    "Use snake_case keys only in the CMO-authored JSON. For agent metrics use metric_a and metric_b.",
+    "Do not use runId, createdAt, status value succeeded, or vault_notes.",
     "Do not include this prompt, cron payload, OpenClaw stdout, OpenClaw stderr, or Gateway details in the normalized JSON.",
   ].join("\n");
 }
@@ -1137,18 +1472,25 @@ async function finalizeRun(runId, { fallbackRun = null } = {}) {
     return sanitizePublicRun(run);
   }
 
-  const runWithMetadata = sanitizePublicRun({
+  const rawRunWithMetadata = {
     ...run,
     openclaw,
-  });
+  };
+  const runWithMetadata = sanitizePublicRun(rawRunWithMetadata);
   const createdAt = safeString(runWithMetadata.created_at, new Date().toISOString());
   const workspace = safeString(runWithMetadata.workspace, "Holdstation");
 
   if (runWithMetadata.status === "completed") {
-    const validation = validateDashboardRunContract(runWithMetadata);
+    const normalizedRun = sanitizePublicRun(normalizeCompletedRunForValidation({
+      ...rawRunWithMetadata,
+      run_id: safeString(rawRunWithMetadata.run_id, runId),
+      created_at: createdAt,
+      workspace,
+    }));
+    const validation = validateDashboardRunContract(normalizedRun);
 
     if (validation.valid) {
-      return writePublicRunState(runWithMetadata, { successful: true });
+      return writePublicRunState(normalizedRun, { successful: true });
     }
 
     const invalidRun = createInvalidOpenClawRun({
