@@ -7,6 +7,7 @@ import type {
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
   ContextPack,
+  ContextItem,
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
 import { summarizeContextQuality } from "@/lib/cmo/context-quality";
@@ -63,6 +64,11 @@ const DEFAULT_FALLBACK_ACTIONS: CMOAppChatResponse["suggestedActions"] = [
   },
 ];
 
+interface FallbackComposition {
+  answer: string;
+  suggestedActions: CMOAppChatResponse["suggestedActions"];
+}
+
 function runtimeModeFromStatus(status: CMORuntimeStatus): CmoRuntimeMode {
   if (status === "connected") {
     return "live";
@@ -75,7 +81,65 @@ function runtimeModeFromStatus(status: CMORuntimeStatus): CmoRuntimeMode {
   return "fallback";
 }
 
-function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): string {
+function contextItem(input: CmoRuntimeTurnInput, kind: ContextItem["kind"]): ContextItem | undefined {
+  return input.contextPack.items.find((item) => item.kind === kind && item.exists);
+}
+
+function compactLine(value: string, limit = 220): string {
+  const compacted = value
+    .replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^#+\s*/, "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return compacted.length > limit ? `${compacted.slice(0, limit - 3)}...` : compacted;
+}
+
+function itemBrief(item: ContextItem | undefined, fallback: string): string {
+  if (!item) {
+    return fallback;
+  }
+
+  return compactLine(item.contentPreview || item.content, 260) || fallback;
+}
+
+function includedContextLabels(input: CmoRuntimeTurnInput): string[] {
+  const labelByKind: Record<ContextItem["kind"], string> = {
+    current_priority: "Current Priority",
+    app_memory: "App Memory",
+    latest_sessions: "Latest Sessions",
+    promotion_candidates: "Memory Candidates",
+  };
+
+  return input.contextPack.items
+    .filter((item) => item.exists)
+    .map((item) => labelByKind[item.kind])
+    .filter((label, index, list) => list.indexOf(label) === index);
+}
+
+function fallbackRecommendations(input: CmoRuntimeTurnInput): CMOAppChatResponse["suggestedActions"] {
+  const appName = input.request.appName;
+
+  return [
+    {
+      type: "fallback_recommendation",
+      label: `Define this week's activation event and the simplest evidence check for ${appName}.`,
+    },
+    {
+      type: "fallback_recommendation",
+      label: "Turn one concrete product proof point into campaign-ready messaging.",
+    },
+    {
+      type: "fallback_recommendation",
+      label: "Create one retention or follow-up loop for users who reach the activation moment.",
+    },
+  ];
+}
+
+function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackComposition {
   const contextList = input.contextUsed.length ? input.contextUsed.map((note) => note.title).join(", ") : "no context pack items were available";
   const missingList = input.missingContext.length ? input.missingContext.map((note) => note.title).join(", ") : "none";
   const qualitySummary = summarizeContextQuality([...input.contextUsed, ...input.missingContext]);
@@ -83,17 +147,46 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): string {
     .filter((note) => note.contextQuality === "placeholder" || note.contextQuality === "draft")
     .map((note) => `${note.title}: ${note.contextQuality}`)
     .join(", ");
+  const priority = itemBrief(contextItem(input, "current_priority"), "No current priority was available.");
+  const memory = itemBrief(contextItem(input, "app_memory"), "No durable app memory was available.");
+  const latestSessions = itemBrief(contextItem(input, "latest_sessions"), "No recent CMO sessions were available.");
+  const memoryCandidates = itemBrief(contextItem(input, "promotion_candidates"), "No open memory candidates were available.");
+  const contextLabels = includedContextLabels(input);
+  const suggestedActions = fallbackRecommendations(input);
+  const contextUsedLine = contextLabels.length ? contextLabels.join(", ") : contextList;
 
-  return [
-    "Fallback response: OpenClaw CMO live app-chat runtime is not available.",
-    reason,
-    `CMO context pack was built automatically for ${input.request.appName}.`,
-    `Context actually included: ${contextList}.`,
-    `Unavailable context pack items: ${missingList}.`,
-    `Context quality: ${qualitySummary.confirmedCount} confirmed, ${qualitySummary.placeholderOrDraftCount} placeholder/draft, ${qualitySummary.missingCount} missing.`,
-    placeholderOrDraft ? `Draft or placeholder notes: ${placeholderOrDraft}.` : "No draft or placeholder notes were flagged.",
-    "Connect this route to the OpenClaw CMO runtime before treating the answer as operator judgment.",
-  ].join("\n");
+  return {
+    answer: [
+      `Based on the loaded workspace context for ${input.request.appName}, my recommendation is to focus this turn on practical activation and proof-building work.`,
+      "",
+      `User question: ${input.message}`,
+      "",
+      `Action 1: ${suggestedActions[0].label}`,
+      "Use the current priority to make the target behavior explicit. Keep it evidence-based: define what the user must do, what product surface proves it happened, and what qualitative signal would make the action worth scaling.",
+      "",
+      `Action 2: ${suggestedActions[1].label}`,
+      "Pull from App Memory and package one specific product truth into a short message, landing-page section, creator prompt, or campaign angle. Do not add performance claims unless they already exist in confirmed context.",
+      "",
+      `Action 3: ${suggestedActions[2].label}`,
+      "After the activation moment, decide the next prompt, reminder, or content touch that brings the user back. Treat this as a retention hypothesis, not a proven metric.",
+      "",
+      "Why these actions fit:",
+      `- Current Priority: ${priority}`,
+      `- App Memory: ${memory}`,
+      `- Latest Sessions: ${latestSessions}`,
+      `- Memory Candidates: ${memoryCandidates}`,
+      "",
+      `Context used: ${contextUsedLine}.`,
+      `Unavailable context: ${missingList}.`,
+      `Context quality: ${qualitySummary.confirmedCount} confirmed, ${qualitySummary.placeholderOrDraftCount} placeholder/draft, ${qualitySummary.missingCount} missing.`,
+      placeholderOrDraft ? `Context caution: ${placeholderOrDraft}.` : "Context caution: no draft or placeholder notes were flagged.",
+      `Runtime note: ${reason}`,
+    ].join("\n"),
+    suggestedActions: [
+      ...suggestedActions,
+      ...DEFAULT_FALLBACK_ACTIONS,
+    ],
+  };
 }
 
 function classifyAppTurnErrorReason(error: unknown): CmoRuntimeErrorReason {
@@ -197,10 +290,12 @@ export class FallbackRuntime implements CmoRuntime {
   }
 
   async runTurn(input: CmoRuntimeTurnInput): Promise<CmoRuntimeTurnResult> {
+    const fallback = fallbackAnswer(input, this.reason);
+
     return {
-      answer: fallbackAnswer(input, this.reason),
+      answer: fallback.answer,
       assumptions: [],
-      suggestedActions: DEFAULT_FALLBACK_ACTIONS,
+      suggestedActions: fallback.suggestedActions,
       runtimeStatus: this.status,
       runtimeMode: this.mode,
       runtimeLabel: this.label,
