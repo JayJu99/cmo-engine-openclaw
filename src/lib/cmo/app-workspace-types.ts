@@ -143,6 +143,9 @@ export interface CMOSessionSummary {
   topic: string;
   createdAt: string;
   runtimeStatus?: CMORuntimeStatus;
+  runtimeMode?: CmoRuntimeMode;
+  runtimeProvider?: string;
+  runtimeAgent?: string;
   isDevelopmentFallback: boolean;
   contextUsedCount: number;
   contextQualitySummary?: CMOContextQualitySummary;
@@ -407,6 +410,12 @@ export interface CMOChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: string;
+  runtimeMode?: CmoRuntimeMode;
+  runtimeStatus?: CMORuntimeStatus;
+  runtimeProvider?: string;
+  runtimeAgent?: string;
+  runtimeErrorReason?: CmoRuntimeErrorReason;
+  contextUsedCount?: number;
 }
 
 export interface CMOChatSession {
@@ -427,6 +436,8 @@ export interface CMOChatSession {
   runtimeLabel?: string;
   runtimeError?: string;
   runtimeErrorReason?: CmoRuntimeErrorReason;
+  runtimeProvider?: string;
+  runtimeAgent?: string;
   missingContext?: VaultNoteRef[];
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
@@ -474,6 +485,8 @@ export interface CMOAppChatResponse {
   runtimeLabel: string;
   runtimeError?: string;
   runtimeErrorReason?: CmoRuntimeErrorReason;
+  runtimeProvider?: string;
+  runtimeAgent?: string;
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
 }
@@ -504,6 +517,8 @@ export interface RawCaptureRequest {
   isDevelopmentFallback?: boolean;
   isRuntimeFallback?: boolean;
   runtimeErrorReason?: CmoRuntimeErrorReason;
+  runtimeProvider?: string;
+  runtimeAgent?: string;
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
   assumptions?: string[];

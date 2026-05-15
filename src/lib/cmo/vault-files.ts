@@ -1481,6 +1481,9 @@ function sessionSummary(session: Awaited<ReturnType<typeof readAppChatSessions>>
     topic: session.topic || "CMO session",
     createdAt: session.createdAt,
     runtimeStatus: session.runtimeStatus,
+    runtimeMode: session.runtimeMode,
+    runtimeProvider: session.runtimeProvider,
+    runtimeAgent: session.runtimeAgent,
     isDevelopmentFallback: session.isDevelopmentFallback === true,
     contextUsedCount: session.contextUsed.length,
     contextQualitySummary: session.contextQualitySummary,
@@ -2003,6 +2006,18 @@ function formatMessagesByRole(session: Awaited<ReturnType<typeof readAppChatSess
   return { userInputs, cmoResponse, allMessages };
 }
 
+function runtimeDescription(session: NonNullable<Awaited<ReturnType<typeof readAppChatSession>>>): string {
+  if (session.runtimeMode === "live") {
+    return "live app-chat via OpenClaw CMO app-turn";
+  }
+
+  if (session.runtimeMode === "fallback" || session.isRuntimeFallback || session.isDevelopmentFallback) {
+    return "fallback generated from workspace context";
+  }
+
+  return session.runtimeStatus ?? "not captured";
+}
+
 function sessionNoteMarkdown(app: AppWorkspace, session: NonNullable<Awaited<ReturnType<typeof readAppChatSession>>>, targetPath: string): string {
   const date = formatVaultDate(new Date(session.createdAt));
   const topic = session.topic || "CMO session";
@@ -2019,9 +2034,13 @@ function sessionNoteMarkdown(app: AppWorkspace, session: NonNullable<Awaited<Ret
     "vault: holdstation",
     `app: ${app.name}`,
     `app_id: ${app.id}`,
+    `workspace_id: ${app.workspaceId}`,
+    `source_id: ${app.sourceId}`,
     `date: ${date}`,
     `runtime_status: ${session.runtimeStatus ?? "not_captured"}`,
     `runtime_mode: ${session.runtimeMode ?? "not_captured"}`,
+    `runtime_provider: ${session.runtimeProvider ?? "not_captured"}`,
+    `runtime_agent: ${session.runtimeAgent ?? "not_captured"}`,
     `attempted_runtime_mode: ${session.attemptedRuntimeMode ?? "not_captured"}`,
     session.runtimeErrorReason ? `runtime_error_reason: ${session.runtimeErrorReason}` : "runtime_error_reason: none",
     `fallback: ${session.isDevelopmentFallback ? "true" : "false"}`,
@@ -2039,9 +2058,17 @@ function sessionNoteMarkdown(app: AppWorkspace, session: NonNullable<Awaited<Ret
     "## Topic",
     topic,
     "",
+    "## Workspace Scope",
+    `Workspace ID: ${app.workspaceId}`,
+    `App ID: ${app.id}`,
+    `Source ID: ${app.sourceId}`,
+    "",
     "## Runtime Status",
+    `Runtime: ${runtimeDescription(session)}`,
     `Runtime status: ${session.runtimeStatus ?? "not captured"}`,
     `Runtime mode: ${session.runtimeMode ?? "not captured"}`,
+    `Runtime provider: ${session.runtimeProvider ?? "not captured"}`,
+    `Runtime agent: ${session.runtimeAgent ?? "not captured"}`,
     `Attempted runtime mode: ${session.attemptedRuntimeMode ?? "not captured"}`,
     `Fallback: ${session.isDevelopmentFallback ? "true" : "false"}`,
     `Runtime fallback: ${session.isRuntimeFallback ? "true" : "false"}`,
@@ -2360,6 +2387,11 @@ function formatRawCaptureSection(request: RawCaptureRequest, date: string, times
   const summary = request.summary?.trim() || "No session summary was provided.";
   const runtimeStatus = request.runtimeStatus ?? "not_captured";
   const runtimeMode = request.runtimeMode ?? "not_captured";
+  const runtimeDescription = runtimeMode === "live"
+    ? "live app-chat via OpenClaw CMO app-turn"
+    : runtimeMode === "fallback" || request.isRuntimeFallback || request.isDevelopmentFallback
+      ? "fallback generated from workspace context"
+      : runtimeStatus;
   const selectedContext = formatQualifiedNoteList(request.selectedContextNotes, "No selected context notes were captured.");
   const context = formatQualifiedNoteList(request.contextUsed, "No selected context notes were included in the CMO payload.");
   const missingContext = request.missingContext?.length
@@ -2396,14 +2428,18 @@ function formatRawCaptureSection(request: RawCaptureRequest, date: string, times
     `Source: ${sourceLabel(request.source)}`,
     `Related Source: ${request.relatedSource ?? request.source}`,
     `App: ${request.appName}`,
+    `Workspace ID: ${request.workspaceId}`,
     `App ID: ${request.appId}`,
+    `Source ID: ${request.workspaceId}__${request.appId}`,
     request.sessionId ? `Session ID: ${request.sessionId}` : "Session ID: not_captured",
     request.sessionNotePath ? `Session Note: ${request.sessionNotePath}` : "Session Note: not_saved",
     request.relatedPriority ? `Related Priority: ${request.relatedPriority}` : "Related Priority: none",
     request.relatedPlan ? `Related Plan: ${request.relatedPlan}` : "Related Plan: none",
     "Status: captured",
-    `Runtime: ${runtimeStatus}`,
+    `Runtime: ${runtimeDescription}`,
     `Runtime Mode: ${runtimeMode}`,
+    `Runtime Provider: ${request.runtimeProvider ?? "not_captured"}`,
+    `Runtime Agent: ${request.runtimeAgent ?? "not_captured"}`,
     `Attempted Runtime Mode: ${request.attemptedRuntimeMode ?? "not_captured"}`,
     `Fallback: ${request.isDevelopmentFallback ? "true" : "false"}`,
     `Runtime Fallback: ${request.isRuntimeFallback ? "true" : "false"}`,

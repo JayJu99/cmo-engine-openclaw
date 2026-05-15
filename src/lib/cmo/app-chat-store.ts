@@ -189,6 +189,12 @@ function normalizeRuntimeErrorReason(value: unknown): CmoRuntimeErrorReason | un
     : undefined;
 }
 
+function normalizeRuntimeProvider(value: unknown): string | undefined {
+  const normalized = stringValue(value);
+
+  return normalized || undefined;
+}
+
 function normalizeContextDiagnostics(value: unknown): CMOContextDiagnostics | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -319,6 +325,12 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             role,
             content: stringValue(message.content),
             createdAt: stringValue(message.createdAt, new Date(0).toISOString()),
+            runtimeMode: normalizeRuntimeMode(message.runtimeMode, normalizeRuntimeStatus(message.runtimeStatus, false), false),
+            runtimeStatus: normalizeRuntimeStatus(message.runtimeStatus, false),
+            runtimeProvider: normalizeRuntimeProvider(message.runtimeProvider),
+            runtimeAgent: normalizeRuntimeProvider(message.runtimeAgent),
+            runtimeErrorReason: normalizeRuntimeErrorReason(message.runtimeErrorReason),
+            contextUsedCount: typeof message.contextUsedCount === "number" && Number.isFinite(message.contextUsedCount) ? Math.max(0, Math.floor(message.contextUsedCount)) : undefined,
           };
         })
         .filter((message): message is CMOChatMessage => Boolean(message))
@@ -346,6 +358,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     runtimeLabel: stringValue(value.runtimeLabel),
     runtimeError: stringValue(value.runtimeError),
     runtimeErrorReason: normalizeRuntimeErrorReason(value.runtimeErrorReason),
+    runtimeProvider: normalizeRuntimeProvider(value.runtimeProvider),
+    runtimeAgent: normalizeRuntimeProvider(value.runtimeAgent),
     missingContext,
     contextDiagnostics,
     contextQualitySummary: normalizeContextQualitySummary(value.contextQualitySummary ?? contextDiagnostics, [...contextUsed, ...missingContext]),
@@ -397,6 +411,8 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
   let runtimeLabel = "OpenClaw CMO runtime";
   let runtimeError = "";
   let runtimeErrorReason: CmoRuntimeErrorReason | undefined;
+  let runtimeProvider: string | undefined;
+  let runtimeAgent: string | undefined;
 
   try {
     const runtimeResult = await runtime.runTurn({
@@ -420,6 +436,8 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     runtimeLabel = runtimeResult.runtimeLabel;
     runtimeError = runtimeResult.runtimeError ?? "";
     runtimeErrorReason = runtimeResult.runtimeErrorReason;
+    runtimeProvider = runtimeResult.runtimeProvider;
+    runtimeAgent = runtimeResult.runtimeAgent;
     if (request.forceFallback) {
       attemptedRuntimeMode = "live";
       runtimeError = "Live app-chat intentionally bypassed for fallback smoke.";
@@ -458,6 +476,8 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     runtimeLabel,
     ...(runtimeError ? { runtimeError } : {}),
     ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
+    ...(runtimeProvider ? { runtimeProvider } : {}),
+    ...(runtimeAgent ? { runtimeAgent } : {}),
     contextDiagnostics,
     contextQualitySummary,
     messages: [
@@ -473,6 +493,12 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
         role: "assistant",
         content: answer,
         createdAt: now,
+        runtimeMode,
+        runtimeStatus,
+        ...(runtimeProvider ? { runtimeProvider } : {}),
+        ...(runtimeAgent ? { runtimeAgent } : {}),
+        ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
+        contextUsedCount: contextUsed.length,
       },
     ],
   };
@@ -496,6 +522,8 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     runtimeLabel,
     ...(runtimeError ? { runtimeError } : {}),
     ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
+    ...(runtimeProvider ? { runtimeProvider } : {}),
+    ...(runtimeAgent ? { runtimeAgent } : {}),
     contextDiagnostics,
     contextQualitySummary,
   };

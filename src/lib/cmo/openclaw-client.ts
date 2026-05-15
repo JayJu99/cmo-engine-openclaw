@@ -37,6 +37,8 @@ export interface OpenClawCmoResult {
   rawRuntimeResponse?: unknown;
   isDevelopmentFallback: false;
   runtimeLabel: string;
+  runtimeProvider?: string;
+  runtimeAgent?: string;
   runtimeRunId?: string;
 }
 
@@ -416,6 +418,8 @@ function normalizeRuntimeResult(payload: unknown, config: OpenClawCmoRuntimeConf
     rawRuntimeResponse: payload,
     isDevelopmentFallback: false,
     runtimeLabel: config.label,
+    runtimeProvider: "openclaw",
+    runtimeAgent: "cmo",
     runtimeRunId: pickRuntimeRunId(payload) || undefined,
   };
 }
@@ -473,6 +477,8 @@ function normalizeAppTurnRuntimeResult(payload: unknown, config: OpenClawCmoRunt
     rawRuntimeResponse: payload,
     isDevelopmentFallback: false,
     runtimeLabel: config.label,
+    runtimeProvider: trimString(source.runtimeProvider ?? source.runtime_provider) || "openclaw",
+    runtimeAgent: trimString(source.runtimeAgent ?? source.runtime_agent) || "cmo",
     runtimeRunId: pickRuntimeRunId(payload) || undefined,
   };
 }
@@ -561,6 +567,8 @@ function normalizeRemoteChatRuntimeResult(chatRun: CmoChatRun, config: OpenClawC
     rawRuntimeResponse: chatRun,
     isDevelopmentFallback: false,
     runtimeLabel: config.label,
+    runtimeProvider: "openclaw",
+    runtimeAgent: "cmo",
     runtimeRunId: chatRun.chat_run_id,
   };
 }
@@ -726,6 +734,8 @@ export async function callOpenClawAppTurnRuntime(
       rawRuntimeResponse: response.data.rawRuntimeResponse,
       isDevelopmentFallback: false,
       runtimeLabel: config.label,
+      runtimeProvider: response.data.runtimeProvider || "openclaw",
+      runtimeAgent: response.data.runtimeAgent || "cmo",
     };
   }
 

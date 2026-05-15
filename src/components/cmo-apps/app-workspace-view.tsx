@@ -21,6 +21,7 @@ import type {
   AppWorkspacePlanState,
   AppWorkspaceTab,
   CLevelPriority,
+  CMOChatMessage,
   CMOChatSession,
   CMORuntimeStatus,
   PriorityLevel,
@@ -69,7 +70,7 @@ function runtimeLabel(status: CMORuntimeStatus | undefined): string {
   }
 
   if (status === "live_failed_then_fallback") {
-    return "App chat fallback";
+    return "Fallback used";
   }
 
   if (status === "development_fallback") {
@@ -267,6 +268,43 @@ function sessionContextSummary(session: CMOChatSession): string {
   }
 
   return `${quality.confirmedCount} confirmed, ${quality.draftCount} draft, ${quality.placeholderCount} need content, ${quality.missingCount} missing`;
+}
+
+function firstUserMessage(session: CMOChatSession): string {
+  return session.messages.find((message) => message.role === "user")?.content ?? "";
+}
+
+function latestAssistantMessage(session: CMOChatSession): string {
+  return [...session.messages].reverse().find((message) => message.role === "assistant")?.content ?? "";
+}
+
+function previewText(value: string, limit = 160): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+
+  return compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
+}
+
+function sessionRuntimeModeLabel(session: CMOChatSession): string {
+  return session.runtimeMode === "live" ? "live" : session.isRuntimeFallback || session.isDevelopmentFallback ? "fallback used" : "runtime pending";
+}
+
+function assistantMessageProvenance(message: CMOChatMessage, session: CMOChatSession): string | null {
+  if (message.role !== "assistant") {
+    return null;
+  }
+
+  const mode = message.runtimeMode ?? session.runtimeMode;
+
+  if (!mode) {
+    return null;
+  }
+
+  const runtime = mode === "live" ? "Live" : "Fallback";
+  const provider = mode === "live"
+    ? message.runtimeAgent || session.runtimeAgent || message.runtimeProvider || session.runtimeProvider || "OpenClaw CMO"
+    : `reason: ${message.runtimeErrorReason ?? session.runtimeErrorReason ?? "fallback"}`;
+
+  return `${runtime} · ${provider} · ${message.contextUsedCount ?? session.contextUsed.length} context notes`;
 }
 
 export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
@@ -534,6 +572,8 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               `Fallback: ${selectedSession.isDevelopmentFallback ? "true" : "false"}.`,
               `Runtime fallback: ${selectedSession.isRuntimeFallback ? "true" : "false"}.`,
               `Runtime error reason: ${selectedSession.runtimeErrorReason ?? "none"}.`,
+              `Runtime provider: ${selectedSession.runtimeProvider ?? "not captured"}.`,
+              `Runtime agent: ${selectedSession.runtimeAgent ?? "not captured"}.`,
               `Context quality: ${sessionContextSummary(selectedSession)}.`,
               selectedSession.sessionNotePath ? `Full session note: ${selectedSession.sessionNotePath}.` : "Full session note not saved yet.",
             ].join("\n"),
@@ -550,6 +590,8 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             isDevelopmentFallback: selectedSession.isDevelopmentFallback,
             isRuntimeFallback: selectedSession.isRuntimeFallback,
             runtimeErrorReason: selectedSession.runtimeErrorReason,
+            runtimeProvider: selectedSession.runtimeProvider,
+            runtimeAgent: selectedSession.runtimeAgent,
             contextDiagnostics: selectedSession.contextDiagnostics,
             contextQualitySummary: selectedSession.contextQualitySummary,
             assumptions: selectedSession.assumptions,
@@ -740,7 +782,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                   <div className="font-bold text-slate-950">{latestSession.topic || "CMO session"}</div>
                   <div className="flex flex-wrap gap-2">
                     <Badge title={latestSession.runtimeStatus} variant={runtimeVariant(latestSession.runtimeStatus)}>{runtimeLabel(latestSession.runtimeStatus)}</Badge>
-                    <Badge variant={latestSession.isDevelopmentFallback ? "orange" : "green"}>{latestSession.isDevelopmentFallback ? "fallback used" : "runtime answer"}</Badge>
+                    <Badge variant={latestSession.runtimeMode === "live" ? "green" : "orange"}>{sessionRuntimeModeLabel(latestSession)}</Badge>
                   </div>
                   <CardDescription>{displayDate(latestSession.createdAt)}</CardDescription>
                 </div>
@@ -1108,10 +1150,14 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                         <Badge title={session.runtimeStatus} variant={runtimeVariant(session.runtimeStatus)}>{runtimeLabel(session.runtimeStatus)}</Badge>
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <Badge variant={session.isDevelopmentFallback ? "orange" : "green"}>{session.isDevelopmentFallback ? "fallback used" : "runtime answer"}</Badge>
+                        <Badge variant={session.runtimeMode === "live" ? "green" : "orange"}>{sessionRuntimeModeLabel(session)}</Badge>
                         <Badge variant="slate">{session.contextUsed.length} context notes</Badge>
                         <Badge variant={session.savedToVault ? "green" : "slate"}>{session.savedToVault ? "saved" : "not saved"}</Badge>
                         <Badge variant={session.rawCapturePath ? "green" : "slate"}>{session.rawCapturePath ? "raw captured" : "raw pending"}</Badge>
+                      </div>
+                      <div className="mt-3 space-y-1 text-xs leading-5 text-slate-600">
+                        <p><span className="font-bold text-slate-800">User:</span> {previewText(firstUserMessage(session) || session.topic || "No user question captured.")}</p>
+                        <p><span className="font-bold text-slate-800">CMO:</span> {previewText(latestAssistantMessage(session) || "No CMO answer captured.")}</p>
                       </div>
                     </button>
                   ))}
@@ -1135,7 +1181,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                     </div>
                     <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
                       <div className="text-xs font-semibold uppercase text-slate-400">Fallback</div>
-                      <Badge className="mt-2" variant={selectedSession.isDevelopmentFallback ? "orange" : "green"}>{selectedSession.isDevelopmentFallback ? "used" : "not used"}</Badge>
+                      <Badge className="mt-2" variant={selectedSession.runtimeMode === "live" ? "green" : "orange"}>{sessionRuntimeModeLabel(selectedSession)}</Badge>
+                    </div>
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase text-slate-400">Runtime Provider</div>
+                      <div className="mt-2 text-sm font-bold text-slate-950">{selectedSession.runtimeAgent || selectedSession.runtimeProvider || "not captured"}</div>
                     </div>
                     <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
                       <div className="text-xs font-semibold uppercase text-slate-400">Context Used</div>
@@ -1189,6 +1239,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                   <div key={message.id} className={cn("rounded-xl px-4 py-3 text-sm leading-6", message.role === "user" ? "bg-indigo-600 text-white" : "border border-slate-100 bg-slate-50 text-slate-700")}>
                     <div className="mb-1 text-xs font-bold uppercase opacity-80">{message.role === "assistant" ? "CMO" : message.role}</div>
                     <div className="whitespace-pre-wrap">{message.content}</div>
+                    {assistantMessageProvenance(message, selectedSession) ? (
+                      <div className="mt-3 border-t border-slate-200 pt-2 text-xs font-semibold text-slate-400">
+                        {assistantMessageProvenance(message, selectedSession)}
+                      </div>
+                    ) : null}
                   </div>
                 ))}
               </div>

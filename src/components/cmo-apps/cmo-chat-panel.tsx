@@ -58,7 +58,7 @@ function runtimeStatusLabel(status: CMORuntimeStatus | null): string {
   }
 
   if (status === "live_failed_then_fallback") {
-    return "App chat fallback";
+    return "Fallback used";
   }
 
   if (status === "runtime_error") {
@@ -93,6 +93,10 @@ function runtimeStatusVariant(status: CMORuntimeStatus | null): "green" | "orang
 }
 
 function runtimeExplanation(status: CMORuntimeStatus | null, reason: CmoRuntimeErrorReason | null): string | null {
+  if (status === "live") {
+    return "CMO response received from live OpenClaw app-turn.";
+  }
+
   if (status === "configured_but_unreachable") {
     return "Live app-chat is unavailable. Fallback answers use workspace context.";
   }
@@ -104,6 +108,14 @@ function runtimeExplanation(status: CMORuntimeStatus | null, reason: CmoRuntimeE
   if (status === "live_failed_then_fallback") {
     if (reason === "timeout") {
       return "Live app-turn timed out; fallback answer generated from workspace context.";
+    }
+
+    if (reason === "execution_error") {
+      return "Live app-chat intentionally bypassed; fallback generated this response from workspace context.";
+    }
+
+    if (reason === "invalid_response" || reason === "empty_answer") {
+      return "Live app-turn returned an invalid response; fallback generated this response from workspace context.";
     }
 
     return "Live app-chat unavailable; fallback answer generated from workspace context.";
@@ -118,6 +130,19 @@ function runtimeExplanation(status: CMORuntimeStatus | null, reason: CmoRuntimeE
   }
 
   return null;
+}
+
+function assistantProvenance(message: CMOChatMessage, sessionSaved: boolean, rawCaptured: boolean): string | null {
+  if (message.role !== "assistant" || !message.runtimeMode) {
+    return null;
+  }
+
+  const runtime = message.runtimeMode === "live" ? "Live" : "Fallback";
+  const provider = message.runtimeMode === "live" ? message.runtimeAgent || message.runtimeProvider || "OpenClaw CMO" : `reason: ${message.runtimeErrorReason ?? "fallback"}`;
+  const saved = sessionSaved ? "Saved" : "Not saved";
+  const raw = rawCaptured ? "Raw captured" : "Raw pending";
+
+  return `${runtime} · ${provider} · ${message.contextUsedCount ?? 0} context notes · ${saved} · ${raw}`;
 }
 
 function renderAssistantContent(content: string) {
@@ -180,6 +205,8 @@ function captureSummary(
   runtimeStatus: CMORuntimeStatus | null,
   runtimeMode: CmoRuntimeMode | null,
   runtimeLabel: string,
+  runtimeProvider: string | null,
+  runtimeAgent: string | null,
   attemptedRuntimeMode: CmoRuntimeMode | null,
   runtimeErrorReason: CmoRuntimeErrorReason | null,
   contextUsed: VaultNoteRef[],
@@ -202,6 +229,8 @@ function captureSummary(
     `Runtime fallback: ${isRuntimeFallback ? "true" : "false"}`,
     `Runtime error reason: ${runtimeErrorReason ?? "none"}`,
     `Runtime label: ${runtimeStatus ? runtimeLabel || "Unlabeled runtime" : "Not checked"}`,
+    `Runtime provider: ${runtimeProvider ?? "not captured"}`,
+    `Runtime agent: ${runtimeAgent ?? "not captured"}`,
     `Context pack used: ${contextLine}`,
     `Unavailable context pack items: ${missingLine}`,
     `Context quality counts: ${qualitySummary.confirmedCount} confirmed, ${qualitySummary.draftCount} draft, ${qualitySummary.placeholderCount} placeholder, ${qualitySummary.missingCount} missing.`,
@@ -247,6 +276,8 @@ export function CMOChatPanel({
   const [attemptedRuntimeMode, setAttemptedRuntimeMode] = useState<CmoRuntimeMode | null>(null);
   const [runtimeErrorReason, setRuntimeErrorReason] = useState<CmoRuntimeErrorReason | null>(null);
   const [runtimeLabel, setRuntimeLabel] = useState(initialRuntimeLabel);
+  const [runtimeProvider, setRuntimeProvider] = useState<string | null>(null);
+  const [runtimeAgent, setRuntimeAgent] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
   const [isSavingSession, setIsSavingSession] = useState(false);
@@ -353,6 +384,8 @@ export function CMOChatPanel({
     setRuntimeStatus(null);
     setRuntimeMode(null);
     setRuntimeLabel("");
+    setRuntimeProvider(null);
+    setRuntimeAgent(null);
     setIsDevelopmentFallback(false);
     setIsRuntimeFallback(false);
     setAttemptedRuntimeMode(null);
@@ -400,15 +433,21 @@ export function CMOChatPanel({
       setAttemptedRuntimeMode(response.attemptedRuntimeMode ?? null);
       setRuntimeErrorReason(response.runtimeErrorReason ?? null);
       setRuntimeLabel(response.runtimeLabel);
+      setRuntimeProvider(response.runtimeProvider ?? null);
+      setRuntimeAgent(response.runtimeAgent ?? null);
       setError(response.status === "failed" ? response.runtimeError || "CMO runtime returned an error." : null);
       setSendStatus(
         response.isRuntimeFallback || response.runtimeStatus === "live_failed_then_fallback"
           ? response.runtimeErrorReason === "timeout"
             ? "Live app-turn timed out; fallback answer generated from workspace context."
-            : "Live app-chat unavailable; fallback answer generated from workspace context."
+            : response.runtimeErrorReason === "invalid_response" || response.runtimeErrorReason === "empty_answer"
+              ? "Live app-turn returned an invalid response; fallback generated this response from workspace context."
+              : response.runtimeErrorReason === "execution_error"
+                ? "Live app-chat intentionally bypassed; fallback generated this response from workspace context."
+                : "Live app-chat unavailable; fallback answer generated from workspace context."
           : response.isDevelopmentFallback
             ? "Runtime unavailable; using development fallback."
-            : "CMO response received.",
+            : "CMO response received from live OpenClaw app-turn.",
       );
       setMessages((current) =>
         current.map((message) =>
@@ -417,6 +456,12 @@ export function CMOChatPanel({
                 ...message,
                 id: response.messageId,
                 content: response.answer,
+                runtimeMode: response.runtimeMode,
+                runtimeStatus: response.runtimeStatus,
+                runtimeProvider: response.runtimeProvider,
+                runtimeAgent: response.runtimeAgent,
+                runtimeErrorReason: response.runtimeErrorReason,
+                contextUsedCount: response.contextUsed.length,
               }
             : message,
         ),
@@ -425,6 +470,8 @@ export function CMOChatPanel({
     } catch (sendError) {
       setRuntimeStatus("runtime_error");
       setRuntimeLabel("OpenClaw CMO runtime");
+      setRuntimeProvider(null);
+      setRuntimeAgent(null);
       setSendStatus(null);
       setError(`Failed to send: ${sendError instanceof Error ? sendError.message : "CMO chat failed"}`);
       setMessages((current) =>
@@ -513,6 +560,8 @@ export function CMOChatPanel({
               runtimeStatus,
               runtimeMode,
               runtimeLabel,
+              runtimeProvider,
+              runtimeAgent,
               attemptedRuntimeMode,
               runtimeErrorReason,
               lastContextUsed,
@@ -534,6 +583,8 @@ export function CMOChatPanel({
             isDevelopmentFallback,
             isRuntimeFallback,
             runtimeErrorReason: runtimeErrorReason ?? undefined,
+            runtimeProvider: runtimeProvider ?? undefined,
+            runtimeAgent: runtimeAgent ?? undefined,
             contextDiagnostics,
             contextQualitySummary: contextQualitySummary ?? summarizeContextQuality([...lastContextUsed, ...missingContext]),
             assumptions,
@@ -594,10 +645,10 @@ export function CMOChatPanel({
           </div>
         </div>
 
-        {runtimeExplanation(runtimeStatus, runtimeErrorReason) ? (
-          <div className="border-b border-orange-100 bg-orange-50 px-5 py-3 text-sm font-medium text-orange-800">
+        {capturableMessages.length && runtimeExplanation(runtimeStatus, runtimeErrorReason) ? (
+          <div className={cn("border-b px-5 py-3 text-sm font-medium", runtimeStatus === "live" ? "border-emerald-100 bg-emerald-50 text-emerald-800" : "border-orange-100 bg-orange-50 text-orange-800")}>
             {runtimeExplanation(runtimeStatus, runtimeErrorReason)}
-            {runtimeStatus ? <span className="ml-2 text-xs text-orange-700">Status: {runtimeStatus}</span> : null}
+            {runtimeStatus ? <span className={cn("ml-2 text-xs", runtimeStatus === "live" ? "text-emerald-700" : "text-orange-700")}>Status: {runtimeStatus}</span> : null}
           </div>
         ) : null}
 
@@ -620,6 +671,11 @@ export function CMOChatPanel({
                     </div>
                   ) : null}
                   {message.role === "assistant" ? renderAssistantContent(message.content) : <div className="whitespace-pre-wrap">{message.content}</div>}
+                  {message.role === "assistant" && assistantProvenance(message, Boolean(savedSessionNotePath), Boolean(rawCapturePath)) ? (
+                    <div className="mt-4 border-t border-slate-100 pt-3 text-xs font-semibold text-slate-400">
+                      {assistantProvenance(message, Boolean(savedSessionNotePath), Boolean(rawCapturePath))}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ))

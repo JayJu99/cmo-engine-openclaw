@@ -60,6 +60,8 @@ export interface CmoAppTurnResponse {
   suggestedCandidates: Array<Record<string, string>>;
   contextUsed: string[];
   runtimeMode?: CmoRuntimeMode;
+  runtimeProvider?: string;
+  runtimeAgent?: string;
   rawRuntimeResponse?: unknown;
 }
 
@@ -415,6 +417,8 @@ function normalizeAppTurnResponse(payload: unknown): CmoAppTurnResponse {
     suggestedCandidates: normalizeRecordList(source.suggestedCandidates ?? source.suggested_candidates),
     contextUsed: stringList(source.contextUsed ?? source.context_used),
     runtimeMode: runtimeMode(source.runtimeMode ?? source.runtime_mode),
+    runtimeProvider: trimString(source.runtimeProvider ?? source.runtime_provider) || undefined,
+    runtimeAgent: trimString(source.runtimeAgent ?? source.runtime_agent) || undefined,
     rawRuntimeResponse: payload,
   };
 }

@@ -46,6 +46,8 @@ export interface CmoRuntimeTurnResult {
   runtimeLabel: string;
   runtimeError?: string;
   runtimeErrorReason?: CmoRuntimeErrorReason;
+  runtimeProvider?: string;
+  runtimeAgent?: string;
   isDevelopmentFallback: boolean;
   isRuntimeFallback?: boolean;
 }
@@ -377,6 +379,7 @@ export class FallbackRuntime implements CmoRuntime {
       runtimeStatus: this.status,
       runtimeMode: this.mode,
       runtimeLabel: this.label,
+      runtimeProvider: "fallback",
       isDevelopmentFallback: true,
       isRuntimeFallback: true,
     };
@@ -424,6 +427,8 @@ export class LiveOpenClawRuntime implements CmoRuntime {
         runtimeMode: "live",
         attemptedRuntimeMode: "live",
         runtimeLabel: result.runtimeLabel,
+        runtimeProvider: result.runtimeProvider ?? "openclaw",
+        runtimeAgent: result.runtimeAgent ?? "cmo",
         isDevelopmentFallback: false,
         isRuntimeFallback: false,
       };
@@ -446,6 +451,8 @@ export class LiveOpenClawRuntime implements CmoRuntime {
         runtimeLabel: availability.label,
         runtimeError,
         runtimeErrorReason,
+        runtimeProvider: fallback.runtimeProvider,
+        runtimeAgent: fallback.runtimeAgent,
         isDevelopmentFallback: true,
         isRuntimeFallback: true,
       };
