@@ -50,12 +50,12 @@ function runtimeVariant(runtimeMode: ContextPackRuntimeMode): "green" | "orange"
 }
 
 function runtimeLabel(runtimeMode: ContextPackRuntimeMode): string {
-  if (runtimeMode === "live") {
-    return "live";
+  if (runtimeMode === "live" || runtimeMode === "connected") {
+    return "adapter connected";
   }
 
   if (runtimeMode === "configured_but_unreachable") {
-    return "configured but unreachable";
+    return "live app-chat unavailable";
   }
 
   if (runtimeMode === "not_configured") {

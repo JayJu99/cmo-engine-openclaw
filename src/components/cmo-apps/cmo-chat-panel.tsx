@@ -46,15 +46,15 @@ function messageId(prefix: string) {
 
 function runtimeStatusLabel(status: CMORuntimeStatus | null): string {
   if (status === "connected") {
-    return "Runtime connected";
+    return "Adapter connected";
   }
 
   if (status === "configured_but_unreachable") {
-    return "Runtime unavailable";
+    return "Live app-chat unavailable";
   }
 
   if (status === "live_failed_then_fallback") {
-    return "Live failed; fallback used";
+    return "App chat fallback";
   }
 
   if (status === "runtime_error") {
@@ -90,7 +90,7 @@ function runtimeStatusVariant(status: CMORuntimeStatus | null): "green" | "orang
 
 function runtimeExplanation(status: CMORuntimeStatus | null): string | null {
   if (status === "configured_but_unreachable") {
-    return "CMO runtime is not connected yet. Using development fallback.";
+    return "Live app-chat is unavailable. Fallback answers use workspace context.";
   }
 
   if (status === "development_fallback") {
@@ -98,7 +98,7 @@ function runtimeExplanation(status: CMORuntimeStatus | null): string | null {
   }
 
   if (status === "live_failed_then_fallback") {
-    return "Live runtime unavailable for app chat; fallback used.";
+    return "Live app-chat unavailable; fallback answer generated from workspace context.";
   }
 
   if (status === "runtime_error") {
@@ -110,6 +110,60 @@ function runtimeExplanation(status: CMORuntimeStatus | null): string | null {
   }
 
   return null;
+}
+
+function renderAssistantContent(content: string) {
+  const lines = content.split(/\r?\n/);
+
+  return (
+    <div className="space-y-3">
+      {lines.map((line, index) => {
+        const trimmed = line.trim();
+
+        if (!trimmed) {
+          return <div key={`space-${index}`} className="h-1" />;
+        }
+
+        const heading = trimmed.match(/^##\s+(.+)$/);
+
+        if (heading) {
+          return (
+            <h3 key={`heading-${index}`} className="pt-2 text-sm font-extrabold uppercase text-slate-950 first:pt-0">
+              {heading[1]}
+            </h3>
+          );
+        }
+
+        const numbered = trimmed.match(/^(\d+)\.\s+(.+)$/);
+
+        if (numbered) {
+          return (
+            <div key={`numbered-${index}`} className="flex gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+              <span className="grid size-6 shrink-0 place-items-center rounded-full bg-indigo-600 text-xs font-bold text-white">{numbered[1]}</span>
+              <p className="font-semibold text-slate-950">{numbered[2]}</p>
+            </div>
+          );
+        }
+
+        const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+
+        if (bullet) {
+          return (
+            <div key={`bullet-${index}`} className="flex gap-2 text-slate-700">
+              <span className="mt-2 size-1.5 shrink-0 rounded-full bg-slate-400" />
+              <p>{bullet[1]}</p>
+            </div>
+          );
+        }
+
+        return (
+          <p key={`paragraph-${index}`} className="text-slate-700">
+            {trimmed}
+          </p>
+        );
+      })}
+    </div>
+  );
 }
 
 function captureSummary(
@@ -340,7 +394,7 @@ export function CMOChatPanel({
       setError(response.status === "failed" ? response.runtimeError || "CMO runtime returned an error." : null);
       setSendStatus(
         response.isRuntimeFallback || response.runtimeStatus === "live_failed_then_fallback"
-          ? "Live runtime unavailable for app chat; fallback used"
+          ? "Live app-chat unavailable; fallback answer generated from workspace context."
           : response.isDevelopmentFallback
             ? "Runtime unavailable; using development fallback."
             : "CMO response received.",
@@ -542,8 +596,10 @@ export function CMOChatPanel({
               <div key={message.id} className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}>
                 <div
                   className={cn(
-                    "max-w-[640px] rounded-2xl px-4 py-3 text-sm leading-7 shadow-sm",
-                    message.role === "user" ? "bg-indigo-600 text-white" : "border border-slate-200 bg-white text-slate-700",
+                    "rounded-2xl px-4 py-3 text-sm leading-7 shadow-sm",
+                    message.role === "user"
+                      ? "max-w-[560px] bg-indigo-600 text-white"
+                      : "w-full max-w-5xl border border-slate-200 bg-white text-slate-700 sm:px-5 sm:py-4",
                   )}
                 >
                   {message.role === "assistant" ? (
@@ -552,7 +608,7 @@ export function CMOChatPanel({
                       CMO
                     </div>
                   ) : null}
-                  <div className="whitespace-pre-wrap">{message.content}</div>
+                  {message.role === "assistant" ? renderAssistantContent(message.content) : <div className="whitespace-pre-wrap">{message.content}</div>}
                 </div>
               </div>
             ))

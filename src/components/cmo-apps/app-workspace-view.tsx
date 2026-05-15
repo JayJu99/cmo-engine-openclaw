@@ -57,15 +57,15 @@ function isWorkspaceTab(value: string | null): value is AppWorkspaceTab {
 
 function runtimeLabel(status: CMORuntimeStatus | undefined): string {
   if (status === "connected") {
-    return "Runtime connected";
+    return "Adapter connected";
   }
 
   if (status === "configured_but_unreachable") {
-    return "Runtime unavailable";
+    return "Live app-chat unavailable";
   }
 
   if (status === "live_failed_then_fallback") {
-    return "Live failed; fallback used";
+    return "App chat fallback";
   }
 
   if (status === "development_fallback") {

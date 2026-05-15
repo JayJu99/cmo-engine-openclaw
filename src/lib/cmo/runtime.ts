@@ -81,31 +81,6 @@ function runtimeModeFromStatus(status: CMORuntimeStatus): CmoRuntimeMode {
   return "fallback";
 }
 
-function contextItem(input: CmoRuntimeTurnInput, kind: ContextItem["kind"]): ContextItem | undefined {
-  return input.contextPack.items.find((item) => item.kind === kind && item.exists);
-}
-
-function compactLine(value: string, limit = 220): string {
-  const compacted = value
-    .replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^#+\s*/, "").trim())
-    .filter(Boolean)
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  return compacted.length > limit ? `${compacted.slice(0, limit - 3)}...` : compacted;
-}
-
-function itemBrief(item: ContextItem | undefined, fallback: string): string {
-  if (!item) {
-    return fallback;
-  }
-
-  return compactLine(item.contentPreview || item.content, 260) || fallback;
-}
-
 function includedContextLabels(input: CmoRuntimeTurnInput): string[] {
   const labelByKind: Record<ContextItem["kind"], string> = {
     current_priority: "Current Priority",
@@ -141,46 +116,35 @@ function fallbackRecommendations(input: CmoRuntimeTurnInput): CMOAppChatResponse
 
 function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackComposition {
   const contextList = input.contextUsed.length ? input.contextUsed.map((note) => note.title).join(", ") : "no context pack items were available";
-  const missingList = input.missingContext.length ? input.missingContext.map((note) => note.title).join(", ") : "none";
   const qualitySummary = summarizeContextQuality([...input.contextUsed, ...input.missingContext]);
-  const placeholderOrDraft = [...input.contextUsed, ...input.missingContext]
-    .filter((note) => note.contextQuality === "placeholder" || note.contextQuality === "draft")
-    .map((note) => `${note.title}: ${note.contextQuality}`)
-    .join(", ");
-  const priority = itemBrief(contextItem(input, "current_priority"), "No current priority was available.");
-  const memory = itemBrief(contextItem(input, "app_memory"), "No durable app memory was available.");
-  const latestSessions = itemBrief(contextItem(input, "latest_sessions"), "No recent CMO sessions were available.");
-  const memoryCandidates = itemBrief(contextItem(input, "promotion_candidates"), "No open memory candidates were available.");
   const contextLabels = includedContextLabels(input);
   const suggestedActions = fallbackRecommendations(input);
-  const contextUsedLine = contextLabels.length ? contextLabels.join(", ") : contextList;
+  const contextUsedDisplay = contextLabels.length ? contextLabels.join(" / ") : contextList;
+  const qualityLine = `${qualitySummary.confirmedCount} confirmed / ${qualitySummary.placeholderOrDraftCount} draft-placeholder / ${qualitySummary.missingCount} missing`;
 
   return {
     answer: [
-      `Based on the loaded workspace context for ${input.request.appName}, my recommendation is to focus this turn on practical activation and proof-building work.`,
+      "## Recommended Actions",
       "",
-      `User question: ${input.message}`,
+      `1. ${suggestedActions[0].label.replace(/\.$/, "")}`,
+      "Define the target user behavior for this week, the product surface that proves it happened, and the simplest qualitative check before scaling it.",
       "",
-      `Action 1: ${suggestedActions[0].label}`,
-      "Use the current priority to make the target behavior explicit. Keep it evidence-based: define what the user must do, what product surface proves it happened, and what qualitative signal would make the action worth scaling.",
+      `2. ${suggestedActions[1].label.replace(/\.$/, "")}`,
+      "Turn one confirmed product truth into a short campaign angle, creator prompt, or landing-page message. Avoid performance claims unless they are already confirmed in the workspace context.",
       "",
-      `Action 2: ${suggestedActions[1].label}`,
-      "Pull from App Memory and package one specific product truth into a short message, landing-page section, creator prompt, or campaign angle. Do not add performance claims unless they already exist in confirmed context.",
+      `3. ${suggestedActions[2].label.replace(/\.$/, "")}`,
+      "Choose the next prompt, reminder, or content touch for users who reach the activation moment. Treat it as a retention hypothesis, not a proven result.",
       "",
-      `Action 3: ${suggestedActions[2].label}`,
-      "After the activation moment, decide the next prompt, reminder, or content touch that brings the user back. Treat this as a retention hypothesis, not a proven metric.",
+      "## Context Used",
       "",
-      "Why these actions fit:",
-      `- Current Priority: ${priority}`,
-      `- App Memory: ${memory}`,
-      `- Latest Sessions: ${latestSessions}`,
-      `- Memory Candidates: ${memoryCandidates}`,
+      `Context used: ${contextUsedDisplay}.`,
+      `Quality: ${qualityLine}.`,
       "",
-      `Context used: ${contextUsedLine}.`,
-      `Unavailable context: ${missingList}.`,
-      `Context quality: ${qualitySummary.confirmedCount} confirmed, ${qualitySummary.placeholderOrDraftCount} placeholder/draft, ${qualitySummary.missingCount} missing.`,
-      placeholderOrDraft ? `Context caution: ${placeholderOrDraft}.` : "Context caution: no draft or placeholder notes were flagged.",
-      `Runtime note: ${reason}`,
+      "## Runtime Note",
+      "",
+      reason === "Live runtime unavailable for app chat; fallback used."
+        ? "Live app-chat runtime is unavailable; fallback generated this answer from workspace context."
+        : `${reason} Fallback generated this answer from workspace context.`,
     ].join("\n"),
     suggestedActions: [
       ...suggestedActions,
