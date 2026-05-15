@@ -19,7 +19,7 @@ import { getAppWorkspace, HOLDSTATION_WORKSPACE_ID } from "@/lib/cmo/app-workspa
 import { buildContextPack, withContextPackMessage } from "@/lib/cmo/context-pack-builder";
 import { summarizeContextQuality } from "@/lib/cmo/context-quality";
 import { CmoAdapterError } from "@/lib/cmo/errors";
-import { getRuntimeRegistry } from "@/lib/cmo/runtime";
+import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 
 const APP_CHAT_DIR = path.join(process.cwd(), "data", "cmo-dashboard", "app-chat");
@@ -139,6 +139,7 @@ function normalizeAppChatRequest(body: unknown): CMOAppChatRequest {
     sessionId: stringValue(body.sessionId) || undefined,
     message,
     topic: stringValue(body.topic),
+    forceFallback: body.forceFallback === true || (isRecord(body.context) && body.context.forceFallback === true),
     context: {
       mode: "app_context",
       selectedNotes: [],
@@ -361,7 +362,14 @@ function normalizeSession(value: unknown): CMOChatSession | null {
 
 export async function createAppChatSession(body: unknown): Promise<CMOAppChatResponse> {
   const request = normalizeAppChatRequest(body);
-  const runtime = await getRuntimeRegistry().selectRuntime();
+  const runtime = request.forceFallback
+    ? new FallbackRuntime({
+        status: "live_failed_then_fallback",
+        mode: "fallback",
+        label: "CMO smoke fallback",
+        reason: "Live app-chat intentionally bypassed for fallback smoke.",
+      })
+    : await getRuntimeRegistry().selectRuntime();
   const contextPackResult = withContextPackMessage(
     await buildContextPack({
       workspaceId: request.workspaceId,
@@ -412,6 +420,11 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     runtimeLabel = runtimeResult.runtimeLabel;
     runtimeError = runtimeResult.runtimeError ?? "";
     runtimeErrorReason = runtimeResult.runtimeErrorReason;
+    if (request.forceFallback) {
+      attemptedRuntimeMode = "live";
+      runtimeError = "Live app-chat intentionally bypassed for fallback smoke.";
+      runtimeErrorReason = "execution_error";
+    }
     status = runtimeResult.runtimeError && !runtimeResult.isRuntimeFallback ? "failed" : "completed";
   } catch (error) {
     status = "failed";

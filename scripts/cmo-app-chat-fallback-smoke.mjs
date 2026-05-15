@@ -1,5 +1,6 @@
 const baseUrl = (process.env.CMO_SMOKE_BASE_URL || "http://127.0.0.1:3002").replace(/\/+$/, "");
-const expectedReason = process.env.CMO_SMOKE_EXPECT_REASON || "unsupported_chat_turn";
+const forceFallback = process.env.CMO_SMOKE_FORCE_FALLBACK !== "0";
+const expectedReason = process.env.CMO_SMOKE_EXPECT_REASON || (forceFallback ? "execution_error" : "any");
 const allowedReasons = new Set(["unsupported_chat_turn", "timeout", "invalid_response", "empty_answer", "execution_error"]);
 const endpoint = `${baseUrl}/api/cmo/chat`;
 
@@ -61,9 +62,11 @@ async function postChat(message, topic) {
     appName: "Holdstation Mini App",
     message,
     topic,
+    ...(forceFallback ? { forceFallback: true } : {}),
     context: {
       selectedNotes: [],
       mode: "app_context",
+      ...(forceFallback ? { forceFallback: true } : {}),
     },
   };
   const response = await fetch(endpoint, {
@@ -119,6 +122,7 @@ assert(typeof recommendation.answer === "string" && recommendation.answer.trim()
 assert(!recommendation.answer.trim().startsWith("Fallback response:"), "Expected answer to be more than diagnostics", recommendation.answer);
 assert(containsRecommendation(recommendation.answer), "Expected at least one recommendation in answer", recommendation.answer);
 assert(containsContextUsed(recommendation.answer), "Expected answer to include context used", recommendation.answer);
+assert(/Runtime Note/i.test(recommendation.answer), "Recommendation should include runtime note", recommendation.answer);
 
 console.log(
   JSON.stringify(
@@ -128,12 +132,14 @@ console.log(
         sessionId: greeting.sessionId,
         runtimeStatus: greeting.runtimeStatus,
         runtimeErrorReason: greeting.runtimeErrorReason,
+        forcedFallback: forceFallback,
         answerPreview: greeting.answer.slice(0, 220),
       },
       recommendation: {
         sessionId: recommendation.sessionId,
         runtimeStatus: recommendation.runtimeStatus,
         runtimeErrorReason: recommendation.runtimeErrorReason,
+        forcedFallback: forceFallback,
         answerPreview: recommendation.answer.slice(0, 260),
       },
     },

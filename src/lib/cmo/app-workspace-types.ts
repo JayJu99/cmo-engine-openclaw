@@ -447,6 +447,7 @@ export interface CMOAppChatRequest {
   sessionId?: string;
   message: string;
   topic?: string;
+  forceFallback?: boolean;
   context: {
     selectedNotes: VaultNoteRef[];
     mode: "app_context";

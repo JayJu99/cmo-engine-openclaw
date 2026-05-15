@@ -10,7 +10,7 @@ import {
   type CmoStatus,
 } from "@/lib/cmo/types";
 import type { CMOAppChatResponse, CMOChatMessage, CmoRuntimeMode, ContextPack } from "@/lib/cmo/app-workspace-types";
-import { getOpenClawCmoTimeoutMs, getRemoteAdapterApiKey, getRemoteAdapterUrl } from "@/lib/cmo/config";
+import { getCmoAppTurnRequestTimeoutMs, getRemoteAdapterApiKey, getRemoteAdapterUrl } from "@/lib/cmo/config";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import { normalizeRun, validateNormalizedRun } from "@/lib/cmo/validation";
 
@@ -495,7 +495,7 @@ export async function postRemoteAppTurn(body: CmoAppTurnRequest): Promise<Remote
   const response = await requestRemoteJson<unknown>("/cmo/app-turn", {
     method: "POST",
     body,
-    timeoutMs: getOpenClawCmoTimeoutMs(),
+    timeoutMs: getCmoAppTurnRequestTimeoutMs(),
   });
 
   return {

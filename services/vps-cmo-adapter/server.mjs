@@ -18,7 +18,8 @@ const DEFAULT_OPENCLAW_BIN = "openclaw";
 const DEFAULT_CMO_AGENT_ID = "cmo";
 const DEFAULT_CMO_RUN_TIMEOUT_SECONDS = 900;
 const DEFAULT_CMO_CHAT_TIMEOUT_SECONDS = 900;
-const DEFAULT_CMO_APP_TURN_TIMEOUT_MS = 60_000;
+const DEFAULT_CMO_APP_TURN_POLL_TIMEOUT_MS = 110_000;
+const DEFAULT_CMO_APP_TURN_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_CMO_CRON_RUN_TIMEOUT_MS = 180_000;
 const DEFAULT_RUN_LIST_LIMIT = 20;
 const MAX_RUN_LIST_LIMIT = 100;
@@ -46,22 +47,33 @@ const DEFAULT_AGENT_NAMES = ["CMO", "Adapter", "Researcher", "Content", "Vault"]
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
 
+function positiveIntEnv(name, fallback) {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 function getConfig() {
   const triggerMode = process.env.CMO_TRIGGER_MODE ?? DEFAULT_TRIGGER_MODE;
+  const cmoAppTurnPollTimeoutMs = positiveIntEnv(
+    "CMO_APP_TURN_POLL_TIMEOUT_MS",
+    positiveIntEnv("CMO_APP_TURN_TIMEOUT_MS", DEFAULT_CMO_APP_TURN_POLL_TIMEOUT_MS),
+  );
 
   return {
     apiKey: process.env.CMO_ADAPTER_API_KEY ?? "",
     dataDir: process.env.CMO_DASHBOARD_DATA_DIR ?? DEFAULT_DATA_DIR,
     schemaVersion: process.env.CMO_SCHEMA_VERSION ?? DEFAULT_SCHEMA_VERSION,
     gatewayUrl: process.env.OPENCLAW_GATEWAY_URL ?? DEFAULT_GATEWAY_URL,
-    openclawTimeoutMs: Number.parseInt(process.env.OPENCLAW_TIMEOUT_MS ?? String(DEFAULT_OPENCLAW_TIMEOUT_MS), 10),
+    openclawTimeoutMs: positiveIntEnv("OPENCLAW_TIMEOUT_MS", DEFAULT_OPENCLAW_TIMEOUT_MS),
     triggerMode,
     openclawBin: process.env.OPENCLAW_BIN ?? DEFAULT_OPENCLAW_BIN,
     cmoAgentId: process.env.CMO_AGENT_ID ?? DEFAULT_CMO_AGENT_ID,
-    cmoRunTimeoutSeconds: Number.parseInt(process.env.CMO_RUN_TIMEOUT_SECONDS ?? String(DEFAULT_CMO_RUN_TIMEOUT_SECONDS), 10),
-    cmoChatTimeoutSeconds: Number.parseInt(process.env.CMO_CHAT_TIMEOUT_SECONDS ?? String(DEFAULT_CMO_CHAT_TIMEOUT_SECONDS), 10),
-    cmoAppTurnTimeoutMs: Number.parseInt(process.env.CMO_APP_TURN_TIMEOUT_MS ?? String(DEFAULT_CMO_APP_TURN_TIMEOUT_MS), 10),
-    cmoCronRunTimeoutMs: Number.parseInt(process.env.CMO_CRON_RUN_TIMEOUT_MS ?? String(DEFAULT_CMO_CRON_RUN_TIMEOUT_MS), 10),
+    cmoRunTimeoutSeconds: positiveIntEnv("CMO_RUN_TIMEOUT_SECONDS", DEFAULT_CMO_RUN_TIMEOUT_SECONDS),
+    cmoChatTimeoutSeconds: positiveIntEnv("CMO_CHAT_TIMEOUT_SECONDS", DEFAULT_CMO_CHAT_TIMEOUT_SECONDS),
+    cmoAppTurnPollTimeoutMs,
+    cmoAppTurnPollIntervalMs: positiveIntEnv("CMO_APP_TURN_POLL_INTERVAL_MS", DEFAULT_CMO_APP_TURN_POLL_INTERVAL_MS),
+    cmoCronRunTimeoutMs: positiveIntEnv("CMO_CRON_RUN_TIMEOUT_MS", DEFAULT_CMO_CRON_RUN_TIMEOUT_MS),
     openclawTriggerEnabled: triggerMode === "openclaw-cron",
     port: Number.parseInt(process.env.CMO_ADAPTER_PORT ?? process.env.PORT ?? "8787", 10),
     host: process.env.CMO_ADAPTER_HOST ?? "0.0.0.0",
@@ -107,6 +119,17 @@ function jsonResponse(res, status, payload) {
     "Content-Length": Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+function appTurnLog(turnId, event, details = {}) {
+  console.log(JSON.stringify({
+    ts: new Date().toISOString(),
+    component: "vps-cmo-adapter",
+    scope: "cmo-app-turn",
+    turnId,
+    event,
+    ...details,
+  }));
 }
 
 function methodNotAllowed(res) {
@@ -2176,6 +2199,18 @@ async function runOpenClawAppTurn({ turnId, request, rawPath, jsonPath }) {
   const scheduleAt = createNearFutureCronAt();
   const specPath = dataPath("status", `${turnId}.openclaw-app-turn-spec.json`);
 
+  appTurnLog(turnId, "prompt_built", {
+    sessionId: request.sessionId || null,
+    workspaceId: request.workspaceId,
+    appId: request.appId,
+    sourceId: request.sourceId,
+    historyCount: request.history.length,
+    contextItemCount: Array.isArray(request.contextPack.items) ? request.contextPack.items.length : 0,
+    promptChars: prompt.length,
+    rawPath,
+    jsonPath,
+  });
+
   await writeJsonFile(specPath, {
     schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
     name: jobName,
@@ -2200,9 +2235,14 @@ async function runOpenClawAppTurn({ turnId, request, rawPath, jsonPath }) {
     delivery: {
       mode: "none",
     },
-    timeoutSeconds: Math.ceil(config.cmoAppTurnTimeoutMs / 1000),
+    timeoutSeconds: Math.ceil(config.cmoAppTurnPollTimeoutMs / 1000),
   });
 
+  appTurnLog(turnId, "cron_add_started", {
+    jobName,
+    scheduleAt,
+    agentId: config.cmoAgentId,
+  });
   const addResult = await execOpenClaw(
     [
       "cron",
@@ -2224,7 +2264,19 @@ async function runOpenClawAppTurn({ turnId, request, rawPath, jsonPath }) {
     "app_turn_cron_add",
   );
   const jobId = pickOpenClawJobIdFromOutput(addResult.stdout, jobName);
+  appTurnLog(turnId, "cron_add_completed", {
+    jobId,
+    stdoutChars: addResult.stdout.length,
+    stderrChars: addResult.stderr.length,
+  });
+
+  appTurnLog(turnId, "cron_run_started", { jobId });
   const runResult = await execOpenClaw(["cron", "run", jobId], config.cmoCronRunTimeoutMs, "app_turn_cron_run");
+  appTurnLog(turnId, "cron_run_completed", {
+    jobId,
+    stdoutChars: runResult.stdout.length,
+    stderrChars: runResult.stderr.length,
+  });
   const openclawRunId = pickOpenClawRunId(runResult.json);
   const openclaw = {
     mode: "openclaw-cron",
@@ -2529,7 +2581,9 @@ async function handleStatus(res) {
     openclaw_timeout_ms: config.openclawTimeoutMs,
     cmo_run_timeout_seconds: config.cmoRunTimeoutSeconds,
     cmo_chat_timeout_seconds: config.cmoChatTimeoutSeconds,
-    cmo_app_turn_timeout_ms: config.cmoAppTurnTimeoutMs,
+    recommended_cmo_app_turn_request_timeout_ms: config.cmoAppTurnPollTimeoutMs + 10_000,
+    cmo_app_turn_poll_timeout_ms: config.cmoAppTurnPollTimeoutMs,
+    cmo_app_turn_poll_interval_ms: config.cmoAppTurnPollIntervalMs,
     cmo_cron_run_timeout_ms: config.cmoCronRunTimeoutMs,
   }));
 }
@@ -2710,8 +2764,27 @@ async function handleAppTurn(req, res) {
   const config = getConfig();
   const body = await readRequestJson(req);
   const request = validateAppTurnBody(body);
+  const requestStartedAt = Date.now();
+  const requestStartedIso = new Date(requestStartedAt).toISOString();
+  const turnId = `appturn_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
+  const rawPath = dataPath("app-turn", "raw", `${turnId}.md`);
+  const jsonPath = dataPath("app-turn", `${turnId}.json`);
+
+  appTurnLog(turnId, "request_received", {
+    sessionId: request.sessionId || null,
+    workspaceId: request.workspaceId,
+    appId: request.appId,
+    sourceId: request.sourceId,
+    startedAt: requestStartedIso,
+    expectedOutputPath: jsonPath,
+  });
 
   if (config.triggerMode !== "openclaw-cron") {
+    appTurnLog(turnId, "request_failed", {
+      finalStatus: "not_available",
+      durationMs: Date.now() - requestStartedAt,
+      errorCode: "app_turn_not_available",
+    });
     jsonResponse(res, 503, {
       error: "OpenClaw app-turn requires CMO_TRIGGER_MODE=openclaw-cron",
       code: "app_turn_not_available",
@@ -2722,6 +2795,12 @@ async function handleAppTurn(req, res) {
   const runtime = await checkOpenClawRuntime(config);
 
   if (runtime.runtime_status !== "connected") {
+    appTurnLog(turnId, "request_failed", {
+      finalStatus: "runtime_unavailable",
+      durationMs: Date.now() - requestStartedAt,
+      errorCode: "app_turn_runtime_unavailable",
+      runtimeStatus: runtime.runtime_status,
+    });
     jsonResponse(res, 503, {
       error: runtime.runtime_reason ?? "OpenClaw runtime is not connected",
       code: "app_turn_runtime_unavailable",
@@ -2731,10 +2810,19 @@ async function handleAppTurn(req, res) {
 
   await ensureDashboardDirs();
 
-  const turnId = `appturn_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
-  const rawPath = dataPath("app-turn", "raw", `${turnId}.md`);
-  const jsonPath = dataPath("app-turn", `${turnId}.json`);
   const startedAt = Date.now();
+
+  appTurnLog(turnId, "request_started", {
+    sessionId: request.sessionId || null,
+    workspaceId: request.workspaceId,
+    appId: request.appId,
+    sourceId: request.sourceId,
+    startedAt: requestStartedIso,
+    expectedOutputPath: jsonPath,
+    rawPath,
+    pollTimeoutMs: config.cmoAppTurnPollTimeoutMs,
+    pollIntervalMs: config.cmoAppTurnPollIntervalMs,
+  });
 
   await writeJsonFile(dataPath("status", `${turnId}.app-turn-trigger.json`), {
     schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
@@ -2753,6 +2841,7 @@ async function handleAppTurn(req, res) {
     openclaw = await runOpenClawAppTurn({ turnId, request, rawPath, jsonPath });
   } catch (error) {
     const failure = summarizeExecError(error);
+    const durationMs = Date.now() - requestStartedAt;
 
     await writeJsonFile(dataPath("status", `${turnId}.app-turn-trigger.json`), {
       schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
@@ -2761,6 +2850,12 @@ async function handleAppTurn(req, res) {
       updated_at: new Date().toISOString(),
       error: failure,
     });
+    appTurnLog(turnId, "request_failed", {
+      finalStatus: "openclaw_trigger_failed",
+      durationMs,
+      errorCode: "app_turn_openclaw_trigger_failed",
+      errorMessage: failure.message,
+    });
     jsonResponse(res, 502, {
       error: failure.message,
       code: "app_turn_openclaw_trigger_failed",
@@ -2768,11 +2863,18 @@ async function handleAppTurn(req, res) {
     return;
   }
 
-  while (!isAppTurnTimedOut(startedAt, config.cmoAppTurnTimeoutMs)) {
+  appTurnLog(turnId, "poll_started", {
+    expectedOutputPath: jsonPath,
+    pollTimeoutMs: config.cmoAppTurnPollTimeoutMs,
+    pollIntervalMs: config.cmoAppTurnPollIntervalMs,
+  });
+
+  while (!isAppTurnTimedOut(startedAt, config.cmoAppTurnPollTimeoutMs)) {
     try {
       const completed = await readCompletedAppTurn(jsonPath, openclaw);
 
       if (completed) {
+        const durationMs = Date.now() - requestStartedAt;
         await writeJsonFile(dataPath("status", `${turnId}.app-turn-trigger.json`), {
           schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
           turn_id: turnId,
@@ -2780,10 +2882,19 @@ async function handleAppTurn(req, res) {
           updated_at: new Date().toISOString(),
           openclaw: sanitizeOpenClawMetadata(openclaw),
         });
+        appTurnLog(turnId, "request_completed", {
+          finalStatus: "live",
+          validation: "success",
+          durationMs,
+          answerChars: completed.answer.length,
+          contextUsedCount: completed.contextUsed.length,
+          suggestedActionsCount: completed.suggestedActions.length,
+        });
         jsonResponse(res, 200, completed);
         return;
       }
     } catch (error) {
+      const durationMs = Date.now() - requestStartedAt;
       await writeJsonFile(dataPath("status", `${turnId}.app-turn-trigger.json`), {
         schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
         turn_id: turnId,
@@ -2795,6 +2906,13 @@ async function handleAppTurn(req, res) {
         },
         openclaw: sanitizeOpenClawMetadata(openclaw),
       });
+      appTurnLog(turnId, "request_failed", {
+        finalStatus: "invalid_response",
+        validation: "failed",
+        durationMs,
+        errorCode: "app_turn_invalid_response",
+        errorMessage: error.message,
+      });
       jsonResponse(res, error.status ?? 502, {
         error: error.message,
         code: "app_turn_invalid_response",
@@ -2802,15 +2920,22 @@ async function handleAppTurn(req, res) {
       return;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => setTimeout(resolve, config.cmoAppTurnPollIntervalMs));
   }
 
+  const durationMs = Date.now() - requestStartedAt;
   await writeJsonFile(dataPath("status", `${turnId}.app-turn-trigger.json`), {
     schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
     turn_id: turnId,
     status: "timeout",
     updated_at: new Date().toISOString(),
     openclaw: sanitizeOpenClawMetadata(openclaw),
+  });
+  appTurnLog(turnId, "request_failed", {
+    finalStatus: "timeout",
+    durationMs,
+    errorCode: "app_turn_timeout",
+    expectedOutputPath: jsonPath,
   });
   jsonResponse(res, 504, {
     error: "OpenClaw app-turn did not complete before timeout",

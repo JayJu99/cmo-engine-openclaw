@@ -16,7 +16,7 @@ Finalization happens when `GET /cmo/runs/:runId` or `GET /cmo/latest` is read. I
 
 `GET /cmo/chat` lists recent chat runs newest first, defaulting to 20 items. `POST /cmo/chat` starts an async CMO chat run and returns `status: "running"` with a `chat_run_id`. `GET /cmo/chat/:chatRunId` returns the current chat run and finalizes mock or timed-out runs. In `openclaw-cron` mode, the private CMO prompt includes the latest dashboard summary, actions, signals, campaigns, and vault context when available.
 
-`POST /cmo/app-turn` is the synchronous app workspace chat-turn endpoint for CMO Session. It is separate from `/cmo/run-brief` and `/cmo/chat`. It accepts app-scoped ContextPack input, triggers the real OpenClaw CMO agent through the local `openclaw cron` path, waits for an app-turn JSON response, validates that the response is not dashboard JSON, and returns a live chat answer. If OpenClaw does not return a valid app-turn answer before `CMO_APP_TURN_TIMEOUT_MS`, the endpoint returns a non-200 error so the dashboard can use its honest fallback runtime.
+`POST /cmo/app-turn` is the synchronous app workspace chat-turn endpoint for CMO Session. It is separate from `/cmo/run-brief` and `/cmo/chat`. It accepts app-scoped ContextPack input, triggers the real OpenClaw CMO agent through the local `openclaw cron` path, waits for an app-turn JSON response, validates that the response is not dashboard JSON, and returns a live chat answer. If OpenClaw does not return a valid app-turn answer before `CMO_APP_TURN_POLL_TIMEOUT_MS`, the endpoint returns a non-200 error so the dashboard can use its honest fallback runtime. The dashboard request timeout should be slightly longer than the adapter poll timeout.
 
 `GET /cmo/status` performs a lightweight runtime status check. It does not run a CMO chat. In `openclaw-cron` mode it verifies that `CMO_AGENT_ID` is configured and that `OPENCLAW_BIN` can execute a help command. The response includes `runtime_status` and `openclaw_runtime` as one of `connected`, `configured_but_unreachable`, `development_fallback`, `runtime_error`, or `not_configured`.
 
@@ -47,7 +47,9 @@ OPENCLAW_BIN=openclaw
 CMO_AGENT_ID=cmo
 CMO_RUN_TIMEOUT_SECONDS=900
 CMO_CHAT_TIMEOUT_SECONDS=900
-CMO_APP_TURN_TIMEOUT_MS=60000
+CMO_APP_TURN_REQUEST_TIMEOUT_MS=120000
+CMO_APP_TURN_POLL_TIMEOUT_MS=110000
+CMO_APP_TURN_POLL_INTERVAL_MS=1000
 CMO_CRON_RUN_TIMEOUT_MS=180000
 OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 OPENCLAW_TIMEOUT_MS=120000
@@ -197,6 +199,8 @@ Fallback smoke remains separate:
 ```bash
 npm run smoke:cmo-fallback
 ```
+
+`smoke:cmo-fallback` deliberately sends a fallback-only app chat request by default with `CMO_SMOKE_FORCE_FALLBACK=1` semantics. Set `CMO_SMOKE_FORCE_FALLBACK=0` only when intentionally testing organic live failure behavior.
 
 ## Chat Data Format
 

@@ -92,7 +92,7 @@ function runtimeStatusVariant(status: CMORuntimeStatus | null): "green" | "orang
   return "slate";
 }
 
-function runtimeExplanation(status: CMORuntimeStatus | null): string | null {
+function runtimeExplanation(status: CMORuntimeStatus | null, reason: CmoRuntimeErrorReason | null): string | null {
   if (status === "configured_but_unreachable") {
     return "Live app-chat is unavailable. Fallback answers use workspace context.";
   }
@@ -102,6 +102,10 @@ function runtimeExplanation(status: CMORuntimeStatus | null): string | null {
   }
 
   if (status === "live_failed_then_fallback") {
+    if (reason === "timeout") {
+      return "Live app-turn timed out; fallback answer generated from workspace context.";
+    }
+
     return "Live app-chat unavailable; fallback answer generated from workspace context.";
   }
 
@@ -399,7 +403,9 @@ export function CMOChatPanel({
       setError(response.status === "failed" ? response.runtimeError || "CMO runtime returned an error." : null);
       setSendStatus(
         response.isRuntimeFallback || response.runtimeStatus === "live_failed_then_fallback"
-          ? "Live app-chat unavailable; fallback answer generated from workspace context."
+          ? response.runtimeErrorReason === "timeout"
+            ? "Live app-turn timed out; fallback answer generated from workspace context."
+            : "Live app-chat unavailable; fallback answer generated from workspace context."
           : response.isDevelopmentFallback
             ? "Runtime unavailable; using development fallback."
             : "CMO response received.",
@@ -588,9 +594,9 @@ export function CMOChatPanel({
           </div>
         </div>
 
-        {runtimeExplanation(runtimeStatus) ? (
+        {runtimeExplanation(runtimeStatus, runtimeErrorReason) ? (
           <div className="border-b border-orange-100 bg-orange-50 px-5 py-3 text-sm font-medium text-orange-800">
-            {runtimeExplanation(runtimeStatus)}
+            {runtimeExplanation(runtimeStatus, runtimeErrorReason)}
             {runtimeStatus ? <span className="ml-2 text-xs text-orange-700">Status: {runtimeStatus}</span> : null}
           </div>
         ) : null}

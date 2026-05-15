@@ -28,8 +28,16 @@ export function getOpenClawWorkspaceId(): string {
   return (process.env.OPENCLAW_WORKSPACE_ID ?? "").trim();
 }
 
-export function getOpenClawCmoTimeoutMs(): number {
-  const value = Number.parseInt(process.env.OPENCLAW_CMO_TIMEOUT_MS ?? "", 10);
+function positiveIntEnv(name: string, fallback: number): number {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
 
-  return Number.isFinite(value) && value > 0 ? value : 60_000;
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+export function getOpenClawCmoTimeoutMs(): number {
+  return positiveIntEnv("OPENCLAW_CMO_TIMEOUT_MS", 60_000);
+}
+
+export function getCmoAppTurnRequestTimeoutMs(): number {
+  return positiveIntEnv("CMO_APP_TURN_REQUEST_TIMEOUT_MS", positiveIntEnv("OPENCLAW_CMO_TIMEOUT_MS", 120_000));
 }

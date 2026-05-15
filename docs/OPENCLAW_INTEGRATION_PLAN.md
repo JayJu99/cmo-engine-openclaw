@@ -218,7 +218,9 @@ CMO_TRIGGER_MODE=mock|openclaw-cron
 OPENCLAW_BIN=openclaw
 CMO_AGENT_ID=cmo
 CMO_RUN_TIMEOUT_SECONDS=900
-CMO_APP_TURN_TIMEOUT_MS=60000
+CMO_APP_TURN_REQUEST_TIMEOUT_MS=120000
+CMO_APP_TURN_POLL_TIMEOUT_MS=110000
+CMO_APP_TURN_POLL_INTERVAL_MS=1000
 CMO_CRON_RUN_TIMEOUT_MS=180000
 ```
 
@@ -299,6 +301,7 @@ Implementation notes:
 - The VPS adapter authenticates with the same `Authorization: Bearer <CMO_ADAPTER_API_KEY>` pattern.
 - In `openclaw-cron` mode, the adapter creates an isolated one-shot OpenClaw CMO cron turn and instructs the agent to write `app-turn/{turnId}.json`.
 - The adapter validates that the output is app-turn JSON, has a non-empty `answer`, is not `cmo.dashboard.v1`, and is not fallback diagnostics.
+- The dashboard app-turn request timeout is `CMO_APP_TURN_REQUEST_TIMEOUT_MS` and should be slightly longer than the adapter `CMO_APP_TURN_POLL_TIMEOUT_MS`.
 - If live app-turn fails, the dashboard keeps the existing fallback provenance: `attemptedRuntimeMode=live`, `runtimeMode=fallback`, `runtimeStatus=live_failed_then_fallback`, and a controlled `runtimeErrorReason`.
 
 ### `GET /cmo/runs/:runId`

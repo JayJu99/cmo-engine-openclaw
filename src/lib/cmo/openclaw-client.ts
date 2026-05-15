@@ -1,6 +1,7 @@
 import type { CMOAppChatResponse, CMOChatMessage, CMOContextPackage } from "@/lib/cmo/app-workspace-types";
 import type { CmoChatRun } from "@/lib/cmo/types";
 import {
+  getCmoAppTurnRequestTimeoutMs,
   getOpenClawApiKey,
   getOpenClawCmoEndpoint,
   getOpenClawCmoTimeoutMs,
@@ -731,7 +732,7 @@ export async function callOpenClawAppTurnRuntime(
   const response = await requestRuntimeJson<unknown>(config, config.endpoint, {
     method: "POST",
     body: appTurnBody(contextPackage, history, sessionId),
-    timeoutMs: getOpenClawCmoTimeoutMs(),
+    timeoutMs: getCmoAppTurnRequestTimeoutMs(),
   });
 
   return normalizeAppTurnRuntimeResult(response.data, config);
