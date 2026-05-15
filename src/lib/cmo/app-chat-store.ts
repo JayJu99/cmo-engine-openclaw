@@ -149,6 +149,7 @@ function normalizeAppChatRequest(body: unknown): CMOAppChatRequest {
 function normalizeRuntimeStatus(value: unknown, isDevelopmentFallback: boolean): CMOChatSession["runtimeStatus"] {
   if (
     value === "connected" ||
+    value === "live" ||
     value === "configured_but_unreachable" ||
     value === "live_failed_then_fallback" ||
     value === "development_fallback" ||
@@ -166,7 +167,7 @@ function normalizeRuntimeMode(value: unknown, runtimeStatus: CMOChatSession["run
     return value;
   }
 
-  if (runtimeStatus === "connected") {
+  if (runtimeStatus === "connected" || runtimeStatus === "live") {
     return "live";
   }
 

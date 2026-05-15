@@ -99,6 +99,7 @@ OPENCLAW_BIN=openclaw
 CMO_AGENT_ID=cmo
 CMO_RUN_TIMEOUT_SECONDS=900
 CMO_CHAT_TIMEOUT_SECONDS=900
+CMO_APP_TURN_TIMEOUT_MS=60000
 CMO_CRON_RUN_TIMEOUT_MS=180000
 OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 OPENCLAW_TIMEOUT_MS=120000
@@ -298,6 +299,79 @@ If chat fails:
 - Check `status/<chat-run-id>.chat-trigger.json` and `status/<chat-run-id>.chat-debug.json` on the VPS.
 - Check adapter logs for `OpenClaw CMO chat trigger failed`.
 
+## App CMO Session troubleshooting
+
+The Holdstation Mini App CMO Session uses `/api/cmo/chat` in the dashboard and the live adapter contract `POST /cmo/app-turn`. This path is separate from `/cmo/run-brief` and must not treat dashboard brief JSON as a chat answer.
+
+Live app-turn request shape:
+
+```json
+{
+  "schema_version": "cmo.app_turn.request.v1",
+  "sessionId": "optional-session-id",
+  "workspaceId": "holdstation",
+  "appId": "holdstation-mini-app",
+  "sourceId": "holdstation__holdstation-mini-app",
+  "userMessage": "hi, introduce yourself as the CMO for this workspace",
+  "history": [],
+  "contextPack": {},
+  "metadata": {}
+}
+```
+
+Successful live response shape:
+
+```json
+{
+  "schema_version": "cmo.app_turn.response.v1",
+  "answer": "Useful app-chat answer.",
+  "contextUsed": ["Current Priority", "App Memory"],
+  "suggestedActions": ["Optional short action"],
+  "runtimeMode": "live",
+  "runtimeStatus": "live",
+  "runtimeProvider": "openclaw",
+  "runtimeAgent": "cmo"
+}
+```
+
+Test live app-turn through the dashboard:
+
+```bash
+CMO_SMOKE_BASE_URL=http://127.0.0.1:3002 \
+npm run smoke:cmo-live-app-turn
+```
+
+If the dashboard is Basic Auth protected, include either:
+
+```bash
+CMO_SMOKE_AUTH_HEADER='Basic <base64-username-password>'
+```
+
+or:
+
+```bash
+BASIC_AUTH_USERNAME='<dashboard-username>' \
+BASIC_AUTH_PASSWORD='<dashboard-password>' \
+npm run smoke:cmo-live-app-turn
+```
+
+Runtime status interpretation:
+
+- `runtimeMode: "live"` and `runtimeStatus: "live"` mean `/cmo/app-turn` returned a valid app-turn answer.
+- `runtimeMode: "fallback"` and `runtimeStatus: "live_failed_then_fallback"` mean the adapter or OpenClaw was reachable enough to attempt live, but app-turn failed and the dashboard generated an honest workspace-context fallback answer.
+- `runtimeErrorReason: "unsupported_chat_turn"` means `/cmo/app-turn` is missing or not supported by the adapter.
+- `runtimeErrorReason: "timeout"` means the CMO agent did not write valid app-turn JSON before `CMO_APP_TURN_TIMEOUT_MS`.
+- `runtimeErrorReason: "invalid_response"` means the response was empty, malformed, dashboard JSON, or diagnostic-only.
+- `runtimeErrorReason: "execution_error"` means the adapter/OpenClaw invocation failed before a valid app-turn answer was available.
+
+If live app-turn fails:
+
+- Confirm `/cmo/status` reports `app_turn_supported: true`, `trigger_mode: "openclaw-cron"`, and `openclaw_runtime: "connected"`.
+- Check `status/<turn-id>.app-turn-trigger.json`, `status/<turn-id>.app-turn-debug.json`, and `status/<turn-id>.openclaw-app-turn-spec.json`.
+- Confirm the CMO agent wrote `app-turn/<turn-id>.json` with `schema_version: "cmo.app_turn.response.v1"`.
+- Confirm the CMO agent did not write `schema_version: "cmo.dashboard.v1"` for app chat.
+- Keep the fallback smoke separate with `npm run smoke:cmo-fallback`; it should pass when live app-turn is unavailable.
+
 ## Run History troubleshooting
 
 Run history is served from normalized run JSON files under `runs/`.
@@ -408,10 +482,17 @@ Production data directory:
     <chat-run-id>.chat-trigger.json
     <chat-run-id>.chat-debug.json
     <chat-run-id>.openclaw-chat-spec.json
+    <turn-id>.app-turn-trigger.json
+    <turn-id>.app-turn-debug.json
+    <turn-id>.openclaw-app-turn-spec.json
   chat/
     <chat-run-id>.json
     raw/
       <chat-run-id>.md
+  app-turn/
+    <turn-id>.json
+    raw/
+      <turn-id>.md
 ```
 
 Public dashboard APIs only serve sanitized normalized run and chat data. Private debug, raw prompt, stdout, stderr, and status details must remain on the VPS and must not be exposed through Traefik.
@@ -459,7 +540,8 @@ Restore safety:
 
 ## Known limitations
 
-- The adapter status endpoint reports OpenClaw runtime as `not_checked`; it confirms adapter config, not a full OpenClaw execution.
+- The adapter status endpoint checks CLI/runtime reachability and gateway socket reachability, but it is still not proof that the CMO agent can complete a valid app-turn answer.
+- Live CMO Session depends on the OpenClaw CMO agent writing valid `cmo.app_turn.response.v1` JSON to the adapter-provided `app-turn/<turn-id>.json` path before `CMO_APP_TURN_TIMEOUT_MS`; otherwise the dashboard keeps using fallback.
 - `/cmo/latest` and `/cmo/runs/<run-id>` perform finalization reads for running OpenClaw outputs, so a run can become completed during read.
 - Completed OpenClaw output must match the dashboard contract after repair/normalization; invalid output becomes `partial` and does not replace `latest_successful.json`.
 - Run archive intentionally skips malformed JSON and non-run files.

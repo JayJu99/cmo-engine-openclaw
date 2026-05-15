@@ -72,7 +72,7 @@ interface FallbackComposition {
 type FallbackIntent = "greeting" | "start_session" | "strategic_recommendation" | "context_explanation" | "general";
 
 function runtimeModeFromStatus(status: CMORuntimeStatus): CmoRuntimeMode {
-  if (status === "connected") {
+  if (status === "connected" || status === "live") {
     return "live";
   }
 
@@ -282,6 +282,7 @@ function classifyAppTurnErrorReason(error: unknown): CmoRuntimeErrorReason {
 
   if (
     error.code.includes("dashboard_json") ||
+    error.code.includes("diagnostic") ||
     error.code.includes("invalid") ||
     error.code.includes("validation") ||
     error.code.includes("json")
@@ -410,13 +411,13 @@ export class LiveOpenClawRuntime implements CmoRuntime {
     }
 
     try {
-      const result = await callOpenClawAppTurnRuntime(input.contextPackage, availability.config, input.history);
+      const result = await callOpenClawAppTurnRuntime(input.contextPackage, availability.config, input.history, input.request.sessionId);
 
       return {
         answer: result.answer,
         assumptions: result.assumptions,
         suggestedActions: result.suggestedActions.length ? result.suggestedActions : DEFAULT_FALLBACK_ACTIONS,
-        runtimeStatus: "connected",
+        runtimeStatus: "live",
         runtimeMode: "live",
         attemptedRuntimeMode: "live",
         runtimeLabel: result.runtimeLabel,

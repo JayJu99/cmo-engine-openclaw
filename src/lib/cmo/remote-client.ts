@@ -10,7 +10,7 @@ import {
   type CmoStatus,
 } from "@/lib/cmo/types";
 import type { CMOAppChatResponse, CMOChatMessage, CmoRuntimeMode, ContextPack } from "@/lib/cmo/app-workspace-types";
-import { getRemoteAdapterApiKey, getRemoteAdapterUrl } from "@/lib/cmo/config";
+import { getOpenClawCmoTimeoutMs, getRemoteAdapterApiKey, getRemoteAdapterUrl } from "@/lib/cmo/config";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import { normalizeRun, validateNormalizedRun } from "@/lib/cmo/validation";
 
@@ -41,12 +41,16 @@ export type CmoRemoteStatus = {
 };
 
 export interface CmoAppTurnRequest {
+  schema_version: "cmo.app_turn.request.v1";
+  sessionId?: string;
   workspaceId: string;
   appId: string;
   sourceId: string;
   contextPack: ContextPack;
-  message: string;
+  userMessage: string;
+  message?: string;
   history: CMOChatMessage[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface CmoAppTurnResponse {
@@ -359,6 +363,17 @@ function isDashboardRunBriefPayload(payload: unknown): boolean {
   return "summary" in payload || "actions" in payload || "signals" in payload || "agents" in payload || "reports" in payload || "vault" in payload || "campaigns" in payload;
 }
 
+function isDiagnosticOnlyAnswer(answer: string): boolean {
+  const normalized = answer.toLowerCase();
+
+  return (
+    normalized.includes("live app-chat is unavailable") ||
+    normalized.includes("fallback generated this response") ||
+    normalized.includes("fallback generated this answer") ||
+    normalized.startsWith("fallback response:")
+  );
+}
+
 function normalizeAppTurnResponse(payload: unknown): CmoAppTurnResponse {
   if (isDashboardRunBriefPayload(payload)) {
     throw new CmoAdapterError(
@@ -387,6 +402,10 @@ function normalizeAppTurnResponse(payload: unknown): CmoAppTurnResponse {
 
   if (!answer) {
     throw new CmoAdapterError("Remote CMO Adapter app-turn response did not include a usable answer", 502, "cmo_app_turn_empty_answer");
+  }
+
+  if (isDiagnosticOnlyAnswer(answer)) {
+    throw new CmoAdapterError("Remote CMO Adapter app-turn response only contained diagnostics", 502, "cmo_app_turn_diagnostic_answer");
   }
 
   return {
@@ -476,6 +495,7 @@ export async function postRemoteAppTurn(body: CmoAppTurnRequest): Promise<Remote
   const response = await requestRemoteJson<unknown>("/cmo/app-turn", {
     method: "POST",
     body,
+    timeoutMs: getOpenClawCmoTimeoutMs(),
   });
 
   return {

@@ -211,6 +211,7 @@ function normalizeVaultRelativePath(relativeVaultPath: string): string {
 
 function normalizeRuntimeStatus(value: unknown): CMORuntimeStatus | undefined {
   return value === "connected" ||
+    value === "live" ||
     value === "configured_but_unreachable" ||
     value === "live_failed_then_fallback" ||
     value === "development_fallback" ||
@@ -221,7 +222,7 @@ function normalizeRuntimeStatus(value: unknown): CMORuntimeStatus | undefined {
 }
 
 function contextPackRuntimeMode(status: CMORuntimeStatus): ContextPackRuntimeMode {
-  if (status === "connected") {
+  if (status === "connected" || status === "live") {
     return "live";
   }
 

@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import net from "node:net";
 import { execFile } from "node:child_process";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
@@ -8,6 +9,8 @@ import { promisify } from "node:util";
 
 const DEFAULT_DATA_DIR = "/home/ju/.openclaw/workspace/data/cmo-dashboard";
 const DEFAULT_SCHEMA_VERSION = "cmo.dashboard.v1";
+const APP_TURN_REQUEST_SCHEMA_VERSION = "cmo.app_turn.request.v1";
+const APP_TURN_RESPONSE_SCHEMA_VERSION = "cmo.app_turn.response.v1";
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 const DEFAULT_OPENCLAW_TIMEOUT_MS = 120_000;
 const DEFAULT_TRIGGER_MODE = "mock";
@@ -15,6 +18,7 @@ const DEFAULT_OPENCLAW_BIN = "openclaw";
 const DEFAULT_CMO_AGENT_ID = "cmo";
 const DEFAULT_CMO_RUN_TIMEOUT_SECONDS = 900;
 const DEFAULT_CMO_CHAT_TIMEOUT_SECONDS = 900;
+const DEFAULT_CMO_APP_TURN_TIMEOUT_MS = 60_000;
 const DEFAULT_CMO_CRON_RUN_TIMEOUT_MS = 180_000;
 const DEFAULT_RUN_LIST_LIMIT = 20;
 const MAX_RUN_LIST_LIMIT = 100;
@@ -56,6 +60,7 @@ function getConfig() {
     cmoAgentId: process.env.CMO_AGENT_ID ?? DEFAULT_CMO_AGENT_ID,
     cmoRunTimeoutSeconds: Number.parseInt(process.env.CMO_RUN_TIMEOUT_SECONDS ?? String(DEFAULT_CMO_RUN_TIMEOUT_SECONDS), 10),
     cmoChatTimeoutSeconds: Number.parseInt(process.env.CMO_CHAT_TIMEOUT_SECONDS ?? String(DEFAULT_CMO_CHAT_TIMEOUT_SECONDS), 10),
+    cmoAppTurnTimeoutMs: Number.parseInt(process.env.CMO_APP_TURN_TIMEOUT_MS ?? String(DEFAULT_CMO_APP_TURN_TIMEOUT_MS), 10),
     cmoCronRunTimeoutMs: Number.parseInt(process.env.CMO_CRON_RUN_TIMEOUT_MS ?? String(DEFAULT_CMO_CRON_RUN_TIMEOUT_MS), 10),
     openclawTriggerEnabled: triggerMode === "openclaw-cron",
     port: Number.parseInt(process.env.CMO_ADAPTER_PORT ?? process.env.PORT ?? "8787", 10),
@@ -174,6 +179,51 @@ function summarizeRuntimeCheckError(error) {
   };
 }
 
+function gatewayTarget(gatewayUrl) {
+  try {
+    const url = new URL(gatewayUrl);
+
+    return {
+      host: url.hostname || "127.0.0.1",
+      port: Number.parseInt(url.port || (url.protocol === "wss:" ? "443" : "80"), 10),
+    };
+  } catch {
+    return {
+      host: "127.0.0.1",
+      port: 18789,
+    };
+  }
+}
+
+function checkGatewayReachable(gatewayUrl, timeoutMs = 1_500) {
+  const target = gatewayTarget(gatewayUrl);
+
+  return new Promise((resolve) => {
+    const socket = net.createConnection(target);
+    let settled = false;
+    const finish = (status, reason = "") => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      socket.destroy();
+      resolve({
+        openclaw_gateway_url: gatewayUrl,
+        openclaw_gateway_host: target.host,
+        openclaw_gateway_port: target.port,
+        openclaw_gateway_status: status,
+        ...(reason ? { openclaw_gateway_reason: reason } : {}),
+      });
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish("reachable"));
+    socket.once("timeout", () => finish("timeout", "Gateway TCP check timed out."));
+    socket.once("error", (error) => finish("unreachable", error.message));
+  });
+}
+
 async function checkOpenClawRuntime(config) {
   const cmoAgentConfigured = typeof config.cmoAgentId === "string" && config.cmoAgentId.trim().length > 0;
   const openclawBinConfigured = typeof config.openclawBin === "string" && config.openclawBin.trim().length > 0;
@@ -279,6 +329,7 @@ async function ensureDashboardDirs() {
   await mkdir(dataPath("runs"), { recursive: true });
   await mkdir(dataPath("status"), { recursive: true });
   await mkdir(dataPath("chat", "raw"), { recursive: true });
+  await mkdir(dataPath("app-turn", "raw"), { recursive: true });
 }
 
 async function readRequestJson(req) {
@@ -1589,6 +1640,241 @@ function buildCmoChatPrompt({ chatRunId, question, rawPath, jsonPath, context, a
   ].join("\n");
 }
 
+function normalizeHistoryForAppTurn(history) {
+  return Array.isArray(history)
+    ? history.slice(-12).map((message) => ({
+        role: ["user", "assistant", "system"].includes(message?.role) ? message.role : "user",
+        content: safeString(message?.content, "").slice(0, 4_000),
+        created_at: safeString(message?.createdAt ?? message?.created_at, ""),
+      })).filter((message) => message.content)
+    : [];
+}
+
+function compactContextPackForAppTurn(contextPack) {
+  if (!isRecord(contextPack)) {
+    return null;
+  }
+
+  const items = Array.isArray(contextPack.items)
+    ? contextPack.items.slice(0, 8).map((item) => ({
+        kind: safeString(item?.kind, "context"),
+        title: safeString(item?.title, "Context item"),
+        inclusion_reason: safeString(item?.inclusionReason ?? item?.inclusion_reason, ""),
+        source_label: safeString(item?.source?.label, ""),
+        source_type: safeString(item?.source?.type, ""),
+        exists: item?.exists === true,
+        context_quality: safeString(item?.contextQuality ?? item?.context_quality, "draft"),
+        content: typeof item?.content === "string" ? item.content.slice(0, 10_000) : "",
+        content_preview: safeString(item?.contentPreview ?? item?.content_preview, "").slice(0, 1_000),
+        truncated: item?.truncated === true,
+      }))
+    : [];
+  const exclusions = Array.isArray(contextPack.exclusions)
+    ? contextPack.exclusions.slice(0, 12).map((item) => ({
+        label: safeString(item?.label, "Excluded context"),
+        reason: safeString(item?.reason, ""),
+      }))
+    : [];
+
+  return {
+    policy_version: safeString(contextPack.policyVersion ?? contextPack.policy_version, "context-pack-v1"),
+    workspace_id: safeString(contextPack.workspaceId ?? contextPack.workspace_id, ""),
+    app_id: safeString(contextPack.appId ?? contextPack.app_id, ""),
+    source_id: safeString(contextPack.sourceId ?? contextPack.source_id, ""),
+    logical_app_path: safeString(contextPack.logicalAppPath ?? contextPack.logical_app_path, ""),
+    runtime_mode: safeString(contextPack.runtimeMode ?? contextPack.runtime_mode, ""),
+    token_budget: isRecord(contextPack.tokenBudget) ? pickFields(contextPack.tokenBudget, ["maxInputTokens", "estimatedTokens", "maxItemChars"]) : {},
+    context_quality_summary: isRecord(contextPack.contextQualitySummary) ? cloneJson(contextPack.contextQualitySummary) : {},
+    items,
+    exclusions,
+  };
+}
+
+function appTurnMessageFromBody(body) {
+  if (!isRecord(body)) {
+    return "";
+  }
+
+  return safeString(body.userMessage ?? body.user_message ?? body.message ?? body.question, "");
+}
+
+function validateAppTurnBody(body) {
+  if (!isRecord(body)) {
+    const error = new Error("Request body must be an object");
+    error.status = 400;
+    throw error;
+  }
+
+  const userMessage = appTurnMessageFromBody(body);
+  const workspaceId = safeString(body.workspaceId ?? body.workspace_id, "");
+  const appId = safeString(body.appId ?? body.app_id, "");
+  const sourceId = safeString(body.sourceId ?? body.source_id, "");
+  const contextPack = body.contextPack ?? body.context_pack;
+
+  if (!userMessage) {
+    const error = new Error("userMessage is required");
+    error.status = 400;
+    throw error;
+  }
+
+  if (!workspaceId || !appId || !sourceId) {
+    const error = new Error("workspaceId, appId, and sourceId are required");
+    error.status = 400;
+    throw error;
+  }
+
+  if (!isRecord(contextPack)) {
+    const error = new Error("contextPack is required");
+    error.status = 400;
+    throw error;
+  }
+
+  return {
+    schemaVersion: safeString(body.schema_version, APP_TURN_REQUEST_SCHEMA_VERSION),
+    sessionId: safeString(body.sessionId ?? body.session_id, ""),
+    workspaceId,
+    appId,
+    sourceId,
+    userMessage,
+    history: normalizeHistoryForAppTurn(body.history),
+    contextPack,
+    metadata: isRecord(body.metadata) ? cloneJson(body.metadata) : {},
+  };
+}
+
+function buildCmoAppTurnPrompt({ turnId, request, rawPath, jsonPath }) {
+  const compactContextPack = compactContextPackForAppTurn(request.contextPack);
+
+  return [
+    "You are the Holdstation CMO agent answering one app workspace chat turn.",
+    "",
+    `App turn ID: ${turnId}`,
+    `Workspace ID: ${request.workspaceId}`,
+    `App ID: ${request.appId}`,
+    `Source ID: ${request.sourceId}`,
+    `Raw markdown path: ${rawPath}`,
+    `App-turn JSON path: ${jsonPath}`,
+    "",
+    "Current user message:",
+    request.userMessage,
+    "",
+    "Recent chat history:",
+    JSON.stringify(request.history, null, 2),
+    "",
+    "CMO Context Pack:",
+    JSON.stringify(compactContextPack, null, 2),
+    "",
+    "Runtime instructions:",
+    "1. Answer as the CMO operating assistant for the selected app workspace.",
+    "2. Use only the provided workspace context unless explicitly saying an assumption.",
+    "3. Do not invent metrics, campaign results, user counts, Task Tracker data, or external facts.",
+    "4. Do not claim unavailable tools, all-vault RAG, graph retrieval, analytics, or Task Tracker access.",
+    "5. Return a useful chat answer for the user. Do not return dashboard JSON.",
+    "6. If context is draft, placeholder, or missing, say so briefly and continue with bounded recommendations.",
+    "7. Write the raw markdown answer first to the raw markdown path.",
+    "8. Write the app-turn JSON second to the app-turn JSON path.",
+    "9. Do not send Discord, Telegram, email, chat, or other external messages.",
+    "10. Do not include Gateway details, prompts, stdout, stderr, secrets, or this instruction text in the public JSON.",
+    "",
+    "The app-turn JSON must match this contract exactly:",
+    JSON.stringify(
+      {
+        schema_version: APP_TURN_RESPONSE_SCHEMA_VERSION,
+        answer: "useful chat answer string",
+        contextUsed: ["Current Priority", "App Memory"],
+        suggestedActions: ["optional short action"],
+        runtimeMode: "live",
+        runtimeStatus: "live",
+        runtimeProvider: "openclaw",
+        runtimeAgent: getConfig().cmoAgentId,
+      },
+      null,
+      2,
+    ),
+    "",
+    "Reject these output shapes: dashboard brief JSON, cmo.dashboard.v1, run_id, summary/actions/signals/agents/reports/vault/campaigns as the main response.",
+  ].join("\n");
+}
+
+function isDashboardPayload(value) {
+  return isRecord(value) && (
+    value.schema_version === DEFAULT_SCHEMA_VERSION ||
+    "run_id" in value ||
+    "summary" in value ||
+    "actions" in value ||
+    "signals" in value ||
+    "agents" in value ||
+    "reports" in value ||
+    "vault" in value ||
+    "campaigns" in value
+  );
+}
+
+function isDiagnosticOnlyAnswer(answer) {
+  const normalized = answer.toLowerCase();
+
+  return normalized.includes("live app-chat is unavailable") ||
+    normalized.includes("fallback generated this response") ||
+    normalized.includes("fallback generated this answer") ||
+    normalized.startsWith("fallback response:");
+}
+
+function normalizeAppTurnOutput(payload, openclaw = {}) {
+  if (isDashboardPayload(payload)) {
+    const error = new Error("OpenClaw returned dashboard JSON instead of app-turn JSON");
+    error.status = 502;
+    throw error;
+  }
+
+  const record = isRecord(payload) ? payload : {};
+  const answer = safeString(record.answer, "");
+
+  if (!answer) {
+    const error = new Error("OpenClaw app-turn completed without an answer");
+    error.status = 502;
+    throw error;
+  }
+
+  if (isDiagnosticOnlyAnswer(answer)) {
+    const error = new Error("OpenClaw app-turn returned diagnostics instead of a useful answer");
+    error.status = 502;
+    throw error;
+  }
+
+  const suggestedActions = Array.isArray(record.suggestedActions ?? record.suggested_actions)
+    ? (record.suggestedActions ?? record.suggested_actions).filter((item) => typeof item === "string" && item.trim()).slice(0, 8)
+    : [];
+  const contextUsed = Array.isArray(record.contextUsed ?? record.context_used)
+    ? (record.contextUsed ?? record.context_used).filter((item) => typeof item === "string" && item.trim()).slice(0, 12)
+    : [];
+
+  return {
+    schema_version: APP_TURN_RESPONSE_SCHEMA_VERSION,
+    answer,
+    contextUsed,
+    suggestedActions,
+    rawRuntime: sanitizeOpenClawMetadata(openclaw),
+    runtimeMode: "live",
+    runtimeStatus: "live",
+    runtimeProvider: "openclaw",
+    runtimeAgent: getConfig().cmoAgentId,
+  };
+}
+
+function isAppTurnTimedOut(startedAtMs, timeoutMs) {
+  return Date.now() - startedAtMs > timeoutMs;
+}
+
+async function readCompletedAppTurn(jsonPath, openclaw) {
+  const payload = await readJsonFile(jsonPath);
+
+  if (!payload) {
+    return null;
+  }
+
+  return normalizeAppTurnOutput(payload, openclaw);
+}
+
 function sanitizeCommandArgs(args) {
   if (!Array.isArray(args)) {
     return null;
@@ -1883,6 +2169,98 @@ async function runOpenClawCronChat({ chatRunId, question, rawPath, jsonPath, con
   };
 }
 
+async function runOpenClawAppTurn({ turnId, request, rawPath, jsonPath }) {
+  const config = getConfig();
+  const jobName = `cmo-app-turn-${turnId}`;
+  const prompt = buildCmoAppTurnPrompt({ turnId, request, rawPath, jsonPath });
+  const scheduleAt = createNearFutureCronAt();
+  const specPath = dataPath("status", `${turnId}.openclaw-app-turn-spec.json`);
+
+  await writeJsonFile(specPath, {
+    schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
+    name: jobName,
+    oneShot: true,
+    enabled: true,
+    at: scheduleAt,
+    agentId: config.cmoAgentId,
+    sessionTarget: "isolated",
+    payload: {
+      kind: "agentTurn",
+      prompt,
+      app_turn: {
+        schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
+        turn_id: turnId,
+        workspace_id: request.workspaceId,
+        app_id: request.appId,
+        source_id: request.sourceId,
+        raw_markdown_path: rawPath,
+        app_turn_json_path: jsonPath,
+      },
+    },
+    delivery: {
+      mode: "none",
+    },
+    timeoutSeconds: Math.ceil(config.cmoAppTurnTimeoutMs / 1000),
+  });
+
+  const addResult = await execOpenClaw(
+    [
+      "cron",
+      "add",
+      "--name",
+      jobName,
+      "--at",
+      scheduleAt,
+      "--session",
+      "isolated",
+      "--message",
+      prompt,
+      "--agent",
+      config.cmoAgentId,
+      "--no-deliver",
+      "--delete-after-run",
+    ],
+    config.cmoCronRunTimeoutMs,
+    "app_turn_cron_add",
+  );
+  const jobId = pickOpenClawJobIdFromOutput(addResult.stdout, jobName);
+  const runResult = await execOpenClaw(["cron", "run", jobId], config.cmoCronRunTimeoutMs, "app_turn_cron_run");
+  const openclawRunId = pickOpenClawRunId(runResult.json);
+  const openclaw = {
+    mode: "openclaw-cron",
+    agent_id: config.cmoAgentId,
+    job_id: jobId,
+    job_name: jobName,
+    schedule_at: scheduleAt,
+    openclaw_run_id: openclawRunId ? String(openclawRunId) : "",
+    trigger_status: runResult.json?.enqueued === true ? "enqueued" : "triggered",
+    raw_markdown_path: rawPath,
+    normalized_json_path: jsonPath,
+    spec_path: specPath,
+  };
+
+  await writeJsonFile(dataPath("status", `${turnId}.app-turn-debug.json`), {
+    schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
+    turn_id: turnId,
+    captured_at: new Date().toISOString(),
+    note: "Private OpenClaw CLI app-turn debug output. Do not serve this file through dashboard APIs.",
+    add: {
+      args: sanitizeCommandArgs(addResult.args),
+      stdout: addResult.stdout,
+      stderr: addResult.stderr,
+      json: addResult.json,
+    },
+    run: {
+      args: sanitizeCommandArgs(runResult.args),
+      stdout: runResult.stdout,
+      stderr: runResult.stderr,
+      json: runResult.json,
+    },
+  });
+
+  return openclaw;
+}
+
 async function triggerOpenClawCronInBackground({ runId, createdAt, workspace, rawPath, normalizedPath }) {
   const statusPath = dataPath("status", `${runId}.trigger.json`);
 
@@ -2131,6 +2509,8 @@ async function handleStatus(res) {
   const config = getConfig();
   const dataDirExists = await pathExists(config.dataDir);
   const runtime = await checkOpenClawRuntime(config);
+  const gateway = await checkGatewayReachable(config.gatewayUrl);
+  const appTurnSupported = runtime.runtime_status === "connected" && config.triggerMode === "openclaw-cron";
 
   jsonResponse(res, 200, versioned({
     ok: true,
@@ -2139,13 +2519,17 @@ async function handleStatus(res) {
     data_dir: config.dataDir,
     data_dir_exists: dataDirExists,
     gateway_mode: "loopback",
+    ...gateway,
     trigger_mode: config.triggerMode,
     cmo_agent_id: config.cmoAgentId,
     openclaw_trigger_enabled: config.openclawTriggerEnabled,
+    run_brief_supported: config.triggerMode === "mock" || config.triggerMode === "openclaw-cron",
+    app_turn_supported: appTurnSupported,
     ...runtime,
     openclaw_timeout_ms: config.openclawTimeoutMs,
     cmo_run_timeout_seconds: config.cmoRunTimeoutSeconds,
     cmo_chat_timeout_seconds: config.cmoChatTimeoutSeconds,
+    cmo_app_turn_timeout_ms: config.cmoAppTurnTimeoutMs,
     cmo_cron_run_timeout_ms: config.cmoCronRunTimeoutMs,
   }));
 }
@@ -2320,6 +2704,118 @@ async function handleRunBrief(req, res) {
   }
 
   jsonResponse(res, 201, run);
+}
+
+async function handleAppTurn(req, res) {
+  const config = getConfig();
+  const body = await readRequestJson(req);
+  const request = validateAppTurnBody(body);
+
+  if (config.triggerMode !== "openclaw-cron") {
+    jsonResponse(res, 503, {
+      error: "OpenClaw app-turn requires CMO_TRIGGER_MODE=openclaw-cron",
+      code: "app_turn_not_available",
+    });
+    return;
+  }
+
+  const runtime = await checkOpenClawRuntime(config);
+
+  if (runtime.runtime_status !== "connected") {
+    jsonResponse(res, 503, {
+      error: runtime.runtime_reason ?? "OpenClaw runtime is not connected",
+      code: "app_turn_runtime_unavailable",
+    });
+    return;
+  }
+
+  await ensureDashboardDirs();
+
+  const turnId = `appturn_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
+  const rawPath = dataPath("app-turn", "raw", `${turnId}.md`);
+  const jsonPath = dataPath("app-turn", `${turnId}.json`);
+  const startedAt = Date.now();
+
+  await writeJsonFile(dataPath("status", `${turnId}.app-turn-trigger.json`), {
+    schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
+    turn_id: turnId,
+    status: "running",
+    created_at: new Date().toISOString(),
+    trigger_mode: config.triggerMode,
+    cmo_agent_id: config.cmoAgentId,
+    raw_markdown_path: rawPath,
+    app_turn_json_path: jsonPath,
+  });
+
+  let openclaw;
+
+  try {
+    openclaw = await runOpenClawAppTurn({ turnId, request, rawPath, jsonPath });
+  } catch (error) {
+    const failure = summarizeExecError(error);
+
+    await writeJsonFile(dataPath("status", `${turnId}.app-turn-trigger.json`), {
+      schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
+      turn_id: turnId,
+      status: "failed",
+      updated_at: new Date().toISOString(),
+      error: failure,
+    });
+    jsonResponse(res, 502, {
+      error: failure.message,
+      code: "app_turn_openclaw_trigger_failed",
+    });
+    return;
+  }
+
+  while (!isAppTurnTimedOut(startedAt, config.cmoAppTurnTimeoutMs)) {
+    try {
+      const completed = await readCompletedAppTurn(jsonPath, openclaw);
+
+      if (completed) {
+        await writeJsonFile(dataPath("status", `${turnId}.app-turn-trigger.json`), {
+          schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
+          turn_id: turnId,
+          status: "completed",
+          updated_at: new Date().toISOString(),
+          openclaw: sanitizeOpenClawMetadata(openclaw),
+        });
+        jsonResponse(res, 200, completed);
+        return;
+      }
+    } catch (error) {
+      await writeJsonFile(dataPath("status", `${turnId}.app-turn-trigger.json`), {
+        schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
+        turn_id: turnId,
+        status: "failed",
+        updated_at: new Date().toISOString(),
+        error: {
+          code: "app_turn_invalid_response",
+          message: error.message,
+        },
+        openclaw: sanitizeOpenClawMetadata(openclaw),
+      });
+      jsonResponse(res, error.status ?? 502, {
+        error: error.message,
+        code: "app_turn_invalid_response",
+      });
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+
+  await writeJsonFile(dataPath("status", `${turnId}.app-turn-trigger.json`), {
+    schema_version: APP_TURN_REQUEST_SCHEMA_VERSION,
+    turn_id: turnId,
+    status: "timeout",
+    updated_at: new Date().toISOString(),
+    openclaw: sanitizeOpenClawMetadata(openclaw),
+  });
+  jsonResponse(res, 504, {
+    error: "OpenClaw app-turn did not complete before timeout",
+    code: "app_turn_timeout",
+  });
 }
 
 async function handleChat(req, res) {
@@ -2563,6 +3059,16 @@ async function routeRequest(req, res) {
       }
 
       await handleRun(res, decodeURIComponent(runMatch[1]));
+      return;
+    }
+
+    if (url.pathname === "/cmo/app-turn") {
+      if (req.method !== "POST") {
+        methodNotAllowed(res);
+        return;
+      }
+
+      await handleAppTurn(req, res);
       return;
     }
 

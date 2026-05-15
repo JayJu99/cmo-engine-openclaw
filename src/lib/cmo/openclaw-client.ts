@@ -419,6 +419,17 @@ function normalizeRuntimeResult(payload: unknown, config: OpenClawCmoRuntimeConf
   };
 }
 
+function isDiagnosticOnlyAnswer(answer: string): boolean {
+  const normalized = answer.toLowerCase();
+
+  return (
+    normalized.includes("live app-chat is unavailable") ||
+    normalized.includes("fallback generated this response") ||
+    normalized.includes("fallback generated this answer") ||
+    normalized.startsWith("fallback response:")
+  );
+}
+
 function normalizeAppTurnRuntimeResult(payload: unknown, config: OpenClawCmoRuntimeConfig): OpenClawCmoResult {
   if (isDashboardRunBriefPayload(payload)) {
     throw new CmoAdapterError(
@@ -449,6 +460,10 @@ function normalizeAppTurnRuntimeResult(payload: unknown, config: OpenClawCmoRunt
     throw new CmoAdapterError("OpenClaw CMO app-turn response did not include a usable answer", 502, "openclaw_cmo_empty_answer");
   }
 
+  if (isDiagnosticOnlyAnswer(answer)) {
+    throw new CmoAdapterError("OpenClaw CMO app-turn response only contained diagnostics", 502, "openclaw_cmo_diagnostic_answer");
+  }
+
   return {
     answer,
     assumptions: stringList(source.assumptions),
@@ -461,14 +476,21 @@ function normalizeAppTurnRuntimeResult(payload: unknown, config: OpenClawCmoRunt
   };
 }
 
-function appTurnBody(contextPackage: CMOContextPackage, history: CMOChatMessage[]) {
+function appTurnBody(contextPackage: CMOContextPackage, history: CMOChatMessage[], sessionId?: string) {
   return {
+    schema_version: "cmo.app_turn.request.v1" as const,
+    ...(sessionId ? { sessionId } : {}),
     workspaceId: contextPackage.workspaceId,
     appId: contextPackage.app.id,
     sourceId: contextPackage.sourceId,
     contextPack: contextPackage.contextPack,
+    userMessage: contextPackage.userMessage,
     message: contextPackage.userMessage,
     history,
+    metadata: {
+      requestedBy: "app-cmo-workspace",
+      appName: contextPackage.app.name,
+    },
   };
 }
 
@@ -690,9 +712,10 @@ export async function callOpenClawAppTurnRuntime(
   contextPackage: CMOContextPackage,
   config: OpenClawCmoRuntimeConfig,
   history: CMOChatMessage[],
+  sessionId?: string,
 ): Promise<OpenClawCmoResult> {
   if (config.kind === "vps-cmo-adapter") {
-    const response = await postRemoteAppTurn(appTurnBody(contextPackage, history));
+    const response = await postRemoteAppTurn(appTurnBody(contextPackage, history, sessionId));
 
     return {
       answer: response.data.answer,
@@ -707,7 +730,7 @@ export async function callOpenClawAppTurnRuntime(
 
   const response = await requestRuntimeJson<unknown>(config, config.endpoint, {
     method: "POST",
-    body: appTurnBody(contextPackage, history),
+    body: appTurnBody(contextPackage, history, sessionId),
     timeoutMs: getOpenClawCmoTimeoutMs(),
   });
 

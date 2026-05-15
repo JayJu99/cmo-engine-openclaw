@@ -394,6 +394,7 @@ export interface CMOContextPackage {
 }
 
 export type CMORuntimeStatus =
+  | "live"
   | "connected"
   | "configured_but_unreachable"
   | "live_failed_then_fallback"

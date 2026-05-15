@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "smoke:cmo-fallback": "node scripts/cmo-app-chat-fallback-smoke.mjs",
+    "smoke:cmo-live-app-turn": "node scripts/cmo-app-turn-live-smoke.mjs",
     "adapter:dev": "node --watch services/vps-cmo-adapter/server.mjs",
     "adapter:build": "node --check services/vps-cmo-adapter/server.mjs",
     "adapter:start": "node services/vps-cmo-adapter/server.mjs"

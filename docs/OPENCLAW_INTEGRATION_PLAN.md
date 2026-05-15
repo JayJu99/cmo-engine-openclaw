@@ -218,6 +218,7 @@ CMO_TRIGGER_MODE=mock|openclaw-cron
 OPENCLAW_BIN=openclaw
 CMO_AGENT_ID=cmo
 CMO_RUN_TIMEOUT_SECONDS=900
+CMO_APP_TURN_TIMEOUT_MS=60000
 CMO_CRON_RUN_TIMEOUT_MS=180000
 ```
 
@@ -258,6 +259,48 @@ Response may be synchronous if the run completes quickly, or accepted if the run
 }
 ```
 
+### `POST /cmo/app-turn`
+
+Starts one synchronous app workspace CMO chat turn. This endpoint is the live runtime contract for `/apps/holdstation-mini-app` CMO Session chat. It must not call `/cmo/run-brief`, and it must not return dashboard JSON.
+
+Request:
+
+```json
+{
+  "schema_version": "cmo.app_turn.request.v1",
+  "sessionId": "optional-session-id",
+  "workspaceId": "holdstation",
+  "appId": "holdstation-mini-app",
+  "sourceId": "holdstation__holdstation-mini-app",
+  "userMessage": "hi, introduce yourself as the CMO for this workspace",
+  "history": [],
+  "contextPack": {},
+  "metadata": {}
+}
+```
+
+Response:
+
+```json
+{
+  "schema_version": "cmo.app_turn.response.v1",
+  "answer": "Useful app-chat answer.",
+  "contextUsed": ["Current Priority", "App Memory"],
+  "suggestedActions": ["Optional short action"],
+  "runtimeMode": "live",
+  "runtimeStatus": "live",
+  "runtimeProvider": "openclaw",
+  "runtimeAgent": "cmo"
+}
+```
+
+Implementation notes:
+
+- The VPS adapter authenticates with the same `Authorization: Bearer <CMO_ADAPTER_API_KEY>` pattern.
+- In `openclaw-cron` mode, the adapter creates an isolated one-shot OpenClaw CMO cron turn and instructs the agent to write `app-turn/{turnId}.json`.
+- The adapter validates that the output is app-turn JSON, has a non-empty `answer`, is not `cmo.dashboard.v1`, and is not fallback diagnostics.
+- If live app-turn fails, the dashboard keeps the existing fallback provenance: `attemptedRuntimeMode=live`, `runtimeMode=fallback`, `runtimeStatus=live_failed_then_fallback`, and a controlled `runtimeErrorReason`.
+
 ### `GET /cmo/runs/:runId`
 
 Returns the normalized run JSON for a specific run from:
@@ -289,7 +332,7 @@ This endpoint attempts the same OpenClaw cron finalization as `GET /cmo/runs/:ru
 
 ### `GET /cmo/status`
 
-Returns adapter health, OpenClaw runtime reachability, and configured data directory visibility.
+Returns adapter health, OpenClaw runtime reachability, app-turn capability, and configured data directory visibility.
 
 Example:
 
@@ -297,11 +340,16 @@ Example:
 {
   "ok": true,
   "adapter": "ok",
-  "openclaw_runtime": "active",
-  "gateway": "loopback",
+  "openclaw_runtime": "connected",
+  "openclaw_gateway_status": "reachable",
+  "app_turn_supported": true,
+  "run_brief_supported": true,
+  "gateway_mode": "loopback",
   "data_dir": "/home/ju/.openclaw/workspace/data/cmo-dashboard"
 }
 ```
+
+`adapter: "ok"` means the adapter process is reachable. It is not enough to mark app chat live. App chat should be considered live only when `/cmo/app-turn` returns `schema_version: "cmo.app_turn.response.v1"`, a non-empty `answer`, `runtimeMode: "live"`, and `runtimeStatus: "live"`.
 
 ## 10. Future Realtime/SSE Plan
 

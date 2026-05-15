@@ -49,6 +49,10 @@ function runtimeStatusLabel(status: CMORuntimeStatus | null): string {
     return "Adapter connected";
   }
 
+  if (status === "live") {
+    return "Live app-chat";
+  }
+
   if (status === "configured_but_unreachable") {
     return "Live app-chat unavailable";
   }
@@ -73,7 +77,7 @@ function runtimeStatusLabel(status: CMORuntimeStatus | null): string {
 }
 
 function runtimeStatusVariant(status: CMORuntimeStatus | null): "green" | "orange" | "red" | "slate" {
-  if (status === "connected") {
+  if (status === "connected" || status === "live") {
     return "green";
   }
 
@@ -265,6 +269,7 @@ export function CMOChatPanel({
 
         if (
           status === "connected" ||
+          status === "live" ||
           status === "configured_but_unreachable" ||
           status === "live_failed_then_fallback" ||
           status === "development_fallback" ||

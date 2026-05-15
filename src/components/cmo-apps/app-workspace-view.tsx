@@ -60,6 +60,10 @@ function runtimeLabel(status: CMORuntimeStatus | undefined): string {
     return "Adapter connected";
   }
 
+  if (status === "live") {
+    return "Live app-chat";
+  }
+
   if (status === "configured_but_unreachable") {
     return "Live app-chat unavailable";
   }
@@ -84,7 +88,7 @@ function runtimeLabel(status: CMORuntimeStatus | undefined): string {
 }
 
 function runtimeVariant(status: CMORuntimeStatus | undefined): "green" | "orange" | "red" | "slate" {
-  if (status === "connected") {
+  if (status === "connected" || status === "live") {
     return "green";
   }
 
