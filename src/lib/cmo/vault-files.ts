@@ -2024,6 +2024,17 @@ function formatDecisionLayerList<T extends { id: string; sourceSnippet?: string 
   return values?.length ? values.map(render).join("\n") : "- None.";
 }
 
+function formatDecisionReview(item: { reviewStatus?: string; reviewedAt?: string; reviewedBy?: string; reviewNote?: string }): string {
+  const fields = [
+    `review: ${item.reviewStatus ?? "unreviewed"}`,
+    item.reviewedAt ? `reviewed_at: ${item.reviewedAt}` : "",
+    item.reviewedBy ? `reviewed_by: ${item.reviewedBy}` : "",
+    item.reviewNote ? `note: ${item.reviewNote}` : "",
+  ].filter(Boolean);
+
+  return fields.join("; ");
+}
+
 function formatDecisionLayerMarkdown(layer: CmoDecisionLayer | undefined): string {
   if (!layer) {
     return "Decision layer not extracted.";
@@ -2034,19 +2045,19 @@ function formatDecisionLayerMarkdown(layer: CmoDecisionLayer | undefined): strin
     `Extraction: ${layer.extractionMode} / ${layer.extractionStatus}`,
     "",
     "### Decisions",
-    formatDecisionLayerList(layer.decisions, (item) => `- ${item.title} [${item.status}; ${item.confidence}] - ${item.statement}`),
+    formatDecisionLayerList(layer.decisions, (item) => `- ${item.title} [${item.status}; ${item.confidence}; ${formatDecisionReview(item)}] - ${item.statement}`),
     "",
     "### Assumptions",
-    formatDecisionLayerList(layer.assumptions, (item) => `- ${item.statement} [risk: ${item.riskLevel ?? "not_set"}; ${item.confidence}]`),
+    formatDecisionLayerList(layer.assumptions, (item) => `- ${item.statement} [risk: ${item.riskLevel ?? "not_set"}; ${item.confidence}; ${formatDecisionReview(item)}]`),
     "",
     "### Suggested Actions",
-    formatDecisionLayerList(layer.suggestedActions, (item) => `- ${item.title} [priority: ${item.priorityHint ?? "not_set"}; ${item.confidence}]${item.description ? ` - ${item.description}` : ""}`),
+    formatDecisionLayerList(layer.suggestedActions, (item) => `- ${item.title} [priority: ${item.priorityHint ?? "not_set"}; ${item.confidence}; ${formatDecisionReview(item)}]${item.description ? ` - ${item.description}` : ""}`),
     "",
     "### Memory Candidates",
-    formatDecisionLayerList(layer.memoryCandidates, (item) => `- ${item.type}: ${item.statement} [review_required; ${item.confidence}]`),
+    formatDecisionLayerList(layer.memoryCandidates, (item) => `- ${item.type}: ${item.statement} [${item.confidence}; ${formatDecisionReview(item)}]`),
     "",
     "### Task Candidates",
-    formatDecisionLayerList(layer.taskCandidates, (item) => `- ${item.title} [not_pushed; ${item.priorityHint ?? "not_set"}; ${item.confidence}]${item.description ? ` - ${item.description}` : ""}`),
+    formatDecisionLayerList(layer.taskCandidates, (item) => `- ${item.title} [not_pushed; ${item.priorityHint ?? "not_set"}; ${item.confidence}; ${formatDecisionReview(item)}]${item.description ? ` - ${item.description}` : ""}`),
   ].join("\n");
 }
 
@@ -2171,8 +2182,8 @@ function sessionNoteMarkdown(app: AppWorkspace, session: NonNullable<Awaited<Ret
     "",
     "## Potential Decisions",
     session.decisionLayer?.decisions.length
-      ? session.decisionLayer.decisions.map((decision) => `- ${decision.title}: ${decision.statement} [${decision.status}]`).join("\n")
-      : "None locked. Decision locking comes in Phase 2.",
+      ? session.decisionLayer.decisions.map((decision) => `- ${decision.title}: ${decision.statement} [${decision.status}; ${formatDecisionReview(decision)}]`).join("\n")
+      : "None extracted for review.",
     "",
     "## Related Tasks",
     session.relatedTasks?.length ? session.relatedTasks.map((task) => `- ${task}`).join("\n") : "None linked yet.",

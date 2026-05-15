@@ -341,6 +341,8 @@ Decision Layer fields are additive Phase 1.95 outputs on dashboard chat/session 
 
 These are review surfaces only. They must not push to Task Tracker, promote App Memory, or trigger automation in Phase 1.95.
 
+Phase 2.0 adds manual review status to the same Decision Layer. The dashboard can mark decisions confirmed/rejected/deferred, assumptions accepted/risky/rejected, suggested actions reviewed, memory candidates approved for later promotion, and task candidates approved for later task creation. These marks are additive session metadata only: no Task Tracker push, no App Memory promotion, no all-vault search, and no manual Vault picker are introduced.
+
 Successful live response shape:
 
 ```json

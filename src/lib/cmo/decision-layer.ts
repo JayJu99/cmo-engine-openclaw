@@ -245,6 +245,7 @@ function extractDecisions(lines: ExtractedLine[], sessionId: string): CmoDecisio
       rationale: line.section.includes("decision") ? "Extracted from a decision-oriented section." : undefined,
       confidence: confidenceFromLine(line),
       sourceSnippet: line.snippet,
+      reviewStatus: "unreviewed",
     })),
     (item) => item.statement,
   );
@@ -268,6 +269,7 @@ function extractAssumptions(lines: ExtractedLine[], runtimeAssumptions: string[]
       riskLevel: riskLevel(line.text),
       confidence: confidenceFromLine(line, line.section === "runtime assumptions" ? "high" : "medium"),
       sourceSnippet: line.snippet,
+      reviewStatus: "unreviewed",
     })),
     (item) => item.statement,
   );
@@ -303,6 +305,7 @@ function extractSuggestedActions(
         : undefined,
       confidence: confidenceFromLine(line),
       sourceSnippet: line.snippet,
+      reviewStatus: "unreviewed",
     })),
     (item) => item.title,
   );
@@ -350,6 +353,7 @@ function extractTaskCandidates(lines: ExtractedLine[], sessionId: string): CmoTa
       pushStatus: "not_pushed",
       confidence: confidenceFromLine(line),
       sourceSnippet: line.snippet,
+      reviewStatus: "unreviewed",
     })),
     (item) => item.title,
   );

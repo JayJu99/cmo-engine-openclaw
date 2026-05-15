@@ -24,6 +24,11 @@ import type {
   CMOChatMessage,
   CMOChatSession,
   CMORuntimeStatus,
+  CmoAssumptionReviewStatus,
+  CmoDecisionReviewStatus,
+  CmoMemoryCandidateReviewStatus,
+  CmoSuggestedActionReviewStatus,
+  CmoTaskCandidateReviewStatus,
   PriorityLevel,
   PriorityStatus,
   VaultNoteRef,
@@ -307,6 +312,55 @@ function assistantMessageProvenance(message: CMOChatMessage, session: CMOChatSes
   return `${runtime} · ${provider} · ${message.contextUsedCount ?? session.contextUsed.length} context notes`;
 }
 
+type DecisionLayerReviewItemType = "decision" | "assumption" | "suggestedAction" | "memoryCandidate" | "taskCandidate";
+type DecisionLayerReviewStatus =
+  | CmoDecisionReviewStatus
+  | CmoAssumptionReviewStatus
+  | CmoSuggestedActionReviewStatus
+  | CmoMemoryCandidateReviewStatus
+  | CmoTaskCandidateReviewStatus;
+
+function reviewBadgeVariant(status: string | undefined): "green" | "orange" | "red" | "blue" | "slate" {
+  if (status === "confirmed" || status === "accepted" || status === "reviewed" || status === "approved_for_promotion_later" || status === "approved_for_task_later") {
+    return "green";
+  }
+
+  if (status === "rejected") {
+    return "red";
+  }
+
+  if (status === "deferred" || status === "risky" || status === "review_required") {
+    return "orange";
+  }
+
+  return "slate";
+}
+
+function reviewLabel(status: string | undefined): string {
+  return status?.replace(/_/g, " ") ?? "unreviewed";
+}
+
+function decisionReviewCount(session: CMOChatSession | undefined): { reviewed: number; total: number } {
+  const layer = session?.decisionLayer;
+
+  if (!layer) {
+    return { reviewed: 0, total: 0 };
+  }
+
+  const statuses = [
+    ...layer.decisions.map((item) => item.reviewStatus ?? "unreviewed"),
+    ...layer.assumptions.map((item) => item.reviewStatus ?? "unreviewed"),
+    ...layer.suggestedActions.map((item) => item.reviewStatus ?? "unreviewed"),
+    ...layer.memoryCandidates.map((item) => item.reviewStatus),
+    ...layer.taskCandidates.map((item) => item.reviewStatus ?? "unreviewed"),
+  ];
+
+  return {
+    reviewed: statuses.filter((status) => status !== "unreviewed" && status !== "review_required").length,
+    total: statuses.length,
+  };
+}
+
 export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const { app } = state;
   const router = useRouter();
@@ -332,6 +386,9 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [isSavingSelectedSession, setIsSavingSelectedSession] = useState(false);
   const [isCapturingSelectedSession, setIsCapturingSelectedSession] = useState(false);
+  const [reviewingDecisionItemId, setReviewingDecisionItemId] = useState<string | null>(null);
+  const [decisionReviewStatus, setDecisionReviewStatus] = useState<string | null>(null);
+  const [decisionReviewError, setDecisionReviewError] = useState<string | null>(null);
   const [sessionFocusSignal, setSessionFocusSignal] = useState(0);
   const [memoryRefreshSignal, setMemoryRefreshSignal] = useState(0);
   const [promotionRefreshSignal, setPromotionRefreshSignal] = useState(0);
@@ -621,6 +678,43 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
       setSessionError(`Failed to capture: ${error instanceof Error ? error.message : "Raw capture failed"}`);
     } finally {
       setIsCapturingSelectedSession(false);
+    }
+  }
+
+  async function reviewDecisionLayerItem(itemType: DecisionLayerReviewItemType, itemId: string, reviewStatus: DecisionLayerReviewStatus) {
+    if (!selectedSession || reviewingDecisionItemId) {
+      return;
+    }
+
+    setReviewingDecisionItemId(itemId);
+    setDecisionReviewStatus(null);
+    setDecisionReviewError(null);
+
+    try {
+      const payload = await readJsonResponse<{ data: CMOChatSession }>(
+        await fetch("/api/cmo/sessions/decision-layer/review", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            appId: app.id,
+            sessionId: selectedSession.id,
+            itemType,
+            itemId,
+            reviewStatus,
+          }),
+        }),
+      );
+
+      setSessions((current) => current.map((session) => (session.id === payload.data.id ? payload.data : session)));
+      setSelectedSessionId(payload.data.id);
+      setDecisionReviewStatus(`Review saved: ${reviewLabel(reviewStatus)}.`);
+      setPromotionRefreshSignal((current) => current + 1);
+    } catch (error) {
+      setDecisionReviewError(error instanceof Error ? error.message : "Decision review update failed");
+    } finally {
+      setReviewingDecisionItemId(null);
     }
   }
 
@@ -1263,6 +1357,143 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
           </div>
 
           {selectedSession ? (
+            <SectionCard
+              title="Decision Review"
+              icon={<icons.CheckCircle2 />}
+              action={<Badge variant={decisionReviewCount(selectedSession).reviewed ? "green" : "slate"}>{decisionReviewCount(selectedSession).reviewed}/{decisionReviewCount(selectedSession).total} reviewed</Badge>}
+            >
+              {selectedSession.decisionLayer ? (
+                <div className="space-y-6">
+                  <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">
+                    Manual review only. Approved memory and task candidates are marked for later; nothing is promoted to App Memory or pushed to Task Tracker here.
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-bold text-slate-950">Decisions</h3>
+                      <Badge variant="slate">{selectedSession.decisionLayer.decisions.length}</Badge>
+                    </div>
+                    {selectedSession.decisionLayer.decisions.length ? selectedSession.decisionLayer.decisions.map((item) => (
+                      <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <div className="font-bold text-slate-950">{item.title}</div>
+                            <div className="mt-1 text-sm leading-6 text-slate-700">{item.statement}</div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <Badge variant="blue">extracted: {item.status}</Badge>
+                              <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
+                              <Badge variant="slate">{item.confidence} confidence</Badge>
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap gap-2">
+                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("decision", item.id, "confirmed")}>Confirm</Button>
+                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("decision", item.id, "rejected")}>Reject</Button>
+                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("decision", item.id, "deferred")}>Defer</Button>
+                          </div>
+                        </div>
+                      </div>
+                    )) : <EmptyCopy>No decisions extracted for review.</EmptyCopy>}
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-bold text-slate-950">Assumptions</h3>
+                      <Badge variant="slate">{selectedSession.decisionLayer.assumptions.length}</Badge>
+                    </div>
+                    {selectedSession.decisionLayer.assumptions.length ? selectedSession.decisionLayer.assumptions.map((item) => (
+                      <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <div className="text-sm leading-6 text-slate-700">{item.statement}</div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <Badge variant={item.riskLevel === "high" ? "red" : item.riskLevel === "medium" ? "orange" : "slate"}>risk: {item.riskLevel ?? "not set"}</Badge>
+                              <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
+                              <Badge variant="slate">{item.confidence} confidence</Badge>
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap gap-2">
+                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("assumption", item.id, "accepted")}>Accept</Button>
+                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("assumption", item.id, "risky")}>Risky</Button>
+                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("assumption", item.id, "rejected")}>Reject</Button>
+                          </div>
+                        </div>
+                      </div>
+                    )) : <EmptyCopy>No assumptions extracted for review.</EmptyCopy>}
+                  </div>
+
+                  <div className="grid gap-6 xl:grid-cols-3">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-sm font-bold text-slate-950">Suggested Actions</h3>
+                        <Badge variant="slate">{selectedSession.decisionLayer.suggestedActions.length}</Badge>
+                      </div>
+                      {selectedSession.decisionLayer.suggestedActions.length ? selectedSession.decisionLayer.suggestedActions.map((item) => (
+                        <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                          <div className="font-bold text-slate-950">{item.title}</div>
+                          {item.description ? <div className="mt-1 text-sm leading-6 text-slate-700">{item.description}</div> : null}
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
+                            <Badge variant="slate">{item.priorityHint ?? "no priority"} priority</Badge>
+                          </div>
+                          <Button className="mt-3" size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("suggestedAction", item.id, "reviewed")}>Mark Reviewed</Button>
+                        </div>
+                      )) : <EmptyCopy>No suggested actions extracted.</EmptyCopy>}
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-sm font-bold text-slate-950">Memory Candidates</h3>
+                        <Badge variant="slate">{selectedSession.decisionLayer.memoryCandidates.length}</Badge>
+                      </div>
+                      {selectedSession.decisionLayer.memoryCandidates.length ? selectedSession.decisionLayer.memoryCandidates.map((item) => (
+                        <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                          <div className="text-sm leading-6 text-slate-700">{item.statement}</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <Badge variant="blue">{item.type}</Badge>
+                            <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("memoryCandidate", item.id, "approved_for_promotion_later")}>Approve Later</Button>
+                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("memoryCandidate", item.id, "rejected")}>Reject</Button>
+                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("memoryCandidate", item.id, "deferred")}>Defer</Button>
+                          </div>
+                        </div>
+                      )) : <EmptyCopy>No memory candidates extracted.</EmptyCopy>}
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-sm font-bold text-slate-950">Task Candidates</h3>
+                        <Badge variant="slate">{selectedSession.decisionLayer.taskCandidates.length}</Badge>
+                      </div>
+                      {selectedSession.decisionLayer.taskCandidates.length ? selectedSession.decisionLayer.taskCandidates.map((item) => (
+                        <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                          <div className="font-bold text-slate-950">{item.title}</div>
+                          {item.description ? <div className="mt-1 text-sm leading-6 text-slate-700">{item.description}</div> : null}
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
+                            <Badge variant="slate">{item.pushStatus}</Badge>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("taskCandidate", item.id, "approved_for_task_later")}>Approve Later</Button>
+                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("taskCandidate", item.id, "rejected")}>Reject</Button>
+                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("taskCandidate", item.id, "deferred")}>Defer</Button>
+                          </div>
+                        </div>
+                      )) : <EmptyCopy>No task candidates extracted.</EmptyCopy>}
+                    </div>
+                  </div>
+
+                  {decisionReviewStatus ? <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">{decisionReviewStatus}</div> : null}
+                  {decisionReviewError ? <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{decisionReviewError}</div> : null}
+                </div>
+              ) : (
+                <EmptyCopy>No Decision Layer has been extracted for the selected session.</EmptyCopy>
+              )}
+            </SectionCard>
+          ) : null}
+
+          {selectedSession ? (
             <SectionCard title="Selected Session Messages" icon={<icons.MessageSquare />}>
               <div className="space-y-3">
                 {selectedSession.messages.map((message) => (
@@ -1290,7 +1521,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             ) : (
               <EmptyCopy>No potential decisions extracted from the selected CMO answer.</EmptyCopy>
             )}
-            <p className="mt-3 text-xs font-semibold text-slate-500">Decision locking comes in Phase 2.</p>
+            <p className="mt-3 text-xs font-semibold text-slate-500">Structured review is available in Decision Review above.</p>
           </SectionCard>
 
         </div>

@@ -13,7 +13,12 @@ import type {
   CMORuntimeStatus,
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
+  CmoAssumptionReviewStatus,
   CmoDecisionLayer,
+  CmoDecisionReviewStatus,
+  CmoMemoryCandidateReviewStatus,
+  CmoSuggestedActionReviewStatus,
+  CmoTaskCandidateReviewStatus,
   ContextGraphHint,
   ContextGraphHintConfidence,
   ContextGraphHintSourceType,
@@ -61,6 +66,26 @@ function normalizeGraphConfidence(value: unknown): ContextGraphHintConfidence {
   return value === "high" || value === "medium" || value === "low" ? value : "low";
 }
 
+function normalizeDecisionReviewStatus(value: unknown): CmoDecisionReviewStatus | undefined {
+  return value === "unreviewed" || value === "confirmed" || value === "rejected" || value === "deferred" ? value : undefined;
+}
+
+function normalizeAssumptionReviewStatus(value: unknown): CmoAssumptionReviewStatus | undefined {
+  return value === "unreviewed" || value === "accepted" || value === "risky" || value === "rejected" ? value : undefined;
+}
+
+function normalizeSuggestedActionReviewStatus(value: unknown): CmoSuggestedActionReviewStatus | undefined {
+  return value === "unreviewed" || value === "reviewed" ? value : undefined;
+}
+
+function normalizeMemoryCandidateReviewStatus(value: unknown): CmoMemoryCandidateReviewStatus {
+  return value === "approved_for_promotion_later" || value === "rejected" || value === "deferred" ? value : "review_required";
+}
+
+function normalizeTaskCandidateReviewStatus(value: unknown): CmoTaskCandidateReviewStatus | undefined {
+  return value === "unreviewed" || value === "approved_for_task_later" || value === "rejected" || value === "deferred" ? value : undefined;
+}
+
 function normalizeDecisionLayer(value: unknown): CmoDecisionLayer | undefined {
   if (!isRecord(value) || value.schemaVersion !== "cmo.decision-layer.v1") {
     return undefined;
@@ -102,6 +127,10 @@ function normalizeDecisionLayer(value: unknown): CmoDecisionLayer | undefined {
             rationale: optionalString(item, "rationale"),
             confidence: confidence(item),
             sourceSnippet: optionalString(item, "sourceSnippet"),
+            reviewStatus: normalizeDecisionReviewStatus(isRecord(item) ? item.reviewStatus : undefined) ?? "unreviewed",
+            reviewedAt: optionalString(item, "reviewedAt"),
+            reviewedBy: optionalString(item, "reviewedBy"),
+            reviewNote: optionalString(item, "reviewNote"),
           });
         }
       });
@@ -119,6 +148,10 @@ function normalizeDecisionLayer(value: unknown): CmoDecisionLayer | undefined {
             riskLevel,
             confidence: confidence(item),
             sourceSnippet: optionalString(item, "sourceSnippet"),
+            reviewStatus: normalizeAssumptionReviewStatus(isRecord(item) ? item.reviewStatus : undefined) ?? "unreviewed",
+            reviewedAt: optionalString(item, "reviewedAt"),
+            reviewedBy: optionalString(item, "reviewedBy"),
+            reviewNote: optionalString(item, "reviewNote"),
           });
         }
       });
@@ -139,6 +172,10 @@ function normalizeDecisionLayer(value: unknown): CmoDecisionLayer | undefined {
             expectedImpact: optionalString(item, "expectedImpact"),
             confidence: confidence(item),
             sourceSnippet: optionalString(item, "sourceSnippet"),
+            reviewStatus: normalizeSuggestedActionReviewStatus(isRecord(item) ? item.reviewStatus : undefined) ?? "unreviewed",
+            reviewedAt: optionalString(item, "reviewedAt"),
+            reviewedBy: optionalString(item, "reviewedBy"),
+            reviewNote: optionalString(item, "reviewNote"),
           });
         }
       });
@@ -156,9 +193,12 @@ function normalizeDecisionLayer(value: unknown): CmoDecisionLayer | undefined {
             type: isRecord(item) && typeof item.type === "string" && memoryTypes.has(item.type) ? item.type as CmoDecisionLayer["memoryCandidates"][number]["type"] : "other",
             statement,
             reason: optionalString(item, "reason"),
-            reviewStatus: "review_required",
+            reviewStatus: normalizeMemoryCandidateReviewStatus(isRecord(item) ? item.reviewStatus : undefined),
             confidence: confidence(item),
             sourceSnippet: optionalString(item, "sourceSnippet"),
+            reviewedAt: optionalString(item, "reviewedAt"),
+            reviewedBy: optionalString(item, "reviewedBy"),
+            reviewNote: optionalString(item, "reviewNote"),
           });
         }
       });
@@ -180,6 +220,10 @@ function normalizeDecisionLayer(value: unknown): CmoDecisionLayer | undefined {
             pushStatus: "not_pushed",
             confidence: confidence(item),
             sourceSnippet: optionalString(item, "sourceSnippet"),
+            reviewStatus: normalizeTaskCandidateReviewStatus(isRecord(item) ? item.reviewStatus : undefined) ?? "unreviewed",
+            reviewedAt: optionalString(item, "reviewedAt"),
+            reviewedBy: optionalString(item, "reviewedBy"),
+            reviewNote: optionalString(item, "reviewNote"),
           });
         }
       });
@@ -803,6 +847,162 @@ export async function updateAppChatSessionMetadata(
   };
 
   await writeJsonFile(sessionPath(sessionId), updated);
+
+  return updated;
+}
+
+export type DecisionLayerReviewItemType = "decision" | "assumption" | "suggestedAction" | "memoryCandidate" | "taskCandidate";
+
+export interface UpdateDecisionLayerReviewInput {
+  appId: string;
+  sessionId: string;
+  itemType: DecisionLayerReviewItemType;
+  itemId: string;
+  reviewStatus: string;
+  reviewedBy?: string;
+  reviewNote?: string;
+}
+
+function reviewNoteValue(value: string | undefined): string | undefined {
+  return value?.trim() ? value.trim().slice(0, 500) : undefined;
+}
+
+export async function updateDecisionLayerReview(input: UpdateDecisionLayerReviewInput): Promise<CMOChatSession | null> {
+  const app = getAppWorkspace(input.appId);
+
+  if (!app || app.workspaceId !== HOLDSTATION_WORKSPACE_ID) {
+    throw new Error(`Unknown appId: ${input.appId}`);
+  }
+
+  const session = await readAppChatSession(input.sessionId);
+
+  if (!session) {
+    return null;
+  }
+
+  if (session.appId !== app.id) {
+    throw new Error("Session does not belong to the requested app.");
+  }
+
+  const layer = session.decisionLayer;
+
+  if (!layer) {
+    throw new Error("Session has no Decision Layer to review.");
+  }
+
+  if (layer.workspaceId !== app.workspaceId || layer.appId !== app.id || layer.sourceId !== app.sourceId) {
+    throw new Error("Decision Layer source boundary does not match the requested app.");
+  }
+
+  const reviewedAt = new Date().toISOString();
+  const reviewedBy = input.reviewedBy?.trim() || "cmo-user";
+  const reviewNote = reviewNoteValue(input.reviewNote);
+  let updatedLayer: CmoDecisionLayer;
+  let changed = false;
+
+  if (input.itemType === "decision") {
+    const reviewStatus = normalizeDecisionReviewStatus(input.reviewStatus);
+
+    if (!reviewStatus || reviewStatus === "unreviewed") {
+      throw new Error("Invalid decision review status.");
+    }
+
+    updatedLayer = {
+      ...layer,
+      decisions: layer.decisions.map((item) => {
+        if (item.id !== input.itemId) {
+          return item;
+        }
+
+        changed = true;
+        return { ...item, reviewStatus, reviewedAt, reviewedBy, reviewNote };
+      }),
+    };
+  } else if (input.itemType === "assumption") {
+    const reviewStatus = normalizeAssumptionReviewStatus(input.reviewStatus);
+
+    if (!reviewStatus || reviewStatus === "unreviewed") {
+      throw new Error("Invalid assumption review status.");
+    }
+
+    updatedLayer = {
+      ...layer,
+      assumptions: layer.assumptions.map((item) => {
+        if (item.id !== input.itemId) {
+          return item;
+        }
+
+        changed = true;
+        return { ...item, reviewStatus, reviewedAt, reviewedBy, reviewNote };
+      }),
+    };
+  } else if (input.itemType === "suggestedAction") {
+    const reviewStatus = normalizeSuggestedActionReviewStatus(input.reviewStatus);
+
+    if (reviewStatus !== "reviewed") {
+      throw new Error("Invalid suggested action review status.");
+    }
+
+    updatedLayer = {
+      ...layer,
+      suggestedActions: layer.suggestedActions.map((item) => {
+        if (item.id !== input.itemId) {
+          return item;
+        }
+
+        changed = true;
+        return { ...item, reviewStatus, reviewedAt, reviewedBy, reviewNote };
+      }),
+    };
+  } else if (input.itemType === "memoryCandidate") {
+    const reviewStatus = normalizeMemoryCandidateReviewStatus(input.reviewStatus);
+
+    if (reviewStatus === "review_required") {
+      throw new Error("Invalid memory candidate review status.");
+    }
+
+    updatedLayer = {
+      ...layer,
+      memoryCandidates: layer.memoryCandidates.map((item) => {
+        if (item.id !== input.itemId) {
+          return item;
+        }
+
+        changed = true;
+        return { ...item, reviewStatus, reviewedAt, reviewedBy, reviewNote };
+      }),
+    };
+  } else {
+    const reviewStatus = normalizeTaskCandidateReviewStatus(input.reviewStatus);
+
+    if (!reviewStatus || reviewStatus === "unreviewed") {
+      throw new Error("Invalid task candidate review status.");
+    }
+
+    updatedLayer = {
+      ...layer,
+      taskCandidates: layer.taskCandidates.map((item) => {
+        if (item.id !== input.itemId) {
+          return item;
+        }
+
+        changed = true;
+        return { ...item, reviewStatus, reviewedAt, reviewedBy, reviewNote, pushStatus: "not_pushed" };
+      }),
+    };
+  }
+
+  if (!changed) {
+    throw new Error("Decision Layer item was not found.");
+  }
+
+  const updated: CMOChatSession = {
+    ...session,
+    decisionLayer: updatedLayer,
+    updatedAt: reviewedAt,
+  };
+
+  await writeJsonFile(sessionPath(session.id), updated);
 
   return updated;
 }

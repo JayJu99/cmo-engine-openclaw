@@ -18,6 +18,11 @@ export type ContextGraphStatus = "not_configured" | "empty" | "available" | "par
 export type CmoDecisionStatus = "proposed" | "confirmed" | "rejected" | "deferred";
 export type CmoDecisionConfidence = "low" | "medium" | "high";
 export type CmoDecisionLayerExtractionStatus = "completed" | "partial" | "empty";
+export type CmoDecisionReviewStatus = "unreviewed" | "confirmed" | "rejected" | "deferred";
+export type CmoAssumptionReviewStatus = "unreviewed" | "accepted" | "risky" | "rejected";
+export type CmoSuggestedActionReviewStatus = "unreviewed" | "reviewed";
+export type CmoMemoryCandidateReviewStatus = "review_required" | "approved_for_promotion_later" | "rejected" | "deferred";
+export type CmoTaskCandidateReviewStatus = "unreviewed" | "approved_for_task_later" | "rejected" | "deferred";
 export type CmoMemoryCandidateType =
   | "product_truth"
   | "user_insight"
@@ -82,6 +87,10 @@ export interface CmoDecisionItem {
   rationale?: string;
   confidence: CmoDecisionConfidence;
   sourceSnippet?: string;
+  reviewStatus?: CmoDecisionReviewStatus;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  reviewNote?: string;
 }
 
 export interface CmoAssumptionItem {
@@ -90,6 +99,10 @@ export interface CmoAssumptionItem {
   riskLevel?: "low" | "medium" | "high";
   confidence: CmoDecisionConfidence;
   sourceSnippet?: string;
+  reviewStatus?: CmoAssumptionReviewStatus;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  reviewNote?: string;
 }
 
 export interface CmoSuggestedActionItem {
@@ -102,6 +115,10 @@ export interface CmoSuggestedActionItem {
   expectedImpact?: string;
   confidence: CmoDecisionConfidence;
   sourceSnippet?: string;
+  reviewStatus?: CmoSuggestedActionReviewStatus;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  reviewNote?: string;
 }
 
 export interface CmoMemoryCandidateItem {
@@ -109,9 +126,12 @@ export interface CmoMemoryCandidateItem {
   type: CmoMemoryCandidateType;
   statement: string;
   reason?: string;
-  reviewStatus: "review_required";
+  reviewStatus: CmoMemoryCandidateReviewStatus;
   confidence: CmoDecisionConfidence;
   sourceSnippet?: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  reviewNote?: string;
 }
 
 export interface CmoTaskCandidateItem {
@@ -125,6 +145,10 @@ export interface CmoTaskCandidateItem {
   pushStatus: "not_pushed";
   confidence: CmoDecisionConfidence;
   sourceSnippet?: string;
+  reviewStatus?: CmoTaskCandidateReviewStatus;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  reviewNote?: string;
 }
 
 export interface CmoDecisionLayer {

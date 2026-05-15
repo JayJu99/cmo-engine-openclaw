@@ -313,6 +313,7 @@ Implementation notes:
 - If live app-turn fails, the dashboard keeps the existing fallback provenance: `attemptedRuntimeMode=live`, `runtimeMode=fallback`, `runtimeStatus=live_failed_then_fallback`, and a controlled `runtimeErrorReason`.
 - Phase 1.9 adds graph-boosted context hints additively. Hints are scoped to `workspaceId=holdstation`, `appId=holdstation-mini-app`, `sourceId=holdstation__holdstation-mini-app`, and the physical app vault path only. The agent must treat Graph Context Hints as supporting context after Current Priority and App Memory, and must not claim all-vault RAG.
 - Phase 1.95 adds a dashboard-side deterministic Decision Layer after each CMO Session answer. It extracts decisions, assumptions, suggested actions, memory candidates, and task candidates from the answer, runtime assumptions, and returned suggested actions. It does not add a second LLM call, does not push to Task Tracker, and does not auto-promote App Memory.
+- Phase 2.0 adds manual Decision Review UX on top of the Decision Layer. Review status is stored only on the app-scoped session JSON and later Vault/Raw saves as additive metadata. Approved memory candidates are not promoted, and approved task candidates are not pushed to Task Tracker in this phase.
 
 Decision Layer response/session shape is additive:
 
@@ -334,6 +335,8 @@ Decision Layer response/session shape is additive:
   }
 }
 ```
+
+Decision review fields are optional on each item. Decisions use `reviewStatus: "unreviewed" | "confirmed" | "rejected" | "deferred"`. Assumptions use `unreviewed | accepted | risky | rejected`. Suggested actions use `unreviewed | reviewed`. Memory candidates keep `review_required` and can be marked `approved_for_promotion_later | rejected | deferred`. Task candidates can be marked `approved_for_task_later | rejected | deferred` while `pushStatus` remains `not_pushed`.
 
 ### `GET /cmo/runs/:runId`
 
