@@ -7,7 +7,6 @@ import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { navItems } from "@/components/dashboard/data";
-import { Sparkline } from "@/components/dashboard/charts";
 import { icons, type IconName } from "@/components/dashboard/icons";
 import { RunBriefButton } from "@/components/dashboard/run-brief-button";
 import { cn } from "@/lib/utils";
@@ -84,13 +83,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="text-xs font-medium text-slate-500">CMO Engine Status</div>
               <div className="mt-3 flex items-center gap-2">
-                <span className="size-2 rounded-full bg-emerald-500" />
-                <span className="font-bold text-emerald-600">Live</span>
+                <span className="size-2 rounded-full bg-orange-500" />
+                <span className="font-bold text-orange-600">Phase 1</span>
               </div>
-              <Sparkline tone="violet" className="mt-4" />
-              <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                <span>Uptime</span>
-                <span className="font-bold text-slate-950">99.9%</span>
+              <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-600">
+                App context, CMO chat, Raw Vault capture, and Daily Review.
               </div>
             </div>
           </div>
@@ -101,7 +98,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         <div className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/86 px-4 py-4 backdrop-blur-xl lg:px-8 xl:hidden">
           <div className="flex items-center justify-between gap-4">
             <Logo />
-            <Badge variant="green">Live</Badge>
+            <Badge variant="orange">Phase 1</Badge>
           </div>
         </div>
         <main className="mx-auto w-full max-w-[1720px] px-4 py-6 lg:px-8 xl:px-10">
@@ -118,34 +115,39 @@ export function PageChrome({
   children,
   primary = "Create Campaign",
   onPrimaryClick,
+  actions,
+  showRunBrief = false,
 }: {
   title: string;
   description: string;
   children: React.ReactNode;
   primary?: string;
   onPrimaryClick?: () => void;
+  actions?: React.ReactNode;
+  showRunBrief?: boolean;
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, ease: "easeOut" }}
-      className="space-y-6"
-    >
+    <div className="space-y-6">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-slate-950">{title}</h1>
           <p className="mt-2 text-base text-slate-500">{description}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <RunBriefButton />
-          <Button onClick={onPrimaryClick}>
-            <icons.Rocket />
-            {primary}
-          </Button>
+          {actions ?? (
+            <>
+              {showRunBrief ? <RunBriefButton /> : null}
+              {primary ? (
+                <Button onClick={onPrimaryClick}>
+                  <icons.Rocket />
+                  {primary}
+                </Button>
+              ) : null}
+            </>
+          )}
         </div>
       </header>
       {children}
-    </motion.div>
+    </div>
   );
 }

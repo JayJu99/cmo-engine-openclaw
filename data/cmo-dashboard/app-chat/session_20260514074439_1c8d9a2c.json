@@ -1,0 +1,146 @@
+{
+  "id": "session_20260514074439_1c8d9a2c",
+  "appId": "holdstation-mini-app",
+  "appName": "Holdstation Mini App",
+  "topic": "Phase 1.3 smoke - context quality",
+  "status": "completed",
+  "createdAt": "2026-05-14T07:44:39.760Z",
+  "updatedAt": "2026-05-14T07:44:39.760Z",
+  "contextUsed": [
+    {
+      "id": "holdstation-mini-app-positioning",
+      "title": "Positioning",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Positioning.md",
+      "type": "app-note",
+      "reason": "App positioning context",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No durable positioning note has been confirmed yet. Add confirmed positioning here after a CMO session, user input, or daily promotion. - What is the primary user segment? - What is the main promise? - What is the strongest proof point? - What should this app not try to be?",
+      "frontmatterStatus": "draft",
+      "contextQuality": "placeholder",
+      "qualityReason": "Seed placeholder note; no confirmed app positioning yet."
+    },
+    {
+      "id": "holdstation-mini-app-audience",
+      "title": "Audience",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Audience.md",
+      "type": "app-note",
+      "reason": "Who this app is for and what they care about",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No durable audience note has been confirmed yet. Add confirmed audience segments, jobs, pains, and objections here after a CMO session, user input, or daily promotion. - Who is the primary user? - What situation makes this app immediately useful? - What objections or anxieties need to be addressed? - Which users are out of scope for now?",
+      "frontmatterStatus": "draft",
+      "contextQuality": "placeholder",
+      "qualityReason": "Seed placeholder note; no confirmed app audience yet."
+    },
+    {
+      "id": "holdstation-mini-app-product-notes",
+      "title": "Product Notes",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Product Notes.md",
+      "type": "app-note",
+      "reason": "Product facts, constraints, and UX context",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No durable product facts have been confirmed in this note yet. Add verified product capabilities, constraints, user flows, and roadmap notes here. Do not add assumptions as facts. - What product capabilities are confirmed? - What constraints should marketing respect? - What user flow should content support first? - What claims need product validation?",
+      "frontmatterStatus": "draft",
+      "contextQuality": "placeholder",
+      "qualityReason": "Seed placeholder note; no confirmed app product notes yet."
+    },
+    {
+      "id": "holdstation-mini-app-content-notes",
+      "title": "Content Notes",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Content Notes.md",
+      "type": "app-note",
+      "reason": "Messaging, content angles, and channel context",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No durable content direction has been confirmed yet. Add confirmed messages, content angles, channel notes, and creative constraints here after review. - Which channels matter first? - Which message angles are approved? - What proof or screenshots should content use? - What should content avoid saying?",
+      "frontmatterStatus": "draft",
+      "contextQuality": "placeholder",
+      "qualityReason": "Seed placeholder note; no confirmed app content notes yet."
+    },
+    {
+      "id": "holdstation-mini-app-decisions",
+      "title": "Decisions",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Decisions.md",
+      "type": "app-note",
+      "reason": "Confirmed decisions and unresolved decision points",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No durable app decisions have been recorded yet. - None yet. - What positioning should be treated as durable? - What audience should be prioritized? - What campaign or content direction should be approved next?",
+      "frontmatterStatus": "draft",
+      "contextQuality": "placeholder",
+      "qualityReason": "Seed placeholder note; no confirmed app decisions yet."
+    },
+    {
+      "id": "holdstation-mini-app-tasks",
+      "title": "Tasks",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Tasks.md",
+      "type": "app-note",
+      "reason": "Open tasks and follow-ups for this app",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No confirmed app tasks have been recorded yet. - [ ] Add confirmed tasks after a CMO session, user input, or daily promotion. - What is the next concrete marketing task? - Who owns the task? - What evidence is needed before marking it done?",
+      "frontmatterStatus": "draft",
+      "contextQuality": "placeholder",
+      "qualityReason": "Seed placeholder note; no confirmed app tasks yet."
+    },
+    {
+      "id": "holdstation-mini-app-learnings",
+      "title": "Learnings",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Learnings.md",
+      "type": "app-note",
+      "reason": "Validated learnings and evidence from prior sessions",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No validated learnings have been recorded yet. Add learnings only when they are backed by user input, campaign results, product data, or reviewed CMO sessions. - What has been tested? - What evidence supports the learning? - What should change because of the learning?",
+      "frontmatterStatus": "draft",
+      "contextQuality": "placeholder",
+      "qualityReason": "Seed placeholder note; no confirmed app learnings yet."
+    }
+  ],
+  "missingContext": [],
+  "assumptions": [],
+  "suggestedActions": [
+    {
+      "type": "capture_to_raw_vault",
+      "label": "Capture this session"
+    }
+  ],
+  "isDevelopmentFallback": true,
+  "runtimeStatus": "configured_but_unreachable",
+  "runtimeLabel": "VPS CMO Adapter",
+  "contextDiagnostics": {
+    "selectedCount": 7,
+    "existingCount": 7,
+    "missingCount": 0,
+    "confirmedCount": 0,
+    "draftCount": 0,
+    "placeholderCount": 7,
+    "placeholderOrDraftCount": 7,
+    "totalChars": 4009
+  },
+  "contextQualitySummary": {
+    "selectedCount": 7,
+    "existingCount": 7,
+    "missingCount": 0,
+    "confirmedCount": 0,
+    "draftCount": 0,
+    "placeholderCount": 7,
+    "placeholderOrDraftCount": 7
+  },
+  "messages": [
+    {
+      "id": "msg_a04c941e-351",
+      "role": "user",
+      "content": "Phase 1.3 smoke check: what should the Holdstation Mini App CMO context do next?",
+      "createdAt": "2026-05-14T07:44:39.760Z"
+    },
+    {
+      "id": "msg_d2470edb-684",
+      "role": "assistant",
+      "content": "Development fallback: OpenClaw CMO runtime is not connected.\nOpenClaw CMO runtime is unavailable\nApp context payload was built for Holdstation Mini App.\nContext actually included: Positioning, Audience, Product Notes, Content Notes, Decisions, Tasks, Learnings.\nMissing selected notes: none.\nContext quality: 0 confirmed, 7 placeholder/draft, 0 missing.\nDraft or placeholder notes: Positioning: placeholder, Audience: placeholder, Product Notes: placeholder, Content Notes: placeholder, Decisions: placeholder, Tasks: placeholder, Learnings: placeholder.\nConnect this route to the OpenClaw CMO runtime before treating the answer as operator judgment.",
+      "createdAt": "2026-05-14T07:44:39.760Z"
+    }
+  ]
+}

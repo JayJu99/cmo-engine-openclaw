@@ -1,0 +1,178 @@
+{
+  "id": "session_20260514132224_41f5eaa7",
+  "appId": "holdstation-mini-app",
+  "appName": "Holdstation Mini App",
+  "topic": "Phase 1.7 verification session",
+  "messages": [
+    {
+      "id": "msg_8c81e196-084",
+      "role": "user",
+      "content": "Phase 1.7 verification: using selected context only, what should we review before promoting app memory?",
+      "createdAt": "2026-05-14T13:22:24.812Z"
+    },
+    {
+      "id": "msg_532123c6-adb",
+      "role": "assistant",
+      "content": "Development fallback: OpenClaw CMO runtime is not connected.\nRemote CMO Adapter is unavailable\nApp context payload was built for Holdstation Mini App.\nContext actually included: Positioning, Audience, Product Notes, Content Notes, C-Level Priorities, Decisions, Tasks, Learnings, Latest Daily Note.\nMissing selected notes: none.\nContext quality: 1 confirmed, 8 placeholder/draft, 0 missing.\nDraft or placeholder notes: Positioning: draft, Audience: placeholder, Product Notes: placeholder, Content Notes: placeholder, Decisions: placeholder, Tasks: placeholder, Learnings: placeholder, Latest Daily Note: draft.\nConnect this route to the OpenClaw CMO runtime before treating the answer as operator judgment.",
+      "createdAt": "2026-05-14T13:22:24.812Z"
+    }
+  ],
+  "contextUsed": [
+    {
+      "id": "holdstation-mini-app-positioning",
+      "title": "Positioning",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Positioning.md",
+      "type": "app-note",
+      "reason": "App positioning context",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No confirmed positioning statement is available from the existing repo, docs, vault, or user-provided facts reviewed during Phase 1.4. Needs input. Needs input. Needs input. Needs input. Needs input. - Confirm the primary promise for Holdstation Mini App. - Confirm the target user segment. - Confirm differentiators and proof points that marketing may safely use. - Confirm the claims this app should avoid. - What i...",
+      "frontmatterStatus": "draft",
+      "contextQuality": "draft",
+      "qualityReason": "Frontmatter status is draft; note exists but has not been confirmed."
+    },
+    {
+      "id": "holdstation-mini-app-audience",
+      "title": "Audience",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Audience.md",
+      "type": "app-note",
+      "reason": "Who this app is for and what they care about",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No confirmed primary audience is available from the existing repo, docs, vault, or user-provided facts reviewed during Phase 1.4. Needs input. Needs input. Needs input. Needs input. - Confirm the primary audience and any secondary audience. - Confirm the job this app should solve first. - Confirm pain points, objections, and activation triggers. - Confirm users that are out of scope. - Who is the primary user? - W...",
+      "frontmatterStatus": "placeholder",
+      "contextQuality": "placeholder",
+      "qualityReason": "Frontmatter status is placeholder."
+    },
+    {
+      "id": "holdstation-mini-app-product-notes",
+      "title": "Product Notes",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Product Notes.md",
+      "type": "app-note",
+      "reason": "Product facts, constraints, and UX context",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No confirmed product facts are available from the existing repo, docs, vault, or user-provided facts reviewed during Phase 1.4. Needs input. Needs input. Needs input. Needs input. - Confirm current product capabilities. - Confirm the first user flow marketing should support. - Confirm activation event and product constraints. - Confirm claims that require product validation before use. - What product capabilities ...",
+      "frontmatterStatus": "placeholder",
+      "contextQuality": "placeholder",
+      "qualityReason": "Frontmatter status is placeholder."
+    },
+    {
+      "id": "holdstation-mini-app-content-notes",
+      "title": "Content Notes",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Content Notes.md",
+      "type": "app-note",
+      "reason": "Messaging, content angles, and channel context",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No confirmed narrative direction is available from the existing repo, docs, vault, or user-provided facts reviewed during Phase 1.4. Needs input. Needs input. Needs input. Needs input. - Confirm approved narrative direction and content pillars. - Confirm launch or growth channels. - Confirm examples, proof assets, screenshots, and claims content may use. - Confirm what content should avoid saying. - Which channels...",
+      "frontmatterStatus": "placeholder",
+      "contextQuality": "placeholder",
+      "qualityReason": "Frontmatter status is placeholder."
+    },
+    {
+      "id": "holdstation-mini-app-c-level-priorities",
+      "title": "C-Level Priorities",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/C-Level Priorities.md",
+      "type": "app-note",
+      "reason": "Current executive priority that should shape CMO recommendations",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "--- title: Holdstation Mini App - C-Level Priorities type: app-priority status: active scope: holdstation vault: holdstation app: Holdstation Mini App app_id: holdstation-mini-app tags: - holdstation - app - c-level-priority --- Source: CEO Timeframe: this week Owner: CMO Status: active Success Metric: Increase activated users Last Reviewed: 2026-05-14T13:21:40.640Z User retention Limited team bandwidth and no con...",
+      "frontmatterStatus": "active",
+      "contextQuality": "confirmed",
+      "qualityReason": "Frontmatter status is active; note is treated as confirmed app context."
+    },
+    {
+      "id": "holdstation-mini-app-decisions",
+      "title": "Decisions",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Decisions.md",
+      "type": "app-note",
+      "reason": "Confirmed decisions and unresolved decision points",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No durable app decisions have been recorded yet. - None yet. - What positioning should be treated as durable? - What audience should be prioritized? - What campaign or content direction should be approved next?",
+      "frontmatterStatus": "placeholder",
+      "contextQuality": "placeholder",
+      "qualityReason": "Frontmatter status is placeholder."
+    },
+    {
+      "id": "holdstation-mini-app-tasks",
+      "title": "Tasks",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Tasks.md",
+      "type": "app-note",
+      "reason": "Open tasks and follow-ups for this app",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No confirmed app tasks have been recorded yet. - [ ] Add confirmed tasks after a CMO session, user input, or daily promotion. - What is the next concrete marketing task? - Who owns the task? - What evidence is needed before marking it done? Task Tracker is the operational source of truth. This note stores CMO-readable summaries, blockers, and task context only.",
+      "frontmatterStatus": "placeholder",
+      "contextQuality": "placeholder",
+      "qualityReason": "Frontmatter status is placeholder."
+    },
+    {
+      "id": "holdstation-mini-app-learnings",
+      "title": "Learnings",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Learnings.md",
+      "type": "app-note",
+      "reason": "Validated learnings and evidence from prior sessions",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "No validated learnings have been recorded yet. Add learnings only when they are backed by user input, campaign results, product data, or reviewed CMO sessions. - What has been tested? - What evidence supports the learning? - What should change because of the learning?",
+      "frontmatterStatus": "placeholder",
+      "contextQuality": "placeholder",
+      "qualityReason": "Frontmatter status is placeholder."
+    },
+    {
+      "id": "holdstation-mini-app-latest-daily",
+      "title": "Latest Daily Note",
+      "path": "06 Journal/Daily/2026-05-14.md",
+      "type": "daily-note",
+      "reason": "Daily review context for today",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "Generated from 1 raw capture(s) in [[../Raw/2026-05-14]]. This is a deterministic Phase 1 summary from raw captures because the CMO summarization backend is not connected. - Holdstation Mini App - Holdstation Mini App - Phase 1 verification: Manual Phase 1 verification capture from app-specific CMO chat. - None explicitly captured. - Review the raw captures for unresolved questions before promoting anything into d...",
+      "frontmatterStatus": "draft",
+      "contextQuality": "draft",
+      "qualityReason": "Frontmatter status is draft; note exists but has not been confirmed."
+    }
+  ],
+  "status": "completed",
+  "createdAt": "2026-05-14T13:22:24.812Z",
+  "updatedAt": "2026-05-14T13:22:27.586Z",
+  "isDevelopmentFallback": true,
+  "runtimeStatus": "configured_but_unreachable",
+  "runtimeLabel": "VPS CMO Adapter",
+  "runtimeError": "",
+  "missingContext": [],
+  "contextDiagnostics": {
+    "selectedCount": 9,
+    "existingCount": 9,
+    "missingCount": 0,
+    "confirmedCount": 1,
+    "draftCount": 2,
+    "placeholderCount": 6,
+    "placeholderOrDraftCount": 8,
+    "totalChars": 8094
+  },
+  "contextQualitySummary": {
+    "selectedCount": 9,
+    "existingCount": 9,
+    "missingCount": 0,
+    "confirmedCount": 1,
+    "draftCount": 2,
+    "placeholderCount": 6,
+    "placeholderOrDraftCount": 8
+  },
+  "assumptions": [],
+  "suggestedActions": [
+    {
+      "type": "capture_to_raw_vault",
+      "label": "Capture this session"
+    }
+  ],
+  "savedToVault": true,
+  "rawCapturePath": "06 Journal/Raw/2026-05-14.md",
+  "sessionNotePath": "02 Apps/World Mini App/Holdstation Mini App/Sessions/2026-05-14 - Phase 1.7 verification session.md",
+  "relatedPriority": "Test P1.6",
+  "relatedTasks": []
+}

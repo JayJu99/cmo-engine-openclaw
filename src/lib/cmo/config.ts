@@ -15,3 +15,21 @@ export function getRemoteAdapterUrl(): string {
 export function getRemoteAdapterApiKey(): string {
   return (process.env.CMO_REMOTE_ADAPTER_API_KEY ?? "").trim();
 }
+
+export function getOpenClawCmoEndpoint(): string {
+  return (process.env.OPENCLAW_CMO_ENDPOINT ?? "").trim().replace(/\/+$/, "");
+}
+
+export function getOpenClawApiKey(): string {
+  return (process.env.OPENCLAW_API_KEY ?? "").trim();
+}
+
+export function getOpenClawWorkspaceId(): string {
+  return (process.env.OPENCLAW_WORKSPACE_ID ?? "").trim();
+}
+
+export function getOpenClawCmoTimeoutMs(): number {
+  const value = Number.parseInt(process.env.OPENCLAW_CMO_TIMEOUT_MS ?? "", 10);
+
+  return Number.isFinite(value) && value > 0 ? value : 60_000;
+}

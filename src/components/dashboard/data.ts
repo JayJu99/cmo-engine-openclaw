@@ -1,15 +1,17 @@
-export const navItems = [
-  { label: "Overview", href: "/", icon: "Home" },
-  { label: "CMO Chat", href: "/chat", icon: "MessageSquare" },
-  { label: "Runs", href: "/runs", icon: "List" },
-  { label: "Actions", href: "/actions", icon: "CirclePlus", count: 5 },
-  { label: "Agents", href: "/agents", icon: "Bot" },
-  { label: "Signals", href: "/signals", icon: "Radio" },
-  { label: "Pipeline", href: "/pipeline", icon: "Workflow" },
-  { label: "Reports", href: "/reports", icon: "FileText" },
+type NavItem = {
+  label: string;
+  href: string;
+  icon: string;
+  count?: number;
+};
+
+export const navItems: NavItem[] = [
+  { label: "Command Center", href: "/", icon: "Home" },
+  { label: "Apps", href: "/apps", icon: "Grid2X2" },
+  { label: "Daily Notes", href: "/daily", icon: "FileText" },
   { label: "Vault", href: "/vault", icon: "Package" },
-  { label: "Ops", href: "/ops", icon: "Settings" },
-] as const;
+  { label: "Settings", href: "/ops", icon: "Settings" },
+];
 
 export const agents = [
   {

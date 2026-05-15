@@ -16,6 +16,8 @@ Finalization happens when `GET /cmo/runs/:runId` or `GET /cmo/latest` is read. I
 
 `GET /cmo/chat` lists recent chat runs newest first, defaulting to 20 items. `POST /cmo/chat` starts an async CMO chat run and returns `status: "running"` with a `chat_run_id`. `GET /cmo/chat/:chatRunId` returns the current chat run and finalizes mock or timed-out runs. In `openclaw-cron` mode, the private CMO prompt includes the latest dashboard summary, actions, signals, campaigns, and vault context when available.
 
+`GET /cmo/status` performs a lightweight runtime status check. It does not run a CMO chat. In `openclaw-cron` mode it verifies that `CMO_AGENT_ID` is configured and that `OPENCLAW_BIN` can execute a help command. The response includes `runtime_status` and `openclaw_runtime` as one of `connected`, `configured_but_unreachable`, `development_fallback`, `runtime_error`, or `not_configured`.
+
 ## Run Locally
 
 From the repository root:

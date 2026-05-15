@@ -1,0 +1,87 @@
+{
+  "id": "session_20260514062820_8d92e13c",
+  "appId": "holdstation-mini-app",
+  "appName": "Holdstation Mini App",
+  "topic": "What should we focus on this week for Phase 1.1 verification?",
+  "status": "completed",
+  "createdAt": "2026-05-14T06:28:20.984Z",
+  "updatedAt": "2026-05-14T06:28:20.984Z",
+  "contextUsed": [
+    {
+      "id": "holdstation-mini-app-latest-daily",
+      "title": "Latest Daily Note",
+      "path": "06 Journal/Daily/2026-05-14.md",
+      "type": "daily-note",
+      "reason": "Daily review context for today",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "Generated from 1 raw capture(s) in [[../Raw/2026-05-14]]. This is a deterministic Phase 1 summary from raw captures because the CMO summarization backend is not connected. - Holdstation Mini App - Holdstation Mini App - Phase 1 verification: Manual Phase 1 verification capture from app-specific CMO chat. - None explicitly captured. - Review the raw captures for unresolved questions before promoting anything into d..."
+    }
+  ],
+  "missingContext": [
+    {
+      "id": "holdstation-mini-app-positioning",
+      "title": "Positioning",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Positioning.md",
+      "type": "app-note",
+      "reason": "App positioning context",
+      "selected": true,
+      "exists": false,
+      "contentPreview": "file_not_found"
+    },
+    {
+      "id": "holdstation-mini-app-audience",
+      "title": "Audience",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Audience.md",
+      "type": "app-note",
+      "reason": "Who this app is for and what they care about",
+      "selected": true,
+      "exists": false,
+      "contentPreview": "file_not_found"
+    },
+    {
+      "id": "holdstation-mini-app-product-notes",
+      "title": "Product Notes",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Product Notes.md",
+      "type": "app-note",
+      "reason": "Product facts, constraints, and UX context",
+      "selected": true,
+      "exists": false,
+      "contentPreview": "file_not_found"
+    },
+    {
+      "id": "holdstation-mini-app-content-notes",
+      "title": "Content Notes",
+      "path": "02 Apps/World Mini App/Holdstation Mini App/Content Notes.md",
+      "type": "app-note",
+      "reason": "Messaging, content angles, and channel context",
+      "selected": true,
+      "exists": false,
+      "contentPreview": "file_not_found"
+    }
+  ],
+  "assumptions": [],
+  "suggestedActions": [
+    {
+      "type": "capture_to_raw_vault",
+      "label": "Capture this session"
+    }
+  ],
+  "isDevelopmentFallback": true,
+  "runtimeStatus": "development_fallback",
+  "runtimeLabel": "Development fallback",
+  "messages": [
+    {
+      "id": "msg_2849be9c-9bd",
+      "role": "user",
+      "content": "What should we focus on this week for Phase 1.1 verification?",
+      "createdAt": "2026-05-14T06:28:20.984Z"
+    },
+    {
+      "id": "msg_acfe4eba-e4e",
+      "role": "assistant",
+      "content": "Development fallback: OpenClaw CMO runtime is not connected.\nVPS CMO Adapter is configured, but OpenClaw trigger mode is not enabled.\nApp context payload was built for Holdstation Mini App.\nContext actually included: Latest Daily Note.\nMissing selected notes: Positioning (02 Apps/World Mini App/Holdstation Mini App/Positioning.md), Audience (02 Apps/World Mini App/Holdstation Mini App/Audience.md), Product Notes (02 Apps/World Mini App/Holdstation Mini App/Product Notes.md), Content Notes (02 Apps/World Mini App/Holdstation Mini App/Content Notes.md).\nConnect this route to the OpenClaw CMO runtime before treating the answer as operator judgment.",
+      "createdAt": "2026-05-14T06:28:20.984Z"
+    }
+  ]
+}

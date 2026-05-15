@@ -1,0 +1,100 @@
+{
+  "id": "session_20260515034328_dfa182e1",
+  "appId": "holdstation-mini-app",
+  "appName": "Holdstation Mini App",
+  "topic": "Phase 1.85 runtime smoke",
+  "status": "completed",
+  "createdAt": "2026-05-15T03:43:28.847Z",
+  "updatedAt": "2026-05-15T03:43:28.847Z",
+  "contextUsed": [
+    {
+      "id": "holdstation-mini-app-current-priority",
+      "title": "Current Priority",
+      "path": "Apps/Holdstation Mini App/C-Level Priority.md",
+      "type": "app-note",
+      "reason": "Current executive priority is always included for app-scoped CMO turns.",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "# Holdstation Mini App - C-Level Priority ## Current Priority Increase activated users for Holdstation Mini App. Source: normalized from the current active priority record titled \"Test P1.6\" in C-Level Priorities.md. Owner: CMO. Priority level: P0. ## Why It Matters User retention. ## Success Signals - Increase activated users. - No numeric activation target is connected yet. - No live retention metric is connecte...",
+      "contextQuality": "confirmed"
+    },
+    {
+      "id": "holdstation-mini-app-app-memory",
+      "title": "App Memory",
+      "path": "Apps/Holdstation Mini App/App Memory.md",
+      "type": "app-note",
+      "reason": "Durable app memory notes are included as the CMO baseline.",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "## Canonical App Memory Source: Apps/Holdstation Mini App/App Memory.md # Holdstation Mini App - App Memory ## Product Overview Holdstation Mini App is an active app workspace in the World Mini App group. This memory exists to keep product, audience, content, and CMO decision context scoped to the Holdstation Mini App. Confirmed product feature details are not yet available in the app memory notes. ## Target Users...",
+      "contextQuality": "draft"
+    },
+    {
+      "id": "holdstation-mini-app-latest-sessions",
+      "title": "Latest Sessions",
+      "path": "CMO Session summaries",
+      "type": "app-note",
+      "reason": "The latest one to three app CMO session summaries are included when available.",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "## Phase 1.8 memory bootstrap smoke Session: session_20260515033516_1f6fc528 Created: 2026-05-15T03:35:16.869Z Saved to Vault: no Context refs: Current Priority, App Memory, Latest Sessions, Memory Candidates User asked: Phase 1.8 smoke: summarize the current app memory context without inventing metrics. CMO answered: Development fallback: OpenClaw CMO runtime is not connected. Remote CMO Adapter is unavailable CM...",
+      "contextQuality": "draft"
+    },
+    {
+      "id": "holdstation-mini-app-promotion-candidates",
+      "title": "Memory Candidates",
+      "path": "Apps/Holdstation Mini App/Promotion Candidates.md",
+      "type": "app-note",
+      "reason": "Open app-scoped promotion candidates are included when deterministic session, raw, or daily sources are available.",
+      "selected": true,
+      "exists": true,
+      "contentPreview": "## Canonical Promotion Candidates Source: Apps/Holdstation Mini App/Promotion Candidates.md # Holdstation Mini App - Promotion Candidates ## Review Queue These candidates are review inputs only. They are not confirmed app memory until promoted or rewritten into App Memory. ## Candidate: Phase 1.7 App Memory Review Source: [[02 Apps/World Mini App/Holdstation Mini App/Sessions/2026-05-14 - Phase 1.7 verification se...",
+      "contextQuality": "draft"
+    }
+  ],
+  "missingContext": [],
+  "assumptions": [],
+  "suggestedActions": [
+    {
+      "type": "capture_to_raw_vault",
+      "label": "Capture this session"
+    }
+  ],
+  "isDevelopmentFallback": true,
+  "runtimeStatus": "configured_but_unreachable",
+  "runtimeMode": "configured_but_unreachable",
+  "runtimeLabel": "VPS CMO Adapter",
+  "contextDiagnostics": {
+    "selectedCount": 4,
+    "existingCount": 4,
+    "missingCount": 0,
+    "confirmedCount": 1,
+    "draftCount": 3,
+    "placeholderCount": 0,
+    "placeholderOrDraftCount": 3,
+    "totalChars": 15731
+  },
+  "contextQualitySummary": {
+    "selectedCount": 4,
+    "existingCount": 4,
+    "missingCount": 0,
+    "confirmedCount": 1,
+    "draftCount": 3,
+    "placeholderCount": 0,
+    "placeholderOrDraftCount": 3
+  },
+  "messages": [
+    {
+      "id": "msg_6607b7b0-1c9",
+      "role": "user",
+      "content": "Phase 1.85 smoke: verify runtime registry fallback and context pack.",
+      "createdAt": "2026-05-15T03:43:28.847Z"
+    },
+    {
+      "id": "msg_600adee0-689",
+      "role": "assistant",
+      "content": "Development fallback: OpenClaw CMO runtime is not connected.\nRemote CMO Adapter is unavailable\nCMO context pack was built automatically for Holdstation Mini App.\nContext actually included: Current Priority, App Memory, Latest Sessions, Memory Candidates.\nUnavailable context pack items: none.\nContext quality: 1 confirmed, 3 placeholder/draft, 0 missing.\nDraft or placeholder notes: App Memory: draft, Latest Sessions: draft, Memory Candidates: draft.\nConnect this route to the OpenClaw CMO runtime before treating the answer as operator judgment.",
+      "createdAt": "2026-05-15T03:43:28.847Z"
+    }
+  ]
+}

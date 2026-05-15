@@ -20,6 +20,7 @@ const DEFAULT_RUN_LIST_LIMIT = 20;
 const MAX_RUN_LIST_LIMIT = 100;
 const MAX_BODY_BYTES = 1_000_000;
 const MOCK_CHAT_MIN_RUNNING_MS = 1_500;
+const OPENCLAW_BIN_CHECK_TIMEOUT_MS = 5_000;
 const SAFE_OPENCLAW_METADATA_KEYS = [
   "mode",
   "agent_id",
@@ -158,6 +159,100 @@ async function pathExists(filePath) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function isExecutableMissingError(error) {
+  return error?.code === "ENOENT" || error?.code === "ENOTDIR";
+}
+
+function summarizeRuntimeCheckError(error) {
+  return {
+    message: error?.message ?? "OpenClaw runtime check failed",
+    code: error?.code ?? null,
+    signal: error?.signal ?? null,
+  };
+}
+
+async function checkOpenClawRuntime(config) {
+  const cmoAgentConfigured = typeof config.cmoAgentId === "string" && config.cmoAgentId.trim().length > 0;
+  const openclawBinConfigured = typeof config.openclawBin === "string" && config.openclawBin.trim().length > 0;
+
+  if (config.triggerMode !== "openclaw-cron") {
+    return {
+      runtime_status: "development_fallback",
+      openclaw_runtime: "development_fallback",
+      runtime_ok: false,
+      runtime_reason: "CMO_TRIGGER_MODE is not openclaw-cron.",
+      openclaw_bin_configured: openclawBinConfigured,
+      openclaw_bin_status: "not_checked",
+      cmo_agent_configured: cmoAgentConfigured,
+    };
+  }
+
+  if (!openclawBinConfigured || !cmoAgentConfigured) {
+    return {
+      runtime_status: "not_configured",
+      openclaw_runtime: "not_configured",
+      runtime_ok: false,
+      runtime_reason: !openclawBinConfigured ? "OPENCLAW_BIN is not configured." : "CMO_AGENT_ID is not configured.",
+      openclaw_bin_configured: openclawBinConfigured,
+      openclaw_bin_status: openclawBinConfigured ? "not_checked" : "missing",
+      cmo_agent_configured: cmoAgentConfigured,
+    };
+  }
+
+  try {
+    await execFileAsync(config.openclawBin, ["--help"], {
+      windowsHide: true,
+      timeout: OPENCLAW_BIN_CHECK_TIMEOUT_MS,
+      maxBuffer: 128 * 1024,
+    });
+
+    return {
+      runtime_status: "connected",
+      openclaw_runtime: "connected",
+      runtime_ok: true,
+      runtime_reason: "VPS adapter is in openclaw-cron mode and OPENCLAW_BIN is executable.",
+      openclaw_bin_configured: true,
+      openclaw_bin_status: "executable",
+      cmo_agent_configured: true,
+    };
+  } catch (error) {
+    if (isExecutableMissingError(error)) {
+      return {
+        runtime_status: "configured_but_unreachable",
+        openclaw_runtime: "configured_but_unreachable",
+        runtime_ok: false,
+        runtime_reason: "OPENCLAW_BIN could not be found or executed.",
+        openclaw_bin_configured: true,
+        openclaw_bin_status: "missing",
+        cmo_agent_configured: true,
+      };
+    }
+
+    if (error?.killed || error?.signal === "SIGTERM") {
+      return {
+        runtime_status: "configured_but_unreachable",
+        openclaw_runtime: "configured_but_unreachable",
+        runtime_ok: false,
+        runtime_reason: "OPENCLAW_BIN status check timed out.",
+        openclaw_bin_configured: true,
+        openclaw_bin_status: "timeout",
+        cmo_agent_configured: true,
+      };
+    }
+
+    return {
+      runtime_status: "runtime_error",
+      openclaw_runtime: "runtime_error",
+      runtime_ok: false,
+      runtime_reason: "OPENCLAW_BIN executed but did not pass the status check.",
+      openclaw_bin_configured: true,
+      openclaw_bin_status: "check_failed",
+      cmo_agent_configured: true,
+      runtime_error: summarizeRuntimeCheckError(error),
+    };
   }
 }
 
@@ -1238,6 +1333,70 @@ function contextRunIdFromBody(body) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function appContextPackageFromBody(body) {
+  if (!isRecord(body)) {
+    return null;
+  }
+
+  const value = body.context_package ?? body.app_context_package;
+
+  if (!isRecord(value) || value.mode !== "app_context") {
+    return null;
+  }
+
+  return value;
+}
+
+function compactSelectedAppContext(items) {
+  return Array.isArray(items)
+    ? items.slice(0, 8).map((item) => ({
+        title: safeString(item?.title, "Context note"),
+        path: safeString(item?.path, ""),
+        type: safeString(item?.type, "app-note"),
+        exists: item?.exists === true,
+        content: typeof item?.content === "string" ? item.content.slice(0, 12_000) : "",
+        truncated: item?.truncated === true || item?.contentTruncated === true || (typeof item?.content === "string" && item.content.length > 12_000),
+        frontmatter_status: safeString(item?.frontmatterStatus ?? item?.frontmatter_status, ""),
+        context_quality: safeString(item?.contextQuality ?? item?.context_quality, "draft"),
+        quality_reason: safeString(item?.qualityReason ?? item?.quality_reason, ""),
+      }))
+    : [];
+}
+
+function compactMissingAppContext(items) {
+  return Array.isArray(items)
+    ? items.slice(0, 16).map((item) => ({
+        title: safeString(item?.title, "Context note"),
+        path: safeString(item?.path, ""),
+        type: safeString(item?.type, "app-note"),
+        reason: safeString(item?.reason, "file_not_found"),
+        context_quality: safeString(item?.contextQuality ?? item?.context_quality, "missing"),
+        quality_reason: safeString(item?.qualityReason ?? item?.quality_reason, ""),
+      }))
+    : [];
+}
+
+function compactAppContextPackage(contextPackage) {
+  if (!isRecord(contextPackage)) {
+    return null;
+  }
+
+  const app = isRecord(contextPackage.app) ? contextPackage.app : {};
+
+  return {
+    workspace_id: safeString(contextPackage.workspaceId ?? contextPackage.workspace_id, "holdstation"),
+    mode: "app_context",
+    app: pickFields(app, ["id", "name", "vaultPath", "group", "stage", "currentMission", "oneLiner", "currentGoal", "currentBottleneck"]),
+    user_message: safeString(contextPackage.userMessage ?? contextPackage.user_message, ""),
+    selected_context: compactSelectedAppContext(contextPackage.selectedContext ?? contextPackage.selected_context),
+    missing_context: compactMissingAppContext(contextPackage.missingContext ?? contextPackage.missing_context),
+    context_quality_summary: isRecord(contextPackage.contextQualitySummary ?? contextPackage.context_quality_summary)
+      ? contextPackage.contextQualitySummary ?? contextPackage.context_quality_summary
+      : {},
+    instructions: isRecord(contextPackage.instructions) ? contextPackage.instructions : {},
+  };
+}
+
 async function readLatestDashboardContext() {
   const latestSuccessful = await readJsonFile(dataPath("latest_successful.json"));
   const latest = latestSuccessful ?? (await readJsonFile(dataPath("latest.json")));
@@ -1378,7 +1537,9 @@ async function completeMockChatRun(chatRun) {
   return completed;
 }
 
-function buildCmoChatPrompt({ chatRunId, question, rawPath, jsonPath, context }) {
+function buildCmoChatPrompt({ chatRunId, question, rawPath, jsonPath, context, appContextPackage }) {
+  const compactAppContext = compactAppContextPackage(appContextPackage);
+
   return [
     "You are the Holdstation CMO agent answering one dashboard chat question.",
     "",
@@ -1392,13 +1553,22 @@ function buildCmoChatPrompt({ chatRunId, question, rawPath, jsonPath, context })
     "Selected dashboard context, if available:",
     JSON.stringify(compactDashboardContext(context), null, 2),
     "",
+    "Selected app-scoped vault context, if provided:",
+    JSON.stringify(compactAppContext, null, 2),
+    "",
     "Execution rules:",
     "1. Answer concisely and practically.",
-    "2. Use dashboard context from summary, actions, signals, campaigns, and vault when useful.",
-    "3. Write the raw markdown answer first to the raw markdown path.",
-    "4. Write the public chat JSON second to the chat JSON path.",
-    "5. Do not send Discord, Telegram, chat, email, or other external messages.",
-    "6. Do not include Gateway details, prompts, stdout, stderr, or secrets in the public JSON.",
+    "2. Use app-scoped selected_context first when it is provided.",
+    "3. Use dashboard context from summary, actions, signals, campaigns, and vault only when useful.",
+    "4. Do not claim to have used the whole Vault. Reference only selected_context items actually provided.",
+    "5. If selected notes are listed in missing_context, mention that they were not available.",
+    "6. State assumptions when context is thin, draft, placeholder, or missing.",
+    "7. Write the raw markdown answer first to the raw markdown path.",
+    "8. Write the public chat JSON second to the chat JSON path.",
+    "9. Do not send Discord, Telegram, chat, email, or other external messages.",
+    "10. Do not include Gateway details, prompts, stdout, stderr, or secrets in the public JSON.",
+    "11. Do not pretend durable app memory is complete when context_quality is draft or placeholder.",
+    "12. Ask for confirmation or suggest filling app memory when missing or placeholder context limits the answer.",
     "",
     "The public chat JSON must match this contract exactly:",
     JSON.stringify(
@@ -1626,10 +1796,10 @@ async function runOpenClawCronBrief({ runId, rawPath, normalizedPath, workspace 
   };
 }
 
-async function runOpenClawCronChat({ chatRunId, question, rawPath, jsonPath, context }) {
+async function runOpenClawCronChat({ chatRunId, question, rawPath, jsonPath, context, appContextPackage }) {
   const config = getConfig();
   const jobName = `cmo-chat-${chatRunId}`;
-  const prompt = buildCmoChatPrompt({ chatRunId, question, rawPath, jsonPath, context });
+  const prompt = buildCmoChatPrompt({ chatRunId, question, rawPath, jsonPath, context, appContextPackage });
   const scheduleAt = createNearFutureCronAt();
   const specPath = dataPath("status", `${chatRunId}.openclaw-chat-spec.json`);
 
@@ -1648,6 +1818,7 @@ async function runOpenClawCronChat({ chatRunId, question, rawPath, jsonPath, con
         chat_run_id: chatRunId,
         raw_markdown_path: rawPath,
         chat_json_path: jsonPath,
+        app_context_mode: appContextPackage ? "app_context" : "none",
       },
     },
     delivery: {
@@ -1767,9 +1938,9 @@ async function triggerOpenClawCronInBackground({ runId, createdAt, workspace, ra
   }
 }
 
-async function triggerOpenClawChatInBackground({ chatRunId, question, rawPath, jsonPath, context }) {
+async function triggerOpenClawChatInBackground({ chatRunId, question, rawPath, jsonPath, context, appContextPackage }) {
   try {
-    const metadata = sanitizeOpenClawMetadata(await runOpenClawCronChat({ chatRunId, question, rawPath, jsonPath, context }));
+    const metadata = sanitizeOpenClawMetadata(await runOpenClawCronChat({ chatRunId, question, rawPath, jsonPath, context, appContextPackage }));
     await writeJsonFile(dataPath("status", `${chatRunId}.chat-trigger.json`), versioned({
       chat_run_id: chatRunId,
       status: "triggered",
@@ -1959,6 +2130,7 @@ async function finalizeRun(runId, { fallbackRun = null } = {}) {
 async function handleStatus(res) {
   const config = getConfig();
   const dataDirExists = await pathExists(config.dataDir);
+  const runtime = await checkOpenClawRuntime(config);
 
   jsonResponse(res, 200, versioned({
     ok: true,
@@ -1970,7 +2142,7 @@ async function handleStatus(res) {
     trigger_mode: config.triggerMode,
     cmo_agent_id: config.cmoAgentId,
     openclaw_trigger_enabled: config.openclawTriggerEnabled,
-    openclaw_runtime: "not_checked",
+    ...runtime,
     openclaw_timeout_ms: config.openclawTimeoutMs,
     cmo_run_timeout_seconds: config.cmoRunTimeoutSeconds,
     cmo_chat_timeout_seconds: config.cmoChatTimeoutSeconds,
@@ -2176,6 +2348,7 @@ async function handleChat(req, res) {
   const createdAt = new Date().toISOString();
   const requestedChatRunId = isRecord(body) && typeof body.chat_run_id === "string" && body.chat_run_id.trim() ? body.chat_run_id.trim() : null;
   const requestedContextRunId = contextRunIdFromBody(body);
+  const appContextPackage = appContextPackageFromBody(body);
   const chatRunId = requestedChatRunId ?? `chat_${createdAt.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
 
   if (!isSafeRunId(chatRunId)) {
@@ -2216,9 +2389,10 @@ async function handleChat(req, res) {
       cmo_agent_id: config.cmoAgentId,
       raw_markdown_path: rawPath,
       chat_json_path: jsonPath,
+      app_context_mode: appContextPackage ? "app_context" : "none",
     }));
 
-    void triggerOpenClawChatInBackground({ chatRunId, question, rawPath, jsonPath, context }).catch((error) => {
+    void triggerOpenClawChatInBackground({ chatRunId, question, rawPath, jsonPath, context, appContextPackage }).catch((error) => {
       console.error("OpenClaw CMO chat background task failed", error);
     });
   }

@@ -1,5 +1,5 @@
 import { CMO_SCHEMA_VERSION, type CmoChatRun, type CmoChatRunListResponse, type CmoRun, type CmoRunListResponse } from "@/lib/cmo/types";
-import { getCmoAdapterMode, isRemoteCmoAdapter } from "@/lib/cmo/config";
+import { getCmoAdapterMode, getRemoteAdapterUrl, isRemoteCmoAdapter } from "@/lib/cmo/config";
 import {
   createLocalChatRun,
   createMockRun,
@@ -23,6 +23,8 @@ import {
   type CmoRunBriefResponse,
 } from "@/lib/cmo/remote-client";
 import { CmoAdapterError } from "@/lib/cmo/errors";
+
+type RuntimeStatus = "connected" | "configured_but_unreachable" | "development_fallback" | "runtime_error" | "not_configured";
 
 export async function readDashboardLatestRun(): Promise<CmoRun> {
   return isRemoteCmoAdapter() ? getRemoteLatestRun() : readLatestRun();
@@ -85,9 +87,67 @@ export async function readDashboardChats(limit = 20): Promise<CmoChatRunListResp
   };
 }
 
+function normalizeRuntimeStatus(value: unknown): RuntimeStatus | null {
+  return value === "connected" ||
+    value === "configured_but_unreachable" ||
+    value === "development_fallback" ||
+    value === "runtime_error" ||
+    value === "not_configured"
+    ? value
+    : null;
+}
+
+function runtimeStatusFromRemotePayload(status: CmoRemoteStatus): RuntimeStatus {
+  const explicit = normalizeRuntimeStatus(status.runtime_status ?? status.openclaw_runtime);
+
+  if (explicit) {
+    return explicit;
+  }
+
+  if (status.openclaw_trigger_enabled !== true || status.trigger_mode !== "openclaw-cron") {
+    return "development_fallback";
+  }
+
+  return "runtime_error";
+}
+
+function remoteStatusFromError(error: unknown): CmoRemoteStatus {
+  const isConfigMissing =
+    error instanceof CmoAdapterError && (error.code === "cmo_remote_url_missing" || error.code === "cmo_remote_api_key_missing");
+  const isUnreachable =
+    error instanceof CmoAdapterError && (error.status === 503 || error.status === 504 || error.code.includes("unavailable") || error.code.includes("timeout"));
+  const runtimeStatus: RuntimeStatus = isConfigMissing ? "not_configured" : isUnreachable ? "configured_but_unreachable" : "runtime_error";
+
+  return {
+    schema_version: CMO_SCHEMA_VERSION,
+    ok: false,
+    mode: getCmoAdapterMode(),
+    adapter: "remote",
+    adapter_reachable: false,
+    remote_adapter_url_configured: Boolean(getRemoteAdapterUrl()),
+    runtime_status: runtimeStatus,
+    openclaw_runtime: runtimeStatus,
+    runtime_reason: error instanceof Error ? error.message : "Remote CMO Adapter status check failed",
+  };
+}
+
 export async function readDashboardStatus(): Promise<CmoRemoteStatus> {
   if (isRemoteCmoAdapter()) {
-    return getRemoteStatus();
+    try {
+      const status = await getRemoteStatus();
+      const runtimeStatus = runtimeStatusFromRemotePayload(status);
+
+      return {
+        ...status,
+        mode: getCmoAdapterMode(),
+        adapter: status.adapter ?? "remote",
+        adapter_reachable: true,
+        runtime_status: runtimeStatus,
+        openclaw_runtime: runtimeStatus,
+      };
+    } catch (error) {
+      return remoteStatusFromError(error);
+    }
   }
 
   const dataDir = await readLocalDataDirStatus();
@@ -102,6 +162,8 @@ export async function readDashboardStatus(): Promise<CmoRemoteStatus> {
     gateway_mode: "not_configured",
     trigger_mode: "local",
     openclaw_trigger_enabled: false,
-    openclaw_runtime: "not_checked",
+    runtime_status: "development_fallback",
+    openclaw_runtime: "development_fallback",
+    runtime_reason: "CMO_ADAPTER_MODE is local, so the app uses local development behavior instead of the VPS OpenClaw runtime.",
   };
 }
