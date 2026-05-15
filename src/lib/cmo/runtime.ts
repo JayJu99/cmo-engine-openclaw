@@ -165,6 +165,10 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
   const contextLabels = includedContextLabels(input);
   const suggestedActions = fallbackRecommendations(input);
   const contextUsedDisplay = contextLabels.length ? contextLabels.join(" / ") : contextList;
+  const graphHints = input.contextPack.graphHints ?? [];
+  const graphLine = graphHints.length
+    ? `Graph hints: ${graphHints.map((hint) => `${hint.title} (${hint.confidence})`).join(" / ")}.`
+    : `Graph: ${input.contextPack.graphStatus ?? "empty"}.`;
   const qualityLine = `${qualitySummary.confirmedCount} confirmed / ${qualitySummary.placeholderOrDraftCount} draft-placeholder / ${qualitySummary.missingCount} missing`;
   const note = runtimeNote(reason);
   const intent = fallbackIntent(input.message);
@@ -196,6 +200,7 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
         "## Context Used",
         "",
         `I'm using: ${contextUsedDisplay}.`,
+        graphLine,
         `Quality: ${qualityLine}.`,
         "",
         "This context is resolved automatically from the Holdstation Mini App workspace. Vault file picking, all-vault RAG, fake metrics, and fake Task Tracker data are not part of this answer.",
@@ -255,6 +260,7 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
       "## Context Used",
       "",
       `Context used: ${contextUsedDisplay}.`,
+      graphLine,
       `Quality: ${qualityLine}.`,
       "",
       "## Runtime Note",

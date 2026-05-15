@@ -575,9 +575,17 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               `Runtime provider: ${selectedSession.runtimeProvider ?? "not captured"}.`,
               `Runtime agent: ${selectedSession.runtimeAgent ?? "not captured"}.`,
               `Context quality: ${sessionContextSummary(selectedSession)}.`,
+              `Graph status: ${selectedSession.graphStatus ?? "empty"}.`,
+              `Graph hints used: ${selectedSession.graphHintCount ?? selectedSession.graphHints?.length ?? 0}.`,
+              selectedSession.graphHints?.length
+                ? `Graph hint refs: ${selectedSession.graphHints.map((hint) => `${hint.title} (${hint.path})`).join(", ")}.`
+                : "Graph hint refs: none.",
               selectedSession.sessionNotePath ? `Full session note: ${selectedSession.sessionNotePath}.` : "Full session note not saved yet.",
             ].join("\n"),
             selectedContextNotes: [...selectedSession.contextUsed, ...(selectedSession.missingContext ?? [])],
+            graphHints: selectedSession.graphHints,
+            graphHintCount: selectedSession.graphHintCount,
+            graphStatus: selectedSession.graphStatus,
             messages: selectedSession.messages.map((message) => ({
               role: message.role,
               content: message.content,
@@ -1152,6 +1160,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                       <div className="mt-3 flex flex-wrap gap-2">
                         <Badge variant={session.runtimeMode === "live" ? "green" : "orange"}>{sessionRuntimeModeLabel(session)}</Badge>
                         <Badge variant="slate">{session.contextUsed.length} context notes</Badge>
+                        <Badge variant={session.graphHintCount ? "blue" : "slate"}>{session.graphHintCount ?? session.graphHints?.length ?? 0} graph hints</Badge>
                         <Badge variant={session.savedToVault ? "green" : "slate"}>{session.savedToVault ? "saved" : "not saved"}</Badge>
                         <Badge variant={session.rawCapturePath ? "green" : "slate"}>{session.rawCapturePath ? "raw captured" : "raw pending"}</Badge>
                       </div>
@@ -1190,6 +1199,12 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                     <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
                       <div className="text-xs font-semibold uppercase text-slate-400">Context Used</div>
                       <div className="mt-2 text-sm font-bold text-slate-950">{sessionContextSummary(selectedSession)}</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase text-slate-400">Graph Context</div>
+                      <div className="mt-2 text-sm font-bold text-slate-950">
+                        {selectedSession.graphStatus ?? "empty"}; {selectedSession.graphHintCount ?? selectedSession.graphHints?.length ?? 0} hints
+                      </div>
                     </div>
                     <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
                       <div className="text-xs font-semibold uppercase text-slate-400">Created</div>

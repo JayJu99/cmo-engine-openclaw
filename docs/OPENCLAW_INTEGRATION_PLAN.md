@@ -276,7 +276,15 @@ Request:
   "sourceId": "holdstation__holdstation-mini-app",
   "userMessage": "hi, introduce yourself as the CMO for this workspace",
   "history": [],
-  "contextPack": {},
+  "contextPack": {
+    "items": ["Current Priority", "App Memory", "Latest Sessions", "Memory Candidates"],
+    "graphStatus": "available",
+    "graphHintCount": 5,
+    "graphHints": ["app-scoped hints only"]
+  },
+  "graphStatus": "available",
+  "graphHintCount": 5,
+  "graphHints": ["app-scoped hints only"],
   "metadata": {}
 }
 ```
@@ -303,6 +311,7 @@ Implementation notes:
 - The adapter validates that the output is app-turn JSON, has a non-empty `answer`, is not `cmo.dashboard.v1`, and is not fallback diagnostics.
 - The dashboard app-turn request timeout is `CMO_APP_TURN_REQUEST_TIMEOUT_MS` and should be slightly longer than the adapter `CMO_APP_TURN_POLL_TIMEOUT_MS`.
 - If live app-turn fails, the dashboard keeps the existing fallback provenance: `attemptedRuntimeMode=live`, `runtimeMode=fallback`, `runtimeStatus=live_failed_then_fallback`, and a controlled `runtimeErrorReason`.
+- Phase 1.9 adds graph-boosted context hints additively. Hints are scoped to `workspaceId=holdstation`, `appId=holdstation-mini-app`, `sourceId=holdstation__holdstation-mini-app`, and the physical app vault path only. The agent must treat Graph Context Hints as supporting context after Current Priority and App Memory, and must not claim all-vault RAG.
 
 ### `GET /cmo/runs/:runId`
 

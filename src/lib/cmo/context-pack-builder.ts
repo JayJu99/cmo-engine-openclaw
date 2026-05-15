@@ -12,6 +12,10 @@ import type {
   CMOContextQualitySummary,
   CMOMissingContextNote,
   ContextExclusion,
+  ContextGraphHint,
+  ContextGraphHintConfidence,
+  ContextGraphHintSourceType,
+  ContextGraphStatus,
   ContextItem,
   ContextPack,
   ContextPackRuntimeMode,
@@ -21,6 +25,7 @@ import { appNoteTemplates, getAppWorkspace, HOLDSTATION_WORKSPACE_ID } from "@/l
 import { getOpenClawWorkspaceId } from "@/lib/cmo/config";
 import { analyzeContextQuality, summarizeContextQuality } from "@/lib/cmo/context-quality";
 import { CmoAdapterError } from "@/lib/cmo/errors";
+import { GBrainClient } from "@/lib/cmo/gbrain-client";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 
 const VAULT_ROOT = path.resolve(process.cwd(), "knowledge", "holdstation");
@@ -28,6 +33,8 @@ const APP_CHAT_DIR = path.join(process.cwd(), "data", "cmo-dashboard", "app-chat
 const DEFAULT_MAX_ITEM_CHARS = 6_000;
 const DEFAULT_MAX_INPUT_TOKENS = 12_000;
 const APP_MEMORY_NOTE_IDS = new Set(["positioning", "audience", "product-notes", "content-notes", "decisions", "tasks", "learnings"]);
+const MAX_GRAPH_HINTS = 8;
+const GRAPH_KEYWORDS = ["activation", "retention", "campaign", "onboarding", "user journey", "proof point"];
 
 interface StoredSession {
   id: string;
@@ -656,6 +663,495 @@ async function promotionCandidatesItem(app: AppWorkspace, maxItemChars: number):
   };
 }
 
+interface AppMarkdownFile {
+  relativePath: string;
+  content: string;
+}
+
+interface GraphCandidate {
+  title: string;
+  path: string;
+  reason: string;
+  sourceType: ContextGraphHintSourceType;
+  confidence: ContextGraphHintConfidence;
+  exists: boolean;
+  contentPreview?: string;
+  score: number;
+}
+
+interface GraphBuildResult {
+  hints: ContextGraphHint[];
+  status: ContextGraphStatus;
+  exclusions: ContextExclusion[];
+}
+
+function normalizeGraphKey(value: string): string {
+  return value.trim().replaceAll("\\", "/").replace(/\.md$/i, "").replace(/\/+$/, "").toLowerCase();
+}
+
+function appScopePrefix(app: AppWorkspace): string {
+  return normalizeVaultRelativePath(app.physicalAppVaultPath);
+}
+
+function appScopedPath(app: AppWorkspace, relativeVaultPath: string): string | null {
+  let normalized = "";
+
+  try {
+    normalized = normalizeVaultRelativePath(relativeVaultPath);
+  } catch {
+    return null;
+  }
+
+  const prefix = appScopePrefix(app);
+
+  return normalized === prefix || normalized.startsWith(`${prefix}/`) ? normalized : null;
+}
+
+function appScopedFromLogicalPath(app: AppWorkspace, value: string): string | null {
+  const normalized = value.trim().replaceAll("\\", "/").replace(/^\/+/, "");
+  const logicalPrefix = app.logicalAppPath.replaceAll("\\", "/").replace(/^\/+/, "");
+  const appVaultPrefix = app.appVaultPath.replaceAll("\\", "/").replace(/^\/+/, "");
+
+  if (normalized === logicalPrefix || normalized.startsWith(`${logicalPrefix}/`)) {
+    return appScopedPath(app, `${app.physicalAppVaultPath}${normalized.slice(logicalPrefix.length)}`);
+  }
+
+  if (normalized === appVaultPrefix || normalized.startsWith(`${appVaultPrefix}/`)) {
+    return appScopedPath(app, `${app.physicalAppVaultPath}${normalized.slice(appVaultPrefix.length)}`);
+  }
+
+  return appScopedPath(app, normalized);
+}
+
+function graphTitleFromPath(relativeVaultPath: string): string {
+  return path.posix.basename(relativeVaultPath.replaceAll("\\", "/"), ".md").trim() || "App note";
+}
+
+function graphTitleFromContent(relativeVaultPath: string, content: string | null, fallback?: string): string {
+  const title = content?.match(/^title:\s*["']?(.+?)["']?\s*$/im)?.[1]?.trim()
+    || content?.match(/^#\s+(.+)$/m)?.[1]?.trim()
+    || fallback?.trim()
+    || graphTitleFromPath(relativeVaultPath);
+
+  return title.replace(/^Holdstation Mini App\s+-\s+/i, "").slice(0, 120);
+}
+
+async function listAppMarkdownFiles(app: AppWorkspace): Promise<AppMarkdownFile[]> {
+  const root = vaultFilePath(app.physicalAppVaultPath);
+  const files: AppMarkdownFile[] = [];
+
+  async function visit(directory: string) {
+    const entries = await readdir(directory, { withFileTypes: true });
+
+    await Promise.all(
+      entries.map(async (entry) => {
+        const absolutePath = path.join(directory, entry.name);
+
+        if (entry.isDirectory()) {
+          await visit(absolutePath);
+          return;
+        }
+
+        if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) {
+          return;
+        }
+
+        const relativePath = path.relative(VAULT_ROOT, absolutePath).replaceAll("\\", "/");
+        const scopedPath = appScopedPath(app, relativePath);
+
+        if (!scopedPath) {
+          return;
+        }
+
+        files.push({
+          relativePath: scopedPath,
+          content: await readFile(absolutePath, "utf8"),
+        });
+      }),
+    );
+  }
+
+  try {
+    await visit(root);
+  } catch {
+    return [];
+  }
+
+  return files;
+}
+
+function appFileIndex(appFiles: AppMarkdownFile[]): Map<string, AppMarkdownFile> {
+  const index = new Map<string, AppMarkdownFile>();
+
+  appFiles.forEach((file) => {
+    const withoutExt = file.relativePath.replace(/\.md$/i, "");
+    const base = path.posix.basename(withoutExt);
+
+    index.set(normalizeGraphKey(file.relativePath), file);
+    index.set(normalizeGraphKey(withoutExt), file);
+    index.set(normalizeGraphKey(base), file);
+  });
+
+  return index;
+}
+
+function sourceDirectory(app: AppWorkspace, item: ContextItem): string {
+  const sourcePath = item.source.path ? appScopedFromLogicalPath(app, item.source.path) : null;
+
+  if (!sourcePath) {
+    return app.physicalAppVaultPath;
+  }
+
+  return path.posix.dirname(sourcePath);
+}
+
+function sourceTypeForPath(relativePath: string, fallback: ContextGraphHintSourceType): ContextGraphHintSourceType {
+  const normalized = relativePath.toLowerCase();
+
+  if (normalized.includes("/sessions/")) {
+    return "session-reference";
+  }
+
+  if (normalized.includes("promotion candidates")) {
+    return "promotion-candidate";
+  }
+
+  if (normalized.includes("raw capture") || normalized.includes("/raw/")) {
+    return "raw-capture";
+  }
+
+  return fallback;
+}
+
+function confidenceForPath(relativePath: string, content: string | null, sourceType: ContextGraphHintSourceType): ContextGraphHintConfidence {
+  if (!content) {
+    return "low";
+  }
+
+  const quality = itemQuality(graphTitleFromPath(relativePath), content).contextQuality;
+
+  if (quality === "confirmed" || sourceType === "markdown-link" || sourceType === "session-reference") {
+    return "high";
+  }
+
+  if (quality === "draft" || sourceType === "keyword-match" || sourceType === "promotion-candidate") {
+    return "medium";
+  }
+
+  return "low";
+}
+
+function scoreForGraphCandidate(candidate: Omit<GraphCandidate, "score">, content: string | null): number {
+  const quality = content ? itemQuality(candidate.title, content).contextQuality : "missing";
+  const sourceScore: Record<ContextGraphHintSourceType, number> = {
+    "markdown-link": 90,
+    "session-reference": 82,
+    "promotion-candidate": 76,
+    "raw-capture": 42,
+    "keyword-match": 48,
+  };
+  const qualityScore: Record<CMOContextQuality, number> = {
+    confirmed: 30,
+    draft: 18,
+    placeholder: 4,
+    missing: 0,
+  };
+  const pathPenalty = candidate.path.toLowerCase().includes("/raw/") || candidate.path.toLowerCase().includes("raw capture") ? 18 : 0;
+
+  return sourceScore[candidate.sourceType] + qualityScore[quality] - pathPenalty;
+}
+
+function addGraphCandidate(candidates: Map<string, GraphCandidate>, candidate: Omit<GraphCandidate, "score">, content: string | null) {
+  const key = normalizeGraphKey(candidate.path || candidate.title);
+  const score = scoreForGraphCandidate(candidate, content);
+  const current = candidates.get(key);
+
+  if (!current || score > current.score) {
+    candidates.set(key, {
+      ...candidate,
+      score,
+    });
+  }
+}
+
+function graphExclusion(idParts: string[], label: string, reason: string): ContextExclusion {
+  return {
+    id: `graph-${candidateId(idParts)}`,
+    label,
+    reason,
+    policy: "excluded_by_context_pack_v1",
+  };
+}
+
+function normalizeLinkTarget(rawTarget: string): string {
+  return rawTarget
+    .split("|")[0]
+    .split("#")[0]
+    .trim()
+    .replace(/^<|>$/g, "")
+    .replaceAll("\\", "/");
+}
+
+function resolveGraphTarget(
+  app: AppWorkspace,
+  rawTarget: string,
+  sourceDir: string,
+  index: Map<string, AppMarkdownFile>,
+): { path: string; file?: AppMarkdownFile; outside: false } | { target: string; outside: true } {
+  const target = normalizeLinkTarget(rawTarget);
+
+  if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("#")) {
+    return { target, outside: true };
+  }
+
+  const withMd = target.toLowerCase().endsWith(".md") ? target : `${target}.md`;
+  const direct = appScopedFromLogicalPath(app, withMd);
+
+  if (direct) {
+    const file = index.get(normalizeGraphKey(direct));
+    return { path: file?.relativePath ?? direct, file, outside: false };
+  }
+
+  if (target.startsWith(".") || target.startsWith("..")) {
+    const relative = path.posix.normalize(path.posix.join(sourceDir.replaceAll("\\", "/"), withMd));
+    const scoped = appScopedPath(app, relative);
+
+    if (scoped) {
+      const file = index.get(normalizeGraphKey(scoped));
+      return { path: file?.relativePath ?? scoped, file, outside: false };
+    }
+
+    return { target: relative, outside: true };
+  }
+
+  if (!target.includes("/")) {
+    const file = index.get(normalizeGraphKey(target)) ?? index.get(normalizeGraphKey(withMd));
+
+    if (file) {
+      return { path: file.relativePath, file, outside: false };
+    }
+
+    const scoped = appScopedPath(app, `${app.physicalAppVaultPath}/${withMd}`);
+
+    if (scoped) {
+      return { path: scoped, file: index.get(normalizeGraphKey(scoped)), outside: false };
+    }
+  }
+
+  return { target: withMd, outside: true };
+}
+
+function extractGraphLinks(item: ContextItem): Array<{ label: string; target: string; sourceType: ContextGraphHintSourceType }> {
+  const links: Array<{ label: string; target: string; sourceType: ContextGraphHintSourceType }> = [];
+  const content = item.content;
+
+  for (const match of content.matchAll(/\[\[([^\]]+)\]\]/g)) {
+    const target = match[1]?.trim();
+    const label = target?.split("|")[1]?.trim() || target?.split("|")[0]?.trim() || "Linked note";
+
+    if (target) {
+      links.push({
+        label,
+        target,
+        sourceType: item.kind === "promotion_candidates" ? "promotion-candidate" : "markdown-link",
+      });
+    }
+  }
+
+  for (const match of content.matchAll(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g)) {
+    const label = match[1]?.trim() || "Linked note";
+    const target = match[2]?.trim();
+
+    if (target) {
+      links.push({
+        label,
+        target,
+        sourceType: "markdown-link",
+      });
+    }
+  }
+
+  for (const match of content.matchAll(/(?:Source|Session Note|Raw Capture):\s*([^\r\n]+?\.md)(?=\s*$)/gim)) {
+    const target = match[1]?.trim();
+
+    if (target) {
+      const normalizedTarget = target.toLowerCase();
+
+      links.push({
+        label: graphTitleFromPath(target),
+        target,
+        sourceType: item.kind === "promotion_candidates"
+          ? "promotion-candidate"
+          : normalizedTarget.includes("/sessions/")
+            ? "session-reference"
+            : normalizedTarget.includes("raw capture") || normalizedTarget.includes("/raw/")
+              ? "raw-capture"
+              : "markdown-link",
+      });
+    }
+  }
+
+  return links;
+}
+
+function repeatedGraphKeywords(items: ContextItem[]): string[] {
+  const canonical = items
+    .filter((item) => item.kind === "current_priority" || item.kind === "app_memory")
+    .map((item) => item.content.toLowerCase())
+    .join("\n");
+
+  return GRAPH_KEYWORDS.filter((keyword) => {
+    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return (canonical.match(new RegExp(`\\b${escaped}\\b`, "g")) ?? []).length >= 2;
+  });
+}
+
+async function buildGraphContextHints(
+  app: AppWorkspace,
+  workspaceId: string,
+  sourceId: string,
+  items: ContextItem[],
+): Promise<GraphBuildResult> {
+  let gbrainAvailable = true;
+
+  try {
+    await new GBrainClient().assertSourceScoped({
+      workspaceId,
+      appId: app.id,
+      sourceId,
+    });
+  } catch {
+    gbrainAvailable = false;
+  }
+
+  const appFiles = await listAppMarkdownFiles(app);
+  const index = appFileIndex(appFiles);
+  const candidates = new Map<string, GraphCandidate>();
+  const exclusions = new Map<string, ContextExclusion>();
+  const canonicalSourceKeys = new Set(
+    items
+      .map((item) => (item.source.path ? appScopedFromLogicalPath(app, item.source.path) : null))
+      .filter((item): item is string => Boolean(item))
+      .map(normalizeGraphKey),
+  );
+
+  for (const item of items) {
+    const sourceDir = sourceDirectory(app, item);
+
+    for (const link of extractGraphLinks(item)) {
+      const resolved = resolveGraphTarget(app, link.target, sourceDir, index);
+
+      if (resolved.outside) {
+        const key = normalizeGraphKey(`${link.target}:${item.id}`);
+        exclusions.set(
+          key,
+          graphExclusion([item.id, link.target], link.label, `outside_app_scope: ${link.target}`),
+        );
+        continue;
+      }
+
+      if (canonicalSourceKeys.has(normalizeGraphKey(resolved.path))) {
+        continue;
+      }
+
+      const content = resolved.file?.content ?? await readVaultText(resolved.path);
+      const sourceType = sourceTypeForPath(resolved.path, link.sourceType);
+      const title = graphTitleFromContent(resolved.path, content, link.label);
+
+      addGraphCandidate(candidates, {
+        title,
+        path: resolved.path,
+        reason: `${item.title} references this app-scoped note.`,
+        sourceType,
+        confidence: confidenceForPath(resolved.path, content, sourceType),
+        exists: content !== null,
+        contentPreview: content ? compactText(content, 320) : undefined,
+      }, content);
+    }
+  }
+
+  const sessions = await readStoredSessions(app.id, 8);
+
+  for (const session of sessions) {
+    for (const sessionPathValue of [session.sessionNotePath, session.rawCapturePath].filter(Boolean)) {
+      const scoped = appScopedPath(app, sessionPathValue as string);
+
+      if (!scoped) {
+        exclusions.set(
+          normalizeGraphKey(`${session.id}:${sessionPathValue}`),
+          graphExclusion([session.id, sessionPathValue as string], session.topic, `outside_app_scope: ${sessionPathValue}`),
+        );
+        continue;
+      }
+
+      const content = await readVaultText(scoped);
+      const sourceType = sourceTypeForPath(scoped, scoped.includes("/Sessions/") ? "session-reference" : "raw-capture");
+
+      addGraphCandidate(candidates, {
+        title: graphTitleFromContent(scoped, content, session.topic),
+        path: scoped,
+        reason: `Latest app session references ${session.topic}.`,
+        sourceType,
+        confidence: confidenceForPath(scoped, content, sourceType),
+        exists: content !== null,
+        contentPreview: content ? compactText(content, 320) : compactText(sessionSummary(session), 320),
+      }, content);
+    }
+  }
+
+  for (const keyword of repeatedGraphKeywords(items)) {
+    for (const file of appFiles) {
+      if (canonicalSourceKeys.has(normalizeGraphKey(file.relativePath))) {
+        continue;
+      }
+
+      if (!new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(stripFrontmatter(file.content))) {
+        continue;
+      }
+
+      const sourceType = sourceTypeForPath(file.relativePath, "keyword-match");
+
+      addGraphCandidate(candidates, {
+        title: graphTitleFromContent(file.relativePath, file.content),
+        path: file.relativePath,
+        reason: `Related app note mentions repeated priority keyword: ${keyword}.`,
+        sourceType,
+        confidence: confidenceForPath(file.relativePath, file.content, sourceType),
+        exists: true,
+        contentPreview: compactText(file.content, 320),
+      }, file.content);
+    }
+  }
+
+  const hints = Array.from(candidates.values())
+    .filter((candidate) => candidate.exists && candidate.contentPreview)
+    .sort((left, right) => right.score - left.score || left.title.localeCompare(right.title))
+    .slice(0, MAX_GRAPH_HINTS)
+    .map((candidate): ContextGraphHint => ({
+      id: `graph_${candidateId([candidate.path, candidate.title, candidate.sourceType])}`,
+      title: candidate.title,
+      path: candidate.path,
+      reason: candidate.reason,
+      sourceType: candidate.sourceType,
+      confidence: candidate.confidence,
+      contentPreview: candidate.contentPreview,
+      exists: candidate.exists,
+    }));
+  const status: ContextGraphStatus = !gbrainAvailable && hints.length === 0
+    ? "not_configured"
+    : exclusions.size > 0
+      ? "partial"
+      : hints.length > 0
+        ? "available"
+        : "empty";
+
+  return {
+    hints,
+    status,
+    exclusions: Array.from(exclusions.values()).slice(0, 6),
+  };
+}
+
 function contextBrief(app: AppWorkspace, contextPack: ContextPack): CMOContextBrief {
   const sectionLabel: Record<ContextItem["kind"], string> = {
     current_priority: "Current Priority",
@@ -674,6 +1170,9 @@ function contextBrief(app: AppWorkspace, contextPack: ContextPack): CMOContextBr
     runtimeMode: contextPack.runtimeMode,
     contextQualitySummary: contextPack.contextQualitySummary,
     tokenBudget: contextPack.tokenBudget,
+    graphHints: contextPack.graphHints,
+    graphHintCount: contextPack.graphHintCount,
+    graphStatus: contextPack.graphStatus,
     exclusions: contextPack.exclusions,
     sections: contextPack.items.map((item) => ({
       id: item.kind,
@@ -707,12 +1206,14 @@ export async function buildContextPack(options: BuildContextPackOptions): Promis
     await latestSessionsItem(app, maxItemChars),
     await promotionCandidatesItem(app, maxItemChars),
   ];
+  const graphContext = await buildGraphContextHints(app, workspaceId, registryEntry.sourceId, items);
   const usedItems = items.filter((item) => item.exists);
   const missingItems = items.filter((item) => !item.exists);
   const contextUsed = usedItems.map(contextItemToVaultRef);
   const missingContext = missingItems.map(contextItemToVaultRef);
   const contextQualitySummary = summarizeContextQuality([...contextUsed, ...missingContext]);
-  const estimatedTokens = items.reduce((total, item) => total + item.tokenEstimate, 0);
+  const graphTokenEstimate = graphContext.hints.reduce((total, hint) => total + tokenEstimate(`${hint.title}\n${hint.reason}\n${hint.contentPreview ?? ""}`), 0);
+  const estimatedTokens = items.reduce((total, item) => total + item.tokenEstimate, 0) + graphTokenEstimate;
   const contextPack: ContextPack = {
     policyVersion: "context-pack-v1",
     workspaceId,
@@ -729,7 +1230,10 @@ export async function buildContextPack(options: BuildContextPackOptions): Promis
       maxItemChars,
     },
     items,
-    exclusions: fixedExclusions(),
+    graphHints: graphContext.hints,
+    graphHintCount: graphContext.hints.length,
+    graphStatus: graphContext.status,
+    exclusions: [...fixedExclusions(), ...graphContext.exclusions],
     contextQualitySummary,
   };
   const runtimeWorkspaceId = getOpenClawWorkspaceId();
@@ -771,6 +1275,9 @@ export async function buildContextPack(options: BuildContextPackOptions): Promis
       userMessage: "",
       selectedContext,
       missingContext: missingNotes,
+      graphHints: graphContext.hints,
+      graphHintCount: graphContext.hints.length,
+      graphStatus: graphContext.status,
       contextQualitySummary,
       instructions: {
         role: "strategic CMO",
@@ -784,6 +1291,9 @@ export async function buildContextPack(options: BuildContextPackOptions): Promis
         mustStatePlaceholderLimitations: true,
         askForConfirmationWhenContextIsDraft: true,
         suggestFillingAppMemoryWhenRelevant: true,
+        graphHintsAreSupportingOnly: true,
+        appMemoryAndPriorityOverrideGraphHints: true,
+        mentionGraphUncertaintyWhenDraftOrRaw: true,
       },
     },
   };

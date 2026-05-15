@@ -17,6 +17,8 @@ import type {
   CMORuntimeStatus,
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
+  ContextGraphHint,
+  ContextGraphStatus,
   RawCaptureResponse,
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
@@ -214,11 +216,14 @@ function captureSummary(
   isDevelopmentFallback: boolean,
   isRuntimeFallback: boolean,
   qualitySummary: CMOContextQualitySummary,
+  graphHints: ContextGraphHint[],
+  graphStatus: ContextGraphStatus | null,
 ): string {
   const userMessage = messages.find((message) => message.role === "user")?.content ?? "No user question captured.";
   const assistantMessage = [...messages].reverse().find((message) => message.role === "assistant")?.content ?? "No CMO response captured.";
   const contextLine = contextUsed.length ? contextUsed.map((note) => note.title).join(", ") : "No context pack items were included.";
   const missingLine = missingContext.length ? missingContext.map((note) => note.title).join(", ") : "None.";
+  const graphLine = graphHints.length ? graphHints.map((hint) => `${hint.title} (${hint.path})`).join(", ") : "None.";
 
   return [
     `App-specific CMO session for ${app.name}.`,
@@ -233,6 +238,9 @@ function captureSummary(
     `Runtime agent: ${runtimeAgent ?? "not captured"}`,
     `Context pack used: ${contextLine}`,
     `Unavailable context pack items: ${missingLine}`,
+    `Graph status: ${graphStatus ?? "empty"}`,
+    `Graph hints used: ${graphHints.length}`,
+    `Graph hint refs: ${graphLine}`,
     `Context quality counts: ${qualitySummary.confirmedCount} confirmed, ${qualitySummary.draftCount} draft, ${qualitySummary.placeholderCount} placeholder, ${qualitySummary.missingCount} missing.`,
     `User asked: ${userMessage}`,
     `CMO response captured: ${assistantMessage}`,
@@ -269,6 +277,8 @@ export function CMOChatPanel({
   const [suggestedActions, setSuggestedActions] = useState<CMOAppChatResponse["suggestedActions"]>([]);
   const [contextDiagnostics, setContextDiagnostics] = useState<CMOContextDiagnostics | undefined>(undefined);
   const [contextQualitySummary, setContextQualitySummary] = useState<CMOContextQualitySummary | undefined>(undefined);
+  const [graphHints, setGraphHints] = useState<ContextGraphHint[]>(contextBrief.graphHints ?? []);
+  const [graphStatus, setGraphStatus] = useState<ContextGraphStatus | null>(contextBrief.graphStatus ?? "empty");
   const [isDevelopmentFallback, setIsDevelopmentFallback] = useState(false);
   const [isRuntimeFallback, setIsRuntimeFallback] = useState(false);
   const [runtimeStatus, setRuntimeStatus] = useState<CMORuntimeStatus | null>(initialRuntimeStatus);
@@ -396,6 +406,8 @@ export function CMOChatPanel({
     setSuggestedActions([]);
     setContextDiagnostics(undefined);
     setContextQualitySummary(undefined);
+    setGraphHints([]);
+    setGraphStatus(null);
 
     try {
       const response = await readJsonResponse<CMOAppChatResponse>(
@@ -426,6 +438,8 @@ export function CMOChatPanel({
       setSuggestedActions(response.suggestedActions);
       setContextDiagnostics(response.contextDiagnostics);
       setContextQualitySummary(response.contextQualitySummary ?? response.contextDiagnostics);
+      setGraphHints(response.graphHints ?? []);
+      setGraphStatus(response.graphStatus ?? "empty");
       setIsDevelopmentFallback(response.isDevelopmentFallback);
       setIsRuntimeFallback(response.isRuntimeFallback === true);
       setRuntimeStatus(response.runtimeStatus);
@@ -462,6 +476,7 @@ export function CMOChatPanel({
                 runtimeAgent: response.runtimeAgent,
                 runtimeErrorReason: response.runtimeErrorReason,
                 contextUsedCount: response.contextUsed.length,
+                graphHintCount: response.graphHintCount ?? response.graphHints?.length ?? 0,
               }
             : message,
         ),
@@ -569,6 +584,8 @@ export function CMOChatPanel({
               isDevelopmentFallback,
               isRuntimeFallback,
               contextQualitySummary ?? summarizeContextQuality([...lastContextUsed, ...missingContext]),
+              graphHints,
+              graphStatus,
             ),
             selectedContextNotes: [...lastContextUsed, ...missingContext],
             messages: capturableMessages.map((message) => ({
@@ -587,6 +604,9 @@ export function CMOChatPanel({
             runtimeAgent: runtimeAgent ?? undefined,
             contextDiagnostics,
             contextQualitySummary: contextQualitySummary ?? summarizeContextQuality([...lastContextUsed, ...missingContext]),
+            graphHints,
+            graphHintCount: graphHints.length,
+            graphStatus: graphStatus ?? undefined,
             assumptions,
             suggestedActions,
           }),
@@ -722,6 +742,12 @@ export function CMOChatPanel({
               <div className="mt-1">
                 {effectiveQualitySummary.confirmedCount} confirmed; {effectiveQualitySummary.placeholderCount} need content;{" "}
                 {effectiveQualitySummary.draftCount} draft; {effectiveQualitySummary.missingCount} missing.
+              </div>
+            </div>
+            <div>
+              <div className="font-bold text-slate-950">Graph context</div>
+              <div className="mt-1">
+                {graphStatus ?? "empty"}; {graphHints.length} hints
               </div>
             </div>
             <div>

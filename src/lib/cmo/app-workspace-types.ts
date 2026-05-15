@@ -12,6 +12,9 @@ export type AppPlanStatus = "draft" | "active" | "completed";
 export type MetricsStatus = "missing" | "provided" | "connected";
 export type TaskTrackerStatus = "connected" | "not_connected" | "fallback";
 export type TaskSummarySource = "task-tracker" | "vault" | "placeholder";
+export type ContextGraphHintSourceType = "markdown-link" | "session-reference" | "promotion-candidate" | "raw-capture" | "keyword-match";
+export type ContextGraphHintConfidence = "high" | "medium" | "low";
+export type ContextGraphStatus = "not_configured" | "empty" | "available" | "partial";
 
 export interface AppWorkspace {
   id: string;
@@ -45,6 +48,17 @@ export interface VaultNoteRef {
   frontmatterStatus?: string;
   contextQuality?: CMOContextQuality;
   qualityReason?: string;
+}
+
+export interface ContextGraphHint {
+  id: string;
+  title: string;
+  path: string;
+  reason: string;
+  sourceType: ContextGraphHintSourceType;
+  confidence: ContextGraphHintConfidence;
+  contentPreview?: string;
+  exists: boolean;
 }
 
 export interface AppMemoryNoteSummary {
@@ -149,6 +163,8 @@ export interface CMOSessionSummary {
   isDevelopmentFallback: boolean;
   contextUsedCount: number;
   contextQualitySummary?: CMOContextQualitySummary;
+  graphHintCount?: number;
+  graphStatus?: ContextGraphStatus;
   savedToVault: boolean;
   rawCapturePath?: string;
   sessionNotePath?: string;
@@ -324,6 +340,9 @@ export interface ContextPack {
     maxItemChars: number;
   };
   items: ContextItem[];
+  graphHints?: ContextGraphHint[];
+  graphHintCount?: number;
+  graphStatus?: ContextGraphStatus;
   exclusions: ContextExclusion[];
   contextQualitySummary: CMOContextQualitySummary;
 }
@@ -345,6 +364,9 @@ export interface CMOContextBrief {
   appVaultPath: string;
   runtimeMode: ContextPackRuntimeMode;
   sections: CMOContextBriefSection[];
+  graphHints?: ContextGraphHint[];
+  graphHintCount?: number;
+  graphStatus?: ContextGraphStatus;
   exclusions: ContextExclusion[];
   contextQualitySummary: CMOContextQualitySummary;
   tokenBudget: ContextPack["tokenBudget"];
@@ -380,6 +402,9 @@ export interface CMOContextPackage {
   userMessage: string;
   selectedContext: CMOContextNote[];
   missingContext: CMOMissingContextNote[];
+  graphHints?: ContextGraphHint[];
+  graphHintCount?: number;
+  graphStatus?: ContextGraphStatus;
   contextQualitySummary: CMOContextQualitySummary;
   instructions: {
     role: "strategic CMO";
@@ -393,6 +418,9 @@ export interface CMOContextPackage {
     mustStatePlaceholderLimitations: true;
     askForConfirmationWhenContextIsDraft: true;
     suggestFillingAppMemoryWhenRelevant: true;
+    graphHintsAreSupportingOnly?: true;
+    appMemoryAndPriorityOverrideGraphHints?: true;
+    mentionGraphUncertaintyWhenDraftOrRaw?: true;
   };
 }
 
@@ -416,6 +444,7 @@ export interface CMOChatMessage {
   runtimeAgent?: string;
   runtimeErrorReason?: CmoRuntimeErrorReason;
   contextUsedCount?: number;
+  graphHintCount?: number;
 }
 
 export interface CMOChatSession {
@@ -441,6 +470,9 @@ export interface CMOChatSession {
   missingContext?: VaultNoteRef[];
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
+  graphHints?: ContextGraphHint[];
+  graphHintCount?: number;
+  graphStatus?: ContextGraphStatus;
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
   savedToVault?: boolean;
@@ -489,6 +521,9 @@ export interface CMOAppChatResponse {
   runtimeAgent?: string;
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
+  graphHints?: ContextGraphHint[];
+  graphHintCount?: number;
+  graphStatus?: ContextGraphStatus;
 }
 
 export interface RawCaptureRequest {
@@ -521,6 +556,9 @@ export interface RawCaptureRequest {
   runtimeAgent?: string;
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
+  graphHints?: ContextGraphHint[];
+  graphHintCount?: number;
+  graphStatus?: ContextGraphStatus;
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
   openQuestions?: string[];

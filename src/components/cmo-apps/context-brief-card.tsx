@@ -3,7 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { icons } from "@/components/dashboard/icons";
-import type { CMOContextBrief, CMOContextQuality, ContextPackRuntimeMode } from "@/lib/cmo/app-workspace-types";
+import type { CMOContextBrief, CMOContextQuality, ContextGraphStatus, ContextPackRuntimeMode } from "@/lib/cmo/app-workspace-types";
 
 function qualityVariant(quality: CMOContextQuality | undefined): "green" | "orange" | "slate" | "blue" {
   if (quality === "confirmed") {
@@ -69,7 +69,26 @@ function runtimeLabel(runtimeMode: ContextPackRuntimeMode): string {
   return runtimeMode;
 }
 
+function graphVariant(status: ContextGraphStatus | undefined): "green" | "orange" | "red" | "slate" | "blue" {
+  if (status === "available") {
+    return "green";
+  }
+
+  if (status === "partial") {
+    return "orange";
+  }
+
+  if (status === "not_configured") {
+    return "red";
+  }
+
+  return "slate";
+}
+
 export function ContextBriefCard({ brief }: { brief: CMOContextBrief }) {
+  const graphStatus = brief.graphStatus ?? "empty";
+  const graphHints = brief.graphHints ?? [];
+
   return (
     <Card className="p-5">
       <div className="flex items-start justify-between gap-4">
@@ -115,6 +134,37 @@ export function ContextBriefCard({ brief }: { brief: CMOContextBrief }) {
             {brief.tokenBudget.estimatedTokens} / {brief.tokenBudget.maxInputTokens} est. tokens
           </div>
         </div>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold uppercase text-slate-400">Graph Context</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Badge variant={graphVariant(graphStatus)}>Graph: {graphStatus.replaceAll("_", " ")}</Badge>
+              <Badge variant={graphHints.length ? "blue" : "slate"}>Graph hints: {brief.graphHintCount ?? graphHints.length}</Badge>
+            </div>
+          </div>
+        </div>
+        {graphHints.length ? (
+          <details className="mt-3">
+            <summary className="cursor-pointer text-sm font-bold text-slate-700">Related hints</summary>
+            <div className="mt-3 grid gap-2">
+              {graphHints.map((hint) => (
+                <div key={hint.id} className="rounded-lg border border-slate-100 bg-white px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="font-bold text-slate-950">{hint.title}</div>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant={hint.confidence === "high" ? "green" : hint.confidence === "medium" ? "blue" : "slate"}>{hint.confidence}</Badge>
+                      <Badge variant="slate">{hint.sourceType.replaceAll("-", " ")}</Badge>
+                    </div>
+                  </div>
+                  <div className="mt-1 text-xs font-medium text-slate-500">{hint.reason}</div>
+                </div>
+              ))}
+            </div>
+          </details>
+        ) : null}
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">

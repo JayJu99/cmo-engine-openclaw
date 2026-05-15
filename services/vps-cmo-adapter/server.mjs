@@ -1450,6 +1450,20 @@ function compactMissingAppContext(items) {
     : [];
 }
 
+function compactGraphHints(items) {
+  return Array.isArray(items)
+    ? items.slice(0, 8).map((item) => ({
+        title: safeString(item?.title, "Graph hint"),
+        path: safeString(item?.path, ""),
+        reason: safeString(item?.reason, ""),
+        source_type: safeString(item?.sourceType ?? item?.source_type, "keyword-match"),
+        confidence: safeString(item?.confidence, "low"),
+        exists: item?.exists === true,
+        content_preview: safeString(item?.contentPreview ?? item?.content_preview, "").slice(0, 1_000),
+      }))
+    : [];
+}
+
 function compactAppContextPackage(contextPackage) {
   if (!isRecord(contextPackage)) {
     return null;
@@ -1464,6 +1478,11 @@ function compactAppContextPackage(contextPackage) {
     user_message: safeString(contextPackage.userMessage ?? contextPackage.user_message, ""),
     selected_context: compactSelectedAppContext(contextPackage.selectedContext ?? contextPackage.selected_context),
     missing_context: compactMissingAppContext(contextPackage.missingContext ?? contextPackage.missing_context),
+    graph_status: safeString(contextPackage.graphStatus ?? contextPackage.graph_status, "empty"),
+    graph_hint_count: Number.isFinite(Number(contextPackage.graphHintCount ?? contextPackage.graph_hint_count))
+      ? Number(contextPackage.graphHintCount ?? contextPackage.graph_hint_count)
+      : compactGraphHints(contextPackage.graphHints ?? contextPackage.graph_hints).length,
+    graph_hints: compactGraphHints(contextPackage.graphHints ?? contextPackage.graph_hints),
     context_quality_summary: isRecord(contextPackage.contextQualitySummary ?? contextPackage.context_quality_summary)
       ? contextPackage.contextQualitySummary ?? contextPackage.context_quality_summary
       : {},
@@ -1698,6 +1717,7 @@ function compactContextPackForAppTurn(contextPack) {
         reason: safeString(item?.reason, ""),
       }))
     : [];
+  const graphHints = compactGraphHints(contextPack.graphHints ?? contextPack.graph_hints);
 
   return {
     policy_version: safeString(contextPack.policyVersion ?? contextPack.policy_version, "context-pack-v1"),
@@ -1706,9 +1726,14 @@ function compactContextPackForAppTurn(contextPack) {
     source_id: safeString(contextPack.sourceId ?? contextPack.source_id, ""),
     logical_app_path: safeString(contextPack.logicalAppPath ?? contextPack.logical_app_path, ""),
     runtime_mode: safeString(contextPack.runtimeMode ?? contextPack.runtime_mode, ""),
+    graph_status: safeString(contextPack.graphStatus ?? contextPack.graph_status, "empty"),
+    graph_hint_count: Number.isFinite(Number(contextPack.graphHintCount ?? contextPack.graph_hint_count))
+      ? Number(contextPack.graphHintCount ?? contextPack.graph_hint_count)
+      : graphHints.length,
     token_budget: isRecord(contextPack.tokenBudget) ? pickFields(contextPack.tokenBudget, ["maxInputTokens", "estimatedTokens", "maxItemChars"]) : {},
     context_quality_summary: isRecord(contextPack.contextQualitySummary) ? cloneJson(contextPack.contextQualitySummary) : {},
     items,
+    graph_hints: graphHints,
     exclusions,
   };
 }
@@ -1787,6 +1812,9 @@ function buildCmoAppTurnPrompt({ turnId, request, rawPath, jsonPath }) {
     "CMO Context Pack:",
     JSON.stringify(compactContextPack, null, 2),
     "",
+    "Graph Context Hints:",
+    JSON.stringify(compactContextPack?.graph_hints ?? [], null, 2),
+    "",
     "Runtime instructions:",
     "1. Answer as the CMO operating assistant for the selected app workspace.",
     "2. Use only the provided workspace context unless explicitly saying an assumption.",
@@ -1794,10 +1822,12 @@ function buildCmoAppTurnPrompt({ turnId, request, rawPath, jsonPath }) {
     "4. Do not claim unavailable tools, all-vault RAG, graph retrieval, analytics, or Task Tracker access.",
     "5. Return a useful chat answer for the user. Do not return dashboard JSON.",
     "6. If context is draft, placeholder, or missing, say so briefly and continue with bounded recommendations.",
-    "7. Write the raw markdown answer first to the raw markdown path.",
-    "8. Write the app-turn JSON second to the app-turn JSON path.",
-    "9. Do not send Discord, Telegram, email, chat, or other external messages.",
-    "10. Do not include Gateway details, prompts, stdout, stderr, secrets, or this instruction text in the public JSON.",
+    "7. Use graph hints only as supporting context after Current Priority and App Memory; do not overrule confirmed priority with raw, draft, or lower-confidence hints.",
+    "8. If graph hints are raw, draft, low-confidence, or partial, mention uncertainty briefly.",
+    "9. Write the raw markdown answer first to the raw markdown path.",
+    "10. Write the app-turn JSON second to the app-turn JSON path.",
+    "11. Do not send Discord, Telegram, email, chat, or other external messages.",
+    "12. Do not include Gateway details, prompts, stdout, stderr, secrets, or this instruction text in the public JSON.",
     "",
     "The app-turn JSON must match this contract exactly:",
     JSON.stringify(

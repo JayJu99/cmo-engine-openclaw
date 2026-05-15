@@ -13,6 +13,10 @@ import type {
   CMORuntimeStatus,
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
+  ContextGraphHint,
+  ContextGraphHintConfidence,
+  ContextGraphHintSourceType,
+  ContextGraphStatus,
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
 import { getAppWorkspace, HOLDSTATION_WORKSPACE_ID } from "@/lib/cmo/app-workspaces";
@@ -35,6 +39,24 @@ function stringValue(value: unknown, fallback = ""): string {
 
 function normalizeContextQuality(value: unknown): CMOContextQuality | undefined {
   return value === "missing" || value === "placeholder" || value === "draft" || value === "confirmed" ? value : undefined;
+}
+
+function normalizeGraphStatus(value: unknown): ContextGraphStatus | undefined {
+  return value === "not_configured" || value === "empty" || value === "available" || value === "partial" ? value : undefined;
+}
+
+function normalizeGraphSourceType(value: unknown): ContextGraphHintSourceType {
+  return value === "markdown-link" ||
+    value === "session-reference" ||
+    value === "promotion-candidate" ||
+    value === "raw-capture" ||
+    value === "keyword-match"
+    ? value
+    : "keyword-match";
+}
+
+function normalizeGraphConfidence(value: unknown): ContextGraphHintConfidence {
+  return value === "high" || value === "medium" || value === "low" ? value : "low";
 }
 
 function safeId(value: string): string {
@@ -93,6 +115,40 @@ function normalizeSelectedNotes(value: unknown): VaultNoteRef[] {
   return value
     .map((item, index) => normalizeVaultNote(item, index))
     .filter((item): item is VaultNoteRef => Boolean(item));
+}
+
+function normalizeGraphHint(value: unknown, index: number): ContextGraphHint | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const title = stringValue(value.title, `Graph hint ${index + 1}`);
+  const pathValue = stringValue(value.path);
+
+  if (!title || !pathValue) {
+    return null;
+  }
+
+  return {
+    id: stringValue(value.id, `graph_${index + 1}`),
+    title,
+    path: pathValue,
+    reason: stringValue(value.reason),
+    sourceType: normalizeGraphSourceType(value.sourceType ?? value.source_type),
+    confidence: normalizeGraphConfidence(value.confidence),
+    contentPreview: stringValue(value.contentPreview ?? value.content_preview) || undefined,
+    exists: value.exists === false ? false : true,
+  };
+}
+
+function normalizeGraphHints(value: unknown): ContextGraphHint[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item, index) => normalizeGraphHint(item, index))
+    .filter((item): item is ContextGraphHint => Boolean(item));
 }
 
 export function isAppChatPayload(body: unknown): body is CMOAppChatRequest {
@@ -331,12 +387,14 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             runtimeAgent: normalizeRuntimeProvider(message.runtimeAgent),
             runtimeErrorReason: normalizeRuntimeErrorReason(message.runtimeErrorReason),
             contextUsedCount: typeof message.contextUsedCount === "number" && Number.isFinite(message.contextUsedCount) ? Math.max(0, Math.floor(message.contextUsedCount)) : undefined,
+            graphHintCount: typeof message.graphHintCount === "number" && Number.isFinite(message.graphHintCount) ? Math.max(0, Math.floor(message.graphHintCount)) : undefined,
           };
         })
         .filter((message): message is CMOChatMessage => Boolean(message))
     : [];
   const contextUsed = normalizeSelectedNotes(value.contextUsed);
   const missingContext = normalizeSelectedNotes(value.missingContext);
+  const graphHints = normalizeGraphHints(value.graphHints);
   const contextDiagnostics = normalizeContextDiagnostics(value.contextDiagnostics);
   const runtimeStatus = normalizeRuntimeStatus(value.runtimeStatus, value.isDevelopmentFallback === true);
 
@@ -363,6 +421,9 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     missingContext,
     contextDiagnostics,
     contextQualitySummary: normalizeContextQualitySummary(value.contextQualitySummary ?? contextDiagnostics, [...contextUsed, ...missingContext]),
+    graphHints,
+    graphHintCount: typeof value.graphHintCount === "number" && Number.isFinite(value.graphHintCount) ? Math.max(0, Math.floor(value.graphHintCount)) : graphHints.length,
+    graphStatus: normalizeGraphStatus(value.graphStatus),
     assumptions: normalizeStringList(value.assumptions),
     suggestedActions: normalizeSuggestedActions(value.suggestedActions),
     savedToVault: value.savedToVault === true,
@@ -393,6 +454,9 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     request.message,
   );
   const { contextPackage, contextUsed, missingContext, contextDiagnostics, contextQualitySummary } = contextPackResult;
+  const graphHints = contextPackage.graphHints ?? [];
+  const graphHintCount = contextPackage.graphHintCount ?? graphHints.length;
+  const graphStatus = contextPackage.graphStatus ?? "empty";
   const now = new Date().toISOString();
   const existingSession = request.sessionId ? await readAppChatSession(request.sessionId) : null;
   const continuedSession = existingSession?.appId === request.appId ? existingSession : null;
@@ -480,6 +544,9 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     ...(runtimeAgent ? { runtimeAgent } : {}),
     contextDiagnostics,
     contextQualitySummary,
+    graphHints,
+    graphHintCount,
+    graphStatus,
     messages: [
       ...(continuedSession?.messages ?? []),
       {
@@ -499,6 +566,7 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
         ...(runtimeAgent ? { runtimeAgent } : {}),
         ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
         contextUsedCount: contextUsed.length,
+        graphHintCount,
       },
     ],
   };
@@ -526,6 +594,9 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     ...(runtimeAgent ? { runtimeAgent } : {}),
     contextDiagnostics,
     contextQualitySummary,
+    graphHints,
+    graphHintCount,
+    graphStatus,
   };
 }
 

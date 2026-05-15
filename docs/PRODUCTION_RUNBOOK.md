@@ -316,10 +316,20 @@ Live app-turn request shape:
   "sourceId": "holdstation__holdstation-mini-app",
   "userMessage": "hi, introduce yourself as the CMO for this workspace",
   "history": [],
-  "contextPack": {},
+  "contextPack": {
+    "items": ["Current Priority", "App Memory", "Latest Sessions", "Memory Candidates"],
+    "graphStatus": "available",
+    "graphHintCount": 5,
+    "graphHints": ["app-scoped hints only"]
+  },
+  "graphStatus": "available",
+  "graphHintCount": 5,
+  "graphHints": ["app-scoped hints only"],
   "metadata": {}
 }
 ```
+
+Graph hints are additive Phase 1.9 context. They must come only from the resolved app source (`holdstation__holdstation-mini-app`) and the physical Holdstation Mini App vault path. Outside-vault links can be logged as exclusions, but their content must not be injected.
 
 Successful live response shape:
 

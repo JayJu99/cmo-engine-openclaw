@@ -1487,6 +1487,8 @@ function sessionSummary(session: Awaited<ReturnType<typeof readAppChatSessions>>
     isDevelopmentFallback: session.isDevelopmentFallback === true,
     contextUsedCount: session.contextUsed.length,
     contextQualitySummary: session.contextQualitySummary,
+    graphHintCount: session.graphHintCount ?? session.graphHints?.length ?? 0,
+    graphStatus: session.graphStatus,
     savedToVault: session.savedToVault === true,
     rawCapturePath: session.rawCapturePath,
     sessionNotePath: session.sessionNotePath,
@@ -1993,6 +1995,12 @@ function formatNoteLinks(notes: VaultNoteRef[]): string {
   return notes.length ? notes.map((note) => `- [[${note.path}|${note.title}]]`).join("\n") : "- None.";
 }
 
+function formatGraphHintLinks(hints: NonNullable<Awaited<ReturnType<typeof readAppChatSession>>>["graphHints"]): string {
+  return hints?.length
+    ? hints.map((hint) => `- [[${hint.path}|${hint.title}]] - ${hint.sourceType}; ${hint.confidence}; ${hint.reason}`).join("\n")
+    : "- None.";
+}
+
 function formatMessagesByRole(session: Awaited<ReturnType<typeof readAppChatSession>>): {
   userInputs: string;
   cmoResponse: string;
@@ -2043,6 +2051,8 @@ function sessionNoteMarkdown(app: AppWorkspace, session: NonNullable<Awaited<Ret
     `runtime_agent: ${session.runtimeAgent ?? "not_captured"}`,
     `attempted_runtime_mode: ${session.attemptedRuntimeMode ?? "not_captured"}`,
     session.runtimeErrorReason ? `runtime_error_reason: ${session.runtimeErrorReason}` : "runtime_error_reason: none",
+    `graph_status: ${session.graphStatus ?? "empty"}`,
+    `graph_hint_count: ${session.graphHintCount ?? session.graphHints?.length ?? 0}`,
     `fallback: ${session.isDevelopmentFallback ? "true" : "false"}`,
     `runtime_fallback: ${session.isRuntimeFallback ? "true" : "false"}`,
     "source:",
@@ -2086,6 +2096,11 @@ function sessionNoteMarkdown(app: AppWorkspace, session: NonNullable<Awaited<Ret
     "",
     "## Missing Context",
     formatNoteLinks(session.missingContext ?? []),
+    "",
+    "## Graph Context Hints",
+    `Graph status: ${session.graphStatus ?? "empty"}`,
+    `Graph hint count: ${session.graphHintCount ?? session.graphHints?.length ?? 0}`,
+    formatGraphHintLinks(session.graphHints),
     "",
     "## User Inputs",
     messages.userInputs,
@@ -2310,6 +2325,16 @@ function formatQualifiedNoteList(notes: VaultNoteRef[] | undefined, emptyText: s
     .join("\n");
 }
 
+function formatRawGraphHints(request: RawCaptureRequest): string {
+  if (!request.graphHints?.length) {
+    return "- None.";
+  }
+
+  return request.graphHints
+    .map((hint) => `- [[${hint.path}|${hint.title}]] - ${hint.sourceType}; confidence: ${hint.confidence}; ${hint.reason}`)
+    .join("\n");
+}
+
 function contextQualitySummaryFromRequest(request: RawCaptureRequest): CMOContextQualitySummary {
   if (request.contextQualitySummary) {
     return request.contextQualitySummary;
@@ -2379,6 +2404,8 @@ function rawCaptureDiagnostics(request: RawCaptureRequest) {
     `- Draft notes: ${qualitySummary.draftCount}`,
     `- Placeholder/draft notes: ${qualitySummary.placeholderOrDraftCount}`,
     `- Context characters sent: ${totalChars}`,
+    `- Graph status: ${request.graphStatus ?? "empty"}`,
+    `- Graph hints: ${request.graphHintCount ?? request.graphHints?.length ?? 0}`,
   ].join("\n");
 }
 
@@ -2464,6 +2491,11 @@ function formatRawCaptureSection(request: RawCaptureRequest, date: string, times
     "",
     "### Context Quality",
     formatContextQuality(request),
+    "",
+    "### Graph Context Hints",
+    `Graph status: ${request.graphStatus ?? "empty"}`,
+    `Graph hint count: ${request.graphHintCount ?? request.graphHints?.length ?? 0}`,
+    formatRawGraphHints(request),
     "",
     "### User Messages",
     userMessages.length ? userMessages.map((message) => `- ${message.content.trim() || "(empty)"}`).join("\n") : "- None captured.",
