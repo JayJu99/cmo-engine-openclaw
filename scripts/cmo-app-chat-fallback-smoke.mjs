@@ -14,7 +14,7 @@ function assert(condition, message, detail) {
 }
 
 function containsRecommendation(answer) {
-  return /Action\s+1:/i.test(answer) || /recommended|recommendation|focus this/i.test(answer);
+  return /## Recommended Actions/i.test(answer) || /Action\s+1:/i.test(answer) || /recommended|recommendation|focus this/i.test(answer);
 }
 
 function containsContextUsed(answer) {
@@ -48,70 +48,94 @@ function responseDiagnostics(response, contentType, rawBody) {
   };
 }
 
-const payload = {
-  workspaceId: "holdstation",
-  appId: "holdstation-mini-app",
-  appName: "Holdstation Mini App",
-  message:
-    "Based on the current priority and App Memory, give me 3 recommended CMO actions for Holdstation Mini App this week. Also state which context you used.",
-  topic: "Phase 1.86B fallback smoke",
-  context: {
-    selectedNotes: [],
-    mode: "app_context",
-  },
-};
 const auth = authorizationHeader();
 const headers = {
   "Content-Type": "application/json",
   ...(auth ? { Authorization: auth } : {}),
 };
 
-const response = await fetch(endpoint, {
-  method: "POST",
-  headers,
-  body: JSON.stringify(payload),
-});
-const contentType = response.headers.get("content-type") || "";
-const rawBody = await response.text();
-const data = contentType.toLowerCase().includes("json")
-  ? (() => {
-      try {
-        return JSON.parse(rawBody);
-      } catch {
-        return null;
-      }
-    })()
-  : null;
-const diagnostics = responseDiagnostics(response, contentType, rawBody);
+async function postChat(message, topic) {
+  const payload = {
+    workspaceId: "holdstation",
+    appId: "holdstation-mini-app",
+    appName: "Holdstation Mini App",
+    message,
+    topic,
+    context: {
+      selectedNotes: [],
+      mode: "app_context",
+    },
+  };
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+  const contentType = response.headers.get("content-type") || "";
+  const rawBody = await response.text();
+  const data = contentType.toLowerCase().includes("json")
+    ? (() => {
+        try {
+          return JSON.parse(rawBody);
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+  const diagnostics = responseDiagnostics(response, contentType, rawBody);
 
-assert(response.ok, `Expected HTTP 2xx from ${endpoint}`, diagnostics);
-assert(data && typeof data === "object", "Expected JSON response body", diagnostics);
-assert(data.status === "completed", "Expected completed session status", data);
-assert(data.runtimeStatus === "live_failed_then_fallback", "Expected live runtime attempt to fall back", data);
-assert(data.attemptedRuntimeMode === "live", "Expected attemptedRuntimeMode=live", data);
-assert(data.runtimeMode === "fallback", "Expected runtimeMode=fallback", data);
-assert(data.isRuntimeFallback === true, "Expected isRuntimeFallback=true", data);
-assert(allowedReasons.has(data.runtimeErrorReason), "Expected a controlled runtimeErrorReason", data);
+  assert(response.ok, `Expected HTTP 2xx from ${endpoint}`, diagnostics);
+  assert(data && typeof data === "object", "Expected JSON response body", diagnostics);
 
-if (expectedReason !== "any") {
-  assert(data.runtimeErrorReason === expectedReason, `Expected runtimeErrorReason=${expectedReason}`, data);
+  return data;
 }
 
-assert(typeof data.answer === "string" && data.answer.trim().length > 120, "Expected a useful fallback answer", data);
-assert(!data.answer.trim().startsWith("Fallback response:"), "Expected answer to be more than diagnostics", data.answer);
-assert(containsRecommendation(data.answer), "Expected at least one recommendation in answer", data.answer);
-assert(containsContextUsed(data.answer), "Expected answer to include context used", data.answer);
+function assertFallbackMetadata(data) {
+  assert(data.status === "completed", "Expected completed session status", data);
+  assert(data.runtimeStatus === "live_failed_then_fallback", "Expected live runtime attempt to fall back", data);
+  assert(data.attemptedRuntimeMode === "live", "Expected attemptedRuntimeMode=live", data);
+  assert(data.runtimeMode === "fallback", "Expected runtimeMode=fallback", data);
+  assert(data.isRuntimeFallback === true, "Expected isRuntimeFallback=true", data);
+  assert(allowedReasons.has(data.runtimeErrorReason), "Expected a controlled runtimeErrorReason", data);
+
+  if (expectedReason !== "any") {
+    assert(data.runtimeErrorReason === expectedReason, `Expected runtimeErrorReason=${expectedReason}`, data);
+  }
+}
+
+const greeting = await postChat("hi", "Phase 1.86D fallback greeting smoke");
+assertFallbackMetadata(greeting);
+assert(typeof greeting.answer === "string" && greeting.answer.trim().length > 80, "Expected a conversational greeting answer", greeting);
+assert(/Hi Jay|I'm ready|I’m ready/i.test(greeting.answer), "Expected greeting to respond conversationally", greeting.answer);
+assert(!/## Recommended Actions/i.test(greeting.answer), "Greeting should not return recommendation template", greeting.answer);
+assert(/Runtime Note/i.test(greeting.answer), "Greeting should include runtime note", greeting.answer);
+
+const recommendation = await postChat(
+  "Based on the current priority and App Memory, give me 3 recommended CMO actions for Holdstation Mini App this week. Also state which context you used.",
+  "Phase 1.86D fallback recommendation smoke",
+);
+assertFallbackMetadata(recommendation);
+assert(typeof recommendation.answer === "string" && recommendation.answer.trim().length > 120, "Expected a useful fallback answer", recommendation);
+assert(!recommendation.answer.trim().startsWith("Fallback response:"), "Expected answer to be more than diagnostics", recommendation.answer);
+assert(containsRecommendation(recommendation.answer), "Expected at least one recommendation in answer", recommendation.answer);
+assert(containsContextUsed(recommendation.answer), "Expected answer to include context used", recommendation.answer);
 
 console.log(
   JSON.stringify(
     {
       ok: true,
-      sessionId: data.sessionId,
-      runtimeStatus: data.runtimeStatus,
-      attemptedRuntimeMode: data.attemptedRuntimeMode,
-      runtimeMode: data.runtimeMode,
-      runtimeErrorReason: data.runtimeErrorReason,
-      answerPreview: data.answer.slice(0, 260),
+      greeting: {
+        sessionId: greeting.sessionId,
+        runtimeStatus: greeting.runtimeStatus,
+        runtimeErrorReason: greeting.runtimeErrorReason,
+        answerPreview: greeting.answer.slice(0, 220),
+      },
+      recommendation: {
+        sessionId: recommendation.sessionId,
+        runtimeStatus: recommendation.runtimeStatus,
+        runtimeErrorReason: recommendation.runtimeErrorReason,
+        answerPreview: recommendation.answer.slice(0, 260),
+      },
     },
     null,
     2,

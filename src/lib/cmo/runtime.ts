@@ -69,6 +69,8 @@ interface FallbackComposition {
   suggestedActions: CMOAppChatResponse["suggestedActions"];
 }
 
+type FallbackIntent = "greeting" | "start_session" | "strategic_recommendation" | "context_explanation" | "general";
+
 function runtimeModeFromStatus(status: CMORuntimeStatus): CmoRuntimeMode {
   if (status === "connected") {
     return "live";
@@ -114,6 +116,44 @@ function fallbackRecommendations(input: CmoRuntimeTurnInput): CMOAppChatResponse
   ];
 }
 
+function normalizeMessage(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function fallbackIntent(message: string): FallbackIntent {
+  const normalized = normalizeMessage(message);
+
+  if (/^(hi|hello|hey|yo|chao|xin chao|alo|hi there|hello there)$/.test(normalized)) {
+    return "greeting";
+  }
+
+  if (/\b(context|memory|source|sources|using|loaded|included)\b/.test(normalized) && /\b(what|which|show|explain|tell)\b/.test(normalized)) {
+    return "context_explanation";
+  }
+
+  if (/\b(start|begin|kick off|new session|cmo session|what should we do next|what next|next)\b/.test(normalized)) {
+    return "start_session";
+  }
+
+  if (/\b(recommend|recommendation|action|actions|plan|focus|priority|strategy|strategic|campaign|growth|marketing|this week|next step|next steps)\b/.test(normalized)) {
+    return "strategic_recommendation";
+  }
+
+  return "general";
+}
+
+function runtimeNote(reason: string): string {
+  return reason === "Live runtime unavailable for app chat; fallback used."
+    ? "Live app-chat is unavailable; fallback generated this response from workspace context."
+    : `${reason} Fallback generated this response from workspace context.`;
+}
+
 function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackComposition {
   const contextList = input.contextUsed.length ? input.contextUsed.map((note) => note.title).join(", ") : "no context pack items were available";
   const qualitySummary = summarizeContextQuality([...input.contextUsed, ...input.missingContext]);
@@ -121,6 +161,78 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
   const suggestedActions = fallbackRecommendations(input);
   const contextUsedDisplay = contextLabels.length ? contextLabels.join(" / ") : contextList;
   const qualityLine = `${qualitySummary.confirmedCount} confirmed / ${qualitySummary.placeholderOrDraftCount} draft-placeholder / ${qualitySummary.missingCount} missing`;
+  const note = runtimeNote(reason);
+  const intent = fallbackIntent(input.message);
+
+  if (intent === "greeting") {
+    return {
+      answer: [
+        `Hi Jay, I'm ready. I'll use the current ${input.request.appName} context: ${contextUsedDisplay}.`,
+        "",
+        "What do you want to focus on: activation, retention, campaign messaging, or app memory cleanup?",
+        "",
+        "## Runtime Note",
+        "",
+        note,
+      ].join("\n"),
+      suggestedActions: [
+        {
+          type: "fallback_prompt",
+          label: "Choose a CMO focus area: activation, retention, campaign messaging, or app memory cleanup.",
+        },
+        ...DEFAULT_FALLBACK_ACTIONS,
+      ],
+    };
+  }
+
+  if (intent === "context_explanation") {
+    return {
+      answer: [
+        "## Context Used",
+        "",
+        `I'm using: ${contextUsedDisplay}.`,
+        `Quality: ${qualityLine}.`,
+        "",
+        "This context is resolved automatically from the Holdstation Mini App workspace. Vault file picking, all-vault RAG, fake metrics, and fake Task Tracker data are not part of this answer.",
+        "",
+        "## Runtime Note",
+        "",
+        note,
+      ].join("\n"),
+      suggestedActions: [
+        {
+          type: "fallback_prompt",
+          label: "Ask for recommendations, a campaign angle, retention loop, or app memory cleanup.",
+        },
+        ...DEFAULT_FALLBACK_ACTIONS,
+      ],
+    };
+  }
+
+  if (intent === "start_session" || intent === "general") {
+    return {
+      answer: [
+        `I'm ready to help with ${input.request.appName}. Based on the workspace context, the most useful next CMO angle is to choose one focus area before generating a plan.`,
+        "",
+        "Pick one: activation, retention, campaign messaging, or app memory cleanup.",
+        "",
+        "## Context Used",
+        "",
+        `Context used: ${contextUsedDisplay}.`,
+        "",
+        "## Runtime Note",
+        "",
+        note,
+      ].join("\n"),
+      suggestedActions: [
+        {
+          type: "fallback_prompt",
+          label: "Pick a focus area before generating recommendations.",
+        },
+        ...DEFAULT_FALLBACK_ACTIONS,
+      ],
+    };
+  }
 
   return {
     answer: [
@@ -142,9 +254,7 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
       "",
       "## Runtime Note",
       "",
-      reason === "Live runtime unavailable for app chat; fallback used."
-        ? "Live app-chat runtime is unavailable; fallback generated this answer from workspace context."
-        : `${reason} Fallback generated this answer from workspace context.`,
+      note,
     ].join("\n"),
     suggestedActions: [
       ...suggestedActions,
