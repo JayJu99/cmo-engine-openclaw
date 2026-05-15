@@ -133,16 +133,19 @@ function fallbackIntent(message: string): FallbackIntent {
     return "greeting";
   }
 
-  if (/\b(context|memory|source|sources|using|loaded|included)\b/.test(normalized) && /\b(what|which|show|explain|tell)\b/.test(normalized)) {
+  if (
+    /\b(recommend|recommended|recommendation|action|actions|plan|focus|priority|strategy|strategic|campaign|growth|marketing|activation|retention|increase activation|improve activation|this week|next step|next steps|what should we do next|what should i do next|what next)\b/.test(normalized) ||
+    /\b(nen lam gi|lam gi tiep|de xuat|hanh dong|chien luoc|tang activation|cai thien activation)\b/.test(normalized)
+  ) {
+    return "strategic_recommendation";
+  }
+
+  if (/\b(context|memory|source|sources|using|loaded|included)\b/.test(normalized) && /\b(what|which|show|explain|tell|state)\b/.test(normalized)) {
     return "context_explanation";
   }
 
-  if (/\b(start|begin|kick off|new session|cmo session|what should we do next|what next|next)\b/.test(normalized)) {
+  if (/\b(start|begin|kick off|new session|cmo session|next)\b/.test(normalized)) {
     return "start_session";
-  }
-
-  if (/\b(recommend|recommendation|action|actions|plan|focus|priority|strategy|strategic|campaign|growth|marketing|this week|next step|next steps)\b/.test(normalized)) {
-    return "strategic_recommendation";
   }
 
   return "general";
