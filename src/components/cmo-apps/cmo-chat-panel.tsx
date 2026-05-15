@@ -262,6 +262,7 @@ export function CMOChatPanel({
   initialRuntimeLabel = "",
   focusSignal = 0,
   relatedPriority,
+  activeSessionId,
 }: {
   app: AppWorkspace;
   contextBrief: CMOContextBrief;
@@ -271,6 +272,7 @@ export function CMOChatPanel({
   initialRuntimeLabel?: string;
   focusSignal?: number;
   relatedPriority?: string;
+  activeSessionId?: string | null;
 }) {
   const [messages, setMessages] = useState<CMOChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -428,7 +430,7 @@ export function CMOChatPanel({
             workspaceId: "holdstation",
             appId: app.id,
             appName: app.name,
-            sessionId: sessionId ?? undefined,
+            sessionId: activeSessionId ?? sessionId ?? undefined,
             message: question,
             topic: question.slice(0, 96),
             context: {
@@ -460,7 +462,9 @@ export function CMOChatPanel({
       setRuntimeAgent(response.runtimeAgent ?? null);
       setError(response.status === "failed" ? response.runtimeError || "CMO runtime returned an error." : null);
       setSendStatus(
-        response.isRuntimeFallback || response.runtimeStatus === "live_failed_then_fallback"
+        response.runtimeProvider === "dashboard" && response.runtimeAgent === "decision-review"
+          ? "Decision review updated from chat."
+          : response.isRuntimeFallback || response.runtimeStatus === "live_failed_then_fallback"
           ? response.runtimeErrorReason === "timeout"
             ? "Live app-turn timed out; fallback answer generated from workspace context."
             : response.runtimeErrorReason === "invalid_response" || response.runtimeErrorReason === "empty_answer"
@@ -649,7 +653,7 @@ export function CMOChatPanel({
             </div>
             <div>
               <CardTitle>CMO Chat</CardTitle>
-              <CardDescription>{sessionId ? `Session ${sessionId}` : `App context: ${app.name}`}</CardDescription>
+              <CardDescription>{activeSessionId ?? sessionId ? `Session ${activeSessionId ?? sessionId}` : `App context: ${app.name}`}</CardDescription>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -674,6 +678,9 @@ export function CMOChatPanel({
               {rawCapturePath ? "Raw Captured" : "Capture to Raw Vault"}
             </Button>
           </div>
+        </div>
+        <div className="border-b border-slate-100 bg-white px-5 py-3 text-xs font-medium text-slate-500">
+          Use chat for review commands like &quot;What should I review next?&quot; and &quot;Mark action 1 reviewed.&quot; Save and capture buttons remain operator controls for now.
         </div>
 
         {capturableMessages.length && runtimeExplanation(runtimeStatus, runtimeErrorReason) ? (

@@ -340,11 +340,29 @@ function reviewLabel(status: string | undefined): string {
   return status?.replace(/_/g, " ") ?? "unreviewed";
 }
 
-function decisionReviewCount(session: CMOChatSession | undefined): { reviewed: number; total: number } {
+function decisionLayerStatus(session: CMOChatSession | undefined): {
+  total: number;
+  reviewed: number;
+  pending: number;
+  suggestedActions: number;
+  memoryCandidates: number;
+  taskCandidates: number;
+  deferred: number;
+  approvedForLater: number;
+} {
   const layer = session?.decisionLayer;
 
   if (!layer) {
-    return { reviewed: 0, total: 0 };
+    return {
+      total: 0,
+      reviewed: 0,
+      pending: 0,
+      suggestedActions: 0,
+      memoryCandidates: 0,
+      taskCandidates: 0,
+      deferred: 0,
+      approvedForLater: 0,
+    };
   }
 
   const statuses = [
@@ -356,8 +374,14 @@ function decisionReviewCount(session: CMOChatSession | undefined): { reviewed: n
   ];
 
   return {
-    reviewed: statuses.filter((status) => status !== "unreviewed" && status !== "review_required").length,
     total: statuses.length,
+    reviewed: statuses.filter((status) => status !== "unreviewed" && status !== "review_required").length,
+    pending: statuses.filter((status) => status === "unreviewed" || status === "review_required").length,
+    suggestedActions: layer.suggestedActions.length,
+    memoryCandidates: layer.memoryCandidates.length,
+    taskCandidates: layer.taskCandidates.length,
+    deferred: statuses.filter((status) => status === "deferred").length,
+    approvedForLater: statuses.filter((status) => status === "approved_for_promotion_later" || status === "approved_for_task_later").length,
   };
 }
 
@@ -389,12 +413,14 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [reviewingDecisionItemId, setReviewingDecisionItemId] = useState<string | null>(null);
   const [decisionReviewStatus, setDecisionReviewStatus] = useState<string | null>(null);
   const [decisionReviewError, setDecisionReviewError] = useState<string | null>(null);
+  const [showAdvancedDecisionControls, setShowAdvancedDecisionControls] = useState(false);
   const [sessionFocusSignal, setSessionFocusSignal] = useState(0);
   const [memoryRefreshSignal, setMemoryRefreshSignal] = useState(0);
   const [promotionRefreshSignal, setPromotionRefreshSignal] = useState(0);
   const appNoteQuality = useMemo(() => summarizeContextQuality(appNotes), [appNotes]);
   const selectedQuality = contextBrief.contextQualitySummary;
   const selectedSession = selectedSessionId ? sessions.find((session) => session.id === selectedSessionId) : undefined;
+  const selectedDecisionStatus = decisionLayerStatus(selectedSession);
   const latestSession = sessions[0];
   const mostAppNotesArePlaceholders = appNoteQuality.selectedCount > 0 && appNoteQuality.placeholderCount > appNoteQuality.selectedCount / 2;
 
@@ -1230,6 +1256,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               initialRuntimeLabel={state.initialRuntimeLabel ?? ""}
               focusSignal={sessionFocusSignal}
               relatedPriority={priorityState.activePriority?.title}
+              activeSessionId={selectedSessionId}
             />
           </div>
 
@@ -1358,67 +1385,60 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
           {selectedSession ? (
             <SectionCard
-              title="Decision Review"
+              title="Decision Layer Status"
               icon={<icons.CheckCircle2 />}
-              action={<Badge variant={decisionReviewCount(selectedSession).reviewed ? "green" : "slate"}>{decisionReviewCount(selectedSession).reviewed}/{decisionReviewCount(selectedSession).total} reviewed</Badge>}
+              action={<Badge variant={selectedDecisionStatus.pending ? "orange" : "green"}>{selectedDecisionStatus.reviewed}/{selectedDecisionStatus.total} reviewed</Badge>}
             >
               {selectedSession.decisionLayer ? (
-                <div className="space-y-6">
-                  <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">
-                    Manual review only. Approved memory and task candidates are marked for later; nothing is promoted to App Memory or pushed to Task Tracker here.
+                <div className="space-y-5">
+                  <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800">
+                    <p className="font-semibold">CMO tracks these outputs automatically. Use chat to review or change status.</p>
+                    <p className="mt-1">Review and approval happen through CMO Chat. Nothing is pushed to Task Tracker or promoted to App Memory automatically. Ask: &quot;What should I review next?&quot;</p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase text-slate-400">Extracted Outputs</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.total}</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase text-slate-400">Pending Review</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.pending}</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase text-slate-400">Deferred</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.deferred}</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase text-slate-400">Approved Later</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.approvedForLater}</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase text-slate-400">Suggested Actions</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.suggestedActions}</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase text-slate-400">Memory Candidates</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.memoryCandidates}</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase text-slate-400">Task Candidates</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.taskCandidates}</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase text-slate-400">Vault Status</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Badge variant={selectedSession.savedToVault ? "green" : "slate"}>{selectedSession.savedToVault ? "saved" : "not saved"}</Badge>
+                        <Badge variant={selectedSession.rawCapturePath ? "green" : "slate"}>{selectedSession.rawCapturePath ? "raw captured" : "raw pending"}</Badge>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className="text-sm font-bold text-slate-950">Decisions</h3>
-                      <Badge variant="slate">{selectedSession.decisionLayer.decisions.length}</Badge>
-                    </div>
-                    {selectedSession.decisionLayer.decisions.length ? selectedSession.decisionLayer.decisions.map((item) => (
-                      <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                          <div>
-                            <div className="font-bold text-slate-950">{item.title}</div>
-                            <div className="mt-1 text-sm leading-6 text-slate-700">{item.statement}</div>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              <Badge variant="blue">extracted: {item.status}</Badge>
-                              <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
-                              <Badge variant="slate">{item.confidence} confidence</Badge>
-                            </div>
-                          </div>
-                          <div className="flex shrink-0 flex-wrap gap-2">
-                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("decision", item.id, "confirmed")}>Confirm</Button>
-                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("decision", item.id, "rejected")}>Reject</Button>
-                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("decision", item.id, "deferred")}>Defer</Button>
-                          </div>
-                        </div>
-                      </div>
-                    )) : <EmptyCopy>No decisions extracted for review.</EmptyCopy>}
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className="text-sm font-bold text-slate-950">Assumptions</h3>
-                      <Badge variant="slate">{selectedSession.decisionLayer.assumptions.length}</Badge>
-                    </div>
-                    {selectedSession.decisionLayer.assumptions.length ? selectedSession.decisionLayer.assumptions.map((item) => (
-                      <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                          <div>
-                            <div className="text-sm leading-6 text-slate-700">{item.statement}</div>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              <Badge variant={item.riskLevel === "high" ? "red" : item.riskLevel === "medium" ? "orange" : "slate"}>risk: {item.riskLevel ?? "not set"}</Badge>
-                              <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
-                              <Badge variant="slate">{item.confidence} confidence</Badge>
-                            </div>
-                          </div>
-                          <div className="flex shrink-0 flex-wrap gap-2">
-                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("assumption", item.id, "accepted")}>Accept</Button>
-                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("assumption", item.id, "risky")}>Risky</Button>
-                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("assumption", item.id, "rejected")}>Reject</Button>
-                          </div>
-                        </div>
-                      </div>
-                    )) : <EmptyCopy>No assumptions extracted for review.</EmptyCopy>}
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-slate-600">Detailed outputs are read-only by default.</div>
+                    <Button type="button" size="sm" variant="outline" onClick={() => setShowAdvancedDecisionControls((current) => !current)}>
+                      {showAdvancedDecisionControls ? <icons.ChevronUp /> : <icons.ChevronDown />}
+                      {showAdvancedDecisionControls ? "Hide advanced controls" : "Show advanced controls"}
+                    </Button>
                   </div>
 
                   <div className="grid gap-6 xl:grid-cols-3">
@@ -1435,7 +1455,9 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                             <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
                             <Badge variant="slate">{item.priorityHint ?? "no priority"} priority</Badge>
                           </div>
-                          <Button className="mt-3" size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("suggestedAction", item.id, "reviewed")}>Mark Reviewed</Button>
+                          {showAdvancedDecisionControls ? (
+                            <Button className="mt-3" size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("suggestedAction", item.id, "reviewed")}>Mark Reviewed</Button>
+                          ) : null}
                         </div>
                       )) : <EmptyCopy>No suggested actions extracted.</EmptyCopy>}
                     </div>
@@ -1452,11 +1474,13 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                             <Badge variant="blue">{item.type}</Badge>
                             <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
                           </div>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("memoryCandidate", item.id, "approved_for_promotion_later")}>Approve Later</Button>
-                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("memoryCandidate", item.id, "rejected")}>Reject</Button>
-                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("memoryCandidate", item.id, "deferred")}>Defer</Button>
-                          </div>
+                          {showAdvancedDecisionControls ? (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("memoryCandidate", item.id, "approved_for_promotion_later")}>Approve Later</Button>
+                              <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("memoryCandidate", item.id, "rejected")}>Reject</Button>
+                              <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("memoryCandidate", item.id, "deferred")}>Defer</Button>
+                            </div>
+                          ) : null}
                         </div>
                       )) : <EmptyCopy>No memory candidates extracted.</EmptyCopy>}
                     </div>
@@ -1474,11 +1498,13 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                             <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
                             <Badge variant="slate">{item.pushStatus}</Badge>
                           </div>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("taskCandidate", item.id, "approved_for_task_later")}>Approve Later</Button>
-                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("taskCandidate", item.id, "rejected")}>Reject</Button>
-                            <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("taskCandidate", item.id, "deferred")}>Defer</Button>
-                          </div>
+                          {showAdvancedDecisionControls ? (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("taskCandidate", item.id, "approved_for_task_later")}>Approve Later</Button>
+                              <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("taskCandidate", item.id, "rejected")}>Reject</Button>
+                              <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("taskCandidate", item.id, "deferred")}>Defer</Button>
+                            </div>
+                          ) : null}
                         </div>
                       )) : <EmptyCopy>No task candidates extracted.</EmptyCopy>}
                     </div>

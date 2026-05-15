@@ -541,6 +541,14 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
+function appendMessage(session: CMOChatSession, message: CMOChatMessage): CMOChatSession {
+  return {
+    ...session,
+    messages: [...session.messages, message],
+    updatedAt: message.createdAt,
+  };
+}
+
 function normalizeSession(value: unknown): CMOChatSession | null {
   if (!isRecord(value)) {
     return null;
@@ -629,6 +637,17 @@ function normalizeSession(value: unknown): CMOChatSession | null {
 
 export async function createAppChatSession(body: unknown): Promise<CMOAppChatResponse> {
   const request = normalizeAppChatRequest(body);
+  const now = new Date().toISOString();
+  const existingSession = request.sessionId ? await readAppChatSession(request.sessionId) : null;
+  const continuedSession = existingSession?.appId === request.appId ? existingSession : null;
+  const messageId = `msg_${randomUUID().slice(0, 12)}`;
+  const assistantId = `msg_${randomUUID().slice(0, 12)}`;
+  const localCommand = continuedSession ? parseLocalChatCommand(request.message) : null;
+
+  if (localCommand && continuedSession) {
+    return handleLocalChatCommand(localCommand, request, continuedSession, now, messageId, assistantId);
+  }
+
   const runtime = request.forceFallback
     ? new FallbackRuntime({
         status: "live_failed_then_fallback",
@@ -649,12 +668,7 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
   const graphHints = contextPackage.graphHints ?? [];
   const graphHintCount = contextPackage.graphHintCount ?? graphHints.length;
   const graphStatus = contextPackage.graphStatus ?? "empty";
-  const now = new Date().toISOString();
-  const existingSession = request.sessionId ? await readAppChatSession(request.sessionId) : null;
-  const continuedSession = existingSession?.appId === request.appId ? existingSession : null;
   const sessionId = continuedSession?.id ?? `session_${now.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
-  const messageId = `msg_${randomUUID().slice(0, 12)}`;
-  const assistantId = `msg_${randomUUID().slice(0, 12)}`;
   let answer = "";
   let status: CMOChatSession["status"] = "completed";
   let assumptions: string[] = [];
@@ -828,6 +842,296 @@ export async function readAppChatSessions(limit = DEFAULT_LIMIT, appId?: string)
 
 export async function readAppChatSession(sessionId: string): Promise<CMOChatSession | null> {
   return normalizeSession(await readJsonFile(sessionPath(sessionId)));
+}
+
+type LocalChatCommand =
+  | {
+      type: "review";
+      itemType: DecisionLayerReviewItemType;
+      ordinal: number;
+      reviewStatus: string;
+      noun: string;
+      completionCopy: string;
+      boundaryCopy: string;
+    }
+  | {
+      type: "pending_summary";
+    };
+
+function parsePositiveOrdinal(value: string | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const ordinal = Number.parseInt(value, 10);
+
+  return Number.isFinite(ordinal) && ordinal > 0 ? ordinal : null;
+}
+
+function parseLocalChatCommand(message: string): LocalChatCommand | null {
+  const normalized = message.toLowerCase().replace(/[?.!]+$/g, "").replace(/\s+/g, " ").trim();
+
+  if (/^(what should i review next|what do i review next|show pending review|show pending reviews|review queue)$/.test(normalized)) {
+    return { type: "pending_summary" };
+  }
+
+  const actionMatch = normalized.match(/^(?:mark|approve)\s+(?:suggested\s+)?action\s+(\d+)(?:\s+(?:as\s+)?reviewed)?$/);
+  const actionOrdinal = parsePositiveOrdinal(actionMatch?.[1]);
+
+  if (actionOrdinal) {
+    return {
+      type: "review",
+      itemType: "suggestedAction",
+      ordinal: actionOrdinal,
+      reviewStatus: "reviewed",
+      noun: "Suggested Action",
+      completionCopy: "marked Suggested Action",
+      boundaryCopy: "Nothing was pushed to Task Tracker.",
+    };
+  }
+
+  const memoryMatch = normalized.match(/^(approve|defer|reject)\s+memory(?:\s+candidate)?\s+(\d+)$/);
+  const memoryOrdinal = parsePositiveOrdinal(memoryMatch?.[2]);
+
+  if (memoryMatch?.[1] && memoryOrdinal) {
+    const verb = memoryMatch[1];
+    const reviewStatus = verb === "approve" ? "approved_for_promotion_later" : verb === "defer" ? "deferred" : "rejected";
+
+    return {
+      type: "review",
+      itemType: "memoryCandidate",
+      ordinal: memoryOrdinal,
+      reviewStatus,
+      noun: "Memory Candidate",
+      completionCopy: `${verb === "approve" ? "approved" : verb === "defer" ? "deferred" : "rejected"} Memory Candidate`,
+      boundaryCopy: "Nothing was promoted to App Memory.",
+    };
+  }
+
+  const taskMatch = normalized.match(/^(approve|defer|reject)\s+task(?:\s+candidate)?\s+(\d+)$/);
+  const taskOrdinal = parsePositiveOrdinal(taskMatch?.[2]);
+
+  if (taskMatch?.[1] && taskOrdinal) {
+    const verb = taskMatch[1];
+    const reviewStatus = verb === "approve" ? "approved_for_task_later" : verb === "defer" ? "deferred" : "rejected";
+
+    return {
+      type: "review",
+      itemType: "taskCandidate",
+      ordinal: taskOrdinal,
+      reviewStatus,
+      noun: "Task Candidate",
+      completionCopy: `${verb === "approve" ? "approved" : verb === "defer" ? "deferred" : "rejected"} Task Candidate`,
+      boundaryCopy: "Nothing was pushed to Task Tracker.",
+    };
+  }
+
+  return null;
+}
+
+function reviewStatusValues(layer: CmoDecisionLayer): string[] {
+  return [
+    ...layer.decisions.map((item) => item.reviewStatus ?? "unreviewed"),
+    ...layer.assumptions.map((item) => item.reviewStatus ?? "unreviewed"),
+    ...layer.suggestedActions.map((item) => item.reviewStatus ?? "unreviewed"),
+    ...layer.memoryCandidates.map((item) => item.reviewStatus),
+    ...layer.taskCandidates.map((item) => item.reviewStatus ?? "unreviewed"),
+  ];
+}
+
+function decisionLayerReviewStats(layer: CmoDecisionLayer | undefined): {
+  total: number;
+  reviewed: number;
+  pending: number;
+  deferred: number;
+  approvedForLater: number;
+} {
+  const statuses = layer ? reviewStatusValues(layer) : [];
+
+  return {
+    total: statuses.length,
+    reviewed: statuses.filter((status) => status !== "unreviewed" && status !== "review_required").length,
+    pending: statuses.filter((status) => status === "unreviewed" || status === "review_required").length,
+    deferred: statuses.filter((status) => status === "deferred").length,
+    approvedForLater: statuses.filter((status) => status === "approved_for_promotion_later" || status === "approved_for_task_later").length,
+  };
+}
+
+function reviewSummaryLine(layer: CmoDecisionLayer | undefined): string {
+  const stats = decisionLayerReviewStats(layer);
+
+  return `Current status: ${stats.reviewed}/${stats.total} reviewed, ${stats.pending} pending, ${stats.deferred} deferred, ${stats.approvedForLater} approved for later.`;
+}
+
+function localCommandItem(layer: CmoDecisionLayer, itemType: DecisionLayerReviewItemType, ordinal: number): { id: string; title: string } | null {
+  if (itemType === "suggestedAction") {
+    const item = layer.suggestedActions[ordinal - 1];
+    return item ? { id: item.id, title: item.title } : null;
+  }
+
+  if (itemType === "memoryCandidate") {
+    const item = layer.memoryCandidates[ordinal - 1];
+    return item ? { id: item.id, title: item.statement } : null;
+  }
+
+  if (itemType === "taskCandidate") {
+    const item = layer.taskCandidates[ordinal - 1];
+    return item ? { id: item.id, title: item.title } : null;
+  }
+
+  if (itemType === "decision") {
+    const item = layer.decisions[ordinal - 1];
+    return item ? { id: item.id, title: item.title } : null;
+  }
+
+  const item = layer.assumptions[ordinal - 1];
+  return item ? { id: item.id, title: item.statement } : null;
+}
+
+function pendingReviewLines(layer: CmoDecisionLayer | undefined): string[] {
+  if (!layer) {
+    return ["No Decision Layer is available for this session yet."];
+  }
+
+  const lines: string[] = [];
+  const addPending = (label: string, index: number, title: string, status: string | undefined) => {
+    if (status === "unreviewed" || status === "review_required" || !status) {
+      lines.push(`${label} ${index}: ${title}`);
+    }
+  };
+
+  layer.suggestedActions.forEach((item, index) => addPending("Suggested Action", index + 1, item.title, item.reviewStatus));
+  layer.memoryCandidates.forEach((item, index) => addPending("Memory Candidate", index + 1, item.statement, item.reviewStatus));
+  layer.taskCandidates.forEach((item, index) => addPending("Task Candidate", index + 1, item.title, item.reviewStatus));
+  layer.decisions.forEach((item, index) => addPending("Decision", index + 1, item.title, item.reviewStatus));
+  layer.assumptions.forEach((item, index) => addPending("Assumption", index + 1, item.statement, item.reviewStatus));
+
+  return lines.length ? lines.slice(0, 5) : ["Everything extracted in this session has been reviewed or deferred."];
+}
+
+async function appendLocalCommandTurn(
+  session: CMOChatSession,
+  request: CMOAppChatRequest,
+  answer: string,
+  now: string,
+  messageId: string,
+  assistantId: string,
+): Promise<CMOAppChatResponse> {
+  const userMessage: CMOChatMessage = {
+    id: messageId,
+    role: "user",
+    content: request.message,
+    createdAt: now,
+  };
+  const assistantMessage: CMOChatMessage = {
+    id: assistantId,
+    role: "assistant",
+    content: answer,
+    createdAt: now,
+    runtimeMode: session.runtimeMode,
+    runtimeStatus: session.runtimeStatus,
+    runtimeProvider: "dashboard",
+    runtimeAgent: "decision-review",
+    contextUsedCount: session.contextUsed.length,
+    graphHintCount: session.graphHintCount ?? session.graphHints?.length ?? 0,
+  };
+  const withUser = appendMessage(session, userMessage);
+  const updated: CMOChatSession = {
+    ...appendMessage(withUser, assistantMessage),
+    status: "completed",
+  };
+
+  await writeJsonFile(sessionPath(session.id), updated);
+
+  return {
+    messageId: assistantId,
+    sessionId: session.id,
+    status: "completed",
+    answer,
+    assumptions: updated.assumptions ?? [],
+    suggestedActions: updated.suggestedActions ?? [],
+    contextUsed: updated.contextUsed,
+    missingContext: updated.missingContext ?? [],
+    isDevelopmentFallback: updated.isDevelopmentFallback === true,
+    isRuntimeFallback: updated.isRuntimeFallback === true,
+    runtimeStatus: updated.runtimeStatus ?? "live",
+    runtimeMode: updated.runtimeMode,
+    ...(updated.attemptedRuntimeMode ? { attemptedRuntimeMode: updated.attemptedRuntimeMode } : {}),
+    runtimeLabel: "CMO decision review",
+    runtimeProvider: "dashboard",
+    runtimeAgent: "decision-review",
+    contextDiagnostics: updated.contextDiagnostics,
+    contextQualitySummary: updated.contextQualitySummary,
+    graphHints: updated.graphHints,
+    graphHintCount: updated.graphHintCount,
+    graphStatus: updated.graphStatus,
+    decisionLayer: updated.decisionLayer,
+  };
+}
+
+async function handleLocalChatCommand(
+  command: LocalChatCommand,
+  request: CMOAppChatRequest,
+  session: CMOChatSession,
+  now: string,
+  messageId: string,
+  assistantId: string,
+): Promise<CMOAppChatResponse> {
+  if (command.type === "pending_summary") {
+    const answer = [
+      "Here is the next review queue for this CMO session:",
+      "",
+      ...pendingReviewLines(session.decisionLayer).map((line) => `- ${line}`),
+      "",
+      reviewSummaryLine(session.decisionLayer),
+      "You can say: \"Mark action 1 reviewed\", \"Approve memory candidate 1\", or \"Defer task candidate 1\".",
+      "Nothing is pushed to Task Tracker or promoted to App Memory automatically.",
+    ].join("\n");
+
+    return appendLocalCommandTurn(session, request, answer, now, messageId, assistantId);
+  }
+
+  const layer = session.decisionLayer;
+
+  if (!layer) {
+    return appendLocalCommandTurn(
+      session,
+      request,
+      "I cannot review this yet because this session does not have a Decision Layer. Ask a normal CMO question first, then review the extracted outputs.",
+      now,
+      messageId,
+      assistantId,
+    );
+  }
+
+  const item = localCommandItem(layer, command.itemType, command.ordinal);
+
+  if (!item) {
+    const answer = [
+      `I could not find ${command.noun} ${command.ordinal} in this session.`,
+      reviewSummaryLine(layer),
+      "Nothing was changed.",
+    ].join("\n");
+
+    return appendLocalCommandTurn(session, request, answer, now, messageId, assistantId);
+  }
+
+  const reviewedSession = await updateDecisionLayerReview({
+    appId: request.appId,
+    sessionId: session.id,
+    itemType: command.itemType,
+    itemId: item.id,
+    reviewStatus: command.reviewStatus,
+    reviewedBy: "cmo-chat",
+  });
+  const updatedSession = reviewedSession ?? session;
+  const answer = [
+    `Done - I ${command.completionCopy} ${command.ordinal} as ${command.reviewStatus.replace(/_/g, " ")}.`,
+    reviewSummaryLine(updatedSession.decisionLayer),
+    command.boundaryCopy,
+  ].join(" ");
+
+  return appendLocalCommandTurn(updatedSession, request, answer, now, messageId, assistantId);
 }
 
 export async function updateAppChatSessionMetadata(
