@@ -18,6 +18,7 @@ import type {
   CMOContextBrief,
   CMORuntimeStatus,
   CMOSessionSummary,
+  CmoDecisionLayer,
   ContextPack,
   ContextPackRuntimeMode,
   CMOContextQualitySummary,
@@ -2001,6 +2002,54 @@ function formatGraphHintLinks(hints: NonNullable<Awaited<ReturnType<typeof readA
     : "- None.";
 }
 
+function formatDecisionLayerCounts(layer: CmoDecisionLayer | undefined): string {
+  if (!layer) {
+    return "Decision layer not extracted.";
+  }
+
+  return [
+    `Extraction status: ${layer.extractionStatus}`,
+    `Decisions: ${layer.decisions.length}`,
+    `Assumptions: ${layer.assumptions.length}`,
+    `Suggested actions: ${layer.suggestedActions.length}`,
+    `Memory candidates: ${layer.memoryCandidates.length}`,
+    `Task candidates: ${layer.taskCandidates.length}`,
+  ].join("\n");
+}
+
+function formatDecisionLayerList<T extends { id: string; sourceSnippet?: string }>(
+  values: T[] | undefined,
+  render: (item: T) => string,
+): string {
+  return values?.length ? values.map(render).join("\n") : "- None.";
+}
+
+function formatDecisionLayerMarkdown(layer: CmoDecisionLayer | undefined): string {
+  if (!layer) {
+    return "Decision layer not extracted.";
+  }
+
+  return [
+    `Schema: ${layer.schemaVersion}`,
+    `Extraction: ${layer.extractionMode} / ${layer.extractionStatus}`,
+    "",
+    "### Decisions",
+    formatDecisionLayerList(layer.decisions, (item) => `- ${item.title} [${item.status}; ${item.confidence}] - ${item.statement}`),
+    "",
+    "### Assumptions",
+    formatDecisionLayerList(layer.assumptions, (item) => `- ${item.statement} [risk: ${item.riskLevel ?? "not_set"}; ${item.confidence}]`),
+    "",
+    "### Suggested Actions",
+    formatDecisionLayerList(layer.suggestedActions, (item) => `- ${item.title} [priority: ${item.priorityHint ?? "not_set"}; ${item.confidence}]${item.description ? ` - ${item.description}` : ""}`),
+    "",
+    "### Memory Candidates",
+    formatDecisionLayerList(layer.memoryCandidates, (item) => `- ${item.type}: ${item.statement} [review_required; ${item.confidence}]`),
+    "",
+    "### Task Candidates",
+    formatDecisionLayerList(layer.taskCandidates, (item) => `- ${item.title} [not_pushed; ${item.priorityHint ?? "not_set"}; ${item.confidence}]${item.description ? ` - ${item.description}` : ""}`),
+  ].join("\n");
+}
+
 function formatMessagesByRole(session: Awaited<ReturnType<typeof readAppChatSession>>): {
   userInputs: string;
   cmoResponse: string;
@@ -2053,6 +2102,9 @@ function sessionNoteMarkdown(app: AppWorkspace, session: NonNullable<Awaited<Ret
     session.runtimeErrorReason ? `runtime_error_reason: ${session.runtimeErrorReason}` : "runtime_error_reason: none",
     `graph_status: ${session.graphStatus ?? "empty"}`,
     `graph_hint_count: ${session.graphHintCount ?? session.graphHints?.length ?? 0}`,
+    `decision_layer_status: ${session.decisionLayer?.extractionStatus ?? "empty"}`,
+    `decision_count: ${session.decisionLayer?.decisions.length ?? 0}`,
+    `task_candidate_count: ${session.decisionLayer?.taskCandidates.length ?? 0}`,
     `fallback: ${session.isDevelopmentFallback ? "true" : "false"}`,
     `runtime_fallback: ${session.isRuntimeFallback ? "true" : "false"}`,
     "source:",
@@ -2102,6 +2154,9 @@ function sessionNoteMarkdown(app: AppWorkspace, session: NonNullable<Awaited<Ret
     `Graph hint count: ${session.graphHintCount ?? session.graphHints?.length ?? 0}`,
     formatGraphHintLinks(session.graphHints),
     "",
+    "## Decision Layer",
+    formatDecisionLayerMarkdown(session.decisionLayer),
+    "",
     "## User Inputs",
     messages.userInputs,
     "",
@@ -2115,7 +2170,9 @@ function sessionNoteMarkdown(app: AppWorkspace, session: NonNullable<Awaited<Ret
     suggestedActions,
     "",
     "## Potential Decisions",
-    "None locked. Decision locking comes in Phase 2.",
+    session.decisionLayer?.decisions.length
+      ? session.decisionLayer.decisions.map((decision) => `- ${decision.title}: ${decision.statement} [${decision.status}]`).join("\n")
+      : "None locked. Decision locking comes in Phase 2.",
     "",
     "## Related Tasks",
     session.relatedTasks?.length ? session.relatedTasks.map((task) => `- ${task}`).join("\n") : "None linked yet.",
@@ -2406,6 +2463,8 @@ function rawCaptureDiagnostics(request: RawCaptureRequest) {
     `- Context characters sent: ${totalChars}`,
     `- Graph status: ${request.graphStatus ?? "empty"}`,
     `- Graph hints: ${request.graphHintCount ?? request.graphHints?.length ?? 0}`,
+    `- Decision layer status: ${request.decisionLayer?.extractionStatus ?? "empty"}`,
+    `- Decision layer outputs: ${(request.decisionLayer?.decisions.length ?? 0) + (request.decisionLayer?.assumptions.length ?? 0) + (request.decisionLayer?.suggestedActions.length ?? 0) + (request.decisionLayer?.memoryCandidates.length ?? 0) + (request.decisionLayer?.taskCandidates.length ?? 0)}`,
   ].join("\n");
 }
 
@@ -2496,6 +2555,12 @@ function formatRawCaptureSection(request: RawCaptureRequest, date: string, times
     `Graph status: ${request.graphStatus ?? "empty"}`,
     `Graph hint count: ${request.graphHintCount ?? request.graphHints?.length ?? 0}`,
     formatRawGraphHints(request),
+    "",
+    "### Decision Layer",
+    formatDecisionLayerCounts(request.decisionLayer),
+    "",
+    "### Decision Layer Outputs",
+    formatDecisionLayerMarkdown(request.decisionLayer),
     "",
     "### User Messages",
     userMessages.length ? userMessages.map((message) => `- ${message.content.trim() || "(empty)"}`).join("\n") : "- None captured.",

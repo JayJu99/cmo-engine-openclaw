@@ -312,6 +312,28 @@ Implementation notes:
 - The dashboard app-turn request timeout is `CMO_APP_TURN_REQUEST_TIMEOUT_MS` and should be slightly longer than the adapter `CMO_APP_TURN_POLL_TIMEOUT_MS`.
 - If live app-turn fails, the dashboard keeps the existing fallback provenance: `attemptedRuntimeMode=live`, `runtimeMode=fallback`, `runtimeStatus=live_failed_then_fallback`, and a controlled `runtimeErrorReason`.
 - Phase 1.9 adds graph-boosted context hints additively. Hints are scoped to `workspaceId=holdstation`, `appId=holdstation-mini-app`, `sourceId=holdstation__holdstation-mini-app`, and the physical app vault path only. The agent must treat Graph Context Hints as supporting context after Current Priority and App Memory, and must not claim all-vault RAG.
+- Phase 1.95 adds a dashboard-side deterministic Decision Layer after each CMO Session answer. It extracts decisions, assumptions, suggested actions, memory candidates, and task candidates from the answer, runtime assumptions, and returned suggested actions. It does not add a second LLM call, does not push to Task Tracker, and does not auto-promote App Memory.
+
+Decision Layer response/session shape is additive:
+
+```json
+{
+  "decisionLayer": {
+    "schemaVersion": "cmo.decision-layer.v1",
+    "workspaceId": "holdstation",
+    "appId": "holdstation-mini-app",
+    "sourceId": "holdstation__holdstation-mini-app",
+    "sessionId": "session_...",
+    "extractionMode": "deterministic",
+    "extractionStatus": "completed",
+    "decisions": [],
+    "assumptions": [],
+    "suggestedActions": [],
+    "memoryCandidates": [],
+    "taskCandidates": []
+  }
+}
+```
 
 ### `GET /cmo/runs/:runId`
 

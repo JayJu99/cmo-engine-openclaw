@@ -13,6 +13,7 @@ import type {
   CMORuntimeStatus,
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
+  CmoDecisionLayer,
   ContextGraphHint,
   ContextGraphHintConfidence,
   ContextGraphHintSourceType,
@@ -22,6 +23,7 @@ import type {
 import { getAppWorkspace, HOLDSTATION_WORKSPACE_ID } from "@/lib/cmo/app-workspaces";
 import { buildContextPack, withContextPackMessage } from "@/lib/cmo/context-pack-builder";
 import { summarizeContextQuality } from "@/lib/cmo/context-quality";
+import { buildDecisionLayer } from "@/lib/cmo/decision-layer";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
@@ -57,6 +59,150 @@ function normalizeGraphSourceType(value: unknown): ContextGraphHintSourceType {
 
 function normalizeGraphConfidence(value: unknown): ContextGraphHintConfidence {
   return value === "high" || value === "medium" || value === "low" ? value : "low";
+}
+
+function normalizeDecisionLayer(value: unknown): CmoDecisionLayer | undefined {
+  if (!isRecord(value) || value.schemaVersion !== "cmo.decision-layer.v1") {
+    return undefined;
+  }
+
+  const sessionId = stringValue(value.sessionId);
+  const workspaceId = stringValue(value.workspaceId);
+  const appId = stringValue(value.appId);
+  const sourceId = stringValue(value.sourceId);
+  const createdAt = stringValue(value.createdAt);
+
+  if (!sessionId || !workspaceId || !appId || !sourceId || !createdAt) {
+    return undefined;
+  }
+
+  const confidence = (item: unknown): CmoDecisionLayer["decisions"][number]["confidence"] =>
+    isRecord(item) && (item.confidence === "high" || item.confidence === "medium" || item.confidence === "low") ? item.confidence : "low";
+  const optionalString = (item: unknown, key: string) => isRecord(item) && typeof item[key] === "string" && item[key].trim() ? item[key].trim() : undefined;
+  const text = (item: unknown, key: string, fallback = "") => isRecord(item) ? stringValue(item[key], fallback) : fallback;
+  const decisions: CmoDecisionLayer["decisions"] = [];
+  const assumptions: CmoDecisionLayer["assumptions"] = [];
+  const suggestedActions: CmoDecisionLayer["suggestedActions"] = [];
+  const memoryCandidates: CmoDecisionLayer["memoryCandidates"] = [];
+  const taskCandidates: CmoDecisionLayer["taskCandidates"] = [];
+
+  if (Array.isArray(value.decisions)) {
+    value.decisions.forEach((item, index) => {
+        const status = isRecord(item) && (item.status === "proposed" || item.status === "confirmed" || item.status === "rejected" || item.status === "deferred")
+          ? item.status
+          : "proposed";
+        const statement = text(item, "statement");
+
+        if (statement) {
+          decisions.push({
+            id: text(item, "id", `decision_${index + 1}`),
+            title: text(item, "title", statement.slice(0, 96)),
+            statement,
+            status,
+            rationale: optionalString(item, "rationale"),
+            confidence: confidence(item),
+            sourceSnippet: optionalString(item, "sourceSnippet"),
+          });
+        }
+      });
+  }
+
+  if (Array.isArray(value.assumptions)) {
+    value.assumptions.forEach((item, index) => {
+        const statement = text(item, "statement");
+        const riskLevel = isRecord(item) && (item.riskLevel === "low" || item.riskLevel === "medium" || item.riskLevel === "high") ? item.riskLevel : undefined;
+
+        if (statement) {
+          assumptions.push({
+            id: text(item, "id", `assumption_${index + 1}`),
+            statement,
+            riskLevel,
+            confidence: confidence(item),
+            sourceSnippet: optionalString(item, "sourceSnippet"),
+          });
+        }
+      });
+  }
+
+  if (Array.isArray(value.suggestedActions)) {
+    value.suggestedActions.forEach((item, index) => {
+        const title = text(item, "title");
+
+        if (title) {
+          suggestedActions.push({
+            id: text(item, "id", `action_${index + 1}`),
+            title,
+            description: optionalString(item, "description"),
+            timeframeHint: optionalString(item, "timeframeHint"),
+            ownerHint: optionalString(item, "ownerHint"),
+            priorityHint: isRecord(item) && (item.priorityHint === "low" || item.priorityHint === "medium" || item.priorityHint === "high") ? item.priorityHint : undefined,
+            expectedImpact: optionalString(item, "expectedImpact"),
+            confidence: confidence(item),
+            sourceSnippet: optionalString(item, "sourceSnippet"),
+          });
+        }
+      });
+  }
+
+  const memoryTypes = new Set(["product_truth", "user_insight", "growth_insight", "constraint", "channel", "narrative", "priority", "open_question", "other"]);
+
+  if (Array.isArray(value.memoryCandidates)) {
+    value.memoryCandidates.forEach((item, index) => {
+        const statement = text(item, "statement");
+
+        if (statement) {
+          memoryCandidates.push({
+            id: text(item, "id", `memory_${index + 1}`),
+            type: isRecord(item) && typeof item.type === "string" && memoryTypes.has(item.type) ? item.type as CmoDecisionLayer["memoryCandidates"][number]["type"] : "other",
+            statement,
+            reason: optionalString(item, "reason"),
+            reviewStatus: "review_required",
+            confidence: confidence(item),
+            sourceSnippet: optionalString(item, "sourceSnippet"),
+          });
+        }
+      });
+  }
+
+  if (Array.isArray(value.taskCandidates)) {
+    value.taskCandidates.forEach((item, index) => {
+        const title = text(item, "title");
+
+        if (title) {
+          taskCandidates.push({
+            id: text(item, "id", `task_${index + 1}`),
+            title,
+            description: optionalString(item, "description"),
+            ownerHint: optionalString(item, "ownerHint"),
+            dueDateHint: optionalString(item, "dueDateHint"),
+            priorityHint: isRecord(item) && (item.priorityHint === "low" || item.priorityHint === "medium" || item.priorityHint === "high") ? item.priorityHint : undefined,
+            source: "cmo_session",
+            pushStatus: "not_pushed",
+            confidence: confidence(item),
+            sourceSnippet: optionalString(item, "sourceSnippet"),
+          });
+        }
+      });
+  }
+  const extractionStatus = value.extractionStatus === "completed" || value.extractionStatus === "partial" || value.extractionStatus === "empty"
+    ? value.extractionStatus
+    : "partial";
+
+  return {
+    schemaVersion: "cmo.decision-layer.v1",
+    workspaceId,
+    appId,
+    sourceId,
+    sessionId,
+    createdAt,
+    extractionMode: "deterministic",
+    extractionStatus,
+    decisions,
+    assumptions,
+    suggestedActions,
+    memoryCandidates,
+    taskCandidates,
+  };
 }
 
 function safeId(value: string): string {
@@ -395,6 +541,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
   const contextUsed = normalizeSelectedNotes(value.contextUsed);
   const missingContext = normalizeSelectedNotes(value.missingContext);
   const graphHints = normalizeGraphHints(value.graphHints);
+  const decisionLayer = normalizeDecisionLayer(value.decisionLayer);
   const contextDiagnostics = normalizeContextDiagnostics(value.contextDiagnostics);
   const runtimeStatus = normalizeRuntimeStatus(value.runtimeStatus, value.isDevelopmentFallback === true);
 
@@ -424,6 +571,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     graphHints,
     graphHintCount: typeof value.graphHintCount === "number" && Number.isFinite(value.graphHintCount) ? Math.max(0, Math.floor(value.graphHintCount)) : graphHints.length,
     graphStatus: normalizeGraphStatus(value.graphStatus),
+    decisionLayer,
     assumptions: normalizeStringList(value.assumptions),
     suggestedActions: normalizeSuggestedActions(value.suggestedActions),
     savedToVault: value.savedToVault === true,
@@ -520,6 +668,17 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     ].join("\n");
   }
 
+  const decisionLayer = buildDecisionLayer({
+    workspaceId: request.workspaceId,
+    appId: request.appId,
+    sourceId: contextPackage.sourceId,
+    sessionId,
+    createdAt: now,
+    answer,
+    runtimeAssumptions: assumptions,
+    runtimeSuggestedActions: suggestedActions,
+  });
+
   const session: CMOChatSession = {
     id: sessionId,
     appId: request.appId,
@@ -547,6 +706,7 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     graphHints,
     graphHintCount,
     graphStatus,
+    decisionLayer,
     messages: [
       ...(continuedSession?.messages ?? []),
       {
@@ -597,6 +757,7 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     graphHints,
     graphHintCount,
     graphStatus,
+    decisionLayer,
   };
 }
 

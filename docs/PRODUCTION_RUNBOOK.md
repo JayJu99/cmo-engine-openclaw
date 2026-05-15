@@ -331,6 +331,16 @@ Live app-turn request shape:
 
 Graph hints are additive Phase 1.9 context. They must come only from the resolved app source (`holdstation__holdstation-mini-app`) and the physical Holdstation Mini App vault path. Outside-vault links can be logged as exclusions, but their content must not be injected.
 
+Decision Layer fields are additive Phase 1.95 outputs on dashboard chat/session responses. The dashboard extracts them deterministically after the live or fallback answer returns:
+
+- `decisions`
+- `assumptions`
+- `suggestedActions`
+- `memoryCandidates`
+- `taskCandidates`
+
+These are review surfaces only. They must not push to Task Tracker, promote App Memory, or trigger automation in Phase 1.95.
+
 Successful live response shape:
 
 ```json

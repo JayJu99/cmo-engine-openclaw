@@ -17,6 +17,7 @@ import type {
   CMORuntimeStatus,
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
+  CmoDecisionLayer,
   ContextGraphHint,
   ContextGraphStatus,
   RawCaptureResponse,
@@ -218,12 +219,16 @@ function captureSummary(
   qualitySummary: CMOContextQualitySummary,
   graphHints: ContextGraphHint[],
   graphStatus: ContextGraphStatus | null,
+  decisionLayer: CmoDecisionLayer | null,
 ): string {
   const userMessage = messages.find((message) => message.role === "user")?.content ?? "No user question captured.";
   const assistantMessage = [...messages].reverse().find((message) => message.role === "assistant")?.content ?? "No CMO response captured.";
   const contextLine = contextUsed.length ? contextUsed.map((note) => note.title).join(", ") : "No context pack items were included.";
   const missingLine = missingContext.length ? missingContext.map((note) => note.title).join(", ") : "None.";
   const graphLine = graphHints.length ? graphHints.map((hint) => `${hint.title} (${hint.path})`).join(", ") : "None.";
+  const decisionLine = decisionLayer
+    ? `${decisionLayer.decisions.length} decisions; ${decisionLayer.assumptions.length} assumptions; ${decisionLayer.suggestedActions.length} actions; ${decisionLayer.memoryCandidates.length} memory candidates; ${decisionLayer.taskCandidates.length} task candidates.`
+    : "No decision layer captured.";
 
   return [
     `App-specific CMO session for ${app.name}.`,
@@ -241,6 +246,7 @@ function captureSummary(
     `Graph status: ${graphStatus ?? "empty"}`,
     `Graph hints used: ${graphHints.length}`,
     `Graph hint refs: ${graphLine}`,
+    `Decision layer: ${decisionLine}`,
     `Context quality counts: ${qualitySummary.confirmedCount} confirmed, ${qualitySummary.draftCount} draft, ${qualitySummary.placeholderCount} placeholder, ${qualitySummary.missingCount} missing.`,
     `User asked: ${userMessage}`,
     `CMO response captured: ${assistantMessage}`,
@@ -279,6 +285,7 @@ export function CMOChatPanel({
   const [contextQualitySummary, setContextQualitySummary] = useState<CMOContextQualitySummary | undefined>(undefined);
   const [graphHints, setGraphHints] = useState<ContextGraphHint[]>(contextBrief.graphHints ?? []);
   const [graphStatus, setGraphStatus] = useState<ContextGraphStatus | null>(contextBrief.graphStatus ?? "empty");
+  const [decisionLayer, setDecisionLayer] = useState<CmoDecisionLayer | null>(null);
   const [isDevelopmentFallback, setIsDevelopmentFallback] = useState(false);
   const [isRuntimeFallback, setIsRuntimeFallback] = useState(false);
   const [runtimeStatus, setRuntimeStatus] = useState<CMORuntimeStatus | null>(initialRuntimeStatus);
@@ -408,6 +415,7 @@ export function CMOChatPanel({
     setContextQualitySummary(undefined);
     setGraphHints([]);
     setGraphStatus(null);
+    setDecisionLayer(null);
 
     try {
       const response = await readJsonResponse<CMOAppChatResponse>(
@@ -440,6 +448,7 @@ export function CMOChatPanel({
       setContextQualitySummary(response.contextQualitySummary ?? response.contextDiagnostics);
       setGraphHints(response.graphHints ?? []);
       setGraphStatus(response.graphStatus ?? "empty");
+      setDecisionLayer(response.decisionLayer ?? null);
       setIsDevelopmentFallback(response.isDevelopmentFallback);
       setIsRuntimeFallback(response.isRuntimeFallback === true);
       setRuntimeStatus(response.runtimeStatus);
@@ -586,6 +595,7 @@ export function CMOChatPanel({
               contextQualitySummary ?? summarizeContextQuality([...lastContextUsed, ...missingContext]),
               graphHints,
               graphStatus,
+              decisionLayer,
             ),
             selectedContextNotes: [...lastContextUsed, ...missingContext],
             messages: capturableMessages.map((message) => ({
@@ -607,6 +617,7 @@ export function CMOChatPanel({
             graphHints,
             graphHintCount: graphHints.length,
             graphStatus: graphStatus ?? undefined,
+            decisionLayer: decisionLayer ?? undefined,
             assumptions,
             suggestedActions,
           }),
@@ -748,6 +759,14 @@ export function CMOChatPanel({
               <div className="font-bold text-slate-950">Graph context</div>
               <div className="mt-1">
                 {graphStatus ?? "empty"}; {graphHints.length} hints
+              </div>
+            </div>
+            <div>
+              <div className="font-bold text-slate-950">Decision layer</div>
+              <div className="mt-1">
+                {decisionLayer
+                  ? `${decisionLayer.decisions.length} decisions; ${decisionLayer.suggestedActions.length} actions; ${decisionLayer.taskCandidates.length} tasks`
+                  : "Not extracted yet."}
               </div>
             </div>
             <div>

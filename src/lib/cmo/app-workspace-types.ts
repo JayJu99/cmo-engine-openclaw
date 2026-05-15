@@ -15,6 +15,19 @@ export type TaskSummarySource = "task-tracker" | "vault" | "placeholder";
 export type ContextGraphHintSourceType = "markdown-link" | "session-reference" | "promotion-candidate" | "raw-capture" | "keyword-match";
 export type ContextGraphHintConfidence = "high" | "medium" | "low";
 export type ContextGraphStatus = "not_configured" | "empty" | "available" | "partial";
+export type CmoDecisionStatus = "proposed" | "confirmed" | "rejected" | "deferred";
+export type CmoDecisionConfidence = "low" | "medium" | "high";
+export type CmoDecisionLayerExtractionStatus = "completed" | "partial" | "empty";
+export type CmoMemoryCandidateType =
+  | "product_truth"
+  | "user_insight"
+  | "growth_insight"
+  | "constraint"
+  | "channel"
+  | "narrative"
+  | "priority"
+  | "open_question"
+  | "other";
 
 export interface AppWorkspace {
   id: string;
@@ -59,6 +72,75 @@ export interface ContextGraphHint {
   confidence: ContextGraphHintConfidence;
   contentPreview?: string;
   exists: boolean;
+}
+
+export interface CmoDecisionItem {
+  id: string;
+  title: string;
+  statement: string;
+  status: CmoDecisionStatus;
+  rationale?: string;
+  confidence: CmoDecisionConfidence;
+  sourceSnippet?: string;
+}
+
+export interface CmoAssumptionItem {
+  id: string;
+  statement: string;
+  riskLevel?: "low" | "medium" | "high";
+  confidence: CmoDecisionConfidence;
+  sourceSnippet?: string;
+}
+
+export interface CmoSuggestedActionItem {
+  id: string;
+  title: string;
+  description?: string;
+  timeframeHint?: string;
+  ownerHint?: string;
+  priorityHint?: "low" | "medium" | "high";
+  expectedImpact?: string;
+  confidence: CmoDecisionConfidence;
+  sourceSnippet?: string;
+}
+
+export interface CmoMemoryCandidateItem {
+  id: string;
+  type: CmoMemoryCandidateType;
+  statement: string;
+  reason?: string;
+  reviewStatus: "review_required";
+  confidence: CmoDecisionConfidence;
+  sourceSnippet?: string;
+}
+
+export interface CmoTaskCandidateItem {
+  id: string;
+  title: string;
+  description?: string;
+  ownerHint?: string;
+  dueDateHint?: string;
+  priorityHint?: "low" | "medium" | "high";
+  source: "cmo_session";
+  pushStatus: "not_pushed";
+  confidence: CmoDecisionConfidence;
+  sourceSnippet?: string;
+}
+
+export interface CmoDecisionLayer {
+  schemaVersion: "cmo.decision-layer.v1";
+  workspaceId: string;
+  appId: string;
+  sourceId: string;
+  sessionId: string;
+  createdAt: string;
+  extractionMode: "deterministic";
+  extractionStatus: CmoDecisionLayerExtractionStatus;
+  decisions: CmoDecisionItem[];
+  assumptions: CmoAssumptionItem[];
+  suggestedActions: CmoSuggestedActionItem[];
+  memoryCandidates: CmoMemoryCandidateItem[];
+  taskCandidates: CmoTaskCandidateItem[];
 }
 
 export interface AppMemoryNoteSummary {
@@ -473,6 +555,7 @@ export interface CMOChatSession {
   graphHints?: ContextGraphHint[];
   graphHintCount?: number;
   graphStatus?: ContextGraphStatus;
+  decisionLayer?: CmoDecisionLayer;
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
   savedToVault?: boolean;
@@ -524,6 +607,7 @@ export interface CMOAppChatResponse {
   graphHints?: ContextGraphHint[];
   graphHintCount?: number;
   graphStatus?: ContextGraphStatus;
+  decisionLayer?: CmoDecisionLayer;
 }
 
 export interface RawCaptureRequest {
@@ -559,6 +643,7 @@ export interface RawCaptureRequest {
   graphHints?: ContextGraphHint[];
   graphHintCount?: number;
   graphStatus?: ContextGraphStatus;
+  decisionLayer?: CmoDecisionLayer;
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
   openQuestions?: string[];
