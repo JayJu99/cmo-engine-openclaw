@@ -9,6 +9,7 @@ import {
   type CmoRunListResponse,
   type CmoStatus,
 } from "@/lib/cmo/types";
+import type { CMOAppChatResponse, CMOChatMessage, CmoRuntimeMode, ContextPack } from "@/lib/cmo/app-workspace-types";
 import { getRemoteAdapterApiKey, getRemoteAdapterUrl } from "@/lib/cmo/config";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import { normalizeRun, validateNormalizedRun } from "@/lib/cmo/validation";
@@ -38,6 +39,25 @@ export type CmoRemoteStatus = {
   data_dir?: string;
   [key: string]: unknown;
 };
+
+export interface CmoAppTurnRequest {
+  workspaceId: string;
+  appId: string;
+  sourceId: string;
+  contextPack: ContextPack;
+  message: string;
+  history: CMOChatMessage[];
+}
+
+export interface CmoAppTurnResponse {
+  answer: string;
+  citations: Array<Record<string, string>>;
+  suggestedActions: CMOAppChatResponse["suggestedActions"];
+  suggestedCandidates: Array<Record<string, string>>;
+  contextUsed: string[];
+  runtimeMode?: CmoRuntimeMode;
+  rawRuntimeResponse?: unknown;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -251,6 +271,135 @@ function normalizeRemoteChatList(payload: unknown): CmoChatRunListResponse {
   };
 }
 
+function trimString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => trimString(item)).filter(Boolean).slice(0, 20);
+}
+
+function normalizeSuggestedActions(value: unknown): CMOAppChatResponse["suggestedActions"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item, index) => {
+      if (typeof item === "string" && item.trim()) {
+        return {
+          type: "runtime_suggestion",
+          label: item.trim(),
+        };
+      }
+
+      if (!isRecord(item)) {
+        return null;
+      }
+
+      const label = trimString(item.label ?? item.title ?? item.action);
+
+      if (!label) {
+        return null;
+      }
+
+      return {
+        type: trimString(item.type) || `runtime_suggestion_${index + 1}`,
+        label,
+      };
+    })
+    .filter((item): item is CMOAppChatResponse["suggestedActions"][number] => Boolean(item))
+    .slice(0, 8);
+}
+
+function normalizeRecordList(value: unknown): Array<Record<string, string>> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (typeof item === "string" && item.trim()) {
+        return { label: item.trim() };
+      }
+
+      if (!isRecord(item)) {
+        return null;
+      }
+
+      const normalized = Object.fromEntries(
+        Object.entries(item)
+          .map(([key, entry]) => [key, trimString(entry)])
+          .filter(([, entry]) => Boolean(entry)),
+      );
+
+      return Object.keys(normalized).length ? normalized : null;
+    })
+    .filter((item): item is Record<string, string> => Boolean(item))
+    .slice(0, 12);
+}
+
+function runtimeMode(value: unknown): CmoRuntimeMode | undefined {
+  return value === "live" || value === "fallback" || value === "configured_but_unreachable" ? value : undefined;
+}
+
+function isDashboardRunBriefPayload(payload: unknown): boolean {
+  if (!isRecord(payload)) {
+    return false;
+  }
+
+  if (payload.schema_version === CMO_SCHEMA_VERSION) {
+    return true;
+  }
+
+  return "summary" in payload || "actions" in payload || "signals" in payload || "agents" in payload || "reports" in payload || "vault" in payload || "campaigns" in payload;
+}
+
+function normalizeAppTurnResponse(payload: unknown): CmoAppTurnResponse {
+  if (isDashboardRunBriefPayload(payload)) {
+    throw new CmoAdapterError(
+      "Remote CMO Adapter returned dashboard run-brief JSON instead of app-turn JSON",
+      502,
+      "cmo_app_turn_dashboard_json",
+    );
+  }
+
+  if (!isRecord(payload)) {
+    throw new CmoAdapterError("Remote CMO Adapter app-turn response was not an object", 502, "cmo_app_turn_invalid_response");
+  }
+
+  const data = isRecord(payload.data) ? payload.data : null;
+  const source = data ?? payload;
+
+  if (isDashboardRunBriefPayload(source)) {
+    throw new CmoAdapterError(
+      "Remote CMO Adapter returned nested dashboard run-brief JSON instead of app-turn JSON",
+      502,
+      "cmo_app_turn_dashboard_json",
+    );
+  }
+
+  const answer = trimString(source.answer);
+
+  if (!answer) {
+    throw new CmoAdapterError("Remote CMO Adapter app-turn response did not include a usable answer", 502, "cmo_app_turn_empty_answer");
+  }
+
+  return {
+    answer,
+    citations: normalizeRecordList(source.citations),
+    suggestedActions: normalizeSuggestedActions(source.suggestedActions ?? source.suggested_actions),
+    suggestedCandidates: normalizeRecordList(source.suggestedCandidates ?? source.suggested_candidates),
+    contextUsed: stringList(source.contextUsed ?? source.context_used),
+    runtimeMode: runtimeMode(source.runtimeMode ?? source.runtime_mode),
+    rawRuntimeResponse: payload,
+  };
+}
+
 function countValue(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
@@ -319,6 +468,18 @@ export async function postRemoteChat(body: unknown): Promise<RemoteJsonResponse<
 
   return {
     data: normalizeRemoteChatRun(response.data),
+    status: response.status,
+  };
+}
+
+export async function postRemoteAppTurn(body: CmoAppTurnRequest): Promise<RemoteJsonResponse<CmoAppTurnResponse>> {
+  const response = await requestRemoteJson<unknown>("/cmo/app-turn", {
+    method: "POST",
+    body,
+  });
+
+  return {
+    data: normalizeAppTurnResponse(response.data),
     status: response.status,
   };
 }

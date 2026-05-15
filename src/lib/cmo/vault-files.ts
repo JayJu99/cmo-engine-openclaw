@@ -212,6 +212,7 @@ function normalizeVaultRelativePath(relativeVaultPath: string): string {
 function normalizeRuntimeStatus(value: unknown): CMORuntimeStatus | undefined {
   return value === "connected" ||
     value === "configured_but_unreachable" ||
+    value === "live_failed_then_fallback" ||
     value === "development_fallback" ||
     value === "runtime_error" ||
     value === "not_configured"
@@ -224,7 +225,9 @@ function contextPackRuntimeMode(status: CMORuntimeStatus): ContextPackRuntimeMod
     return "live";
   }
 
-  return status === "development_fallback" || status === "not_configured" ? "fallback" : status;
+  return status === "development_fallback" || status === "not_configured" || status === "live_failed_then_fallback"
+    ? "fallback"
+    : status;
 }
 
 async function readWorkspaceRuntimeStatus(): Promise<{
@@ -2018,7 +2021,10 @@ function sessionNoteMarkdown(app: AppWorkspace, session: NonNullable<Awaited<Ret
     `date: ${date}`,
     `runtime_status: ${session.runtimeStatus ?? "not_captured"}`,
     `runtime_mode: ${session.runtimeMode ?? "not_captured"}`,
+    `attempted_runtime_mode: ${session.attemptedRuntimeMode ?? "not_captured"}`,
+    session.runtimeErrorReason ? `runtime_error_reason: ${session.runtimeErrorReason}` : "runtime_error_reason: none",
     `fallback: ${session.isDevelopmentFallback ? "true" : "false"}`,
+    `runtime_fallback: ${session.isRuntimeFallback ? "true" : "false"}`,
     "source:",
     "  - \"[[../C-Level Priorities]]\"",
     "tags:",
@@ -2035,7 +2041,10 @@ function sessionNoteMarkdown(app: AppWorkspace, session: NonNullable<Awaited<Ret
     "## Runtime Status",
     `Runtime status: ${session.runtimeStatus ?? "not captured"}`,
     `Runtime mode: ${session.runtimeMode ?? "not captured"}`,
+    `Attempted runtime mode: ${session.attemptedRuntimeMode ?? "not captured"}`,
     `Fallback: ${session.isDevelopmentFallback ? "true" : "false"}`,
+    `Runtime fallback: ${session.isRuntimeFallback ? "true" : "false"}`,
+    session.runtimeErrorReason ? `Runtime error reason: ${session.runtimeErrorReason}` : "",
     session.runtimeError ? `Runtime error: ${session.runtimeError}` : "",
     "",
     "## Session ID",
@@ -2394,8 +2403,11 @@ function formatRawCaptureSection(request: RawCaptureRequest, date: string, times
     "Status: captured",
     `Runtime: ${runtimeStatus}`,
     `Runtime Mode: ${runtimeMode}`,
+    `Attempted Runtime Mode: ${request.attemptedRuntimeMode ?? "not_captured"}`,
     `Fallback: ${request.isDevelopmentFallback ? "true" : "false"}`,
+    `Runtime Fallback: ${request.isRuntimeFallback ? "true" : "false"}`,
     `Runtime Status: ${runtimeStatus}`,
+    `Runtime Error Reason: ${request.runtimeErrorReason ?? "none"}`,
     `Development Fallback: ${request.isDevelopmentFallback ? "yes" : "no"}`,
     "",
     "### Session Summary",

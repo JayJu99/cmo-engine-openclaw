@@ -15,6 +15,7 @@ import type {
   CMOContextQualitySummary,
   CMOChatMessage,
   CMORuntimeStatus,
+  CmoRuntimeErrorReason,
   CmoRuntimeMode,
   RawCaptureResponse,
   VaultNoteRef,
@@ -52,6 +53,10 @@ function runtimeStatusLabel(status: CMORuntimeStatus | null): string {
     return "Runtime unavailable";
   }
 
+  if (status === "live_failed_then_fallback") {
+    return "Live failed; fallback used";
+  }
+
   if (status === "runtime_error") {
     return "Runtime error";
   }
@@ -76,7 +81,7 @@ function runtimeStatusVariant(status: CMORuntimeStatus | null): "green" | "orang
     return "red";
   }
 
-  if (status === "development_fallback" || status === "not_configured") {
+  if (status === "development_fallback" || status === "not_configured" || status === "live_failed_then_fallback") {
     return "orange";
   }
 
@@ -90,6 +95,10 @@ function runtimeExplanation(status: CMORuntimeStatus | null): string | null {
 
   if (status === "development_fallback") {
     return "Using development fallback for this session.";
+  }
+
+  if (status === "live_failed_then_fallback") {
+    return "Live runtime unavailable for app chat; fallback used.";
   }
 
   if (status === "runtime_error") {
@@ -109,9 +118,12 @@ function captureSummary(
   runtimeStatus: CMORuntimeStatus | null,
   runtimeMode: CmoRuntimeMode | null,
   runtimeLabel: string,
+  attemptedRuntimeMode: CmoRuntimeMode | null,
+  runtimeErrorReason: CmoRuntimeErrorReason | null,
   contextUsed: VaultNoteRef[],
   missingContext: VaultNoteRef[],
   isDevelopmentFallback: boolean,
+  isRuntimeFallback: boolean,
   qualitySummary: CMOContextQualitySummary,
 ): string {
   const userMessage = messages.find((message) => message.role === "user")?.content ?? "No user question captured.";
@@ -123,7 +135,10 @@ function captureSummary(
     `App-specific CMO session for ${app.name}.`,
     runtimeStatusLabel(runtimeStatus),
     `Runtime mode: ${runtimeMode ?? "not captured"}`,
+    `Attempted runtime mode: ${attemptedRuntimeMode ?? "not captured"}`,
     `Fallback: ${isDevelopmentFallback ? "true" : "false"}`,
+    `Runtime fallback: ${isRuntimeFallback ? "true" : "false"}`,
+    `Runtime error reason: ${runtimeErrorReason ?? "none"}`,
     `Runtime label: ${runtimeStatus ? runtimeLabel || "Unlabeled runtime" : "Not checked"}`,
     `Context pack used: ${contextLine}`,
     `Unavailable context pack items: ${missingLine}`,
@@ -164,8 +179,11 @@ export function CMOChatPanel({
   const [contextDiagnostics, setContextDiagnostics] = useState<CMOContextDiagnostics | undefined>(undefined);
   const [contextQualitySummary, setContextQualitySummary] = useState<CMOContextQualitySummary | undefined>(undefined);
   const [isDevelopmentFallback, setIsDevelopmentFallback] = useState(false);
+  const [isRuntimeFallback, setIsRuntimeFallback] = useState(false);
   const [runtimeStatus, setRuntimeStatus] = useState<CMORuntimeStatus | null>(initialRuntimeStatus);
   const [runtimeMode, setRuntimeMode] = useState<CmoRuntimeMode | null>(null);
+  const [attemptedRuntimeMode, setAttemptedRuntimeMode] = useState<CmoRuntimeMode | null>(null);
+  const [runtimeErrorReason, setRuntimeErrorReason] = useState<CmoRuntimeErrorReason | null>(null);
   const [runtimeLabel, setRuntimeLabel] = useState(initialRuntimeLabel);
   const [isSending, setIsSending] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
@@ -194,6 +212,7 @@ export function CMOChatPanel({
         if (
           status === "connected" ||
           status === "configured_but_unreachable" ||
+          status === "live_failed_then_fallback" ||
           status === "development_fallback" ||
           status === "runtime_error" ||
           status === "not_configured"
@@ -272,6 +291,9 @@ export function CMOChatPanel({
     setRuntimeMode(null);
     setRuntimeLabel("");
     setIsDevelopmentFallback(false);
+    setIsRuntimeFallback(false);
+    setAttemptedRuntimeMode(null);
+    setRuntimeErrorReason(null);
     setLastContextUsed([]);
     setMissingContext([]);
     setAssumptions([]);
@@ -309,11 +331,20 @@ export function CMOChatPanel({
       setContextDiagnostics(response.contextDiagnostics);
       setContextQualitySummary(response.contextQualitySummary ?? response.contextDiagnostics);
       setIsDevelopmentFallback(response.isDevelopmentFallback);
+      setIsRuntimeFallback(response.isRuntimeFallback === true);
       setRuntimeStatus(response.runtimeStatus);
       setRuntimeMode(response.runtimeMode ?? null);
+      setAttemptedRuntimeMode(response.attemptedRuntimeMode ?? null);
+      setRuntimeErrorReason(response.runtimeErrorReason ?? null);
       setRuntimeLabel(response.runtimeLabel);
       setError(response.status === "failed" ? response.runtimeError || "CMO runtime returned an error." : null);
-      setSendStatus(response.isDevelopmentFallback ? "Runtime unavailable; using development fallback." : "CMO response received.");
+      setSendStatus(
+        response.isRuntimeFallback || response.runtimeStatus === "live_failed_then_fallback"
+          ? "Live runtime unavailable for app chat; fallback used"
+          : response.isDevelopmentFallback
+            ? "Runtime unavailable; using development fallback."
+            : "CMO response received.",
+      );
       setMessages((current) =>
         current.map((message) =>
           message.id === pendingAssistantId
@@ -412,14 +443,17 @@ export function CMOChatPanel({
             sessionNotePath: savedSessionNotePath ?? undefined,
             relatedPriority,
             summary: captureSummary(
-        app,
-        capturableMessages,
-        runtimeStatus,
-        runtimeMode,
-        runtimeLabel,
+              app,
+              capturableMessages,
+              runtimeStatus,
+              runtimeMode,
+              runtimeLabel,
+              attemptedRuntimeMode,
+              runtimeErrorReason,
               lastContextUsed,
               missingContext,
               isDevelopmentFallback,
+              isRuntimeFallback,
               contextQualitySummary ?? summarizeContextQuality([...lastContextUsed, ...missingContext]),
             ),
             selectedContextNotes: [...lastContextUsed, ...missingContext],
@@ -431,7 +465,10 @@ export function CMOChatPanel({
             missingContext,
             runtimeStatus: runtimeStatus ?? undefined,
             runtimeMode: runtimeMode ?? undefined,
+            attemptedRuntimeMode: attemptedRuntimeMode ?? undefined,
             isDevelopmentFallback,
+            isRuntimeFallback,
+            runtimeErrorReason: runtimeErrorReason ?? undefined,
             contextDiagnostics,
             contextQualitySummary: contextQualitySummary ?? summarizeContextQuality([...lastContextUsed, ...missingContext]),
             assumptions,
@@ -476,7 +513,7 @@ export function CMOChatPanel({
             <Badge variant={selectedQualitySummary.confirmedCount ? "green" : "slate"}>{selectedQualitySummary.confirmedCount} confirmed</Badge>
             <Badge variant={selectedQualitySummary.draftCount ? "blue" : "slate"}>{selectedQualitySummary.draftCount} draft</Badge>
             <Badge variant={selectedQualitySummary.placeholderCount ? "orange" : "slate"}>{selectedQualitySummary.placeholderCount} need content</Badge>
-            {isDevelopmentFallback ? <Badge variant="orange">development response</Badge> : null}
+            {isRuntimeFallback ? <Badge variant="orange">fallback used</Badge> : isDevelopmentFallback ? <Badge variant="orange">development response</Badge> : null}
             <Button variant="outline" size="sm" onClick={focusChat}>
               <icons.MessageSquare />
               Start CMO Session

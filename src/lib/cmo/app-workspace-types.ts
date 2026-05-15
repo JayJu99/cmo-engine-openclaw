@@ -271,6 +271,12 @@ export type ContextPackPolicyVersion = "context-pack-v1";
 export type CmoRuntimeMode = "live" | "fallback" | "configured_but_unreachable";
 export type ContextPackRuntimeMode = CmoRuntimeMode | "connected" | "not_configured" | "runtime_error";
 export type ContextItemKind = "current_priority" | "app_memory" | "latest_sessions" | "promotion_candidates";
+export type CmoRuntimeErrorReason =
+  | "unsupported_chat_turn"
+  | "timeout"
+  | "invalid_response"
+  | "empty_answer"
+  | "execution_error";
 
 export interface ContextItem {
   id: string;
@@ -390,6 +396,7 @@ export interface CMOContextPackage {
 export type CMORuntimeStatus =
   | "connected"
   | "configured_but_unreachable"
+  | "live_failed_then_fallback"
   | "development_fallback"
   | "runtime_error"
   | "not_configured";
@@ -412,10 +419,13 @@ export interface CMOChatSession {
   createdAt: string;
   updatedAt: string;
   isDevelopmentFallback?: boolean;
+  isRuntimeFallback?: boolean;
   runtimeStatus?: CMORuntimeStatus;
   runtimeMode?: CmoRuntimeMode;
+  attemptedRuntimeMode?: CmoRuntimeMode;
   runtimeLabel?: string;
   runtimeError?: string;
+  runtimeErrorReason?: CmoRuntimeErrorReason;
   missingContext?: VaultNoteRef[];
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
@@ -455,10 +465,13 @@ export interface CMOAppChatResponse {
   contextUsed: VaultNoteRef[];
   missingContext: VaultNoteRef[];
   isDevelopmentFallback: boolean;
+  isRuntimeFallback?: boolean;
   runtimeStatus: CMORuntimeStatus;
   runtimeMode?: CmoRuntimeMode;
+  attemptedRuntimeMode?: CmoRuntimeMode;
   runtimeLabel: string;
   runtimeError?: string;
+  runtimeErrorReason?: CmoRuntimeErrorReason;
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
 }
@@ -485,7 +498,10 @@ export interface RawCaptureRequest {
   missingContext?: VaultNoteRef[];
   runtimeStatus?: CMORuntimeStatus;
   runtimeMode?: CmoRuntimeMode;
+  attemptedRuntimeMode?: CmoRuntimeMode;
   isDevelopmentFallback?: boolean;
+  isRuntimeFallback?: boolean;
+  runtimeErrorReason?: CmoRuntimeErrorReason;
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
   assumptions?: string[];

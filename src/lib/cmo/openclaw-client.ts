@@ -1,4 +1,4 @@
-import type { CMOAppChatResponse, CMOContextPackage } from "@/lib/cmo/app-workspace-types";
+import type { CMOAppChatResponse, CMOChatMessage, CMOContextPackage } from "@/lib/cmo/app-workspace-types";
 import type { CmoChatRun } from "@/lib/cmo/types";
 import {
   getOpenClawApiKey,
@@ -9,7 +9,7 @@ import {
   isRemoteCmoAdapter,
 } from "@/lib/cmo/config";
 import { CmoAdapterError } from "@/lib/cmo/errors";
-import { getRemoteChat, getRemoteStatus, postRemoteChat } from "@/lib/cmo/remote-client";
+import { getRemoteChat, getRemoteStatus, postRemoteAppTurn, postRemoteChat } from "@/lib/cmo/remote-client";
 
 type RuntimeKind = "openclaw-cmo-endpoint" | "vps-cmo-adapter";
 
@@ -376,6 +376,18 @@ function pickRuntimeRunId(payload: unknown): string {
   return trimString(payload.chat_run_id ?? payload.chatRunId ?? payload.run_id ?? payload.runId ?? data.chat_run_id ?? data.run_id);
 }
 
+function isDashboardRunBriefPayload(payload: unknown): boolean {
+  if (!isRecord(payload)) {
+    return false;
+  }
+
+  if (payload.schema_version === "cmo.dashboard.v1") {
+    return true;
+  }
+
+  return "summary" in payload || "actions" in payload || "signals" in payload || "agents" in payload || "reports" in payload || "vault" in payload || "campaigns" in payload;
+}
+
 function normalizeRuntimeResult(payload: unknown, config: OpenClawCmoRuntimeConfig): OpenClawCmoResult {
   const status = pickStatus(payload);
 
@@ -404,6 +416,59 @@ function normalizeRuntimeResult(payload: unknown, config: OpenClawCmoRuntimeConf
     isDevelopmentFallback: false,
     runtimeLabel: config.label,
     runtimeRunId: pickRuntimeRunId(payload) || undefined,
+  };
+}
+
+function normalizeAppTurnRuntimeResult(payload: unknown, config: OpenClawCmoRuntimeConfig): OpenClawCmoResult {
+  if (isDashboardRunBriefPayload(payload)) {
+    throw new CmoAdapterError(
+      "OpenClaw CMO returned dashboard run-brief JSON instead of app-turn JSON",
+      502,
+      "openclaw_cmo_dashboard_json",
+    );
+  }
+
+  if (!isRecord(payload)) {
+    throw new CmoAdapterError("OpenClaw CMO app-turn response was not an object", 502, "openclaw_cmo_invalid_response");
+  }
+
+  const data = isRecord(payload.data) ? payload.data : null;
+  const source = data ?? payload;
+
+  if (isDashboardRunBriefPayload(source)) {
+    throw new CmoAdapterError(
+      "OpenClaw CMO returned nested dashboard run-brief JSON instead of app-turn JSON",
+      502,
+      "openclaw_cmo_dashboard_json",
+    );
+  }
+
+  const answer = trimString(source.answer);
+
+  if (!answer) {
+    throw new CmoAdapterError("OpenClaw CMO app-turn response did not include a usable answer", 502, "openclaw_cmo_empty_answer");
+  }
+
+  return {
+    answer,
+    assumptions: stringList(source.assumptions),
+    suggestedActions: normalizeSuggestedActions(source.suggestedActions ?? source.suggested_actions),
+    contextUsed: stringList(source.contextUsed ?? source.context_used),
+    rawRuntimeResponse: payload,
+    isDevelopmentFallback: false,
+    runtimeLabel: config.label,
+    runtimeRunId: pickRuntimeRunId(payload) || undefined,
+  };
+}
+
+function appTurnBody(contextPackage: CMOContextPackage, history: CMOChatMessage[]) {
+  return {
+    workspaceId: contextPackage.workspaceId,
+    appId: contextPackage.app.id,
+    sourceId: contextPackage.sourceId,
+    contextPack: contextPackage.contextPack,
+    message: contextPackage.userMessage,
+    history,
   };
 }
 
@@ -619,4 +684,32 @@ export async function callOpenClawCmoRuntime(
   }
 
   throw new CmoAdapterError("OpenClaw CMO runtime did not complete before the app chat timeout", 504, "openclaw_cmo_poll_timeout");
+}
+
+export async function callOpenClawAppTurnRuntime(
+  contextPackage: CMOContextPackage,
+  config: OpenClawCmoRuntimeConfig,
+  history: CMOChatMessage[],
+): Promise<OpenClawCmoResult> {
+  if (config.kind === "vps-cmo-adapter") {
+    const response = await postRemoteAppTurn(appTurnBody(contextPackage, history));
+
+    return {
+      answer: response.data.answer,
+      assumptions: [],
+      suggestedActions: response.data.suggestedActions,
+      contextUsed: response.data.contextUsed,
+      rawRuntimeResponse: response.data.rawRuntimeResponse,
+      isDevelopmentFallback: false,
+      runtimeLabel: config.label,
+    };
+  }
+
+  const response = await requestRuntimeJson<unknown>(config, config.endpoint, {
+    method: "POST",
+    body: appTurnBody(contextPackage, history),
+    timeoutMs: getOpenClawCmoTimeoutMs(),
+  });
+
+  return normalizeAppTurnRuntimeResult(response.data, config);
 }

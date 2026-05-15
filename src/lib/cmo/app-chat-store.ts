@@ -11,6 +11,7 @@ import type {
   CMOChatMessage,
   CMOChatSession,
   CMORuntimeStatus,
+  CmoRuntimeErrorReason,
   CmoRuntimeMode,
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
@@ -149,6 +150,7 @@ function normalizeRuntimeStatus(value: unknown, isDevelopmentFallback: boolean):
   if (
     value === "connected" ||
     value === "configured_but_unreachable" ||
+    value === "live_failed_then_fallback" ||
     value === "development_fallback" ||
     value === "runtime_error" ||
     value === "not_configured"
@@ -173,6 +175,16 @@ function normalizeRuntimeMode(value: unknown, runtimeStatus: CMOChatSession["run
   }
 
   return isDevelopmentFallback ? "fallback" : undefined;
+}
+
+function normalizeRuntimeErrorReason(value: unknown): CmoRuntimeErrorReason | undefined {
+  return value === "unsupported_chat_turn" ||
+    value === "timeout" ||
+    value === "invalid_response" ||
+    value === "empty_answer" ||
+    value === "execution_error"
+    ? value
+    : undefined;
 }
 
 function normalizeContextDiagnostics(value: unknown): CMOContextDiagnostics | undefined {
@@ -325,10 +337,13 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     createdAt: stringValue(value.createdAt, new Date(0).toISOString()),
     updatedAt: stringValue(value.updatedAt, new Date(0).toISOString()),
     isDevelopmentFallback: value.isDevelopmentFallback === true,
+    isRuntimeFallback: value.isRuntimeFallback === true,
     runtimeStatus,
     runtimeMode: normalizeRuntimeMode(value.runtimeMode, runtimeStatus, value.isDevelopmentFallback === true),
+    attemptedRuntimeMode: normalizeRuntimeMode(value.attemptedRuntimeMode, runtimeStatus, false),
     runtimeLabel: stringValue(value.runtimeLabel),
     runtimeError: stringValue(value.runtimeError),
+    runtimeErrorReason: normalizeRuntimeErrorReason(value.runtimeErrorReason),
     missingContext,
     contextDiagnostics,
     contextQualitySummary: normalizeContextQualitySummary(value.contextQualitySummary ?? contextDiagnostics, [...contextUsed, ...missingContext]),
@@ -366,10 +381,13 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
   let assumptions: string[] = [];
   let suggestedActions: CMOAppChatResponse["suggestedActions"] = [];
   let isDevelopmentFallback = false;
+  let isRuntimeFallback = false;
   let runtimeStatus: CMORuntimeStatus = "not_configured";
   let runtimeMode: CmoRuntimeMode = runtime.mode;
+  let attemptedRuntimeMode: CmoRuntimeMode | undefined;
   let runtimeLabel = "OpenClaw CMO runtime";
   let runtimeError = "";
+  let runtimeErrorReason: CmoRuntimeErrorReason | undefined;
 
   try {
     const runtimeResult = await runtime.runTurn({
@@ -386,11 +404,14 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     assumptions = runtimeResult.assumptions;
     suggestedActions = runtimeResult.suggestedActions;
     isDevelopmentFallback = runtimeResult.isDevelopmentFallback;
+    isRuntimeFallback = runtimeResult.isRuntimeFallback === true;
     runtimeStatus = runtimeResult.runtimeStatus;
     runtimeMode = runtimeResult.runtimeMode;
+    attemptedRuntimeMode = runtimeResult.attemptedRuntimeMode;
     runtimeLabel = runtimeResult.runtimeLabel;
     runtimeError = runtimeResult.runtimeError ?? "";
-    status = runtimeResult.runtimeError ? "failed" : "completed";
+    runtimeErrorReason = runtimeResult.runtimeErrorReason;
+    status = runtimeResult.runtimeError && !runtimeResult.isRuntimeFallback ? "failed" : "completed";
   } catch (error) {
     status = "failed";
     runtimeStatus = "runtime_error";
@@ -416,10 +437,13 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     assumptions,
     suggestedActions,
     isDevelopmentFallback,
+    isRuntimeFallback,
     runtimeStatus,
     runtimeMode,
+    ...(attemptedRuntimeMode ? { attemptedRuntimeMode } : {}),
     runtimeLabel,
     ...(runtimeError ? { runtimeError } : {}),
+    ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
     contextDiagnostics,
     contextQualitySummary,
     messages: [
@@ -451,10 +475,13 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     contextUsed,
     missingContext,
     isDevelopmentFallback,
+    isRuntimeFallback,
     runtimeStatus,
     runtimeMode,
+    ...(attemptedRuntimeMode ? { attemptedRuntimeMode } : {}),
     runtimeLabel,
     ...(runtimeError ? { runtimeError } : {}),
+    ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
     contextDiagnostics,
     contextQualitySummary,
   };

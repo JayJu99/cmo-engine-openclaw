@@ -4,6 +4,7 @@ import type {
   CMOChatMessage,
   CMOContextPackage,
   CMORuntimeStatus,
+  CmoRuntimeErrorReason,
   CmoRuntimeMode,
   ContextPack,
   VaultNoteRef,
@@ -11,7 +12,7 @@ import type {
 import { summarizeContextQuality } from "@/lib/cmo/context-quality";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import {
-  callOpenClawCmoRuntime,
+  callOpenClawAppTurnRuntime,
   getOpenClawCmoRuntimeAvailability,
   type OpenClawCmoRuntimeAvailability,
 } from "@/lib/cmo/openclaw-client";
@@ -40,9 +41,12 @@ export interface CmoRuntimeTurnResult {
   suggestedActions: CMOAppChatResponse["suggestedActions"];
   runtimeStatus: CMORuntimeStatus;
   runtimeMode: CmoRuntimeMode;
+  attemptedRuntimeMode?: CmoRuntimeMode;
   runtimeLabel: string;
   runtimeError?: string;
+  runtimeErrorReason?: CmoRuntimeErrorReason;
   isDevelopmentFallback: boolean;
+  isRuntimeFallback?: boolean;
 }
 
 export interface CmoRuntime {
@@ -81,7 +85,7 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): string {
     .join(", ");
 
   return [
-    "Development fallback: OpenClaw CMO runtime is not connected.",
+    "Fallback response: OpenClaw CMO live app-chat runtime is not available.",
     reason,
     `CMO context pack was built automatically for ${input.request.appName}.`,
     `Context actually included: ${contextList}.`,
@@ -92,20 +96,80 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): string {
   ].join("\n");
 }
 
-function classifyRuntimeCallError(error: unknown): CMORuntimeStatus {
-  if (error instanceof CmoAdapterError && (error.status === 503 || error.status === 504 || error.code.includes("unavailable") || error.code.includes("timeout"))) {
-    return "configured_but_unreachable";
+function classifyAppTurnErrorReason(error: unknown): CmoRuntimeErrorReason {
+  if (!(error instanceof CmoAdapterError)) {
+    return "execution_error";
   }
 
-  return "runtime_error";
+  if (error.status === 404 || error.status === 405 || error.status === 501 || error.code.includes("unsupported")) {
+    return "unsupported_chat_turn";
+  }
+
+  if (error.status === 504 || error.code.includes("timeout")) {
+    return "timeout";
+  }
+
+  if (error.code.includes("empty_answer")) {
+    return "empty_answer";
+  }
+
+  if (
+    error.code.includes("dashboard_json") ||
+    error.code.includes("invalid") ||
+    error.code.includes("validation") ||
+    error.code.includes("json")
+  ) {
+    return "invalid_response";
+  }
+
+  return "execution_error";
 }
 
-function runtimeErrorAnswer(errorMessage: string): string {
-  return [
-    "Runtime connection error: OpenClaw CMO did not return a usable answer.",
-    errorMessage,
-    "No development fallback was substituted because runtime configuration is present.",
-  ].join("\n");
+function logAppTurnFailure(reason: CmoRuntimeErrorReason, message: string, error: unknown) {
+  if (reason === "unsupported_chat_turn") {
+    console.warn("[cmo-runtime] Adapter health passed, but /cmo/app-turn is unavailable; using app-chat fallback.", {
+      reason,
+      message,
+    });
+    return;
+  }
+
+  if (reason === "invalid_response" && error instanceof CmoAdapterError && error.code.includes("dashboard_json")) {
+    console.warn("[cmo-runtime] Adapter returned dashboard run-brief JSON for app chat; using app-chat fallback.", {
+      reason,
+      message,
+    });
+    return;
+  }
+
+  if (reason === "timeout") {
+    console.warn("[cmo-runtime] Live app-chat turn timed out; using fallback.", {
+      reason,
+      message,
+    });
+    return;
+  }
+
+  if (reason === "invalid_response") {
+    console.warn("[cmo-runtime] Live app-chat turn returned an invalid response; using fallback.", {
+      reason,
+      message,
+    });
+    return;
+  }
+
+  if (reason === "empty_answer") {
+    console.warn("[cmo-runtime] Live app-chat turn returned an empty answer; using fallback.", {
+      reason,
+      message,
+    });
+    return;
+  }
+
+  console.warn("[cmo-runtime] Live app-chat turn failed; using fallback.", {
+    reason,
+    message,
+  });
 }
 
 export class FallbackRuntime implements CmoRuntime {
@@ -141,6 +205,7 @@ export class FallbackRuntime implements CmoRuntime {
       runtimeMode: this.mode,
       runtimeLabel: this.label,
       isDevelopmentFallback: true,
+      isRuntimeFallback: true,
     };
   }
 }
@@ -176,7 +241,7 @@ export class LiveOpenClawRuntime implements CmoRuntime {
     }
 
     try {
-      const result = await callOpenClawCmoRuntime(input.contextPackage, availability.config);
+      const result = await callOpenClawAppTurnRuntime(input.contextPackage, availability.config, input.history);
 
       return {
         answer: result.answer,
@@ -184,22 +249,32 @@ export class LiveOpenClawRuntime implements CmoRuntime {
         suggestedActions: result.suggestedActions.length ? result.suggestedActions : DEFAULT_FALLBACK_ACTIONS,
         runtimeStatus: "connected",
         runtimeMode: "live",
+        attemptedRuntimeMode: "live",
         runtimeLabel: result.runtimeLabel,
         isDevelopmentFallback: false,
+        isRuntimeFallback: false,
       };
     } catch (error) {
-      const runtimeStatus = classifyRuntimeCallError(error);
       const runtimeError = error instanceof Error ? error.message : "OpenClaw CMO runtime failed";
+      const runtimeErrorReason = classifyAppTurnErrorReason(error);
+      logAppTurnFailure(runtimeErrorReason, runtimeError, error);
+      const fallback = await new FallbackRuntime({
+        status: "live_failed_then_fallback",
+        mode: "fallback",
+        label: availability.label,
+        reason: "Live runtime unavailable for app chat; fallback used.",
+      }).runTurn(input);
 
       return {
-        answer: runtimeErrorAnswer(runtimeError),
-        assumptions: [],
-        suggestedActions: DEFAULT_FALLBACK_ACTIONS,
-        runtimeStatus,
-        runtimeMode: runtimeModeFromStatus(runtimeStatus),
+        ...fallback,
+        runtimeStatus: "live_failed_then_fallback",
+        runtimeMode: "fallback",
+        attemptedRuntimeMode: "live",
         runtimeLabel: availability.label,
         runtimeError,
-        isDevelopmentFallback: false,
+        runtimeErrorReason,
+        isDevelopmentFallback: true,
+        isRuntimeFallback: true,
       };
     }
   }
@@ -249,4 +324,3 @@ const runtimeRegistry = new RuntimeRegistry();
 export function getRuntimeRegistry(): RuntimeRegistry {
   return runtimeRegistry;
 }
-

@@ -64,6 +64,10 @@ function runtimeLabel(status: CMORuntimeStatus | undefined): string {
     return "Runtime unavailable";
   }
 
+  if (status === "live_failed_then_fallback") {
+    return "Live failed; fallback used";
+  }
+
   if (status === "development_fallback") {
     return "Development fallback";
   }
@@ -88,7 +92,7 @@ function runtimeVariant(status: CMORuntimeStatus | undefined): "green" | "orange
     return "red";
   }
 
-  if (status === "development_fallback" || status === "not_configured") {
+  if (status === "development_fallback" || status === "not_configured" || status === "live_failed_then_fallback") {
     return "orange";
   }
 
@@ -522,7 +526,10 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               `CMO session for ${app.name}.`,
               `Runtime: ${selectedSession.runtimeStatus ?? "not captured"}.`,
               `Runtime mode: ${selectedSession.runtimeMode ?? "not captured"}.`,
+              `Attempted runtime mode: ${selectedSession.attemptedRuntimeMode ?? "not captured"}.`,
               `Fallback: ${selectedSession.isDevelopmentFallback ? "true" : "false"}.`,
+              `Runtime fallback: ${selectedSession.isRuntimeFallback ? "true" : "false"}.`,
+              `Runtime error reason: ${selectedSession.runtimeErrorReason ?? "none"}.`,
               `Context quality: ${sessionContextSummary(selectedSession)}.`,
               selectedSession.sessionNotePath ? `Full session note: ${selectedSession.sessionNotePath}.` : "Full session note not saved yet.",
             ].join("\n"),
@@ -535,7 +542,10 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             missingContext: selectedSession.missingContext,
             runtimeStatus: selectedSession.runtimeStatus,
             runtimeMode: selectedSession.runtimeMode,
+            attemptedRuntimeMode: selectedSession.attemptedRuntimeMode,
             isDevelopmentFallback: selectedSession.isDevelopmentFallback,
+            isRuntimeFallback: selectedSession.isRuntimeFallback,
+            runtimeErrorReason: selectedSession.runtimeErrorReason,
             contextDiagnostics: selectedSession.contextDiagnostics,
             contextQualitySummary: selectedSession.contextQualitySummary,
             assumptions: selectedSession.assumptions,
