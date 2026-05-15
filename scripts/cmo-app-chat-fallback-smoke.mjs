@@ -1,6 +1,7 @@
-const baseUrl = (process.env.CMO_SMOKE_BASE_URL || "http://127.0.0.1:3000").replace(/\/+$/, "");
+const baseUrl = (process.env.CMO_SMOKE_BASE_URL || "http://127.0.0.1:3002").replace(/\/+$/, "");
 const expectedReason = process.env.CMO_SMOKE_EXPECT_REASON || "unsupported_chat_turn";
 const allowedReasons = new Set(["unsupported_chat_turn", "timeout", "invalid_response", "empty_answer", "execution_error"]);
+const endpoint = `${baseUrl}/api/cmo/chat`;
 
 function assert(condition, message, detail) {
   if (!condition) {
@@ -20,6 +21,33 @@ function containsContextUsed(answer) {
   return /Context used:/i.test(answer);
 }
 
+function authorizationHeader() {
+  const explicit = process.env.CMO_SMOKE_AUTH_HEADER?.trim();
+
+  if (explicit) {
+    return explicit;
+  }
+
+  const username = process.env.BASIC_AUTH_USERNAME;
+  const password = process.env.BASIC_AUTH_PASSWORD;
+
+  if (username && password) {
+    return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+  }
+
+  return "";
+}
+
+function responseDiagnostics(response, contentType, rawBody) {
+  return {
+    url: endpoint,
+    status: response.status,
+    statusText: response.statusText,
+    contentType: contentType || "not provided",
+    rawBody: rawBody.slice(0, 1000),
+  };
+}
+
 const payload = {
   workspaceId: "holdstation",
   appId: "holdstation-mini-app",
@@ -32,23 +60,38 @@ const payload = {
     mode: "app_context",
   },
 };
+const auth = authorizationHeader();
+const headers = {
+  "Content-Type": "application/json",
+  ...(auth ? { Authorization: auth } : {}),
+};
 
-const response = await fetch(`${baseUrl}/api/cmo/chat`, {
+const response = await fetch(endpoint, {
   method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-  },
+  headers,
   body: JSON.stringify(payload),
 });
-const data = await response.json().catch(() => null);
+const contentType = response.headers.get("content-type") || "";
+const rawBody = await response.text();
+const data = contentType.toLowerCase().includes("json")
+  ? (() => {
+      try {
+        return JSON.parse(rawBody);
+      } catch {
+        return null;
+      }
+    })()
+  : null;
+const diagnostics = responseDiagnostics(response, contentType, rawBody);
 
-assert(response.ok, `Expected HTTP 2xx from ${baseUrl}/api/cmo/chat`, data);
-assert(data?.status === "completed", "Expected completed session status", data);
-assert(data?.runtimeStatus === "live_failed_then_fallback", "Expected live runtime attempt to fall back", data);
-assert(data?.attemptedRuntimeMode === "live", "Expected attemptedRuntimeMode=live", data);
-assert(data?.runtimeMode === "fallback", "Expected runtimeMode=fallback", data);
-assert(data?.isRuntimeFallback === true, "Expected isRuntimeFallback=true", data);
-assert(allowedReasons.has(data?.runtimeErrorReason), "Expected a controlled runtimeErrorReason", data);
+assert(response.ok, `Expected HTTP 2xx from ${endpoint}`, diagnostics);
+assert(data && typeof data === "object", "Expected JSON response body", diagnostics);
+assert(data.status === "completed", "Expected completed session status", data);
+assert(data.runtimeStatus === "live_failed_then_fallback", "Expected live runtime attempt to fall back", data);
+assert(data.attemptedRuntimeMode === "live", "Expected attemptedRuntimeMode=live", data);
+assert(data.runtimeMode === "fallback", "Expected runtimeMode=fallback", data);
+assert(data.isRuntimeFallback === true, "Expected isRuntimeFallback=true", data);
+assert(allowedReasons.has(data.runtimeErrorReason), "Expected a controlled runtimeErrorReason", data);
 
 if (expectedReason !== "any") {
   assert(data.runtimeErrorReason === expectedReason, `Expected runtimeErrorReason=${expectedReason}`, data);
