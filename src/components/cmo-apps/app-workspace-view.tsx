@@ -296,6 +296,16 @@ function sessionRuntimeModeLabel(session: CMOChatSession): string {
   return session.runtimeMode === "live" ? "live" : session.isRuntimeFallback || session.isDevelopmentFallback ? "fallback used" : "runtime pending";
 }
 
+function isSmokeSession(session: CMOChatSession | undefined): boolean {
+  if (!session) {
+    return false;
+  }
+
+  const text = `${session.topic} ${firstUserMessage(session)}`.toLowerCase();
+
+  return /\bsmoke\b|ui test|verification session|runtime smoke|app-turn smoke/.test(text);
+}
+
 function assistantMessageProvenance(message: CMOChatMessage, session: CMOChatSession): string | null {
   if (message.role !== "assistant") {
     return null;
@@ -654,11 +664,12 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
       .filter((group) => group.sessions.length);
   }, [filteredSessions]);
   const latestSession = sessions[0];
+  const latestDisplaySession = sessions.find((session) => !isSmokeSession(session)) ?? latestSession;
   const mostAppNotesArePlaceholders = appNoteQuality.selectedCount > 0 && appNoteQuality.placeholderCount > appNoteQuality.selectedCount / 2;
   const contextStatus = contextStatusLabel(selectedQuality);
   const memoryHealth = `${appNoteQuality.confirmedCount} confirmed / ${appNoteQuality.draftCount} draft / ${appNoteQuality.placeholderCount} need content`;
   const sourceStatus = state.todayRawExists || selectedSession?.rawCapturePath ? "Exists" : "Missing";
-  const lastUpdated = app.lastUpdated || priorityState.activePriority?.updatedAt || latestSession?.createdAt || "Vault-backed";
+  const lastUpdated = app.lastUpdated || priorityState.activePriority?.updatedAt || latestDisplaySession?.createdAt || "Vault-backed";
   const metricById = useMemo(() => {
     const lookup = new Map<string, CmoAppMetric>();
 
@@ -782,9 +793,23 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   }
 
   function focusCurrentCmoSession() {
+    const next = new URLSearchParams(searchParams.toString());
+    next.set("tab", "sessions");
+    const target = `${pathname}?${next.toString()}`;
+
     setActiveTab("sessions");
     setSelectedSessionId(null);
+    setSessionStatus(null);
+    setSessionError(null);
+    setDecisionReviewStatus(null);
+    setDecisionReviewError(null);
     setSessionFocusSignal((current) => current + 1);
+
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", target);
+    }
+
+    router.replace(target, { scroll: false });
   }
 
   async function savePriority() {
@@ -1108,14 +1133,9 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   }
 
   const headerActions = (
-    <Button asChild>
-      <Link
-        href={`${pathname}?tab=sessions#cmo-session`}
-        onClick={focusCurrentCmoSession}
-      >
-        <icons.MessageSquare />
-        Start CMO Session
-      </Link>
+    <Button type="button" onClick={focusCurrentCmoSession}>
+      <icons.MessageSquare />
+      Start CMO Session
     </Button>
   );
 
@@ -1282,14 +1302,15 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             </SectionCard>
 
             <SectionCard title="Latest CMO Session" icon={<icons.MessageSquare />}>
-              {latestSession ? (
+              {latestDisplaySession ? (
                 <div className="space-y-3">
-                  <div className="font-bold text-slate-950">{latestSession.topic || "CMO session"}</div>
+                  <div className="font-bold text-slate-950">{latestDisplaySession.topic || "CMO session"}</div>
                   <div className="flex flex-wrap gap-2">
-                    <Badge title={latestSession.runtimeStatus} variant={runtimeVariant(latestSession.runtimeStatus)}>{runtimeLabel(latestSession.runtimeStatus)}</Badge>
-                    <Badge variant={latestSession.runtimeMode === "live" ? "green" : "orange"}>{sessionRuntimeModeLabel(latestSession)}</Badge>
+                    <Badge title={latestDisplaySession.runtimeStatus} variant={runtimeVariant(latestDisplaySession.runtimeStatus)}>{runtimeLabel(latestDisplaySession.runtimeStatus)}</Badge>
+                    <Badge variant={latestDisplaySession.runtimeMode === "live" ? "green" : "orange"}>{sessionRuntimeModeLabel(latestDisplaySession)}</Badge>
+                    {isSmokeSession(latestSession) && latestDisplaySession.id !== latestSession?.id ? <Badge variant="slate">smoke hidden</Badge> : null}
                   </div>
-                  <CardDescription>{displayDate(latestSession.createdAt)}</CardDescription>
+                  <CardDescription>{displayDate(latestDisplaySession.createdAt)}</CardDescription>
                 </div>
               ) : (
                 <EmptyCopy>No CMO session saved yet.</EmptyCopy>
@@ -1760,6 +1781,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                   void refreshSessions(sessionId);
                   setPromotionRefreshSignal((current) => current + 1);
                 }}
+                onStartNewSession={focusCurrentCmoSession}
                 onSessionSaved={() => {
                   void refreshSessions();
                   setPromotionRefreshSignal((current) => current + 1);

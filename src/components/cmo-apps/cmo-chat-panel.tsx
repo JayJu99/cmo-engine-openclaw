@@ -213,6 +213,7 @@ export function CMOChatPanel({
   app,
   contextBrief,
   onSessionCreated,
+  onStartNewSession,
   initialRuntimeStatus = null,
   focusSignal = 0,
   activeSessionId,
@@ -222,6 +223,7 @@ export function CMOChatPanel({
   contextBrief: CMOContextBrief;
   onSessionCreated?: (sessionId?: string) => void;
   onSessionSaved?: (path: string) => void;
+  onStartNewSession?: () => void;
   initialRuntimeStatus?: CMORuntimeStatus | null;
   initialRuntimeLabel?: string;
   focusSignal?: number;
@@ -294,16 +296,37 @@ export function CMOChatPanel({
     }
 
     const timeout = window.setTimeout(() => {
+      setSessionId(null);
+      setMessages([]);
+      setSavedSessionNotePath(null);
+      setRawCapturePath(null);
+      setIsDevelopmentFallback(false);
+      setIsRuntimeFallback(false);
+      setRuntimeStatus(initialRuntimeStatus);
+      setRuntimeErrorReason(null);
+      setError(null);
+      setSendStatus(null);
       inputRef.current?.scrollIntoView({ block: "center" });
       inputRef.current?.focus();
     }, 0);
 
     return () => window.clearTimeout(timeout);
-  }, [focusSignal]);
+  }, [focusSignal, initialRuntimeStatus]);
 
   useEffect(() => {
     if (!selectedSession) {
-      return;
+      const timeout = window.setTimeout(() => {
+        setSessionId(null);
+        setMessages([]);
+        setSavedSessionNotePath(null);
+        setRawCapturePath(null);
+        setIsDevelopmentFallback(false);
+        setIsRuntimeFallback(false);
+        setRuntimeStatus(initialRuntimeStatus);
+        setRuntimeErrorReason(null);
+      }, 0);
+
+      return () => window.clearTimeout(timeout);
     }
 
     const timeout = window.setTimeout(() => {
@@ -443,6 +466,11 @@ export function CMOChatPanel({
   }
 
   function focusChat() {
+    if (onStartNewSession) {
+      onStartNewSession();
+      return;
+    }
+
     inputRef.current?.focus();
   }
 
