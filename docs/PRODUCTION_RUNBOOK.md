@@ -398,6 +398,83 @@ If live app-turn fails:
 - Keep the fallback smoke separate with `npm run smoke:cmo-fallback`; it should pass when live app-turn is unavailable.
 - `npm run smoke:cmo-fallback` deliberately forces fallback by default so it does not depend on live app-turn being unsupported or slow. Set `CMO_SMOKE_FORCE_FALLBACK=0` only for ad hoc organic-failure checks.
 
+## App metrics ingestion
+
+Phase 2.3 adds a file-backed ingestion bridge for app metrics. It does not connect GA4, Google Sheets, Metabase, or n8n directly; those tools should push normalized JSON into the dashboard endpoint.
+
+Endpoint:
+
+```bash
+POST /api/cmo/apps/holdstation-mini-app/metrics/ingest
+```
+
+Production requires:
+
+```bash
+CMO_METRICS_INGEST_API_KEY=<strong-ingest-key>
+```
+
+Requests must include:
+
+```bash
+x-cmo-metrics-ingest-key: <strong-ingest-key>
+```
+
+Sample payload:
+
+```bash
+curl -X POST "https://cmo.jayju.cloud/api/cmo/apps/holdstation-mini-app/metrics/ingest" \
+  -H "Content-Type: application/json" \
+  -H "x-cmo-metrics-ingest-key: <strong-ingest-key>" \
+  -d '{
+    "schemaVersion": "cmo.app-metrics.v1",
+    "workspaceId": "holdstation",
+    "appId": "holdstation-mini-app",
+    "sourceId": "holdstation__holdstation-mini-app",
+    "dateRange": {
+      "preset": "this_week",
+      "startDate": "2026-05-11",
+      "endDate": "2026-05-17",
+      "timezone": "Asia/Ho_Chi_Minh"
+    },
+    "compareToPrevious": false,
+    "lastUpdatedAt": "2026-05-17T00:00:00.000Z",
+    "metrics": [
+      {
+        "id": "activated_users",
+        "label": "Activated Users",
+        "value": 123,
+        "displayValue": "123",
+        "unit": "users",
+        "status": "connected",
+        "trend": "unknown"
+      }
+    ],
+    "diagnostics": {
+      "source": "json",
+      "missingMetrics": [],
+      "notes": ["Imported from external workflow"]
+    }
+  }'
+```
+
+Accepted metric ids are `activated_users`, `activation_rate`, `new_users`, `d1_retention`, `d7_retention`, `pending_reviews`, and `promotions_pending`. Product/user metrics only become connected when supplied by the ingest payload. Missing metrics remain `null` / `No data`.
+
+The dashboard writes the normalized snapshot to:
+
+```text
+data/cmo-dashboard/app-metrics/holdstation-mini-app.json
+```
+
+Local smoke:
+
+```bash
+CMO_METRICS_INGEST_API_KEY=<strong-ingest-key> \
+node scripts/cmo-app-metrics-ingest-smoke.mjs
+```
+
+The smoke script backs up and restores the metrics JSON file after testing. GA4/n8n source-specific integration remains a later phase.
+
 ## Run History troubleshooting
 
 Run history is served from normalized run JSON files under `runs/`.

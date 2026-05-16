@@ -1,4 +1,4 @@
-import { readFile } from "fs/promises";
+import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 
 import { readAppChatSessions } from "@/lib/cmo/app-chat-store";
@@ -68,6 +68,24 @@ export interface ReadAppMetricsOptions {
   compare?: string | boolean | null;
 }
 
+export interface IngestAppMetricsOptions {
+  appId: string;
+  payload: unknown;
+  dryRun?: boolean;
+}
+
+export class AppMetricsIngestError extends Error {
+  status: number;
+  code: string;
+
+  constructor(message: string, status: number, code: string) {
+    super(message);
+    this.name = "AppMetricsIngestError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -78,6 +96,14 @@ function metricStatus(value: unknown, fallback: CmoMetricStatus = "missing"): Cm
 
 function metricPreset(value: unknown): CmoAppMetricDateRangePreset {
   return value === "this_week" || value === "last_7_days" || value === "last_30_days" || value === "this_month" || value === "custom" ? value : "this_week";
+}
+
+function metricDefinition(id: string): Pick<CmoAppMetric, "id" | "label" | "unit" | "description"> | undefined {
+  return metricDefinitions.find((item) => item.id === id);
+}
+
+function allowedMetricIds(): string[] {
+  return metricDefinitions.map((metric) => metric.id);
 }
 
 function isoDate(value: Date): string {
@@ -175,7 +201,7 @@ function normalizeMetric(value: unknown): CmoAppMetric | null {
     return null;
   }
 
-  const definition = metricDefinitions.find((item) => item.id === value.id);
+  const definition = metricDefinition(value.id);
   const numericValue = typeof value.value === "number" && Number.isFinite(value.value) ? value.value : null;
   const deltaValue = typeof value.deltaValue === "number" && Number.isFinite(value.deltaValue) ? value.deltaValue : null;
   const status = metricStatus(value.status, numericValue === null ? "missing" : "connected");
@@ -236,10 +262,14 @@ function missingMetricIds(metrics: CmoAppMetric[]): string[] {
 
 async function readMetricsFile(appId: string): Promise<unknown | null> {
   try {
-    return JSON.parse(await readFile(path.join(APP_METRICS_DIR, `${appId}.json`), "utf8")) as unknown;
+    return JSON.parse(await readFile(appMetricsFilePath(appId), "utf8")) as unknown;
   } catch {
     return null;
   }
+}
+
+function appMetricsFilePath(appId: string): string {
+  return path.join(APP_METRICS_DIR, `${appId}.json`);
 }
 
 function pendingReviewCount(session: Awaited<ReturnType<typeof readAppChatSessions>>[number]): number {
@@ -332,4 +362,144 @@ export async function readAppMetricsSnapshot(options: ReadAppMetricsOptions): Pr
       notes,
     },
   };
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function ensureRecord(value: unknown, message: string, code: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new AppMetricsIngestError(message, 400, code);
+  }
+
+  return value;
+}
+
+function ensureDateRange(value: unknown): CmoAppMetricsSnapshot["dateRange"] {
+  const record = ensureRecord(value, "dateRange is required.", "metrics_ingest_invalid_date_range");
+  const preset = metricPreset(record.preset);
+  const startDate = validDateString(typeof record.startDate === "string" ? record.startDate : null);
+  const endDate = validDateString(typeof record.endDate === "string" ? record.endDate : null);
+  const timezone = typeof record.timezone === "string" && record.timezone.trim() ? record.timezone.trim() : DEFAULT_TIMEZONE;
+
+  if (!startDate || !endDate) {
+    throw new AppMetricsIngestError("dateRange.startDate and dateRange.endDate must be YYYY-MM-DD.", 400, "metrics_ingest_invalid_date_range");
+  }
+
+  if (startDate > endDate) {
+    throw new AppMetricsIngestError("dateRange.startDate must be before or equal to dateRange.endDate.", 400, "metrics_ingest_invalid_date_range");
+  }
+
+  return {
+    preset,
+    startDate,
+    endDate,
+    timezone,
+  };
+}
+
+function normalizeIngestMetric(input: unknown): CmoAppMetric {
+  const record = ensureRecord(input, "Each metric must be an object.", "metrics_ingest_invalid_metric");
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  const definition = metricDefinition(id);
+
+  if (!definition) {
+    throw new AppMetricsIngestError(`Unsupported metric id: ${id || "missing"}.`, 400, "metrics_ingest_unsupported_metric");
+  }
+
+  if (record.value !== null && !(typeof record.value === "number" && Number.isFinite(record.value))) {
+    throw new AppMetricsIngestError(`Metric ${id} value must be a finite number or null.`, 400, "metrics_ingest_invalid_metric_value");
+  }
+
+  const metricValue = typeof record.value === "number" && Number.isFinite(record.value) ? record.value : null;
+  const requestedStatus = metricStatus(record.status, metricValue === null ? "missing" : "connected");
+  const status = metricValue === null ? requestedStatus === "placeholder" ? "placeholder" : "missing" : requestedStatus;
+  const displayValue = typeof record.displayValue === "string" && record.displayValue.trim() ? record.displayValue.trim() : metricValue === null ? "No data" : String(metricValue);
+
+  return {
+    id,
+    label: typeof record.label === "string" && record.label.trim() ? record.label.trim() : definition.label,
+    value: metricValue,
+    displayValue,
+    unit: record.unit === "users" || record.unit === "percent" || record.unit === "count" || record.unit === "ratio" ? record.unit : definition.unit,
+    deltaValue: typeof record.deltaValue === "number" && Number.isFinite(record.deltaValue) ? record.deltaValue : null,
+    deltaDisplay: typeof record.deltaDisplay === "string" && record.deltaDisplay.trim() ? record.deltaDisplay.trim() : undefined,
+    trend: record.trend === "up" || record.trend === "down" || record.trend === "flat" || record.trend === "unknown" ? record.trend : "unknown",
+    status,
+    description: typeof record.description === "string" && record.description.trim() ? record.description.trim() : definition.description,
+  };
+}
+
+export function normalizeMetricsIngestPayload(appId: string, payload: unknown): CmoAppMetricsSnapshot {
+  if (appId !== SUPPORTED_APP_ID) {
+    throw new AppMetricsIngestError(`Unsupported app metrics scope: ${appId}`, 404, "app_metrics_scope_not_supported");
+  }
+
+  const app = getAppWorkspace(appId);
+
+  if (!app) {
+    throw new AppMetricsIngestError(`Unknown app metrics scope: ${appId}`, 404, "app_metrics_scope_not_found");
+  }
+
+  const record = ensureRecord(payload, "Metrics ingest payload must be a JSON object.", "metrics_ingest_invalid_payload");
+
+  if (record.schemaVersion !== "cmo.app-metrics.v1") {
+    throw new AppMetricsIngestError("schemaVersion must be cmo.app-metrics.v1.", 400, "metrics_ingest_invalid_schema");
+  }
+
+  if (record.workspaceId !== app.workspaceId || record.appId !== app.id || record.sourceId !== app.sourceId) {
+    throw new AppMetricsIngestError("workspaceId, appId, and sourceId must match the Holdstation Mini App scope.", 403, "metrics_ingest_scope_mismatch");
+  }
+
+  if (!Array.isArray(record.metrics)) {
+    throw new AppMetricsIngestError("metrics must be an array.", 400, "metrics_ingest_invalid_metrics");
+  }
+
+  const suppliedMetrics = record.metrics.map(normalizeIngestMetric);
+  const suppliedIds = new Set<string>();
+
+  suppliedMetrics.forEach((metric) => {
+    if (suppliedIds.has(metric.id)) {
+      throw new AppMetricsIngestError(`Duplicate metric id: ${metric.id}.`, 400, "metrics_ingest_duplicate_metric");
+    }
+
+    suppliedIds.add(metric.id);
+  });
+
+  const metrics = metricDefinitions.map((definition) => suppliedMetrics.find((metric) => metric.id === definition.id) ?? defaultMetric(definition));
+  const diagnosticsRecord = isRecord(record.diagnostics) ? record.diagnostics : {};
+  const missingMetrics = missingMetricIds(metrics);
+  const notes = stringArray(diagnosticsRecord.notes);
+
+  return {
+    schemaVersion: "cmo.app-metrics.v1",
+    workspaceId: app.workspaceId,
+    appId: app.id,
+    sourceId: app.sourceId,
+    dateRange: ensureDateRange(record.dateRange),
+    compareToPrevious: record.compareToPrevious === true,
+    status: snapshotStatus(metrics),
+    lastUpdatedAt: typeof record.lastUpdatedAt === "string" && !Number.isNaN(Date.parse(record.lastUpdatedAt)) ? record.lastUpdatedAt : new Date().toISOString(),
+    metrics,
+    diagnostics: {
+      source: "json",
+      missingMetrics: stringArray(diagnosticsRecord.missingMetrics).filter((id) => allowedMetricIds().includes(id)).length
+        ? stringArray(diagnosticsRecord.missingMetrics).filter((id) => allowedMetricIds().includes(id))
+        : missingMetrics,
+      notes: notes.length ? notes : ["Imported from external metrics workflow."],
+    },
+  };
+}
+
+export async function ingestAppMetricsSnapshot(options: IngestAppMetricsOptions): Promise<CmoAppMetricsSnapshot> {
+  const snapshot = normalizeMetricsIngestPayload(options.appId, options.payload);
+
+  if (!options.dryRun) {
+    const filePath = appMetricsFilePath(snapshot.appId);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  }
+
+  return snapshot;
 }
