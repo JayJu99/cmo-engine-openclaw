@@ -139,6 +139,14 @@ function assistantProvenance(message: CMOChatMessage, sessionSaved: boolean, raw
   return `${runtime} · ${provider} · ${message.contextUsedCount ?? 0} context notes · ${saved} · ${raw}`;
 }
 
+function isBackendContextLine(line: string): boolean {
+  return /^(context used|unavailable context|context quality|context caution|draft or placeholder notes|graph hints|graph status|graph hint refs|runtime note|remote cmo adapter|cmo context pack)/i.test(line);
+}
+
+function isBackendContextHeading(value: string): boolean {
+  return /^(context used|context|runtime note|graph hints|graph context|system context)$/i.test(value.trim());
+}
+
 function renderAssistantContent(content: string) {
   const lines = content.split(/\r?\n/);
 
@@ -154,11 +162,19 @@ function renderAssistantContent(content: string) {
         const heading = trimmed.match(/^##\s+(.+)$/);
 
         if (heading) {
+          if (isBackendContextHeading(heading[1])) {
+            return null;
+          }
+
           return (
             <h3 key={`heading-${index}`} className="pt-2 text-sm font-extrabold uppercase text-slate-950 first:pt-0">
               {heading[1]}
             </h3>
           );
+        }
+
+        if (isBackendContextLine(trimmed)) {
+          return null;
         }
 
         const numbered = trimmed.match(/^(\d+)\.\s+(.+)$/);

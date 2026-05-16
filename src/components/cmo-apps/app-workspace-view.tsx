@@ -321,6 +321,97 @@ type DecisionLayerReviewStatus =
   | CmoTaskCandidateReviewStatus;
 type SessionFilter = "all" | "live" | "fallback" | "saved" | "raw";
 type ContextDrawerTab = "context" | "decision" | "metadata" | "vault";
+type DateRangePreset = "this_week" | "last_7_days" | "last_30_days" | "this_month" | "custom";
+type PlanReviewTypeFilter = "all" | "decisions" | "tasks" | "memory";
+type PlanReviewStatusFilter = "pending" | "approved" | "skipped";
+
+const dateRangeOptions: Array<{ id: DateRangePreset; label: string }> = [
+  { id: "this_week", label: "This week" },
+  { id: "last_7_days", label: "Last 7 days" },
+  { id: "last_30_days", label: "Last 30 days" },
+  { id: "this_month", label: "This month" },
+  { id: "custom", label: "Custom" },
+];
+
+const planTypeOptions: Array<{ id: PlanReviewTypeFilter; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "decisions", label: "Decisions" },
+  { id: "tasks", label: "Tasks" },
+  { id: "memory", label: "Memory" },
+];
+
+const planStatusOptions: Array<{ id: PlanReviewStatusFilter; label: string }> = [
+  { id: "pending", label: "Pending" },
+  { id: "approved", label: "Approved" },
+  { id: "skipped", label: "Skipped" },
+];
+
+function contextStatusLabel(summary: { existingCount: number; selectedCount: number; missingCount: number }): "Ready" | "Partial" | "Missing" {
+  if (summary.selectedCount === 0 || summary.existingCount === 0) {
+    return "Missing";
+  }
+
+  return summary.missingCount > 0 ? "Partial" : "Ready";
+}
+
+function contextStatusVariant(status: "Ready" | "Partial" | "Missing"): "green" | "orange" | "red" {
+  if (status === "Ready") {
+    return "green";
+  }
+
+  return status === "Partial" ? "orange" : "red";
+}
+
+function FieldValue({ label, value }: { label: string; value?: React.ReactNode }) {
+  const displayValue = value === null || value === undefined || value === "" ? "Not set" : value;
+
+  return (
+    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+      <div className="text-xs font-semibold uppercase text-slate-400">{label}</div>
+      <div className="mt-1 text-sm font-bold text-slate-950">{displayValue}</div>
+    </div>
+  );
+}
+
+function KpiCard({
+  label,
+  value,
+  detail,
+  muted,
+}: {
+  label: string;
+  value: React.ReactNode;
+  detail?: React.ReactNode;
+  muted?: boolean;
+}) {
+  return (
+    <div className="min-h-28 rounded-xl border border-slate-100 bg-white px-4 py-3 shadow-sm">
+      <div className="text-xs font-bold uppercase text-slate-400">{label}</div>
+      <div className={cn("mt-3 text-2xl font-bold tracking-tight", muted ? "text-slate-400" : "text-slate-950")}>{value}</div>
+      {detail ? <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{detail}</div> : null}
+    </div>
+  );
+}
+
+function StatusChipCard({
+  label,
+  badge,
+  variant = "slate",
+  detail,
+}: {
+  label: string;
+  badge: string;
+  variant?: "green" | "orange" | "red" | "blue" | "slate";
+  detail?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+      <div className="text-xs font-semibold uppercase text-slate-400">{label}</div>
+      <Badge className="mt-2" variant={variant}>{badge}</Badge>
+      {detail ? <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{detail}</div> : null}
+    </div>
+  );
+}
 
 function reviewBadgeVariant(status: string | undefined): "green" | "orange" | "red" | "blue" | "slate" {
   if (status === "confirmed" || status === "accepted" || status === "reviewed" || status === "approved_for_promotion_later" || status === "approved_for_task_later") {
@@ -473,6 +564,10 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>("all");
   const [contextDrawerOpen, setContextDrawerOpen] = useState(true);
   const [contextDrawerTab, setContextDrawerTab] = useState<ContextDrawerTab>("decision");
+  const [dateRange, setDateRange] = useState<DateRangePreset>("this_week");
+  const [comparePrevious, setComparePrevious] = useState(false);
+  const [planTypeFilter, setPlanTypeFilter] = useState<PlanReviewTypeFilter>("all");
+  const [planStatusFilter, setPlanStatusFilter] = useState<PlanReviewStatusFilter>("pending");
   const [sessionFocusSignal, setSessionFocusSignal] = useState(0);
   const [memoryRefreshSignal, setMemoryRefreshSignal] = useState(0);
   const [promotionRefreshSignal, setPromotionRefreshSignal] = useState(0);
@@ -507,6 +602,12 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   }, [filteredSessions]);
   const latestSession = sessions[0];
   const mostAppNotesArePlaceholders = appNoteQuality.selectedCount > 0 && appNoteQuality.placeholderCount > appNoteQuality.selectedCount / 2;
+  const contextStatus = contextStatusLabel(selectedQuality);
+  const memoryHealth = `${appNoteQuality.confirmedCount} confirmed / ${appNoteQuality.draftCount} draft / ${appNoteQuality.placeholderCount} need content`;
+  const pendingReviewTotal = sessions.reduce((total, session) => total + decisionLayerStatus(session).pending, 0);
+  const promotionsPending = latestPromotion ? 1 : 0;
+  const sourceStatus = state.todayRawExists || selectedSession?.rawCapturePath ? "Exists" : "Missing";
+  const lastUpdated = app.lastUpdated || priorityState.activePriority?.updatedAt || latestSession?.createdAt || "Vault-backed";
 
   useEffect(() => {
     const nextTab: AppWorkspaceTab = isWorkspaceTab(tabParam) ? tabParam : "dashboard";
@@ -897,93 +998,76 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   }
 
   const headerActions = (
-    <>
-      <Button asChild>
-        <Link
-          href={`${pathname}?tab=sessions#cmo-session`}
-          onClick={focusCurrentCmoSession}
-        >
-          <icons.MessageSquare />
-          Start CMO Session
-        </Link>
-      </Button>
-      {selectedSession && selectedSession.messages.length && !selectedSession.rawCapturePath ? (
-        <Button asChild variant="outline">
-          <Link href={`${pathname}?tab=sessions#raw-capture`} onClick={() => setActiveTab("sessions")}>
-            <icons.Database />
-            Capture to Raw Vault
-          </Link>
-        </Button>
-      ) : (
-        <Button variant="outline" disabled title="Capture becomes available after a selected CMO session has messages.">
-          <icons.Database />
-          Capture to Raw Vault
-        </Button>
-      )}
-      <Button asChild variant="outline">
-        <Link href={`/apps/${app.slug}?tab=plan`} onClick={() => selectTab("plan")}>
-          <icons.FileText />
-          Generate/Review Plan
-        </Link>
-      </Button>
-    </>
+    <Button asChild>
+      <Link
+        href={`${pathname}?tab=sessions#cmo-session`}
+        onClick={focusCurrentCmoSession}
+      >
+        <icons.MessageSquare />
+        Start CMO Session
+      </Link>
+    </Button>
   );
 
   return (
-    <PageChrome title={app.name} description="Tab-based App Operating Workspace for CMO context, planning, tasks, sessions, and Vault capture." actions={headerActions}>
-      <Card className="p-6">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+    <PageChrome title={app.name} description="Executive app workspace with chat-first CMO review, status, and Vault provenance." actions={headerActions}>
+      <Card className="p-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant={app.stage === "Active" ? "green" : "slate"}>{app.stage || "Unknown stage"}</Badge>
-              <Badge variant="slate">{app.group}</Badge>
               <Badge title={state.initialRuntimeStatus ?? "not_checked"} variant={runtimeVariant(state.initialRuntimeStatus)}>{runtimeLabel(state.initialRuntimeStatus)}</Badge>
-              <Badge variant={selectedQuality.missingCount ? "orange" : "slate"}>
-                Context: {selectedQuality.existingCount}/{selectedQuality.selectedCount}
-              </Badge>
+              <Badge variant={contextStatusVariant(contextStatus)}>Context: {contextStatus}</Badge>
+              <Badge variant="slate">Source: Vault-backed</Badge>
             </div>
-            <h2 className="mt-4 text-2xl font-bold tracking-tight text-slate-950">{app.currentMission || "No active mission yet."}</h2>
-            <CardDescription className="mt-2 break-all">{app.vaultPath}</CardDescription>
-            {state.initialRuntimeReason ? <p className="mt-2 text-sm font-medium text-slate-500">{state.initialRuntimeReason}</p> : null}
+            <h2 className="mt-3 text-xl font-bold tracking-tight text-slate-950">{app.name}</h2>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
+              <span>Last updated: {displayDate(lastUpdated)}</span>
+              <span>Metrics: {state.dashboardSnapshot.metricsStatus === "missing" ? "No metric source connected yet" : state.dashboardSnapshot.metricsStatus}</span>
+            </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:min-w-[520px]">
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-              <div className="text-xs font-semibold uppercase text-slate-400">C-Level Priority</div>
-              <div className="mt-1 font-bold text-slate-950">{priorityState.activePriority?.title || "Missing"}</div>
-              {priorityState.activePriority ? (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <Badge>{priorityState.activePriority.priorityLevel}</Badge>
-                  <Badge variant="green">{priorityState.activePriority.status}</Badge>
-                  <Badge variant="slate">{priorityState.activePriority.timeframe}</Badge>
-                </div>
-              ) : null}
+          <div className="flex flex-col gap-3 xl:items-end">
+            <div className="flex flex-wrap gap-2">
+              {dateRangeOptions.map((option) => (
+                <Button
+                  key={option.id}
+                  type="button"
+                  size="sm"
+                  variant={dateRange === option.id ? "default" : "outline"}
+                  onClick={() => setDateRange(option.id)}
+                >
+                  {option.label}
+                </Button>
+              ))}
             </div>
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-              <div className="text-xs font-semibold uppercase text-slate-400">Last Updated</div>
-              <div className="mt-1 font-bold text-slate-950">{app.lastUpdated || "Vault-backed"}</div>
-            </div>
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-              <div className="text-xs font-semibold uppercase text-slate-400">App Memory</div>
-              <div className="mt-1 font-bold text-slate-950">
-                {appNoteQuality.existingCount} / {appNoteQuality.selectedCount} found
-              </div>
-              <div className="mt-1 text-xs font-medium text-slate-500">
-                {appNoteQuality.confirmedCount} confirmed, {appNoteQuality.draftCount} draft, {appNoteQuality.placeholderCount} need content
-              </div>
-            </div>
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-              <div className="text-xs font-semibold uppercase text-slate-400">Today</div>
-              <div className="mt-1 font-bold text-slate-950">
-                Raw {state.todayRawExists ? "exists" : "missing"} / Daily {state.todayDailyExists ? "exists" : "missing"}
-              </div>
-            </div>
+            <label className="flex items-center gap-2 text-xs font-bold uppercase text-slate-500">
+              <input
+                type="checkbox"
+                checked={comparePrevious}
+                onChange={(event) => setComparePrevious(event.target.checked)}
+                className="size-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              Compare to previous period
+            </label>
           </div>
         </div>
-        {mostAppNotesArePlaceholders ? (
-          <div className="mt-5 rounded-xl border border-orange-100 bg-orange-50 px-4 py-3 text-sm font-semibold text-orange-800">
-            Most app memory notes need content. CMO output may rely on assumptions until durable app memory is filled.
-          </div>
-        ) : null}
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+          <KpiCard label="Activated Users" value="-" detail="No metric source connected yet" muted />
+          <KpiCard label="Activation Rate" value="-" detail="No metric source connected yet" muted />
+          <KpiCard label="New Users" value="-" detail="No metric source connected yet" muted />
+          <KpiCard label="Retention" value="-" detail="No metric source connected yet" muted />
+          <KpiCard label="Pending Reviews" value={pendingReviewTotal} detail="Decision Layer items awaiting review" />
+          <KpiCard label="Promotions Pending" value={promotionsPending} detail={latestPromotion ? "Latest candidate available" : "No pending promotion signal"} />
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <StatusChipCard label="Context" badge={contextStatus} variant={contextStatusVariant(contextStatus)} detail={`${selectedQuality.existingCount}/${selectedQuality.selectedCount} source checks`} />
+          <StatusChipCard label="Memory" badge={memoryHealth} variant={appNoteQuality.placeholderCount ? "orange" : "green"} detail="Backend managed" />
+          <StatusChipCard label="Metrics" badge={state.dashboardSnapshot.metricsStatus === "missing" ? "Missing" : state.dashboardSnapshot.metricsStatus} variant={state.dashboardSnapshot.metricsStatus === "missing" ? "orange" : "green"} detail="No metric source connected yet" />
+          <StatusChipCard label="Vault" badge="Backed" variant="green" detail="App-scoped source" />
+          <StatusChipCard label="Raw" badge={sourceStatus} variant={sourceStatus === "Exists" ? "green" : "orange"} detail="Capture provenance" />
+        </div>
       </Card>
 
       <Card className="p-2">
@@ -1095,7 +1179,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                 {state.initialRuntimeStatus === "configured_but_unreachable" ? <p className="mt-2 text-xs font-medium text-slate-500">CMO runtime is not connected yet. Using development fallback.</p> : null}
               </div>
               <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                <div className="text-xs font-semibold uppercase text-slate-400">App Memory</div>
+                <div className="text-xs font-semibold uppercase text-slate-400">Memory</div>
                 <div className="mt-2 text-sm font-bold text-slate-950">
                   {appNoteQuality.confirmedCount} confirmed / {appNoteQuality.draftCount} draft / {appNoteQuality.placeholderCount} need content
                 </div>
@@ -1111,24 +1195,56 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             </div>
           </SectionCard>
 
-          <ContextBriefCard brief={contextBrief} />
-
-          <AppOperatingDeck
-            app={app}
-            notes={appNotes}
-            recentCaptures={state.recentCaptures}
-            dailyNotePath={state.todayDailyPath}
-            dailyNoteExists={state.todayDailyExists}
-            latestPromotion={latestPromotion}
-          />
+          <details className="rounded-xl border border-slate-100 bg-white p-4">
+            <summary className="cursor-pointer text-sm font-bold text-slate-950">System Details</summary>
+            <div className="mt-4 space-y-5">
+              <ContextBriefCard brief={contextBrief} />
+              <AppOperatingDeck
+                app={app}
+                notes={appNotes}
+                recentCaptures={state.recentCaptures}
+                dailyNotePath={state.todayDailyPath}
+                dailyNoteExists={state.todayDailyExists}
+                latestPromotion={latestPromotion}
+              />
+            </div>
+          </details>
         </div>
       ) : null}
 
       {activeTab === "inputs" ? (
         <div className="grid gap-6 2xl:grid-cols-[1fr_0.9fr]">
           <div className="space-y-6">
-            <SectionCard title="C-Level Priority" icon={<icons.Target />} action={<Badge variant={priorityState.activePriority ? "green" : "orange"}>{priorityState.activePriority ? "active" : "missing"}</Badge>}>
-              <form
+            <SectionCard title="Priority Snapshot" icon={<icons.Target />} action={<Badge variant={priorityState.activePriority ? "green" : "orange"}>{priorityState.activePriority ? "active" : "missing"}</Badge>}>
+              <div className="grid gap-3 md:grid-cols-2">
+                <FieldValue label="Current priority" value={priorityState.activePriority?.title} />
+                <FieldValue label="Why now" value={priorityState.activePriority?.whyNow} />
+                <FieldValue label="Success metric" value={priorityState.activePriority?.successMetric} />
+                <FieldValue label="Timeframe" value={priorityState.activePriority?.timeframe} />
+                <FieldValue label="Owner" value={priorityState.activePriority?.owner} />
+                <FieldValue label="Last updated" value={displayDate(priorityState.activePriority?.updatedAt)} />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Badge variant="slate">Source: {priorityState.activePriority?.source || "Updated via CMO Chat / Manual"}</Badge>
+                {priorityState.activePriority ? <Badge>{priorityState.activePriority.priorityLevel}</Badge> : null}
+                {priorityState.activePriority ? <Badge variant={priorityState.activePriority.status === "active" ? "green" : "slate"}>{priorityState.activePriority.status}</Badge> : null}
+              </div>
+              {priorityState.priorities.length > 1 ? (
+                <div className="mt-5 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                  <div className="text-xs font-bold uppercase text-slate-400">Priority Change Log</div>
+                  <div className="mt-3 space-y-2">
+                    {priorityState.priorities.slice(0, 4).map((item) => (
+                      <div key={item.id || `${item.title}-${item.updatedAt}`} className="flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between">
+                        <span className="font-semibold text-slate-800">{item.title || "Untitled priority"}</span>
+                        <span className="text-xs font-semibold text-slate-500">{displayDate(item.updatedAt)} - {item.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <details className="mt-5 rounded-xl border border-slate-100 bg-white p-4">
+                <summary className="cursor-pointer text-sm font-bold text-slate-950">Edit manually</summary>
+                <form
                 ref={priorityFormRef}
                 onSubmit={(event) => {
                   event.preventDefault();
@@ -1221,46 +1337,98 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                 </div>
                 {prioritySaveStatus ? <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">{prioritySaveStatus}</div> : null}
                 {priorityError ? <div className="mt-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{priorityError}</div> : null}
-              </form>
+                </form>
+              </details>
             </SectionCard>
 
-            <SectionCard title="Project Docs" icon={<icons.Folder />}>
-              <div className="grid gap-3 md:grid-cols-2">
-                {state.projectDocStatuses.map((status) => (
-                  <div key={status.path} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="font-bold text-slate-950">{status.title}</div>
-                      <Badge variant={status.exists ? "green" : "slate"}>{status.exists ? "exists" : "missing"}</Badge>
-                    </div>
-                    <div className="mt-1 break-all text-xs font-medium text-slate-500">{status.path}</div>
-                  </div>
-                ))}
+            <SectionCard title="Memory Health" icon={<icons.Database />}>
+              <div className="grid gap-3 md:grid-cols-4">
+                <FieldValue label="Confirmed" value={appNoteQuality.confirmedCount} />
+                <FieldValue label="Draft" value={appNoteQuality.draftCount} />
+                <FieldValue label="Needs input" value={appNoteQuality.placeholderCount} />
+                <FieldValue label="Last updated" value={displayDate(lastUpdated)} />
               </div>
-            </SectionCard>
-
-            <SectionCard title="App Memory" icon={<icons.Database />}>
-              <AppMemorySection appId={app.id} refreshSignal={memoryRefreshSignal} onChanged={refreshWorkspaceAfterMemoryChange} />
+              {mostAppNotesArePlaceholders ? <p className="mt-3 text-sm font-medium text-orange-700">Memory quality is partial. Use CMO Chat to clarify durable facts before promotion.</p> : null}
             </SectionCard>
           </div>
 
           <div className="space-y-6">
-            <ContextBriefCard brief={contextBrief} />
-
-            <SectionCard title="App Memory Quality" icon={<icons.Database />}>
-              <div className="flex flex-wrap gap-2">
-                <Badge variant={appNoteQuality.confirmedCount ? "green" : "slate"}>{appNoteQuality.confirmedCount} confirmed</Badge>
-                <Badge variant={appNoteQuality.draftCount ? "blue" : "slate"}>{appNoteQuality.draftCount} draft</Badge>
-                <Badge variant={appNoteQuality.placeholderCount ? "orange" : "slate"}>{appNoteQuality.placeholderCount} need content</Badge>
-                <Badge variant={appNoteQuality.missingCount ? "red" : "slate"}>{appNoteQuality.missingCount} missing</Badge>
+            <SectionCard title="Backend Status" icon={<icons.ShieldCheck />}>
+              <div className="grid gap-3">
+                <StatusChipCard label="Context" badge={contextStatus} variant={contextStatusVariant(contextStatus)} detail="Resolved automatically" />
+                <StatusChipCard label="Memory" badge={memoryHealth} variant={appNoteQuality.placeholderCount ? "orange" : "green"} detail="Backend managed" />
+                <StatusChipCard label="Metrics" badge={state.dashboardSnapshot.metricsStatus === "missing" ? "Missing" : state.dashboardSnapshot.metricsStatus} variant={state.dashboardSnapshot.metricsStatus === "missing" ? "orange" : "green"} detail="No metric source connected yet" />
               </div>
-              {mostAppNotesArePlaceholders ? <p className="mt-3 text-sm font-medium text-orange-700">Most notes need more content before CMO output can be fully grounded.</p> : null}
             </SectionCard>
+
+            <details className="rounded-xl border border-slate-100 bg-white p-4">
+              <summary className="cursor-pointer text-sm font-bold text-slate-950">System Details</summary>
+              <div className="mt-4 space-y-5">
+                <ContextBriefCard brief={contextBrief} />
+                <SectionCard title="Project Docs" icon={<icons.Folder />}>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {state.projectDocStatuses.map((status) => (
+                      <div key={status.path} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="font-bold text-slate-950">{status.title}</div>
+                          <Badge variant={status.exists ? "green" : "slate"}>{status.exists ? "exists" : "missing"}</Badge>
+                        </div>
+                        <div className="mt-1 break-all text-xs font-medium text-slate-500">{status.path}</div>
+                      </div>
+                    ))}
+                  </div>
+                </SectionCard>
+                <SectionCard title="App Memory" icon={<icons.Database />}>
+                  <AppMemorySection appId={app.id} refreshSignal={memoryRefreshSignal} onChanged={refreshWorkspaceAfterMemoryChange} />
+                </SectionCard>
+              </div>
+            </details>
           </div>
         </div>
       ) : null}
 
       {activeTab === "plan" ? (
         <div className="space-y-6">
+          <Card className="p-4">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div>
+                <CardTitle>Plan & Recap Filters</CardTitle>
+                <CardDescription className="mt-1">Filter reviewed outputs without exposing backend context details by default.</CardDescription>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {dateRangeOptions.map((option) => (
+                  <Button key={option.id} type="button" size="sm" variant={dateRange === option.id ? "default" : "outline"} onClick={() => setDateRange(option.id)}>
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <Field label="Type">
+                <select
+                  value={planTypeFilter}
+                  onChange={(event) => setPlanTypeFilter(event.target.value as PlanReviewTypeFilter)}
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 shadow-sm outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                >
+                  {planTypeOptions.map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Status">
+                <select
+                  value={planStatusFilter}
+                  onChange={(event) => setPlanStatusFilter(event.target.value as PlanReviewStatusFilter)}
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 shadow-sm outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                >
+                  {planStatusOptions.map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+          </Card>
+
           <div className="grid gap-6 xl:grid-cols-2">
             <SectionCard
               title="Week Plan"
@@ -1317,7 +1485,30 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             </SectionCard>
 
             <SectionCard title="Suggested Promotions" icon={<icons.Sparkles />}>
-              <PromotionCandidatesSection appId={app.id} refreshSignal={promotionRefreshSignal} onPromoted={refreshWorkspaceAfterMemoryChange} />
+              <div className="space-y-3">
+                <div className="grid gap-3 md:grid-cols-3">
+                  <FieldValue label="Pending" value={promotionsPending} />
+                  <FieldValue label="Type filter" value={planTypeOptions.find((option) => option.id === planTypeFilter)?.label} />
+                  <FieldValue label="Status filter" value={planStatusOptions.find((option) => option.id === planStatusFilter)?.label} />
+                </div>
+                {latestPromotion ? (
+                  <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                    <div className="font-bold text-slate-950">{latestPromotion.title}</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Badge variant="orange">review pending</Badge>
+                      <Badge variant="slate">provenance available</Badge>
+                    </div>
+                  </div>
+                ) : (
+                  <EmptyCopy>No suggested promotion is pending for this app.</EmptyCopy>
+                )}
+                <details className="rounded-xl border border-slate-100 bg-white p-4">
+                  <summary className="cursor-pointer text-sm font-bold text-slate-950">Advanced promotion queue</summary>
+                  <div className="mt-4">
+                    <PromotionCandidatesSection appId={app.id} refreshSignal={promotionRefreshSignal} onPromoted={refreshWorkspaceAfterMemoryChange} />
+                  </div>
+                </details>
+              </div>
             </SectionCard>
           </div>
         </div>
@@ -1476,7 +1667,21 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                     ))}
                   </div>
 
-                  {contextDrawerTab === "context" ? <ContextBriefCard brief={contextBrief} /> : null}
+                  {contextDrawerTab === "context" ? (
+                    <div className="space-y-3">
+                      <StatusChipCard label="Context" badge={contextStatus} variant={contextStatusVariant(contextStatus)} detail="Resolved automatically for this app" />
+                      <StatusChipCard label="Memory" badge={memoryHealth} variant={appNoteQuality.placeholderCount ? "orange" : "green"} detail="Backend managed" />
+                      <StatusChipCard label="Metrics" badge={state.dashboardSnapshot.metricsStatus === "missing" ? "Missing" : state.dashboardSnapshot.metricsStatus} variant={state.dashboardSnapshot.metricsStatus === "missing" ? "orange" : "green"} detail="No metric source connected yet" />
+                      <StatusChipCard label="Vault" badge="Backed" variant="green" detail="App-scoped source" />
+                      <StatusChipCard label="Raw" badge={sourceStatus} variant={sourceStatus === "Exists" ? "green" : "orange"} detail="Capture provenance" />
+                      <details className="rounded-xl border border-slate-100 bg-white p-3">
+                        <summary className="cursor-pointer text-sm font-bold text-slate-950">System Details</summary>
+                        <div className="mt-3">
+                          <ContextBriefCard brief={contextBrief} />
+                        </div>
+                      </details>
+                    </div>
+                  ) : null}
 
                   {contextDrawerTab === "metadata" ? (
                     selectedSession ? (
@@ -1495,12 +1700,8 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                             <div className="mt-1 text-sm font-bold text-slate-950">{selectedSession.runtimeAgent || selectedSession.runtimeProvider || "not captured"}</div>
                           </div>
                           <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                            <div className="text-xs font-semibold uppercase text-slate-400">Context Used</div>
-                            <div className="mt-1 text-sm font-bold text-slate-950">{sessionContextSummary(selectedSession)}</div>
-                          </div>
-                          <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                            <div className="text-xs font-semibold uppercase text-slate-400">Graph</div>
-                            <div className="mt-1 text-sm font-bold text-slate-950">{selectedSession.graphStatus ?? "empty"}; {selectedSession.graphHintCount ?? selectedSession.graphHints?.length ?? 0} hints</div>
+                            <div className="text-xs font-semibold uppercase text-slate-400">Context Status</div>
+                            <div className="mt-1 text-sm font-bold text-slate-950">{contextStatus}</div>
                           </div>
                           <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
                             <div className="text-xs font-semibold uppercase text-slate-400">Created</div>
@@ -1547,13 +1748,15 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                             </div>
                           ))}
                         </div>
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between">
-                            <div className="text-xs font-bold uppercase text-slate-400">Detailed Rows</div>
-                            <Button type="button" size="sm" variant="outline" onClick={() => setShowAdvancedDecisionControls((current) => !current)}>
-                              {showAdvancedDecisionControls ? "Hide controls" : "Advanced"}
-                            </Button>
-                          </div>
+                        <details className="rounded-xl border border-slate-100 bg-white p-3">
+                          <summary className="cursor-pointer text-sm font-bold text-slate-950">Advanced review rows</summary>
+                          <div className="mt-3 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <div className="text-xs font-bold uppercase text-slate-400">Detailed Rows</div>
+                              <Button type="button" size="sm" variant="outline" onClick={() => setShowAdvancedDecisionControls((current) => !current)}>
+                                {showAdvancedDecisionControls ? "Hide controls" : "Show controls"}
+                              </Button>
+                            </div>
                           {selectedSession.decisionLayer.suggestedActions.map((item, index) => (
                             <div key={item.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
                               <div className="text-sm font-bold text-slate-950">Action {index + 1}: {item.title}</div>
@@ -1589,7 +1792,8 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                           {sessionPotentialDecisions(selectedSession).length ? sessionPotentialDecisions(selectedSession).map((decision) => (
                             <div key={decision} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-700">{decision}</div>
                           )) : <EmptyCopy>No potential decisions extracted.</EmptyCopy>}
-                        </div>
+                          </div>
+                        </details>
                         {decisionReviewStatus ? <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">{decisionReviewStatus}</div> : null}
                         {decisionReviewError ? <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{decisionReviewError}</div> : null}
                       </div>
