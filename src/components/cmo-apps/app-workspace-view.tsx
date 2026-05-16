@@ -319,6 +319,8 @@ type DecisionLayerReviewStatus =
   | CmoSuggestedActionReviewStatus
   | CmoMemoryCandidateReviewStatus
   | CmoTaskCandidateReviewStatus;
+type SessionFilter = "all" | "live" | "fallback" | "saved" | "raw";
+type ContextDrawerTab = "context" | "decision" | "metadata" | "vault";
 
 function reviewBadgeVariant(status: string | undefined): "green" | "orange" | "red" | "blue" | "slate" {
   if (status === "confirmed" || status === "accepted" || status === "reviewed" || status === "approved_for_promotion_later" || status === "approved_for_task_later") {
@@ -385,6 +387,59 @@ function decisionLayerStatus(session: CMOChatSession | undefined): {
   };
 }
 
+function sessionOutputCount(session: CMOChatSession): number {
+  return session.decisionLayer
+    ? session.decisionLayer.decisions.length +
+        session.decisionLayer.assumptions.length +
+        session.decisionLayer.suggestedActions.length +
+        session.decisionLayer.memoryCandidates.length +
+        session.decisionLayer.taskCandidates.length
+    : 0;
+}
+
+function sessionGroupLabel(createdAt: string): string {
+  const date = new Date(createdAt);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Earlier";
+  }
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfSessionDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDiff = Math.floor((startOfToday - startOfSessionDay) / 86400000);
+
+  if (dayDiff <= 0) {
+    return "Today";
+  }
+
+  if (dayDiff === 1) {
+    return "Yesterday";
+  }
+
+  return "Earlier";
+}
+
+function matchesSessionFilter(session: CMOChatSession, filter: SessionFilter): boolean {
+  if (filter === "all") {
+    return true;
+  }
+
+  if (filter === "live") {
+    return session.runtimeMode === "live" || session.runtimeStatus === "live";
+  }
+
+  if (filter === "fallback") {
+    return session.runtimeMode !== "live" || session.isRuntimeFallback === true || session.isDevelopmentFallback === true;
+  }
+
+  if (filter === "saved") {
+    return session.savedToVault === true;
+  }
+
+  return Boolean(session.rawCapturePath);
+}
+
 export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const { app } = state;
   const router = useRouter();
@@ -414,6 +469,10 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [decisionReviewStatus, setDecisionReviewStatus] = useState<string | null>(null);
   const [decisionReviewError, setDecisionReviewError] = useState<string | null>(null);
   const [showAdvancedDecisionControls, setShowAdvancedDecisionControls] = useState(false);
+  const [sessionSearch, setSessionSearch] = useState("");
+  const [sessionFilter, setSessionFilter] = useState<SessionFilter>("all");
+  const [contextDrawerOpen, setContextDrawerOpen] = useState(true);
+  const [contextDrawerTab, setContextDrawerTab] = useState<ContextDrawerTab>("decision");
   const [sessionFocusSignal, setSessionFocusSignal] = useState(0);
   const [memoryRefreshSignal, setMemoryRefreshSignal] = useState(0);
   const [promotionRefreshSignal, setPromotionRefreshSignal] = useState(0);
@@ -421,6 +480,31 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const selectedQuality = contextBrief.contextQualitySummary;
   const selectedSession = selectedSessionId ? sessions.find((session) => session.id === selectedSessionId) : undefined;
   const selectedDecisionStatus = decisionLayerStatus(selectedSession);
+  const filteredSessions = useMemo(() => {
+    const query = sessionSearch.trim().toLowerCase();
+
+    return sessions.filter((session) => {
+      const searchable = [
+        session.topic,
+        firstUserMessage(session),
+        latestAssistantMessage(session),
+      ].join(" ").toLowerCase();
+
+      return matchesSessionFilter(session, sessionFilter) && (!query || searchable.includes(query));
+    });
+  }, [sessionFilter, sessionSearch, sessions]);
+  const groupedSessions = useMemo(() => {
+    const groups = new Map<string, CMOChatSession[]>();
+
+    filteredSessions.forEach((session) => {
+      const label = sessionGroupLabel(session.createdAt);
+      groups.set(label, [...(groups.get(label) ?? []), session]);
+    });
+
+    return ["Today", "Yesterday", "Earlier"]
+      .map((label) => ({ label, sessions: groups.get(label) ?? [] }))
+      .filter((group) => group.sessions.length);
+  }, [filteredSessions]);
   const latestSession = sessions[0];
   const mostAppNotesArePlaceholders = appNoteQuality.selectedCount > 0 && appNoteQuality.placeholderCount > appNoteQuality.selectedCount / 2;
 
@@ -742,6 +826,74 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     } finally {
       setReviewingDecisionItemId(null);
     }
+  }
+
+  function sessionHistoryPanel() {
+    const filters: Array<{ id: SessionFilter; label: string }> = [
+      { id: "all", label: "All" },
+      { id: "live", label: "Live" },
+      { id: "fallback", label: "Fallback" },
+      { id: "saved", label: "Saved" },
+      { id: "raw", label: "Raw" },
+    ];
+
+    return (
+      <div className="space-y-3">
+        <Input
+          value={sessionSearch}
+          onChange={(event) => setSessionSearch(event.target.value)}
+          placeholder="Search sessions..."
+          className="h-9 text-sm"
+        />
+        <div className="flex flex-wrap gap-1.5">
+          {filters.map((filter) => (
+            <button
+              key={filter.id}
+              type="button"
+              onClick={() => setSessionFilter(filter.id)}
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-xs font-semibold transition",
+                sessionFilter === filter.id ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-500 hover:border-slate-300",
+              )}
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
+        {groupedSessions.length ? (
+          <div className="space-y-4">
+            {groupedSessions.map((group) => (
+              <div key={group.label} className="space-y-2">
+                <div className="px-1 text-[11px] font-bold uppercase text-slate-400">{group.label}</div>
+                {group.sessions.map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    onClick={() => setSelectedSessionId(session.id)}
+                    className={cn(
+                      "w-full rounded-lg border px-3 py-2 text-left transition",
+                      selectedSessionId === session.id ? "border-indigo-200 bg-indigo-50" : "border-slate-100 bg-white hover:border-slate-200 hover:bg-slate-50",
+                    )}
+                  >
+                    <div className="truncate text-sm font-bold text-slate-950">{session.topic || firstUserMessage(session) || "CMO session"}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-slate-500">
+                      <span>{displayDate(session.createdAt)}</span>
+                      <span>·</span>
+                      <Badge variant={session.runtimeMode === "live" || session.runtimeStatus === "live" ? "green" : "orange"}>{session.runtimeMode === "live" || session.runtimeStatus === "live" ? "Live" : "Fallback"}</Badge>
+                      <Badge variant={sessionOutputCount(session) ? "blue" : "slate"}>{sessionOutputCount(session)} outputs</Badge>
+                      {session.savedToVault ? <Badge variant="green">saved</Badge> : null}
+                      {session.rawCapturePath ? <Badge variant="green">raw</Badge> : null}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyCopy>No sessions match this view.</EmptyCopy>
+        )}
+      </div>
+    );
   }
 
   const headerActions = (
@@ -1232,324 +1384,254 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
       ) : null}
 
       {activeTab === "sessions" ? (
-        <div className="space-y-6">
-          <div id="cmo-session" className="space-y-4">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2 className="text-xl font-bold tracking-tight text-slate-950">Current Session</h2>
-                <p className="text-sm text-slate-500">Ask the next app-specific CMO question. The context brief is resolved automatically.</p>
-              </div>
-              <Badge title={state.initialRuntimeStatus ?? "not_checked"} variant={runtimeVariant(state.initialRuntimeStatus)}>{runtimeLabel(state.initialRuntimeStatus)}</Badge>
+        <div className="space-y-4">
+          <div className="flex flex-col gap-3 rounded-xl border border-slate-100 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-bold tracking-tight text-slate-950">{app.name} CMO Chat</h2>
+              <p className="text-sm text-slate-500">Chat is the primary workspace. Context, review state, and Vault provenance stay in the side drawer.</p>
             </div>
-            <CMOChatPanel
-              app={app}
-              contextBrief={contextBrief}
-              onSessionCreated={(sessionId) => {
-                void refreshSessions(sessionId);
-                setPromotionRefreshSignal((current) => current + 1);
-              }}
-              onSessionSaved={() => {
-                void refreshSessions();
-                setPromotionRefreshSignal((current) => current + 1);
-              }}
-              initialRuntimeStatus={state.initialRuntimeStatus ?? null}
-              initialRuntimeLabel={state.initialRuntimeLabel ?? ""}
-              focusSignal={sessionFocusSignal}
-              relatedPriority={priorityState.activePriority?.title}
-              activeSessionId={selectedSessionId}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge title={state.initialRuntimeStatus ?? "not_checked"} variant={runtimeVariant(state.initialRuntimeStatus)}>{runtimeLabel(state.initialRuntimeStatus)}</Badge>
+              <Badge variant={selectedQuality.missingCount ? "orange" : "green"}>
+                Context {selectedQuality.existingCount}/{selectedQuality.selectedCount}
+              </Badge>
+              <Button type="button" size="sm" variant="outline" onClick={() => setContextDrawerOpen((current) => !current)}>
+                {contextDrawerOpen ? <icons.ChevronRight /> : <icons.ChevronDown />}
+                Context Drawer
+              </Button>
+              <Button type="button" size="sm" onClick={focusCurrentCmoSession}>
+                <icons.MessageSquare />
+                Start CMO Session
+              </Button>
+            </div>
           </div>
 
-          <div className="grid gap-6 2xl:grid-cols-[0.85fr_1.15fr]">
-            <SectionCard title="Session History" icon={<icons.Clock3 />} action={<Badge variant="slate">{sessions.length} sessions</Badge>}>
-              {sessions.length ? (
-                <div className="space-y-3">
-                  {sessions.map((session) => (
-                    <button
-                      key={session.id}
-                      type="button"
-                      onClick={() => setSelectedSessionId(session.id)}
-                      className={cn(
-                        "w-full rounded-xl border px-4 py-3 text-left transition",
-                        selectedSession?.id === session.id ? "border-indigo-200 bg-indigo-50/70" : "border-slate-100 bg-slate-50 hover:border-slate-200",
-                      )}
-                      aria-pressed={selectedSession?.id === session.id}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-bold text-slate-950">{session.topic || "CMO session"}</div>
-                          <div className="mt-1 text-xs font-medium text-slate-500">{displayDate(session.createdAt)}</div>
-                        </div>
-                        <Badge title={session.runtimeStatus} variant={runtimeVariant(session.runtimeStatus)}>{runtimeLabel(session.runtimeStatus)}</Badge>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Badge variant={session.runtimeMode === "live" ? "green" : "orange"}>{sessionRuntimeModeLabel(session)}</Badge>
-                        <Badge variant="slate">{session.contextUsed.length} context notes</Badge>
-                        <Badge variant={session.graphHintCount ? "blue" : "slate"}>{session.graphHintCount ?? session.graphHints?.length ?? 0} graph hints</Badge>
-                        <Badge variant={session.decisionLayer ? "blue" : "slate"}>
-                          {session.decisionLayer ? session.decisionLayer.decisions.length + session.decisionLayer.suggestedActions.length + session.decisionLayer.taskCandidates.length : 0} outputs
-                        </Badge>
-                        <Badge variant={session.savedToVault ? "green" : "slate"}>{session.savedToVault ? "saved" : "not saved"}</Badge>
-                        <Badge variant={session.rawCapturePath ? "green" : "slate"}>{session.rawCapturePath ? "raw captured" : "raw pending"}</Badge>
-                      </div>
-                      <div className="mt-3 space-y-1 text-xs leading-5 text-slate-600">
-                        <p><span className="font-bold text-slate-800">User:</span> {previewText(firstUserMessage(session) || session.topic || "No user question captured.")}</p>
-                        <p><span className="font-bold text-slate-800">CMO:</span> {previewText(latestAssistantMessage(session) || "No CMO answer captured.")}</p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <EmptyCopy>No sessions for this app yet.</EmptyCopy>
-              )}
-            </SectionCard>
+          <details className="rounded-xl border border-slate-100 bg-white p-4 xl:hidden">
+            <summary className="cursor-pointer text-sm font-bold text-slate-950">Session History</summary>
+            <div className="mt-3">{sessionHistoryPanel()}</div>
+          </details>
 
-            <SectionCard title="Session Metadata" icon={<icons.Database />}>
-              {selectedSession ? (
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-xs font-semibold uppercase text-slate-400">Topic</div>
-                    <div className="mt-1 font-bold text-slate-950">{selectedSession.topic || "CMO session"}</div>
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Runtime</div>
-                      <Badge className="mt-2" title={selectedSession.runtimeStatus} variant={runtimeVariant(selectedSession.runtimeStatus)}>{runtimeLabel(selectedSession.runtimeStatus)}</Badge>
+          <div className={cn("grid gap-4", contextDrawerOpen ? "xl:grid-cols-[280px_minmax(0,1fr)_360px]" : "xl:grid-cols-[280px_minmax(0,1fr)]")}>
+            <aside className="hidden xl:block">
+              <div className="sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border border-slate-100 bg-white p-3">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-sm font-bold text-slate-950">Sessions</div>
+                  <Badge variant="slate">{sessions.length}</Badge>
+                </div>
+                {sessionHistoryPanel()}
+              </div>
+            </aside>
+
+            <main className="min-w-0">
+              <CMOChatPanel
+                app={app}
+                contextBrief={contextBrief}
+                selectedSession={selectedSession ?? null}
+                onSessionCreated={(sessionId) => {
+                  void refreshSessions(sessionId);
+                  setPromotionRefreshSignal((current) => current + 1);
+                }}
+                onSessionSaved={() => {
+                  void refreshSessions();
+                  setPromotionRefreshSignal((current) => current + 1);
+                }}
+                initialRuntimeStatus={state.initialRuntimeStatus ?? null}
+                initialRuntimeLabel={state.initialRuntimeLabel ?? ""}
+                focusSignal={sessionFocusSignal}
+                relatedPriority={priorityState.activePriority?.title}
+                activeSessionId={selectedSessionId}
+              />
+            </main>
+
+            {contextDrawerOpen ? (
+              <aside className="min-w-0">
+                <div className="sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border border-slate-100 bg-white p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-bold text-slate-950">Context Drawer</div>
+                      <div className="text-xs font-medium text-slate-500">Status, provenance, and review tracking</div>
                     </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Fallback</div>
-                      <Badge className="mt-2" variant={selectedSession.runtimeMode === "live" ? "green" : "orange"}>{sessionRuntimeModeLabel(selectedSession)}</Badge>
-                    </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Runtime Provider</div>
-                      <div className="mt-2 text-sm font-bold text-slate-950">{selectedSession.runtimeAgent || selectedSession.runtimeProvider || "not captured"}</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Context Used</div>
-                      <div className="mt-2 text-sm font-bold text-slate-950">{sessionContextSummary(selectedSession)}</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Graph Context</div>
-                      <div className="mt-2 text-sm font-bold text-slate-950">
-                        {selectedSession.graphStatus ?? "empty"}; {selectedSession.graphHintCount ?? selectedSession.graphHints?.length ?? 0} hints
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Decision Layer</div>
-                      <div className="mt-2 text-sm font-bold text-slate-950">
-                        {selectedSession.decisionLayer
-                          ? `${selectedSession.decisionLayer.extractionStatus}; ${selectedSession.decisionLayer.decisions.length} decisions; ${selectedSession.decisionLayer.taskCandidates.length} tasks`
-                          : "not extracted"}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Created</div>
-                      <div className="mt-2 text-sm font-bold text-slate-950">{displayDate(selectedSession.createdAt)}</div>
-                    </div>
-                  </div>
-                  <div className="grid gap-3">
-                    <p className="break-all text-xs font-medium text-slate-500">Session note: {selectedSession.sessionNotePath || "not saved yet"}</p>
-                    <p className="break-all text-xs font-medium text-slate-500">Raw capture: {selectedSession.rawCapturePath || "not captured yet"}</p>
-                    <p className="text-xs font-medium text-slate-500">Related priority: {priorityState.activePriority?.title || "none linked"}</p>
-                    <p className="text-xs font-medium text-slate-500">Related plan: {plans.weekly.exists ? plans.weekly.path : "none linked"}</p>
-                  </div>
-                  <div id="raw-capture" className="flex flex-wrap gap-3">
-                    <Button variant="outline" onClick={() => void saveSelectedSessionToVault()} disabled={!selectedSession.messages.length || isSavingSelectedSession}>
-                      {isSavingSelectedSession ? <icons.RefreshCw className="animate-spin" /> : <icons.FileText />}
-                      Save Session to Vault
-                    </Button>
-                    <Button onClick={() => void captureSelectedSessionToRawVault()} disabled={!selectedSession.messages.length || Boolean(selectedSession.rawCapturePath) || isCapturingSelectedSession}>
-                      {isCapturingSelectedSession ? <icons.RefreshCw className="animate-spin" /> : <icons.Database />}
-                      {selectedSession.rawCapturePath ? "Raw Captured" : "Capture to Raw Vault"}
+                    <Button type="button" size="icon" variant="ghost" onClick={() => setContextDrawerOpen(false)} title="Collapse context drawer">
+                      <icons.ChevronRight />
                     </Button>
                   </div>
-                  {(selectedSession.sessionNotePath || selectedSession.rawCapturePath) ? (
-                    <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <p className="text-sm font-semibold text-indigo-800">Promote useful context to App Memory.</p>
-                        <Button type="button" size="sm" variant="outline" onClick={() => selectTab("plan", "promotion-candidates")}>
+                  <div className="mb-4 grid grid-cols-2 gap-2">
+                    {[
+                      ["context", "Context"],
+                      ["decision", "Decision"],
+                      ["metadata", "Metadata"],
+                      ["vault", "Vault"],
+                    ].map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setContextDrawerTab(id as ContextDrawerTab)}
+                        className={cn(
+                          "rounded-lg border px-3 py-2 text-xs font-bold transition",
+                          contextDrawerTab === id ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-100 bg-slate-50 text-slate-500 hover:border-slate-200",
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {contextDrawerTab === "context" ? <ContextBriefCard brief={contextBrief} /> : null}
+
+                  {contextDrawerTab === "metadata" ? (
+                    selectedSession ? (
+                      <div className="space-y-3">
+                        <div>
+                          <div className="text-xs font-semibold uppercase text-slate-400">Topic</div>
+                          <div className="mt-1 text-sm font-bold text-slate-950">{selectedSession.topic || "CMO session"}</div>
+                        </div>
+                        <div className="grid gap-3">
+                          <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                            <div className="text-xs font-semibold uppercase text-slate-400">Runtime</div>
+                            <Badge className="mt-2" title={selectedSession.runtimeStatus} variant={runtimeVariant(selectedSession.runtimeStatus)}>{runtimeLabel(selectedSession.runtimeStatus)}</Badge>
+                          </div>
+                          <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                            <div className="text-xs font-semibold uppercase text-slate-400">Provider</div>
+                            <div className="mt-1 text-sm font-bold text-slate-950">{selectedSession.runtimeAgent || selectedSession.runtimeProvider || "not captured"}</div>
+                          </div>
+                          <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                            <div className="text-xs font-semibold uppercase text-slate-400">Context Used</div>
+                            <div className="mt-1 text-sm font-bold text-slate-950">{sessionContextSummary(selectedSession)}</div>
+                          </div>
+                          <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                            <div className="text-xs font-semibold uppercase text-slate-400">Graph</div>
+                            <div className="mt-1 text-sm font-bold text-slate-950">{selectedSession.graphStatus ?? "empty"}; {selectedSession.graphHintCount ?? selectedSession.graphHints?.length ?? 0} hints</div>
+                          </div>
+                          <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                            <div className="text-xs font-semibold uppercase text-slate-400">Created</div>
+                            <div className="mt-1 text-sm font-bold text-slate-950">{displayDate(selectedSession.createdAt)}</div>
+                          </div>
+                          {(() => {
+                            const assistantMessage = [...selectedSession.messages].reverse().find((message) => message.role === "assistant");
+                            const provenance = assistantMessage ? assistantMessageProvenance(assistantMessage, selectedSession) : null;
+
+                            return provenance ? (
+                              <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                                <div className="text-xs font-semibold uppercase text-slate-400">Latest Answer</div>
+                                <div className="mt-1 text-xs font-semibold text-slate-600">{provenance}</div>
+                              </div>
+                            ) : null;
+                          })()}
+                        </div>
+                      </div>
+                    ) : (
+                      <EmptyCopy>No session selected.</EmptyCopy>
+                    )
+                  ) : null}
+
+                  {contextDrawerTab === "decision" ? (
+                    selectedSession?.decisionLayer ? (
+                      <div className="space-y-4">
+                        <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
+                          CMO tracks these outputs automatically. Use chat to review or change status. Nothing is pushed or promoted without explicit approval.
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          {[
+                            ["Outputs", selectedDecisionStatus.total],
+                            ["Reviewed", selectedDecisionStatus.reviewed],
+                            ["Pending", selectedDecisionStatus.pending],
+                            ["Deferred", selectedDecisionStatus.deferred],
+                            ["Approved Later", selectedDecisionStatus.approvedForLater],
+                            ["Actions", selectedDecisionStatus.suggestedActions],
+                            ["Memory", selectedDecisionStatus.memoryCandidates],
+                            ["Tasks", selectedDecisionStatus.taskCandidates],
+                          ].map(([label, value]) => (
+                            <div key={label} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                              <div className="text-[11px] font-bold uppercase text-slate-400">{label}</div>
+                              <div className="mt-1 text-lg font-bold text-slate-950">{value}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="text-xs font-bold uppercase text-slate-400">Detailed Rows</div>
+                            <Button type="button" size="sm" variant="outline" onClick={() => setShowAdvancedDecisionControls((current) => !current)}>
+                              {showAdvancedDecisionControls ? "Hide controls" : "Advanced"}
+                            </Button>
+                          </div>
+                          {selectedSession.decisionLayer.suggestedActions.map((item, index) => (
+                            <div key={item.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                              <div className="text-sm font-bold text-slate-950">Action {index + 1}: {item.title}</div>
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
+                                <Badge variant="slate">{item.priorityHint ?? "no priority"}</Badge>
+                              </div>
+                              {showAdvancedDecisionControls ? <Button className="mt-2" size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("suggestedAction", item.id, "reviewed")}>Mark Reviewed</Button> : null}
+                            </div>
+                          ))}
+                          {selectedSession.decisionLayer.memoryCandidates.map((item, index) => (
+                            <div key={item.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                              <div className="text-sm font-bold text-slate-950">Memory Candidate {index + 1}</div>
+                              <div className="mt-1 text-sm leading-5 text-slate-600">{previewText(item.statement, 140)}</div>
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                <Badge variant="blue">{item.type}</Badge>
+                                <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
+                              </div>
+                            </div>
+                          ))}
+                          {selectedSession.decisionLayer.taskCandidates.map((item, index) => (
+                            <div key={item.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                              <div className="text-sm font-bold text-slate-950">Task Candidate {index + 1}: {item.title}</div>
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
+                                <Badge variant="slate">{item.pushStatus}</Badge>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="space-y-2">
+                          <div className="text-xs font-bold uppercase text-slate-400">Potential Decisions</div>
+                          {sessionPotentialDecisions(selectedSession).length ? sessionPotentialDecisions(selectedSession).map((decision) => (
+                            <div key={decision} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-700">{decision}</div>
+                          )) : <EmptyCopy>No potential decisions extracted.</EmptyCopy>}
+                        </div>
+                        {decisionReviewStatus ? <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">{decisionReviewStatus}</div> : null}
+                        {decisionReviewError ? <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{decisionReviewError}</div> : null}
+                      </div>
+                    ) : (
+                      <EmptyCopy>No Decision Layer has been extracted for the selected session.</EmptyCopy>
+                    )
+                  ) : null}
+
+                  {contextDrawerTab === "vault" ? (
+                    selectedSession ? (
+                      <div id="raw-capture" className="space-y-3">
+                        <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                          <div className="text-xs font-semibold uppercase text-slate-400">Session Note</div>
+                          <div className="mt-1 break-all text-xs font-medium text-slate-600">{selectedSession.sessionNotePath || "not saved yet"}</div>
+                        </div>
+                        <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                          <div className="text-xs font-semibold uppercase text-slate-400">Raw Capture</div>
+                          <div className="mt-1 break-all text-xs font-medium text-slate-600">{selectedSession.rawCapturePath || "not captured yet"}</div>
+                        </div>
+                        <Button className="w-full" variant="outline" onClick={() => void saveSelectedSessionToVault()} disabled={!selectedSession.messages.length || isSavingSelectedSession}>
+                          {isSavingSelectedSession ? <icons.RefreshCw className="animate-spin" /> : <icons.FileText />}
+                          Save Session to Vault
+                        </Button>
+                        <Button className="w-full" onClick={() => void captureSelectedSessionToRawVault()} disabled={!selectedSession.messages.length || Boolean(selectedSession.rawCapturePath) || isCapturingSelectedSession}>
+                          {isCapturingSelectedSession ? <icons.RefreshCw className="animate-spin" /> : <icons.Database />}
+                          {selectedSession.rawCapturePath ? "Raw Captured" : "Capture to Raw Vault"}
+                        </Button>
+                        <Button type="button" className="w-full" size="sm" variant="outline" onClick={() => selectTab("plan", "promotion-candidates")}>
                           <icons.Sparkles />
                           Promotion Candidates
                         </Button>
+                        {sessionStatus ? <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">{sessionStatus}</div> : null}
+                        {sessionError ? <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{sessionError}</div> : null}
                       </div>
-                    </div>
+                    ) : (
+                      <EmptyCopy>No session selected.</EmptyCopy>
+                    )
                   ) : null}
-                  {sessionStatus ? <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">{sessionStatus}</div> : null}
-                  {sessionError ? <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{sessionError}</div> : null}
                 </div>
-              ) : (
-                <EmptyCopy>No session selected.</EmptyCopy>
-              )}
-            </SectionCard>
+              </aside>
+            ) : null}
           </div>
-
-          {selectedSession ? (
-            <SectionCard
-              title="Decision Layer Status"
-              icon={<icons.CheckCircle2 />}
-              action={<Badge variant={selectedDecisionStatus.pending ? "orange" : "green"}>{selectedDecisionStatus.reviewed}/{selectedDecisionStatus.total} reviewed</Badge>}
-            >
-              {selectedSession.decisionLayer ? (
-                <div className="space-y-5">
-                  <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800">
-                    <p className="font-semibold">CMO tracks these outputs automatically. Use chat to review or change status.</p>
-                    <p className="mt-1">Review and approval happen through CMO Chat. Nothing is pushed to Task Tracker or promoted to App Memory automatically. Ask: &quot;What should I review next?&quot;</p>
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Extracted Outputs</div>
-                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.total}</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Pending Review</div>
-                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.pending}</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Deferred</div>
-                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.deferred}</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Approved Later</div>
-                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.approvedForLater}</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Suggested Actions</div>
-                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.suggestedActions}</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Memory Candidates</div>
-                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.memoryCandidates}</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Task Candidates</div>
-                      <div className="mt-2 text-2xl font-bold text-slate-950">{selectedDecisionStatus.taskCandidates}</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                      <div className="text-xs font-semibold uppercase text-slate-400">Vault Status</div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <Badge variant={selectedSession.savedToVault ? "green" : "slate"}>{selectedSession.savedToVault ? "saved" : "not saved"}</Badge>
-                        <Badge variant={selectedSession.rawCapturePath ? "green" : "slate"}>{selectedSession.rawCapturePath ? "raw captured" : "raw pending"}</Badge>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="text-sm font-semibold text-slate-600">Detailed outputs are read-only by default.</div>
-                    <Button type="button" size="sm" variant="outline" onClick={() => setShowAdvancedDecisionControls((current) => !current)}>
-                      {showAdvancedDecisionControls ? <icons.ChevronUp /> : <icons.ChevronDown />}
-                      {showAdvancedDecisionControls ? "Hide advanced controls" : "Show advanced controls"}
-                    </Button>
-                  </div>
-
-                  <div className="grid gap-6 xl:grid-cols-3">
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <h3 className="text-sm font-bold text-slate-950">Suggested Actions</h3>
-                        <Badge variant="slate">{selectedSession.decisionLayer.suggestedActions.length}</Badge>
-                      </div>
-                      {selectedSession.decisionLayer.suggestedActions.length ? selectedSession.decisionLayer.suggestedActions.map((item) => (
-                        <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                          <div className="font-bold text-slate-950">{item.title}</div>
-                          {item.description ? <div className="mt-1 text-sm leading-6 text-slate-700">{item.description}</div> : null}
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
-                            <Badge variant="slate">{item.priorityHint ?? "no priority"} priority</Badge>
-                          </div>
-                          {showAdvancedDecisionControls ? (
-                            <Button className="mt-3" size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("suggestedAction", item.id, "reviewed")}>Mark Reviewed</Button>
-                          ) : null}
-                        </div>
-                      )) : <EmptyCopy>No suggested actions extracted.</EmptyCopy>}
-                    </div>
-
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <h3 className="text-sm font-bold text-slate-950">Memory Candidates</h3>
-                        <Badge variant="slate">{selectedSession.decisionLayer.memoryCandidates.length}</Badge>
-                      </div>
-                      {selectedSession.decisionLayer.memoryCandidates.length ? selectedSession.decisionLayer.memoryCandidates.map((item) => (
-                        <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                          <div className="text-sm leading-6 text-slate-700">{item.statement}</div>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <Badge variant="blue">{item.type}</Badge>
-                            <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
-                          </div>
-                          {showAdvancedDecisionControls ? (
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("memoryCandidate", item.id, "approved_for_promotion_later")}>Approve Later</Button>
-                              <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("memoryCandidate", item.id, "rejected")}>Reject</Button>
-                              <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("memoryCandidate", item.id, "deferred")}>Defer</Button>
-                            </div>
-                          ) : null}
-                        </div>
-                      )) : <EmptyCopy>No memory candidates extracted.</EmptyCopy>}
-                    </div>
-
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <h3 className="text-sm font-bold text-slate-950">Task Candidates</h3>
-                        <Badge variant="slate">{selectedSession.decisionLayer.taskCandidates.length}</Badge>
-                      </div>
-                      {selectedSession.decisionLayer.taskCandidates.length ? selectedSession.decisionLayer.taskCandidates.map((item) => (
-                        <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                          <div className="font-bold text-slate-950">{item.title}</div>
-                          {item.description ? <div className="mt-1 text-sm leading-6 text-slate-700">{item.description}</div> : null}
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
-                            <Badge variant="slate">{item.pushStatus}</Badge>
-                          </div>
-                          {showAdvancedDecisionControls ? (
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("taskCandidate", item.id, "approved_for_task_later")}>Approve Later</Button>
-                              <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("taskCandidate", item.id, "rejected")}>Reject</Button>
-                              <Button size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("taskCandidate", item.id, "deferred")}>Defer</Button>
-                            </div>
-                          ) : null}
-                        </div>
-                      )) : <EmptyCopy>No task candidates extracted.</EmptyCopy>}
-                    </div>
-                  </div>
-
-                  {decisionReviewStatus ? <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">{decisionReviewStatus}</div> : null}
-                  {decisionReviewError ? <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{decisionReviewError}</div> : null}
-                </div>
-              ) : (
-                <EmptyCopy>No Decision Layer has been extracted for the selected session.</EmptyCopy>
-              )}
-            </SectionCard>
-          ) : null}
-
-          {selectedSession ? (
-            <SectionCard title="Selected Session Messages" icon={<icons.MessageSquare />}>
-              <div className="space-y-3">
-                {selectedSession.messages.map((message) => (
-                  <div key={message.id} className={cn("rounded-xl px-4 py-3 text-sm leading-6", message.role === "user" ? "bg-indigo-600 text-white" : "border border-slate-100 bg-slate-50 text-slate-700")}>
-                    <div className="mb-1 text-xs font-bold uppercase opacity-80">{message.role === "assistant" ? "CMO" : message.role}</div>
-                    <div className="whitespace-pre-wrap">{message.content}</div>
-                    {assistantMessageProvenance(message, selectedSession) ? (
-                      <div className="mt-3 border-t border-slate-200 pt-2 text-xs font-semibold text-slate-400">
-                        {assistantMessageProvenance(message, selectedSession)}
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </SectionCard>
-          ) : null}
-
-          <SectionCard title="Potential Decisions" icon={<icons.Lightbulb />}>
-            {sessionPotentialDecisions(selectedSession).length ? (
-              <div className="space-y-2">
-                {sessionPotentialDecisions(selectedSession).map((decision) => (
-                  <div key={decision} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-700">{decision}</div>
-                ))}
-              </div>
-            ) : (
-              <EmptyCopy>No potential decisions extracted from the selected CMO answer.</EmptyCopy>
-            )}
-            <p className="mt-3 text-xs font-semibold text-slate-500">Structured review is available in Decision Review above.</p>
-          </SectionCard>
-
         </div>
       ) : null}
 

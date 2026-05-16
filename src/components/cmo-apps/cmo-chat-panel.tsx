@@ -6,24 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { icons } from "@/components/dashboard/icons";
-import { ContextBriefCard } from "@/components/cmo-apps/context-brief-card";
 import type {
   AppWorkspace,
   CMOAppChatResponse,
   CMOContextBrief,
-  CMOContextDiagnostics,
-  CMOContextQualitySummary,
   CMOChatMessage,
+  CMOChatSession,
   CMORuntimeStatus,
   CmoRuntimeErrorReason,
-  CmoRuntimeMode,
-  CmoDecisionLayer,
-  ContextGraphHint,
-  ContextGraphStatus,
-  RawCaptureResponse,
-  VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
-import { summarizeContextQuality } from "@/lib/cmo/context-quality";
 import { cn } from "@/lib/utils";
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
@@ -202,67 +193,14 @@ function renderAssistantContent(content: string) {
   );
 }
 
-function captureSummary(
-  app: AppWorkspace,
-  messages: CMOChatMessage[],
-  runtimeStatus: CMORuntimeStatus | null,
-  runtimeMode: CmoRuntimeMode | null,
-  runtimeLabel: string,
-  runtimeProvider: string | null,
-  runtimeAgent: string | null,
-  attemptedRuntimeMode: CmoRuntimeMode | null,
-  runtimeErrorReason: CmoRuntimeErrorReason | null,
-  contextUsed: VaultNoteRef[],
-  missingContext: VaultNoteRef[],
-  isDevelopmentFallback: boolean,
-  isRuntimeFallback: boolean,
-  qualitySummary: CMOContextQualitySummary,
-  graphHints: ContextGraphHint[],
-  graphStatus: ContextGraphStatus | null,
-  decisionLayer: CmoDecisionLayer | null,
-): string {
-  const userMessage = messages.find((message) => message.role === "user")?.content ?? "No user question captured.";
-  const assistantMessage = [...messages].reverse().find((message) => message.role === "assistant")?.content ?? "No CMO response captured.";
-  const contextLine = contextUsed.length ? contextUsed.map((note) => note.title).join(", ") : "No context pack items were included.";
-  const missingLine = missingContext.length ? missingContext.map((note) => note.title).join(", ") : "None.";
-  const graphLine = graphHints.length ? graphHints.map((hint) => `${hint.title} (${hint.path})`).join(", ") : "None.";
-  const decisionLine = decisionLayer
-    ? `${decisionLayer.decisions.length} decisions; ${decisionLayer.assumptions.length} assumptions; ${decisionLayer.suggestedActions.length} actions; ${decisionLayer.memoryCandidates.length} memory candidates; ${decisionLayer.taskCandidates.length} task candidates.`
-    : "No decision layer captured.";
-
-  return [
-    `App-specific CMO session for ${app.name}.`,
-    runtimeStatusLabel(runtimeStatus),
-    `Runtime mode: ${runtimeMode ?? "not captured"}`,
-    `Attempted runtime mode: ${attemptedRuntimeMode ?? "not captured"}`,
-    `Fallback: ${isDevelopmentFallback ? "true" : "false"}`,
-    `Runtime fallback: ${isRuntimeFallback ? "true" : "false"}`,
-    `Runtime error reason: ${runtimeErrorReason ?? "none"}`,
-    `Runtime label: ${runtimeStatus ? runtimeLabel || "Unlabeled runtime" : "Not checked"}`,
-    `Runtime provider: ${runtimeProvider ?? "not captured"}`,
-    `Runtime agent: ${runtimeAgent ?? "not captured"}`,
-    `Context pack used: ${contextLine}`,
-    `Unavailable context pack items: ${missingLine}`,
-    `Graph status: ${graphStatus ?? "empty"}`,
-    `Graph hints used: ${graphHints.length}`,
-    `Graph hint refs: ${graphLine}`,
-    `Decision layer: ${decisionLine}`,
-    `Context quality counts: ${qualitySummary.confirmedCount} confirmed, ${qualitySummary.draftCount} draft, ${qualitySummary.placeholderCount} placeholder, ${qualitySummary.missingCount} missing.`,
-    `User asked: ${userMessage}`,
-    `CMO response captured: ${assistantMessage}`,
-  ].join("\n");
-}
-
 export function CMOChatPanel({
   app,
   contextBrief,
   onSessionCreated,
-  onSessionSaved,
   initialRuntimeStatus = null,
-  initialRuntimeLabel = "",
   focusSignal = 0,
-  relatedPriority,
   activeSessionId,
+  selectedSession,
 }: {
   app: AppWorkspace;
   contextBrief: CMOContextBrief;
@@ -273,41 +211,26 @@ export function CMOChatPanel({
   focusSignal?: number;
   relatedPriority?: string;
   activeSessionId?: string | null;
+  selectedSession?: CMOChatSession | null;
 }) {
   const [messages, setMessages] = useState<CMOChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [savedSessionNotePath, setSavedSessionNotePath] = useState<string | null>(null);
   const [rawCapturePath, setRawCapturePath] = useState<string | null>(null);
-  const [lastContextUsed, setLastContextUsed] = useState<VaultNoteRef[]>([]);
-  const [missingContext, setMissingContext] = useState<VaultNoteRef[]>([]);
-  const [assumptions, setAssumptions] = useState<string[]>([]);
-  const [suggestedActions, setSuggestedActions] = useState<CMOAppChatResponse["suggestedActions"]>([]);
-  const [contextDiagnostics, setContextDiagnostics] = useState<CMOContextDiagnostics | undefined>(undefined);
-  const [contextQualitySummary, setContextQualitySummary] = useState<CMOContextQualitySummary | undefined>(undefined);
-  const [graphHints, setGraphHints] = useState<ContextGraphHint[]>(contextBrief.graphHints ?? []);
-  const [graphStatus, setGraphStatus] = useState<ContextGraphStatus | null>(contextBrief.graphStatus ?? "empty");
-  const [decisionLayer, setDecisionLayer] = useState<CmoDecisionLayer | null>(null);
   const [isDevelopmentFallback, setIsDevelopmentFallback] = useState(false);
   const [isRuntimeFallback, setIsRuntimeFallback] = useState(false);
   const [runtimeStatus, setRuntimeStatus] = useState<CMORuntimeStatus | null>(initialRuntimeStatus);
-  const [runtimeMode, setRuntimeMode] = useState<CmoRuntimeMode | null>(null);
-  const [attemptedRuntimeMode, setAttemptedRuntimeMode] = useState<CmoRuntimeMode | null>(null);
   const [runtimeErrorReason, setRuntimeErrorReason] = useState<CmoRuntimeErrorReason | null>(null);
-  const [runtimeLabel, setRuntimeLabel] = useState(initialRuntimeLabel);
-  const [runtimeProvider, setRuntimeProvider] = useState<string | null>(null);
-  const [runtimeAgent, setRuntimeAgent] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [isSavingSession, setIsSavingSession] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sendStatus, setSendStatus] = useState<string | null>(null);
-  const [captureStatus, setCaptureStatus] = useState<string | null>(null);
-  const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedQualitySummary = contextBrief.contextQualitySummary;
-  const effectiveQualitySummary = contextQualitySummary ?? selectedQualitySummary;
-  const capturableMessages = messages.filter((message) => message.role === "user" || message.role === "assistant");
+  const visibleMessages = messages.length ? messages : selectedSession?.messages ?? [];
+  const activeDisplaySessionId = activeSessionId ?? sessionId ?? selectedSession?.id ?? null;
+  const activeSavedToVault = selectedSession?.savedToVault || Boolean(savedSessionNotePath);
+  const activeRawCaptured = Boolean(selectedSession?.rawCapturePath || rawCapturePath);
 
   useEffect(() => {
     let isMounted = true;
@@ -335,11 +258,9 @@ export function CMOChatPanel({
           setRuntimeStatus("runtime_error");
         }
 
-        setRuntimeLabel(typeof payload.adapter === "string" ? payload.adapter : "");
       } catch {
         if (isMounted) {
           setRuntimeStatus("configured_but_unreachable");
-          setRuntimeLabel("CMO Adapter");
         }
       }
     }
@@ -363,6 +284,25 @@ export function CMOChatPanel({
 
     return () => window.clearTimeout(timeout);
   }, [focusSignal]);
+
+  useEffect(() => {
+    if (!selectedSession) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setSessionId(selectedSession.id);
+      setMessages(selectedSession.messages);
+      setSavedSessionNotePath(selectedSession.sessionNotePath ?? null);
+      setRawCapturePath(selectedSession.rawCapturePath ?? null);
+      setIsDevelopmentFallback(selectedSession.isDevelopmentFallback === true);
+      setIsRuntimeFallback(selectedSession.isRuntimeFallback === true);
+      setRuntimeStatus(selectedSession.runtimeStatus ?? initialRuntimeStatus);
+      setRuntimeErrorReason(selectedSession.runtimeErrorReason ?? null);
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+  }, [initialRuntimeStatus, selectedSession]);
 
   async function sendMessage() {
     const question = input.trim();
@@ -396,28 +336,14 @@ export function CMOChatPanel({
     setIsSending(true);
     setError(null);
     setSendStatus("Sending...");
-    setCaptureStatus(null);
-    setSaveStatus(null);
-    setSavedSessionNotePath(null);
-    setRawCapturePath(null);
+    if (!activeSessionId) {
+      setSavedSessionNotePath(null);
+      setRawCapturePath(null);
+    }
     setRuntimeStatus(null);
-    setRuntimeMode(null);
-    setRuntimeLabel("");
-    setRuntimeProvider(null);
-    setRuntimeAgent(null);
     setIsDevelopmentFallback(false);
     setIsRuntimeFallback(false);
-    setAttemptedRuntimeMode(null);
     setRuntimeErrorReason(null);
-    setLastContextUsed([]);
-    setMissingContext([]);
-    setAssumptions([]);
-    setSuggestedActions([]);
-    setContextDiagnostics(undefined);
-    setContextQualitySummary(undefined);
-    setGraphHints([]);
-    setGraphStatus(null);
-    setDecisionLayer(null);
 
     try {
       const response = await readJsonResponse<CMOAppChatResponse>(
@@ -442,24 +368,10 @@ export function CMOChatPanel({
       );
 
       setSessionId(response.sessionId);
-      setLastContextUsed(response.contextUsed);
-      setMissingContext(response.missingContext);
-      setAssumptions(response.assumptions);
-      setSuggestedActions(response.suggestedActions);
-      setContextDiagnostics(response.contextDiagnostics);
-      setContextQualitySummary(response.contextQualitySummary ?? response.contextDiagnostics);
-      setGraphHints(response.graphHints ?? []);
-      setGraphStatus(response.graphStatus ?? "empty");
-      setDecisionLayer(response.decisionLayer ?? null);
       setIsDevelopmentFallback(response.isDevelopmentFallback);
       setIsRuntimeFallback(response.isRuntimeFallback === true);
       setRuntimeStatus(response.runtimeStatus);
-      setRuntimeMode(response.runtimeMode ?? null);
-      setAttemptedRuntimeMode(response.attemptedRuntimeMode ?? null);
       setRuntimeErrorReason(response.runtimeErrorReason ?? null);
-      setRuntimeLabel(response.runtimeLabel);
-      setRuntimeProvider(response.runtimeProvider ?? null);
-      setRuntimeAgent(response.runtimeAgent ?? null);
       setError(response.status === "failed" ? response.runtimeError || "CMO runtime returned an error." : null);
       setSendStatus(
         response.runtimeProvider === "dashboard" && response.runtimeAgent === "decision-review"
@@ -497,9 +409,6 @@ export function CMOChatPanel({
       onSessionCreated?.(response.sessionId);
     } catch (sendError) {
       setRuntimeStatus("runtime_error");
-      setRuntimeLabel("OpenClaw CMO runtime");
-      setRuntimeProvider(null);
-      setRuntimeAgent(null);
       setSendStatus(null);
       setError(`Failed to send: ${sendError instanceof Error ? sendError.message : "CMO chat failed"}`);
       setMessages((current) =>
@@ -517,128 +426,6 @@ export function CMOChatPanel({
     }
   }
 
-  async function saveSessionToVault() {
-    if (!sessionId || isSavingSession) {
-      return;
-    }
-
-    setIsSavingSession(true);
-    setError(null);
-    setSaveStatus("Saving session...");
-
-    try {
-      const response = await readJsonResponse<{ status: "saved"; path: string; sessionId: string; alreadySaved: boolean }>(
-        await fetch("/api/cmo/sessions/save-to-vault", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            appId: app.id,
-            sessionId,
-            topic: messages.find((message) => message.role === "user")?.content.slice(0, 96),
-            relatedPriority,
-          }),
-        }),
-      );
-
-      setSavedSessionNotePath(response.path);
-      setSaveStatus(`${response.alreadySaved ? "Already saved" : "Saved to Vault"}: ${response.path}`);
-      onSessionSaved?.(response.path);
-      onSessionCreated?.(sessionId);
-    } catch (saveError) {
-      setSaveStatus(null);
-      setError(`Failed to save: ${saveError instanceof Error ? saveError.message : "Session save failed"}`);
-    } finally {
-      setIsSavingSession(false);
-    }
-  }
-
-  async function captureToRawVault() {
-    if (!capturableMessages.length || isCapturing) {
-      return;
-    }
-
-    const topic = capturableMessages.find((message) => message.role === "user")?.content.slice(0, 96) || "CMO session";
-
-    setIsCapturing(true);
-    setError(null);
-    setCaptureStatus("Capturing...");
-
-    try {
-      const response = await readJsonResponse<RawCaptureResponse>(
-        await fetch("/api/vault/raw-captures", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            workspaceId: "holdstation",
-            appId: app.id,
-            appName: app.name,
-            topic,
-            source: "cmo-session",
-            relatedSource: "cmo-session",
-            sessionId: sessionId ?? undefined,
-            sessionNotePath: savedSessionNotePath ?? undefined,
-            relatedPriority,
-            summary: captureSummary(
-              app,
-              capturableMessages,
-              runtimeStatus,
-              runtimeMode,
-              runtimeLabel,
-              runtimeProvider,
-              runtimeAgent,
-              attemptedRuntimeMode,
-              runtimeErrorReason,
-              lastContextUsed,
-              missingContext,
-              isDevelopmentFallback,
-              isRuntimeFallback,
-              contextQualitySummary ?? summarizeContextQuality([...lastContextUsed, ...missingContext]),
-              graphHints,
-              graphStatus,
-              decisionLayer,
-            ),
-            selectedContextNotes: [...lastContextUsed, ...missingContext],
-            messages: capturableMessages.map((message) => ({
-              role: message.role,
-              content: message.content,
-            })),
-            contextUsed: lastContextUsed,
-            missingContext,
-            runtimeStatus: runtimeStatus ?? undefined,
-            runtimeMode: runtimeMode ?? undefined,
-            attemptedRuntimeMode: attemptedRuntimeMode ?? undefined,
-            isDevelopmentFallback,
-            isRuntimeFallback,
-            runtimeErrorReason: runtimeErrorReason ?? undefined,
-            runtimeProvider: runtimeProvider ?? undefined,
-            runtimeAgent: runtimeAgent ?? undefined,
-            contextDiagnostics,
-            contextQualitySummary: contextQualitySummary ?? summarizeContextQuality([...lastContextUsed, ...missingContext]),
-            graphHints,
-            graphHintCount: graphHints.length,
-            graphStatus: graphStatus ?? undefined,
-            decisionLayer: decisionLayer ?? undefined,
-            assumptions,
-            suggestedActions,
-          }),
-        }),
-      );
-
-      setRawCapturePath(response.path);
-      setCaptureStatus(`Captured to Raw Vault: ${response.path}`);
-      onSessionCreated?.(sessionId ?? undefined);
-    } catch (captureError) {
-      setCaptureStatus(null);
-      setError(`Failed to capture: ${captureError instanceof Error ? captureError.message : "Raw capture write failed"}`);
-    } finally {
-      setIsCapturing(false);
-    }
-  }
-
   function focusChat() {
     inputRef.current?.focus();
   }
@@ -653,7 +440,7 @@ export function CMOChatPanel({
             </div>
             <div>
               <CardTitle>CMO Chat</CardTitle>
-              <CardDescription>{activeSessionId ?? sessionId ? `Session ${activeSessionId ?? sessionId}` : `App context: ${app.name}`}</CardDescription>
+              <CardDescription>{activeDisplaySessionId ? `Session ${activeDisplaySessionId}` : `App context: ${app.name}`}</CardDescription>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -669,21 +456,13 @@ export function CMOChatPanel({
               <icons.MessageSquare />
               Start CMO Session
             </Button>
-            <Button variant="outline" size="sm" onClick={() => void saveSessionToVault()} disabled={!sessionId || !capturableMessages.length || isSavingSession} title={!capturableMessages.length ? "Send a message before saving a session note." : undefined}>
-              {isSavingSession ? <icons.RefreshCw className="animate-spin" /> : <icons.FileText />}
-              Save Session to Vault
-            </Button>
-            <Button size="sm" onClick={() => void captureToRawVault()} disabled={!capturableMessages.length || Boolean(rawCapturePath) || isCapturing} title={!capturableMessages.length ? "Send a message before capturing to Raw Vault." : undefined}>
-              {isCapturing ? <icons.RefreshCw className="animate-spin" /> : <icons.Database />}
-              {rawCapturePath ? "Raw Captured" : "Capture to Raw Vault"}
-            </Button>
           </div>
         </div>
         <div className="border-b border-slate-100 bg-white px-5 py-3 text-xs font-medium text-slate-500">
-          Use chat for review commands like &quot;What should I review next?&quot; and &quot;Mark action 1 reviewed.&quot; Save and capture buttons remain operator controls for now.
+          Use chat for review commands like &quot;What should I review next?&quot; and &quot;Mark action 1 reviewed.&quot; Save and capture live in the Vault drawer.
         </div>
 
-        {capturableMessages.length && runtimeExplanation(runtimeStatus, runtimeErrorReason) ? (
+        {visibleMessages.length && runtimeExplanation(runtimeStatus, runtimeErrorReason) ? (
           <div className={cn("border-b px-5 py-3 text-sm font-medium", runtimeStatus === "live" ? "border-emerald-100 bg-emerald-50 text-emerald-800" : "border-orange-100 bg-orange-50 text-orange-800")}>
             {runtimeExplanation(runtimeStatus, runtimeErrorReason)}
             {runtimeStatus ? <span className={cn("ml-2 text-xs", runtimeStatus === "live" ? "text-emerald-700" : "text-orange-700")}>Status: {runtimeStatus}</span> : null}
@@ -691,8 +470,8 @@ export function CMOChatPanel({
         ) : null}
 
         <div className="min-h-[360px] space-y-4 bg-slate-50/70 p-5">
-          {messages.length ? (
-            messages.map((message) => (
+          {visibleMessages.length ? (
+            visibleMessages.map((message) => (
               <div key={message.id} className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}>
                 <div
                   className={cn(
@@ -709,9 +488,9 @@ export function CMOChatPanel({
                     </div>
                   ) : null}
                   {message.role === "assistant" ? renderAssistantContent(message.content) : <div className="whitespace-pre-wrap">{message.content}</div>}
-                  {message.role === "assistant" && assistantProvenance(message, Boolean(savedSessionNotePath), Boolean(rawCapturePath)) ? (
+                  {message.role === "assistant" && assistantProvenance(message, activeSavedToVault, activeRawCaptured) ? (
                     <div className="mt-4 border-t border-slate-100 pt-3 text-xs font-semibold text-slate-400">
-                      {assistantProvenance(message, Boolean(savedSessionNotePath), Boolean(rawCapturePath))}
+                      {assistantProvenance(message, activeSavedToVault, activeRawCaptured)}
                     </div>
                   ) : null}
                 </div>
@@ -734,61 +513,29 @@ export function CMOChatPanel({
 
         {sendStatus ? <div className="border-t border-indigo-100 bg-indigo-50 px-5 py-3 text-sm font-medium text-indigo-700">{sendStatus}</div> : null}
         {error ? <div className="border-t border-red-100 bg-red-50 px-5 py-3 text-sm font-medium text-red-700">{error}</div> : null}
-        {saveStatus ? <div className="border-t border-blue-100 bg-blue-50 px-5 py-3 text-sm font-medium text-blue-700">{saveStatus}</div> : null}
-        {captureStatus ? <div className="border-t border-emerald-100 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-700">{captureStatus}</div> : null}
-
-        {sessionId ? (
-          <div className="grid gap-3 border-t border-slate-100 bg-white px-5 py-4 text-xs text-slate-600 sm:grid-cols-2">
-            <div>
-              <div className="font-bold text-slate-950">Context used</div>
-              <div className="mt-1">{lastContextUsed.length ? lastContextUsed.map((note) => note.title).join(", ") : "No context pack items were included."}</div>
-            </div>
-            <div>
-              <div className="font-bold text-slate-950">Unavailable context</div>
-              <div className="mt-1">{missingContext.length ? missingContext.map((note) => note.title).join(", ") : "None"}</div>
-            </div>
-            <div>
-              <div className="font-bold text-slate-950">Assumptions</div>
-              <div className="mt-1">{assumptions.length ? assumptions.join("; ") : "None returned."}</div>
-            </div>
-            <div>
-              <div className="font-bold text-slate-950">Suggested action</div>
-              <div className="mt-1">{suggestedActions[0]?.label ?? "Capture this session to Raw Vault."}</div>
-            </div>
-            <div>
-              <div className="font-bold text-slate-950">Context quality</div>
-              <div className="mt-1">
-                {effectiveQualitySummary.confirmedCount} confirmed; {effectiveQualitySummary.placeholderCount} need content;{" "}
-                {effectiveQualitySummary.draftCount} draft; {effectiveQualitySummary.missingCount} missing.
-              </div>
-            </div>
-            <div>
-              <div className="font-bold text-slate-950">Graph context</div>
-              <div className="mt-1">
-                {graphStatus ?? "empty"}; {graphHints.length} hints
-              </div>
-            </div>
-            <div>
-              <div className="font-bold text-slate-950">Decision layer</div>
-              <div className="mt-1">
-                {decisionLayer
-                  ? `${decisionLayer.decisions.length} decisions; ${decisionLayer.suggestedActions.length} actions; ${decisionLayer.taskCandidates.length} tasks`
-                  : "Not extracted yet."}
-              </div>
-            </div>
-            <div>
-              <div className="font-bold text-slate-950">Vault session note</div>
-              <div className="mt-1 break-all">{savedSessionNotePath ?? "Not saved yet."}</div>
-            </div>
-            <div>
-              <div className="font-bold text-slate-950">Raw capture</div>
-              <div className="mt-1 break-all">{rawCapturePath ?? "Not captured yet."}</div>
-            </div>
-          </div>
-        ) : null}
 
         <div className="border-t border-slate-100 bg-white p-4">
           <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap gap-2">
+              {[
+                "What should I review next?",
+                "Mark action 1 reviewed",
+                "Save this session",
+                "Capture to raw vault",
+              ].map((command) => (
+                <button
+                  key={command}
+                  type="button"
+                  onClick={() => {
+                    setInput(command);
+                    inputRef.current?.focus();
+                  }}
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                >
+                  {command}
+                </button>
+              ))}
+            </div>
             <textarea
               ref={inputRef}
               value={input}
@@ -811,7 +558,6 @@ export function CMOChatPanel({
         </div>
       </Card>
 
-      <ContextBriefCard brief={contextBrief} />
     </div>
   );
 }
