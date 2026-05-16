@@ -10,6 +10,8 @@ export type PriorityStatus = "active" | "paused" | "completed" | "archived";
 export type AppPlanType = "weekly" | "monthly";
 export type AppPlanStatus = "draft" | "active" | "completed";
 export type MetricsStatus = "missing" | "provided" | "connected";
+export type CmoMetricStatus = "connected" | "missing" | "partial" | "placeholder";
+export type CmoAppMetricDateRangePreset = "this_week" | "last_7_days" | "last_30_days" | "this_month" | "custom";
 export type TaskTrackerStatus = "connected" | "not_connected" | "fallback";
 export type TaskSummarySource = "task-tracker" | "vault" | "placeholder";
 export type ContextGraphHintSourceType = "markdown-link" | "session-reference" | "promotion-candidate" | "raw-capture" | "keyword-match";
@@ -297,6 +299,41 @@ export interface AppDashboardSnapshot {
     sourcePath?: string;
     promotedAt?: string;
   };
+}
+
+export interface CmoAppMetricsSnapshot {
+  schemaVersion: "cmo.app-metrics.v1";
+  workspaceId: string;
+  appId: string;
+  sourceId: string;
+  dateRange: {
+    preset: CmoAppMetricDateRangePreset;
+    startDate: string;
+    endDate: string;
+    timezone: string;
+  };
+  compareToPrevious: boolean;
+  status: CmoMetricStatus;
+  lastUpdatedAt: string | null;
+  metrics: CmoAppMetric[];
+  diagnostics: {
+    source: "json" | "placeholder" | "not_connected";
+    missingMetrics: string[];
+    notes: string[];
+  };
+}
+
+export interface CmoAppMetric {
+  id: string;
+  label: string;
+  value: number | null;
+  displayValue: string;
+  unit?: "users" | "percent" | "count" | "ratio";
+  deltaValue?: number | null;
+  deltaDisplay?: string;
+  trend?: "up" | "down" | "flat" | "unknown";
+  status: CmoMetricStatus;
+  description?: string;
 }
 
 export interface AppPlan {

@@ -21,6 +21,9 @@ import type {
   AppWorkspacePlanState,
   AppWorkspaceTab,
   CLevelPriority,
+  CmoAppMetric,
+  CmoAppMetricDateRangePreset,
+  CmoAppMetricsSnapshot,
   CMOChatMessage,
   CMOChatSession,
   CMORuntimeStatus,
@@ -321,11 +324,10 @@ type DecisionLayerReviewStatus =
   | CmoTaskCandidateReviewStatus;
 type SessionFilter = "all" | "live" | "fallback" | "saved" | "raw";
 type ContextDrawerTab = "context" | "decision" | "metadata" | "vault";
-type DateRangePreset = "this_week" | "last_7_days" | "last_30_days" | "this_month" | "custom";
 type PlanReviewTypeFilter = "all" | "decisions" | "tasks" | "memory";
 type PlanReviewStatusFilter = "pending" | "approved" | "skipped";
 
-const dateRangeOptions: Array<{ id: DateRangePreset; label: string }> = [
+const dateRangeOptions: Array<{ id: CmoAppMetricDateRangePreset; label: string }> = [
   { id: "this_week", label: "This week" },
   { id: "last_7_days", label: "Last 7 days" },
   { id: "last_30_days", label: "Last 30 days" },
@@ -378,17 +380,25 @@ function KpiCard({
   value,
   detail,
   muted,
+  status,
+  comparison,
 }: {
   label: string;
   value: React.ReactNode;
   detail?: React.ReactNode;
   muted?: boolean;
+  status?: React.ReactNode;
+  comparison?: React.ReactNode;
 }) {
   return (
     <div className="min-h-28 rounded-xl border border-slate-100 bg-white px-4 py-3 shadow-sm">
-      <div className="text-xs font-bold uppercase text-slate-400">{label}</div>
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-xs font-bold uppercase text-slate-400">{label}</div>
+        {status}
+      </div>
       <div className={cn("mt-3 text-2xl font-bold tracking-tight", muted ? "text-slate-400" : "text-slate-950")}>{value}</div>
       {detail ? <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{detail}</div> : null}
+      {comparison ? <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{comparison}</div> : null}
     </div>
   );
 }
@@ -411,6 +421,46 @@ function StatusChipCard({
       {detail ? <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{detail}</div> : null}
     </div>
   );
+}
+
+function metricStatusLabel(status: CmoAppMetric["status"] | CmoAppMetricsSnapshot["status"] | undefined): string {
+  if (status === "connected") {
+    return "Connected";
+  }
+
+  if (status === "partial") {
+    return "Partial";
+  }
+
+  if (status === "placeholder") {
+    return "Placeholder";
+  }
+
+  return "Missing";
+}
+
+function metricStatusVariant(status: CmoAppMetric["status"] | CmoAppMetricsSnapshot["status"] | undefined): "green" | "orange" | "red" | "slate" {
+  if (status === "connected") {
+    return "green";
+  }
+
+  if (status === "partial" || status === "placeholder") {
+    return "orange";
+  }
+
+  return status === "missing" ? "red" : "slate";
+}
+
+function metricsSourceLabel(source: CmoAppMetricsSnapshot["diagnostics"]["source"] | undefined): string {
+  if (source === "json") {
+    return "JSON";
+  }
+
+  if (source === "placeholder") {
+    return "Placeholder";
+  }
+
+  return "Not connected";
 }
 
 function reviewBadgeVariant(status: string | undefined): "green" | "orange" | "red" | "blue" | "slate" {
@@ -564,8 +614,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>("all");
   const [contextDrawerOpen, setContextDrawerOpen] = useState(true);
   const [contextDrawerTab, setContextDrawerTab] = useState<ContextDrawerTab>("decision");
-  const [dateRange, setDateRange] = useState<DateRangePreset>("this_week");
+  const [dateRange, setDateRange] = useState<CmoAppMetricDateRangePreset>("this_week");
   const [comparePrevious, setComparePrevious] = useState(false);
+  const [metricsSnapshot, setMetricsSnapshot] = useState<CmoAppMetricsSnapshot | null>(null);
+  const [metricsStatus, setMetricsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [metricsError, setMetricsError] = useState<string | null>(null);
   const [planTypeFilter, setPlanTypeFilter] = useState<PlanReviewTypeFilter>("all");
   const [planStatusFilter, setPlanStatusFilter] = useState<PlanReviewStatusFilter>("pending");
   const [sessionFocusSignal, setSessionFocusSignal] = useState(0);
@@ -604,10 +657,29 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const mostAppNotesArePlaceholders = appNoteQuality.selectedCount > 0 && appNoteQuality.placeholderCount > appNoteQuality.selectedCount / 2;
   const contextStatus = contextStatusLabel(selectedQuality);
   const memoryHealth = `${appNoteQuality.confirmedCount} confirmed / ${appNoteQuality.draftCount} draft / ${appNoteQuality.placeholderCount} need content`;
-  const pendingReviewTotal = sessions.reduce((total, session) => total + decisionLayerStatus(session).pending, 0);
-  const promotionsPending = latestPromotion ? 1 : 0;
   const sourceStatus = state.todayRawExists || selectedSession?.rawCapturePath ? "Exists" : "Missing";
   const lastUpdated = app.lastUpdated || priorityState.activePriority?.updatedAt || latestSession?.createdAt || "Vault-backed";
+  const metricById = useMemo(() => {
+    const lookup = new Map<string, CmoAppMetric>();
+
+    metricsSnapshot?.metrics.forEach((metric) => lookup.set(metric.id, metric));
+
+    return lookup;
+  }, [metricsSnapshot]);
+  const metricCards = [
+    "activated_users",
+    "activation_rate",
+    "new_users",
+    "d1_retention",
+    "d7_retention",
+    "pending_reviews",
+    "promotions_pending",
+  ].map((id) => metricById.get(id)).filter((metric): metric is CmoAppMetric => Boolean(metric));
+  const promotionsPendingMetric = metricById.get("promotions_pending");
+  const metricsHealthLabel = metricsStatus === "loading" ? "Loading" : metricStatusLabel(metricsSnapshot?.status);
+  const metricsHealthVariant = metricsStatus === "loading" ? "slate" : metricStatusVariant(metricsSnapshot?.status);
+  const metricsSource = metricsSourceLabel(metricsSnapshot?.diagnostics.source);
+  const metricsLastUpdated = metricsSnapshot?.lastUpdatedAt ? displayDate(metricsSnapshot.lastUpdatedAt) : "Not connected";
 
   useEffect(() => {
     const nextTab: AppWorkspaceTab = isWorkspaceTab(tabParam) ? tabParam : "dashboard";
@@ -617,6 +689,44 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
     return () => window.clearTimeout(timeout);
   }, [tabParam]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      range: dateRange,
+      compare: comparePrevious ? "true" : "false",
+    });
+
+    async function loadMetrics() {
+      setMetricsStatus("loading");
+      setMetricsError(null);
+
+      try {
+        const payload = await readJsonResponse<{ data: CmoAppMetricsSnapshot }>(
+          await fetch(`/api/cmo/apps/${app.id}/metrics?${params.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        );
+
+        if (!controller.signal.aborted) {
+          setMetricsSnapshot(payload.data);
+          setMetricsStatus("ready");
+        }
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setMetricsStatus("error");
+        setMetricsError(loadError instanceof Error ? loadError.message : "Metrics load failed");
+      }
+    }
+
+    void loadMetrics();
+
+    return () => controller.abort();
+  }, [app.id, comparePrevious, dateRange]);
 
   function selectTab(tab: AppWorkspaceTab, hash?: string) {
     const next = new URLSearchParams(searchParams.toString());
@@ -1023,7 +1133,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             <h2 className="mt-3 text-xl font-bold tracking-tight text-slate-950">{app.name}</h2>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
               <span>Last updated: {displayDate(lastUpdated)}</span>
-              <span>Metrics: {state.dashboardSnapshot.metricsStatus === "missing" ? "No metric source connected yet" : state.dashboardSnapshot.metricsStatus}</span>
+              <span>Metrics: {metricsHealthLabel}</span>
             </div>
           </div>
           <div className="flex flex-col gap-3 xl:items-end">
@@ -1052,19 +1162,39 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-          <KpiCard label="Activated Users" value="-" detail="No metric source connected yet" muted />
-          <KpiCard label="Activation Rate" value="-" detail="No metric source connected yet" muted />
-          <KpiCard label="New Users" value="-" detail="No metric source connected yet" muted />
-          <KpiCard label="Retention" value="-" detail="No metric source connected yet" muted />
-          <KpiCard label="Pending Reviews" value={pendingReviewTotal} detail="Decision Layer items awaiting review" />
-          <KpiCard label="Promotions Pending" value={promotionsPending} detail={latestPromotion ? "Latest candidate available" : "No pending promotion signal"} />
+        {dateRange === "custom" ? (
+          <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-500">
+            Custom date range picker is not connected yet. The endpoint currently uses the current date for custom ranges unless explicit dates are supplied.
+          </div>
+        ) : null}
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+          {metricCards.map((metric) => (
+            <KpiCard
+              key={metric.id}
+              label={metric.label}
+              value={metric.status === "connected" && metric.value !== null ? metric.displayValue : "No data"}
+              detail={metric.status === "connected" ? metric.description : "No metrics source connected yet."}
+              muted={metric.status !== "connected"}
+              status={<Badge variant={metricStatusVariant(metric.status)}>{metric.status === "connected" ? "Connected" : "Metrics missing"}</Badge>}
+              comparison={comparePrevious ? metric.deltaDisplay || "No comparison data" : null}
+            />
+          ))}
+          {!metricCards.length ? (
+            <KpiCard
+              label="Metrics"
+              value={metricsStatus === "loading" ? "Loading" : "No data"}
+              detail={metricsError || "No metrics source connected yet."}
+              muted
+              status={<Badge variant="orange">{metricsStatus === "error" ? "Error" : "Metrics missing"}</Badge>}
+            />
+          ) : null}
         </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <StatusChipCard label="Context" badge={contextStatus} variant={contextStatusVariant(contextStatus)} detail={`${selectedQuality.existingCount}/${selectedQuality.selectedCount} source checks`} />
           <StatusChipCard label="Memory" badge={memoryHealth} variant={appNoteQuality.placeholderCount ? "orange" : "green"} detail="Backend managed" />
-          <StatusChipCard label="Metrics" badge={state.dashboardSnapshot.metricsStatus === "missing" ? "Missing" : state.dashboardSnapshot.metricsStatus} variant={state.dashboardSnapshot.metricsStatus === "missing" ? "orange" : "green"} detail="No metric source connected yet" />
+          <StatusChipCard label="Metrics" badge={metricsHealthLabel} variant={metricsHealthVariant} detail={`Source: ${metricsSource}; updated ${metricsLastUpdated}`} />
           <StatusChipCard label="Vault" badge="Backed" variant="green" detail="App-scoped source" />
           <StatusChipCard label="Raw" badge={sourceStatus} variant={sourceStatus === "Exists" ? "green" : "orange"} detail="Capture provenance" />
         </div>
@@ -1124,7 +1254,14 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             </SectionCard>
 
             <SectionCard title="KPI / Metrics Snapshot" icon={<icons.BarChart3 />}>
-              <EmptyCopy>No metrics connected yet. Metrics can be added later from project docs or data sources.</EmptyCopy>
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant={metricsHealthVariant}>Metrics: {metricsHealthLabel}</Badge>
+                  <Badge variant="slate">Source: {metricsSource}</Badge>
+                  <Badge variant="slate">Range: {dateRangeOptions.find((option) => option.id === dateRange)?.label}</Badge>
+                </div>
+                <EmptyCopy>{metricsSnapshot?.diagnostics.notes[0] ?? "No metrics source connected yet."}</EmptyCopy>
+              </div>
             </SectionCard>
 
             <SectionCard title="Task Summary" icon={<icons.List />}>
@@ -1186,7 +1323,8 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               </div>
               <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
                 <div className="text-xs font-semibold uppercase text-slate-400">Metrics</div>
-                <Badge className="mt-2" variant={state.dashboardSnapshot.metricsStatus === "missing" ? "orange" : "green"}>{state.dashboardSnapshot.metricsStatus}</Badge>
+                <Badge className="mt-2" variant={metricsHealthVariant}>{metricsHealthLabel}</Badge>
+                <div className="mt-2 text-xs font-semibold text-slate-500">Source: {metricsSource}</div>
               </div>
               <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
                 <div className="text-xs font-semibold uppercase text-slate-400">C-Level Priority</div>
@@ -1357,7 +1495,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               <div className="grid gap-3">
                 <StatusChipCard label="Context" badge={contextStatus} variant={contextStatusVariant(contextStatus)} detail="Resolved automatically" />
                 <StatusChipCard label="Memory" badge={memoryHealth} variant={appNoteQuality.placeholderCount ? "orange" : "green"} detail="Backend managed" />
-                <StatusChipCard label="Metrics" badge={state.dashboardSnapshot.metricsStatus === "missing" ? "Missing" : state.dashboardSnapshot.metricsStatus} variant={state.dashboardSnapshot.metricsStatus === "missing" ? "orange" : "green"} detail="No metric source connected yet" />
+                <StatusChipCard label="Metrics" badge={metricsHealthLabel} variant={metricsHealthVariant} detail={`Source: ${metricsSource}; updated ${metricsLastUpdated}`} />
               </div>
             </SectionCard>
 
@@ -1487,7 +1625,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             <SectionCard title="Suggested Promotions" icon={<icons.Sparkles />}>
               <div className="space-y-3">
                 <div className="grid gap-3 md:grid-cols-3">
-                  <FieldValue label="Pending" value={promotionsPending} />
+                  <FieldValue label="Pending" value={promotionsPendingMetric?.displayValue ?? "No data"} />
                   <FieldValue label="Type filter" value={planTypeOptions.find((option) => option.id === planTypeFilter)?.label} />
                   <FieldValue label="Status filter" value={planStatusOptions.find((option) => option.id === planStatusFilter)?.label} />
                 </div>
@@ -1671,7 +1809,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                     <div className="space-y-3">
                       <StatusChipCard label="Context" badge={contextStatus} variant={contextStatusVariant(contextStatus)} detail="Resolved automatically for this app" />
                       <StatusChipCard label="Memory" badge={memoryHealth} variant={appNoteQuality.placeholderCount ? "orange" : "green"} detail="Backend managed" />
-                      <StatusChipCard label="Metrics" badge={state.dashboardSnapshot.metricsStatus === "missing" ? "Missing" : state.dashboardSnapshot.metricsStatus} variant={state.dashboardSnapshot.metricsStatus === "missing" ? "orange" : "green"} detail="No metric source connected yet" />
+                      <StatusChipCard label="Metrics" badge={metricsHealthLabel} variant={metricsHealthVariant} detail={`Source: ${metricsSource}; updated ${metricsLastUpdated}`} />
                       <StatusChipCard label="Vault" badge="Backed" variant="green" detail="App-scoped source" />
                       <StatusChipCard label="Raw" badge={sourceStatus} variant={sourceStatus === "Exists" ? "green" : "orange"} detail="Capture provenance" />
                       <details className="rounded-xl border border-slate-100 bg-white p-3">

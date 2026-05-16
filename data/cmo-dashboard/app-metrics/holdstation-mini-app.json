@@ -1,0 +1,96 @@
+{
+  "schemaVersion": "cmo.app-metrics.v1",
+  "workspaceId": "holdstation",
+  "appId": "holdstation-mini-app",
+  "sourceId": "holdstation__holdstation-mini-app",
+  "status": "missing",
+  "lastUpdatedAt": null,
+  "metrics": [
+    {
+      "id": "activated_users",
+      "label": "Activated Users",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "users",
+      "trend": "unknown",
+      "status": "missing",
+      "description": "Users who reached the defined activation event."
+    },
+    {
+      "id": "activation_rate",
+      "label": "Activation Rate",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "percent",
+      "trend": "unknown",
+      "status": "missing",
+      "description": "Share of new users who activated in the selected period."
+    },
+    {
+      "id": "new_users",
+      "label": "New Users",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "users",
+      "trend": "unknown",
+      "status": "missing",
+      "description": "New users acquired in the selected period."
+    },
+    {
+      "id": "d1_retention",
+      "label": "D1 Retention",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "percent",
+      "trend": "unknown",
+      "status": "missing",
+      "description": "Day-one retention for the selected cohort."
+    },
+    {
+      "id": "d7_retention",
+      "label": "D7 Retention",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "percent",
+      "trend": "unknown",
+      "status": "missing",
+      "description": "Day-seven retention for the selected cohort."
+    },
+    {
+      "id": "pending_reviews",
+      "label": "Pending Reviews",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "count",
+      "trend": "unknown",
+      "status": "placeholder",
+      "description": "Decision Layer outputs awaiting review."
+    },
+    {
+      "id": "promotions_pending",
+      "label": "Promotions Pending",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "count",
+      "trend": "unknown",
+      "status": "placeholder",
+      "description": "Latest app-scoped promotion signal awaiting review."
+    }
+  ],
+  "diagnostics": {
+    "source": "placeholder",
+    "missingMetrics": [
+      "activated_users",
+      "activation_rate",
+      "new_users",
+      "d1_retention",
+      "d7_retention",
+      "pending_reviews",
+      "promotions_pending"
+    ],
+    "notes": [
+      "No metrics source connected yet.",
+      "Product analytics values are intentionally null until a real source is connected."
+    ]
+  }
+}
