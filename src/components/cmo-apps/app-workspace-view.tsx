@@ -25,6 +25,7 @@ import type {
   CmoAppMetricDateRangePreset,
   CmoAppMetricsSnapshot,
   CmoChannelMetric,
+  CmoChannelMetricsSyncStatus,
   CmoChannelMetricsSnapshot,
   CMOChatMessage,
   CMOChatSession,
@@ -515,6 +516,50 @@ function channelSourceLabel(source: CmoChannelMetricsSnapshot["source"] | undefi
   return "Not connected";
 }
 
+function channelSyncStatusLabel(status: CmoChannelMetricsSyncStatus["status"] | undefined): string {
+  if (status === "success") {
+    return "Success";
+  }
+
+  if (status === "partial") {
+    return "Partial";
+  }
+
+  if (status === "failed") {
+    return "Failed";
+  }
+
+  return "Not scheduled";
+}
+
+function channelSyncStatusVariant(status: CmoChannelMetricsSyncStatus["status"] | undefined): "green" | "orange" | "red" | "slate" {
+  if (status === "success") {
+    return "green";
+  }
+
+  if (status === "partial") {
+    return "orange";
+  }
+
+  if (status === "failed") {
+    return "red";
+  }
+
+  return "slate";
+}
+
+function channelSyncStatusCopy(status: CmoChannelMetricsSyncStatus | null): string {
+  if (status?.status === "failed") {
+    return "Showing last successful Lens snapshot.";
+  }
+
+  if (status?.status === "skipped" || !status) {
+    return "Manual refresh only.";
+  }
+
+  return "Lens sync tracked.";
+}
+
 function channelStatusCopy(status: CmoChannelMetricsSnapshot["status"] | undefined): string {
   if (status === "connected") {
     return "Lens Facebook metrics connected.";
@@ -742,6 +787,8 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [channelMetricsSnapshot, setChannelMetricsSnapshot] = useState<CmoChannelMetricsSnapshot | null>(null);
   const [channelMetricsStatus, setChannelMetricsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [channelMetricsError, setChannelMetricsError] = useState<string | null>(null);
+  const [channelSyncStatus, setChannelSyncStatus] = useState<CmoChannelMetricsSyncStatus | null>(null);
+  const [channelSyncLoadStatus, setChannelSyncLoadStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [planTypeFilter, setPlanTypeFilter] = useState<PlanReviewTypeFilter>("all");
   const [planStatusFilter, setPlanStatusFilter] = useState<PlanReviewStatusFilter>("pending");
   const [sessionFocusSignal, setSessionFocusSignal] = useState(0);
@@ -815,7 +862,14 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const channelMetricsHealthLabel = channelMetricsStatus === "loading" ? "Loading" : channelMetricStatusLabel(channelMetricsSnapshot?.status);
   const channelMetricsHealthVariant = channelMetricsStatus === "loading" ? "slate" : channelMetricStatusVariant(channelMetricsSnapshot?.status);
   const channelMetricsSource = channelSourceLabel(channelMetricsSnapshot?.source);
-  const channelMetricsLastUpdated = channelMetricsSnapshot?.lastUpdatedAt ? displayDate(channelMetricsSnapshot.lastUpdatedAt) : "Not connected";
+  const channelMetricsLastUpdated = channelSyncStatus?.lastFinishedAt
+    ? displayDate(channelSyncStatus.lastFinishedAt)
+    : channelMetricsSnapshot?.lastUpdatedAt
+      ? displayDate(channelMetricsSnapshot.lastUpdatedAt)
+      : "Not connected";
+  const channelMetricsLastSuccess = channelSyncStatus?.lastSuccessAt ? displayDate(channelSyncStatus.lastSuccessAt) : "Not tracked";
+  const channelSyncLabel = channelSyncLoadStatus === "loading" ? "Loading" : channelSyncStatusLabel(channelSyncStatus?.status);
+  const channelSyncVariant = channelSyncLoadStatus === "loading" ? "slate" : channelSyncStatusVariant(channelSyncStatus?.status);
 
   useEffect(() => {
     const nextTab: AppWorkspaceTab = isWorkspaceTab(tabParam) ? tabParam : "dashboard";
@@ -901,6 +955,42 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
     return () => controller.abort();
   }, [app.id, dateRange]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      channel: "facebook",
+    });
+
+    async function loadChannelSyncStatus() {
+      setChannelSyncLoadStatus("loading");
+
+      try {
+        const payload = await readJsonResponse<{ data: CmoChannelMetricsSyncStatus }>(
+          await fetch(`/api/cmo/apps/${app.id}/channel-metrics/sync-status?${params.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        );
+
+        if (!controller.signal.aborted) {
+          setChannelSyncStatus(payload.data);
+          setChannelSyncLoadStatus("ready");
+        }
+      } catch {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setChannelSyncStatus(null);
+        setChannelSyncLoadStatus("error");
+      }
+    }
+
+    void loadChannelSyncStatus();
+
+    return () => controller.abort();
+  }, [app.id]);
 
   function selectTab(tab: AppWorkspaceTab, hash?: string) {
     const next = new URLSearchParams(searchParams.toString());
@@ -1465,10 +1555,12 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
               <Badge variant="slate">Source: {channelMetricsSource}</Badge>
               <Badge variant="slate">Last synced: {channelMetricsLastUpdated}</Badge>
+              <Badge variant="slate">Last success: {channelMetricsLastSuccess}</Badge>
+              <Badge variant={channelSyncVariant}>Sync: {channelSyncLabel}</Badge>
               <Badge variant="slate">Range: {dateRangeOptions.find((option) => option.id === dateRange)?.label}</Badge>
             </div>
             <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold leading-6 text-slate-600">
-              {channelMetricsError || channelStatusCopy(channelMetricsSnapshot?.status)}
+              {channelMetricsError || `${channelStatusCopy(channelMetricsSnapshot?.status)} ${channelSyncStatusCopy(channelSyncStatus)}`}
             </div>
 
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">

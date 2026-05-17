@@ -15,6 +15,7 @@ export type CmoAppMetricDateRangePreset = "this_week" | "last_7_days" | "last_30
 export type CmoChannelMetricStatus = "connected" | "missing" | "partial" | "placeholder";
 export type CmoChannelMetricDateRangePreset = "today" | "yesterday" | "last_7_days" | "last_30_days" | "this_week" | "this_month" | "custom";
 export type CmoChannel = "facebook";
+export type CmoChannelMetricsSyncStatusValue = "success" | "failed" | "partial" | "skipped";
 export type TaskTrackerStatus = "connected" | "not_connected" | "fallback";
 export type TaskSummarySource = "task-tracker" | "vault" | "placeholder";
 export type ContextGraphHintSourceType = "markdown-link" | "session-reference" | "promotion-candidate" | "raw-capture" | "keyword-match";
@@ -385,6 +386,23 @@ export interface CmoTopContentItem {
   visibleEngagement?: number | null;
   engagementRate?: number | null;
   bucket?: "viral" | "strong" | "normal" | "low_sample" | "unknown";
+}
+
+export interface CmoChannelMetricsSyncStatus {
+  schemaVersion: "cmo.channel-metrics-sync-status.v1";
+  appId: string;
+  channel: CmoChannel;
+  status: CmoChannelMetricsSyncStatusValue;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  lastSuccessAt: string | null;
+  lastErrorAt: string | null;
+  lastErrorMessage: string | null;
+  normalizedOutputPath: string;
+  lensOutputPath: string;
+  availableMetrics: string[];
+  missingMetrics: string[];
+  notes: string[];
 }
 
 export interface AppPlan {

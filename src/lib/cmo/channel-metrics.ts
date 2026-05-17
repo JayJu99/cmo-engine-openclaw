@@ -6,6 +6,7 @@ import type {
   CmoChannel,
   CmoChannelMetric,
   CmoChannelMetricDateRangePreset,
+  CmoChannelMetricsSyncStatus,
   CmoChannelMetricsSnapshot,
   CmoTopContentItem,
 } from "@/lib/cmo/app-workspace-types";
@@ -14,6 +15,7 @@ const CHANNEL_METRICS_DIR = path.join(process.cwd(), "data", "cmo-dashboard", "c
 const DEFAULT_TIMEZONE = process.env.CMO_VAULT_TIME_ZONE ?? "Asia/Saigon";
 const SUPPORTED_APP_ID = "holdstation-mini-app";
 const SUPPORTED_CHANNEL: CmoChannel = "facebook";
+const LENS_FACEBOOK_OUTPUT_PATH = "/home/ju/.openclaw/workspace/knowledge/holdstation/07 Knowledge/Data/facebook-page/processed/cmo-channel-metrics-facebook.json";
 
 const channelMetricDefinitions: Array<Pick<CmoChannelMetric, "id" | "label" | "unit" | "description" | "caveat">> = [
   {
@@ -322,6 +324,53 @@ function channelMetricsFilePath(appId: string, channel: CmoChannel): string {
   return path.join(CHANNEL_METRICS_DIR, appId, `${channel}.json`);
 }
 
+function channelMetricsSyncStatusFilePath(appId: string, channel: CmoChannel): string {
+  return path.join(CHANNEL_METRICS_DIR, appId, `${channel}-sync-status.json`);
+}
+
+function validSyncStatus(value: unknown): CmoChannelMetricsSyncStatus["status"] {
+  return value === "success" || value === "failed" || value === "partial" || value === "skipped" ? value : "skipped";
+}
+
+function nullableIsoString(value: unknown): string | null {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value)) ? value : null;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function normalizeSyncStatus(value: unknown, fallback: CmoChannelMetricsSyncStatus): CmoChannelMetricsSyncStatus {
+  if (!isRecord(value)) {
+    return fallback;
+  }
+
+  if (
+    value.schemaVersion !== "cmo.channel-metrics-sync-status.v1" ||
+    value.appId !== fallback.appId ||
+    value.channel !== fallback.channel
+  ) {
+    return fallback;
+  }
+
+  return {
+    schemaVersion: "cmo.channel-metrics-sync-status.v1",
+    appId: fallback.appId,
+    channel: fallback.channel,
+    status: validSyncStatus(value.status),
+    lastStartedAt: nullableIsoString(value.lastStartedAt),
+    lastFinishedAt: nullableIsoString(value.lastFinishedAt),
+    lastSuccessAt: nullableIsoString(value.lastSuccessAt),
+    lastErrorAt: nullableIsoString(value.lastErrorAt),
+    lastErrorMessage: typeof value.lastErrorMessage === "string" && value.lastErrorMessage.trim() ? value.lastErrorMessage.trim() : null,
+    normalizedOutputPath: typeof value.normalizedOutputPath === "string" && value.normalizedOutputPath.trim() ? value.normalizedOutputPath.trim() : fallback.normalizedOutputPath,
+    lensOutputPath: typeof value.lensOutputPath === "string" && value.lensOutputPath.trim() ? value.lensOutputPath.trim() : fallback.lensOutputPath,
+    availableMetrics: stringArray(value.availableMetrics),
+    missingMetrics: stringArray(value.missingMetrics),
+    notes: stringArray(value.notes),
+  };
+}
+
 export async function readChannelMetricsSnapshot(options: ReadChannelMetricsOptions): Promise<CmoChannelMetricsSnapshot | null> {
   const channel = options.channel === SUPPORTED_CHANNEL || !options.channel ? SUPPORTED_CHANNEL : null;
 
@@ -374,4 +423,42 @@ export async function readChannelMetricsSnapshot(options: ReadChannelMetricsOpti
           : ["No Lens Facebook channel metrics file connected yet."],
     },
   };
+}
+
+export async function readChannelMetricsSyncStatus(options: Pick<ReadChannelMetricsOptions, "appId" | "channel">): Promise<CmoChannelMetricsSyncStatus | null> {
+  const channel = options.channel === SUPPORTED_CHANNEL || !options.channel ? SUPPORTED_CHANNEL : null;
+
+  if (options.appId !== SUPPORTED_APP_ID || !channel) {
+    return null;
+  }
+
+  const app = getAppWorkspace(options.appId);
+
+  if (!app) {
+    return null;
+  }
+
+  const fallback: CmoChannelMetricsSyncStatus = {
+    schemaVersion: "cmo.channel-metrics-sync-status.v1",
+    appId: app.id,
+    channel,
+    status: "skipped",
+    lastStartedAt: null,
+    lastFinishedAt: null,
+    lastSuccessAt: null,
+    lastErrorAt: null,
+    lastErrorMessage: null,
+    normalizedOutputPath: channelMetricsFilePath(app.id, channel),
+    lensOutputPath: LENS_FACEBOOK_OUTPUT_PATH,
+    availableMetrics: [],
+    missingMetrics: channelMetricDefinitions.map((metric) => metric.id),
+    notes: ["Manual refresh only. No Lens sync status file has been written yet."],
+  };
+
+  try {
+    const value = JSON.parse(await readFile(channelMetricsSyncStatusFilePath(app.id, channel), "utf8")) as unknown;
+    return normalizeSyncStatus(value, fallback);
+  } catch {
+    return fallback;
+  }
 }

@@ -510,6 +510,26 @@ Run the normalizer:
 node scripts/cmo-lens-facebook-normalize.mjs
 ```
 
+Run the CMO-side sync wrapper:
+
+```bash
+node scripts/cmo-lens-facebook-sync.mjs
+```
+
+By default this runs normalize-only/manual refresh mode: it does not run Python, Lens, or Facebook collection. It runs the CMO normalizer, runs the channel metrics contract check, and writes:
+
+```text
+data/cmo-dashboard/channel-metrics/holdstation-mini-app/facebook-sync-status.json
+```
+
+To let the wrapper run the Lens pipeline first, configure `CMO_LENS_FACEBOOK_RUN_COMMAND` outside the app code:
+
+```bash
+CMO_LENS_FACEBOOK_RUN_COMMAND='cd /home/ju/.openclaw/workspace/agents/analyst && python3 tools/facebook_page_traffic/run_lens_facebook_pipeline.py --mode weekly'
+```
+
+Only use the exact Lens command verified for the environment. Do not put secrets in the command string. CMO still does not call Facebook/Meta APIs directly; Lens remains responsible for collection.
+
 Contract check:
 
 ```bash
@@ -518,7 +538,37 @@ node scripts/cmo-channel-metrics-contract-check.mjs
 
 Accepted Facebook channel metric ids are `facebook_views`, `facebook_unique_views`, `facebook_engagement`, `facebook_post_count`, `facebook_video_views`, `facebook_follower_count`, `facebook_follower_growth`, `facebook_link_clicks`, and `facebook_ctr`. Missing metrics remain `null` / `No data`. Reach/impressions should be treated carefully; when Lens only provides media views, the dashboard labels them as views or unique views proxy instead of confirmed reach.
 
-Future path: Lens pipeline generates processed Facebook data, the normalizer writes `facebook.json`, the dashboard reads channel metrics through the endpoint, and n8n can schedule the normalizer later.
+Sync status endpoint:
+
+```bash
+GET /api/cmo/apps/holdstation-mini-app/channel-metrics/sync-status?channel=facebook
+```
+
+If sync fails, `facebook.json` is not deleted and the dashboard continues showing the last successful Lens snapshot.
+
+Optional systemd timer templates are available under `ops/systemd/`:
+
+```bash
+sudo install -D -m 0644 ops/systemd/cmo-lens-facebook-sync.service /etc/systemd/system/cmo-lens-facebook-sync.service
+sudo install -D -m 0644 ops/systemd/cmo-lens-facebook-sync.timer /etc/systemd/system/cmo-lens-facebook-sync.timer
+sudo mkdir -p /etc/cmo-engine
+sudo tee /etc/cmo-engine/cmo-lens-facebook-sync.env >/dev/null <<'EOF'
+# Leave unset for normalize-only/manual refresh mode.
+# CMO_LENS_FACEBOOK_RUN_COMMAND=cd /home/ju/.openclaw/workspace/agents/analyst && python3 tools/facebook_page_traffic/run_lens_facebook_pipeline.py --mode weekly
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now cmo-lens-facebook-sync.timer
+```
+
+Inspect or disable:
+
+```bash
+systemctl list-timers cmo-lens-facebook-sync.timer
+journalctl -u cmo-lens-facebook-sync.service -n 100 --no-pager
+sudo systemctl disable --now cmo-lens-facebook-sync.timer
+```
+
+Future path: Lens pipeline generates processed Facebook data, the CMO sync wrapper runs the normalizer and contract check, the dashboard reads channel metrics and sync status, and n8n can schedule the same script later if preferred.
 
 ## Run History troubleshooting
 

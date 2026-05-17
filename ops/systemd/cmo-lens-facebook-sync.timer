@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CMO Lens Facebook channel metrics sync daily
+
+[Timer]
+OnCalendar=*-*-* 07:15:00
+Persistent=true
+Unit=cmo-lens-facebook-sync.service
+
+[Install]
+WantedBy=timers.target

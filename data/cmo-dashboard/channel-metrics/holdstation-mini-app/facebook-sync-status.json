@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "cmo.channel-metrics-sync-status.v1",
+  "appId": "holdstation-mini-app",
+  "channel": "facebook",
+  "status": "partial",
+  "lastStartedAt": "2026-05-17T09:19:27.891Z",
+  "lastFinishedAt": "2026-05-17T09:19:28.472Z",
+  "lastSuccessAt": "2026-05-17T09:19:28.472Z",
+  "lastErrorAt": null,
+  "lastErrorMessage": null,
+  "normalizedOutputPath": "data/cmo-dashboard/channel-metrics/holdstation-mini-app/facebook.json",
+  "lensOutputPath": "/home/ju/.openclaw/workspace/knowledge/holdstation/07 Knowledge/Data/facebook-page/processed/cmo-channel-metrics-facebook.json",
+  "availableMetrics": [
+    "facebook_views",
+    "facebook_unique_views",
+    "facebook_engagement",
+    "facebook_post_count",
+    "facebook_video_views",
+    "facebook_follower_count",
+    "facebook_follower_growth"
+  ],
+  "missingMetrics": [
+    "facebook_link_clicks",
+    "facebook_ctr"
+  ],
+  "notes": [
+    "CMO_LENS_FACEBOOK_RUN_COMMAND is not configured; ran normalize-only/manual refresh mode.",
+    "Channel metrics normalized and contract check passed.",
+    "No new Lens Facebook source files found; preserved the existing normalized channel metrics snapshot.",
+    "Normalized from Lens Facebook outputs.",
+    "Link clicks and CTR remain missing until Lens has a confirmed click source.",
+    "Facebook channel metrics are separate from cmo.app-metrics.v1 product metrics."
+  ]
+}
