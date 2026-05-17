@@ -20,7 +20,7 @@
       "value": 6026,
       "displayValue": "6,026",
       "unit": "count",
-      "status": "connected",
+      "status": "partial",
       "description": "Facebook content/page views reported by Lens when available.",
       "caveat": "Reach/impressions may use Meta media view proxies."
     },
@@ -30,7 +30,7 @@
       "value": 3166,
       "displayValue": "3,166",
       "unit": "count",
-      "status": "connected",
+      "status": "partial",
       "description": "Unique media/page view proxy reported by Lens when available.",
       "caveat": "This is a unique views proxy, not confirmed classic reach."
     },

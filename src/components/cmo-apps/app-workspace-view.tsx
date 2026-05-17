@@ -532,6 +532,10 @@ function channelMetricDisplayValue(metric: CmoChannelMetric | undefined): string
     return "No data";
   }
 
+  if (metric.displayValue && metric.displayValue !== "No data") {
+    return metric.displayValue;
+  }
+
   if (metric.unit === "percent") {
     return `${Number(metric.value.toFixed(2)).toLocaleString("en-US")}%`;
   }
@@ -540,7 +544,19 @@ function channelMetricDisplayValue(metric: CmoChannelMetric | undefined): string
 }
 
 function channelMetricHasData(metric: CmoChannelMetric | undefined): boolean {
-  return Boolean(metric && metric.status === "connected" && metric.value !== null && metric.value !== undefined);
+  return typeof metric?.value === "number" && Number.isFinite(metric.value);
+}
+
+function channelMetricBadgeLabel(metric: CmoChannelMetric | undefined): string {
+  return channelMetricHasData(metric) ? channelMetricStatusLabel(metric?.status) : "No data";
+}
+
+function channelMetricBadgeVariant(metric: CmoChannelMetric | undefined): "green" | "orange" | "slate" {
+  if (!channelMetricHasData(metric)) {
+    return "slate";
+  }
+
+  return metric?.status === "partial" ? "orange" : "green";
 }
 
 function ChannelMetricTile({
@@ -559,7 +575,7 @@ function ChannelMetricTile({
     <div className="rounded-xl border border-slate-100 bg-white px-4 py-3 shadow-sm">
       <div className="flex items-start justify-between gap-2">
         <div className="text-xs font-bold uppercase text-slate-400">{label ?? metric?.label ?? "Metric"}</div>
-        <Badge variant={hasData ? "green" : "slate"}>{hasData ? "Connected" : "No data"}</Badge>
+        <Badge variant={channelMetricBadgeVariant(metric)}>{channelMetricBadgeLabel(metric)}</Badge>
       </div>
       <div className={cn("mt-3 font-bold tracking-tight", hasData ? "text-slate-950" : "text-slate-400", valueClass)}>{channelMetricDisplayValue(metric)}</div>
       {metric?.caveat && size !== "compact" ? <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{metric.caveat}</div> : null}
