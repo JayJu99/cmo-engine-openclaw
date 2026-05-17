@@ -356,6 +356,10 @@ function summarizeValues(values, mode) {
   return values.reduce((total, value) => total + value, 0);
 }
 
+function uniqueStrings(values) {
+  return [...new Set(values.filter((value) => typeof value === "string" && value.trim()).map((value) => value.trim()))];
+}
+
 async function readStructuredFiles(files) {
   const parsed = [];
   const seenFiles = [];
@@ -399,6 +403,22 @@ async function buildSnapshot() {
   const files = listings.flatMap((listing) => listing.files);
   const missingDirs = listings.map((listing) => listing.missing).filter(Boolean);
   const { parsed, seenFiles, latestMtime } = await readStructuredFiles(files);
+  const existingSnapshot = await readExistingSnapshot();
+
+  if (!files.length && existingSnapshot?.diagnostics?.availableMetrics?.length) {
+    return {
+      ...existingSnapshot,
+      diagnostics: {
+        ...existingSnapshot.diagnostics,
+        notes: uniqueStrings([
+          "No new Lens Facebook source files found; preserved the existing normalized channel metrics snapshot.",
+          ...(Array.isArray(existingSnapshot.diagnostics.notes) ? existingSnapshot.diagnostics.notes : []),
+          missingDirs.length ? `Missing input directories: ${missingDirs.join(", ")}.` : "",
+        ]),
+      },
+    };
+  }
+
   const posts = new Map();
 
   parsed.forEach((node) => collectPosts(node, posts));
@@ -456,6 +476,26 @@ async function writeSnapshot(snapshot) {
   const tempPath = `${outputPath}.tmp`;
   await writeFile(tempPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
   await rename(tempPath, outputPath);
+}
+
+async function readExistingSnapshot() {
+  try {
+    const snapshot = JSON.parse(await readFile(outputPath, "utf8"));
+
+    if (
+      snapshot?.schemaVersion === "cmo.channel-metrics.v1" &&
+      snapshot?.workspaceId === "holdstation" &&
+      snapshot?.appId === "holdstation-mini-app" &&
+      snapshot?.sourceId === "holdstation__holdstation-mini-app" &&
+      snapshot?.channel === "facebook"
+    ) {
+      return snapshot;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 const snapshot = await buildSnapshot();

@@ -4,79 +4,79 @@
   "appId": "holdstation-mini-app",
   "sourceId": "holdstation__holdstation-mini-app",
   "channel": "facebook",
-  "source": "not_connected",
+  "source": "lens.facebook_page",
   "dateRange": {
     "preset": "this_week",
     "startDate": "2026-05-11",
     "endDate": "2026-05-17",
     "timezone": "Asia/Saigon"
   },
-  "status": "missing",
+  "status": "partial",
   "lastUpdatedAt": null,
   "metrics": [
     {
       "id": "facebook_views",
       "label": "Facebook Views",
-      "value": null,
-      "displayValue": "No data",
+      "value": 6026,
+      "displayValue": "6,026",
       "unit": "count",
-      "status": "missing",
+      "status": "connected",
       "description": "Facebook content/page views reported by Lens when available.",
       "caveat": "Reach/impressions may use Meta media view proxies."
     },
     {
       "id": "facebook_unique_views",
       "label": "Unique Views Proxy",
-      "value": null,
-      "displayValue": "No data",
+      "value": 3166,
+      "displayValue": "3,166",
       "unit": "count",
-      "status": "missing",
+      "status": "connected",
       "description": "Unique media/page view proxy reported by Lens when available.",
       "caveat": "This is a unique views proxy, not confirmed classic reach."
     },
     {
       "id": "facebook_engagement",
       "label": "Engagement",
-      "value": null,
-      "displayValue": "No data",
+      "value": 695,
+      "displayValue": "695",
       "unit": "count",
-      "status": "missing",
+      "status": "connected",
       "description": "Visible engagement or page post engagement reported by Lens."
     },
     {
       "id": "facebook_post_count",
       "label": "Post Count",
-      "value": null,
-      "displayValue": "No data",
+      "value": 0,
+      "displayValue": "0",
       "unit": "count",
-      "status": "missing",
+      "status": "connected",
       "description": "Processed Facebook posts in the selected range."
     },
     {
       "id": "facebook_video_views",
       "label": "Video Views",
-      "value": null,
-      "displayValue": "No data",
+      "value": 0,
+      "displayValue": "0",
       "unit": "count",
-      "status": "missing",
+      "status": "connected",
       "description": "Facebook video views reported by Lens when available."
     },
     {
       "id": "facebook_follower_count",
       "label": "Followers",
-      "value": null,
-      "displayValue": "No data",
+      "value": 17325,
+      "displayValue": "17,325",
       "unit": "count",
-      "status": "missing",
+      "status": "connected",
       "description": "Facebook Page follower count when available."
     },
     {
       "id": "facebook_follower_growth",
       "label": "Follower Growth",
-      "value": null,
-      "displayValue": "No data",
+      "value": 17325,
+      "displayValue": "17,325",
       "unit": "count",
-      "status": "missing",
+      "status": "connected",
       "description": "Follower growth from Lens if supplied or safely calculated upstream."
     },
     {
@@ -99,24 +99,26 @@
     }
   ],
   "diagnostics": {
-    "availableMetrics": [],
-    "missingMetrics": [
+    "availableMetrics": [
       "facebook_views",
       "facebook_unique_views",
       "facebook_engagement",
       "facebook_post_count",
       "facebook_video_views",
       "facebook_follower_count",
-      "facebook_follower_growth",
+      "facebook_follower_growth"
+    ],
+    "missingMetrics": [
       "facebook_link_clicks",
       "facebook_ctr"
     ],
     "notes": [
-      "No usable Lens Facebook numeric metrics found.",
-      "No Lens Facebook files found in expected output locations.",
-      "Missing input directories: knowledge/holdstation/07 Knowledge/Data/facebook-page/processed, knowledge/holdstation/07 Knowledge/Data/facebook-page/raw, knowledge/holdstation/07 Knowledge/Data/facebook-page/reports, knowledge/holdstation/05 Agents/Lens/Reports/Facebook/Daily, knowledge/holdstation/05 Agents/Lens/Reports/Facebook/Weekly, knowledge/holdstation/05 Agents/Lens/Reports/Facebook/Monthly.",
+      "No new Lens Facebook source files found; preserved the existing normalized channel metrics snapshot.",
+      "Normalized from Lens Facebook outputs.",
+      "Link clicks and CTR remain missing until Lens has a confirmed click source.",
       "Facebook channel metrics are separate from cmo.app-metrics.v1 product metrics.",
-      "Reach/impressions may use Meta media view proxies when available."
+      "Reach/impressions may use Meta media view proxies when available.",
+      "Missing input directories: knowledge/holdstation/07 Knowledge/Data/facebook-page/processed, knowledge/holdstation/07 Knowledge/Data/facebook-page/raw, knowledge/holdstation/07 Knowledge/Data/facebook-page/reports, knowledge/holdstation/05 Agents/Lens/Reports/Facebook/Daily, knowledge/holdstation/05 Agents/Lens/Reports/Facebook/Weekly, knowledge/holdstation/05 Agents/Lens/Reports/Facebook/Monthly."
     ]
   }
 }

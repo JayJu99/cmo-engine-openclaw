@@ -515,6 +515,58 @@ function channelSourceLabel(source: CmoChannelMetricsSnapshot["source"] | undefi
   return "Not connected";
 }
 
+function channelStatusCopy(status: CmoChannelMetricsSnapshot["status"] | undefined): string {
+  if (status === "connected") {
+    return "Lens Facebook metrics connected.";
+  }
+
+  if (status === "partial") {
+    return "Some Facebook metrics are available from Lens. Link clicks and CTR are not connected yet.";
+  }
+
+  return "Lens Facebook data not normalized yet.";
+}
+
+function channelMetricDisplayValue(metric: CmoChannelMetric | undefined): string {
+  if (!metric || metric.value === null || metric.value === undefined) {
+    return "No data";
+  }
+
+  if (metric.unit === "percent") {
+    return `${Number(metric.value.toFixed(2)).toLocaleString("en-US")}%`;
+  }
+
+  return new Intl.NumberFormat("en-US").format(metric.value);
+}
+
+function channelMetricHasData(metric: CmoChannelMetric | undefined): boolean {
+  return Boolean(metric && metric.status === "connected" && metric.value !== null && metric.value !== undefined);
+}
+
+function ChannelMetricTile({
+  metric,
+  label,
+  size = "normal",
+}: {
+  metric?: CmoChannelMetric;
+  label?: string;
+  size?: "primary" | "normal" | "compact";
+}) {
+  const hasData = channelMetricHasData(metric);
+  const valueClass = size === "primary" ? "text-2xl" : size === "compact" ? "text-base" : "text-xl";
+
+  return (
+    <div className="rounded-xl border border-slate-100 bg-white px-4 py-3 shadow-sm">
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-xs font-bold uppercase text-slate-400">{label ?? metric?.label ?? "Metric"}</div>
+        <Badge variant={hasData ? "green" : "slate"}>{hasData ? "Connected" : "No data"}</Badge>
+      </div>
+      <div className={cn("mt-3 font-bold tracking-tight", hasData ? "text-slate-950" : "text-slate-400", valueClass)}>{channelMetricDisplayValue(metric)}</div>
+      {metric?.caveat && size !== "compact" ? <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{metric.caveat}</div> : null}
+    </div>
+  );
+}
+
 function reviewBadgeVariant(status: string | undefined): "green" | "orange" | "red" | "blue" | "slate" {
   if (status === "confirmed" || status === "accepted" || status === "reviewed" || status === "approved_for_promotion_later" || status === "approved_for_task_later") {
     return "green";
@@ -743,17 +795,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
     return lookup;
   }, [channelMetricsSnapshot]);
-  const channelMetricCards = [
-    "facebook_views",
-    "facebook_unique_views",
-    "facebook_engagement",
-    "facebook_post_count",
-    "facebook_video_views",
-    "facebook_follower_count",
-    "facebook_follower_growth",
-    "facebook_link_clicks",
-    "facebook_ctr",
-  ].map((id) => channelMetricById.get(id)).filter((metric): metric is CmoChannelMetric => Boolean(metric));
+  const channelMetric = (id: string) => channelMetricById.get(id);
   const channelMetricsHealthLabel = channelMetricsStatus === "loading" ? "Loading" : channelMetricStatusLabel(channelMetricsSnapshot?.status);
   const channelMetricsHealthVariant = channelMetricsStatus === "loading" ? "slate" : channelMetricStatusVariant(channelMetricsSnapshot?.status);
   const channelMetricsSource = channelSourceLabel(channelMetricsSnapshot?.source);
@@ -1394,36 +1436,55 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             </SectionCard>
           </div>
 
-          <SectionCard title="Channel Performance" icon={<icons.BarChart3 />} action={<Badge variant={channelMetricsHealthVariant}>Facebook: {channelMetricsHealthLabel}</Badge>}>
+          <SectionCard
+            title="Channel Performance"
+            icon={<icons.BarChart3 />}
+            action={
+              <div className="flex flex-wrap justify-end gap-2">
+                <Badge variant="blue">Facebook</Badge>
+                <Badge variant={channelMetricsHealthVariant}>{channelMetricsHealthLabel}</Badge>
+              </div>
+            }
+          >
             <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
               <Badge variant="slate">Source: {channelMetricsSource}</Badge>
-              <Badge variant="slate">Updated: {channelMetricsLastUpdated}</Badge>
+              <Badge variant="slate">Last synced: {channelMetricsLastUpdated}</Badge>
               <Badge variant="slate">Range: {dateRangeOptions.find((option) => option.id === dateRange)?.label}</Badge>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
-              {channelMetricCards.map((metric) => (
-                <KpiCard
-                  key={metric.id}
-                  label={metric.label}
-                  value={metric.status === "connected" && metric.value !== null ? metric.displayValue : "No data"}
-                  detail={metric.status === "connected" ? metric.caveat || metric.description : "Lens Facebook data not normalized yet."}
-                  muted={metric.status !== "connected"}
-                  status={<Badge variant={channelMetricStatusVariant(metric.status)}>{metric.status === "connected" ? "Connected" : "No data"}</Badge>}
-                />
-              ))}
-              {!channelMetricCards.length ? (
-                <KpiCard
-                  label="Facebook"
-                  value={channelMetricsStatus === "loading" ? "Loading" : "No data"}
-                  detail={channelMetricsError || "No Lens Facebook channel metrics connected yet."}
-                  muted
-                  status={<Badge variant="orange">{channelMetricsStatus === "error" ? "Error" : "Missing"}</Badge>}
-                />
-              ) : null}
+            <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold leading-6 text-slate-600">
+              {channelMetricsError || channelStatusCopy(channelMetricsSnapshot?.status)}
             </div>
-            <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs font-semibold leading-5 text-slate-500">
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <ChannelMetricTile metric={channelMetric("facebook_views")} label="Views" size="primary" />
+              <ChannelMetricTile metric={channelMetric("facebook_unique_views")} label="Unique Views Proxy" size="primary" />
+              <ChannelMetricTile metric={channelMetric("facebook_engagement")} label="Engagement" size="primary" />
+              <ChannelMetricTile metric={channelMetric("facebook_follower_count")} label="Followers" size="primary" />
+            </div>
+
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <ChannelMetricTile metric={channelMetric("facebook_post_count")} label="Posts" />
+              <ChannelMetricTile metric={channelMetric("facebook_video_views")} label="Video Views" />
+              <ChannelMetricTile metric={channelMetric("facebook_follower_growth")} label="Follower Growth" />
+            </div>
+
+            <div className="mt-4 rounded-xl border border-slate-100 bg-white px-4 py-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-xs font-bold uppercase text-slate-400">Missing data</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-600">Waiting for confirmed click source from Lens or analytics.</div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="slate">Link Clicks: {channelMetricDisplayValue(channelMetric("facebook_link_clicks"))}</Badge>
+                  <Badge variant="slate">CTR: {channelMetricDisplayValue(channelMetric("facebook_ctr"))}</Badge>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs font-semibold leading-5 text-slate-500">
               Caveat: Reach/impressions may use Meta media view proxies. App/product metrics remain separate in cmo.app-metrics.v1.
             </div>
+
             {channelMetricsSnapshot?.topPosts?.length ? (
               <details className="mt-4 rounded-xl border border-slate-100 bg-white p-4">
                 <summary className="cursor-pointer text-sm font-bold text-slate-950">Top posts</summary>
@@ -1438,14 +1499,17 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                         {post.messagePreview || post.postId || "No preview"}
                       </div>
                       <div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
-                        <span>Views: {post.views ?? "No data"}</span>
-                        <span>Engagement: {post.visibleEngagement ?? "No data"}</span>
+                        <span>Views: {post.views === null || post.views === undefined ? "No data" : new Intl.NumberFormat("en-US").format(post.views)}</span>
+                        <span>Engagement: {post.visibleEngagement === null || post.visibleEngagement === undefined ? "No data" : new Intl.NumberFormat("en-US").format(post.visibleEngagement)}</span>
+                        <span>Rate: {post.engagementRate === null || post.engagementRate === undefined ? "No data" : `${Number(post.engagementRate.toFixed(2)).toLocaleString("en-US")}%`}</span>
                       </div>
                     </div>
                   ))}
                 </div>
               </details>
-            ) : null}
+            ) : (
+              <div className="mt-3 text-xs font-semibold text-slate-500">No top posts attached to this snapshot.</div>
+            )}
           </SectionCard>
 
           <div className="grid gap-5 xl:grid-cols-3">
