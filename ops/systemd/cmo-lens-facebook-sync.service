@@ -6,7 +6,5 @@ After=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/home/ju/cmo-engine-openclaw
-EnvironmentFile=-/etc/cmo-engine/cmo-lens-facebook-sync.env
+EnvironmentFile=-/home/ju/.config/cmo-engine-openclaw/lens-sync.env
 ExecStart=/usr/bin/node scripts/cmo-lens-facebook-sync.mjs
-User=ju
-Group=ju

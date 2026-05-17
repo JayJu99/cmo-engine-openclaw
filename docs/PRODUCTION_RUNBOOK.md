@@ -549,23 +549,23 @@ If sync fails, `facebook.json` is not deleted and the dashboard continues showin
 Optional systemd timer templates are available under `ops/systemd/`:
 
 ```bash
-sudo install -D -m 0644 ops/systemd/cmo-lens-facebook-sync.service /etc/systemd/system/cmo-lens-facebook-sync.service
-sudo install -D -m 0644 ops/systemd/cmo-lens-facebook-sync.timer /etc/systemd/system/cmo-lens-facebook-sync.timer
-sudo mkdir -p /etc/cmo-engine
-sudo tee /etc/cmo-engine/cmo-lens-facebook-sync.env >/dev/null <<'EOF'
+mkdir -p /home/ju/.config/systemd/user /home/ju/.config/cmo-engine-openclaw
+install -m 0644 ops/systemd/cmo-lens-facebook-sync.service /home/ju/.config/systemd/user/cmo-lens-facebook-sync.service
+install -m 0644 ops/systemd/cmo-lens-facebook-sync.timer /home/ju/.config/systemd/user/cmo-lens-facebook-sync.timer
+cat > /home/ju/.config/cmo-engine-openclaw/lens-sync.env <<'EOF'
 # Leave unset for normalize-only/manual refresh mode.
 # CMO_LENS_FACEBOOK_RUN_COMMAND=cd /home/ju/.openclaw/workspace/agents/analyst && python3 tools/facebook_page_traffic/run_lens_facebook_pipeline.py --mode weekly
 EOF
-sudo systemctl daemon-reload
-sudo systemctl enable --now cmo-lens-facebook-sync.timer
+systemctl --user daemon-reload
+systemctl --user enable --now cmo-lens-facebook-sync.timer
 ```
 
 Inspect or disable:
 
 ```bash
-systemctl list-timers cmo-lens-facebook-sync.timer
-journalctl -u cmo-lens-facebook-sync.service -n 100 --no-pager
-sudo systemctl disable --now cmo-lens-facebook-sync.timer
+systemctl --user list-timers cmo-lens-facebook-sync.timer
+journalctl --user -u cmo-lens-facebook-sync.service -n 100 --no-pager
+systemctl --user disable --now cmo-lens-facebook-sync.timer
 ```
 
 Future path: Lens pipeline generates processed Facebook data, the CMO sync wrapper runs the normalizer and contract check, the dashboard reads channel metrics and sync status, and n8n can schedule the same script later if preferred.
