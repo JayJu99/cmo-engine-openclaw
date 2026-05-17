@@ -12,6 +12,9 @@ export type AppPlanStatus = "draft" | "active" | "completed";
 export type MetricsStatus = "missing" | "provided" | "connected";
 export type CmoMetricStatus = "connected" | "missing" | "partial" | "placeholder";
 export type CmoAppMetricDateRangePreset = "this_week" | "last_7_days" | "last_30_days" | "this_month" | "custom";
+export type CmoChannelMetricStatus = "connected" | "missing" | "partial" | "placeholder";
+export type CmoChannelMetricDateRangePreset = "today" | "yesterday" | "last_7_days" | "last_30_days" | "this_week" | "this_month" | "custom";
+export type CmoChannel = "facebook";
 export type TaskTrackerStatus = "connected" | "not_connected" | "fallback";
 export type TaskSummarySource = "task-tracker" | "vault" | "placeholder";
 export type ContextGraphHintSourceType = "markdown-link" | "session-reference" | "promotion-candidate" | "raw-capture" | "keyword-match";
@@ -334,6 +337,54 @@ export interface CmoAppMetric {
   trend?: "up" | "down" | "flat" | "unknown";
   status: CmoMetricStatus;
   description?: string;
+}
+
+export interface CmoChannelMetricsSnapshot {
+  schemaVersion: "cmo.channel-metrics.v1";
+  workspaceId: string;
+  appId: string;
+  sourceId: string;
+  channel: CmoChannel;
+  source: "lens.facebook_page" | "placeholder" | "not_connected";
+  dateRange: {
+    preset: CmoChannelMetricDateRangePreset;
+    startDate: string;
+    endDate: string;
+    timezone: string;
+  };
+  status: CmoChannelMetricStatus;
+  lastUpdatedAt: string | null;
+  metrics: CmoChannelMetric[];
+  topPosts?: CmoTopContentItem[];
+  diagnostics: {
+    availableMetrics: string[];
+    missingMetrics: string[];
+    notes: string[];
+  };
+}
+
+export interface CmoChannelMetric {
+  id: string;
+  label: string;
+  value: number | null;
+  displayValue: string;
+  unit?: "count" | "percent" | "ratio";
+  status: CmoChannelMetricStatus;
+  description?: string;
+  caveat?: string;
+}
+
+export interface CmoTopContentItem {
+  id: string;
+  postId?: string;
+  createdTime?: string;
+  permalinkUrl?: string;
+  messagePreview?: string;
+  inferredContentType?: string;
+  views?: number | null;
+  visibleEngagement?: number | null;
+  engagementRate?: number | null;
+  bucket?: "viral" | "strong" | "normal" | "low_sample" | "unknown";
 }
 
 export interface AppPlan {

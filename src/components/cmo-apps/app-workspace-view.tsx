@@ -24,6 +24,8 @@ import type {
   CmoAppMetric,
   CmoAppMetricDateRangePreset,
   CmoAppMetricsSnapshot,
+  CmoChannelMetric,
+  CmoChannelMetricsSnapshot,
   CMOChatMessage,
   CMOChatSession,
   CMORuntimeStatus,
@@ -473,6 +475,46 @@ function metricsSourceLabel(source: CmoAppMetricsSnapshot["diagnostics"]["source
   return "Not connected";
 }
 
+function channelMetricStatusLabel(status: CmoChannelMetric["status"] | CmoChannelMetricsSnapshot["status"] | undefined): string {
+  if (status === "connected") {
+    return "Connected";
+  }
+
+  if (status === "partial") {
+    return "Partial";
+  }
+
+  if (status === "placeholder") {
+    return "Placeholder";
+  }
+
+  return "Missing";
+}
+
+function channelMetricStatusVariant(status: CmoChannelMetric["status"] | CmoChannelMetricsSnapshot["status"] | undefined): "green" | "orange" | "red" | "slate" {
+  if (status === "connected") {
+    return "green";
+  }
+
+  if (status === "partial" || status === "placeholder") {
+    return "orange";
+  }
+
+  return status === "missing" ? "red" : "slate";
+}
+
+function channelSourceLabel(source: CmoChannelMetricsSnapshot["source"] | undefined): string {
+  if (source === "lens.facebook_page") {
+    return "Lens Facebook";
+  }
+
+  if (source === "placeholder") {
+    return "Placeholder";
+  }
+
+  return "Not connected";
+}
+
 function reviewBadgeVariant(status: string | undefined): "green" | "orange" | "red" | "blue" | "slate" {
   if (status === "confirmed" || status === "accepted" || status === "reviewed" || status === "approved_for_promotion_later" || status === "approved_for_task_later") {
     return "green";
@@ -629,6 +671,9 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [metricsSnapshot, setMetricsSnapshot] = useState<CmoAppMetricsSnapshot | null>(null);
   const [metricsStatus, setMetricsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [metricsError, setMetricsError] = useState<string | null>(null);
+  const [channelMetricsSnapshot, setChannelMetricsSnapshot] = useState<CmoChannelMetricsSnapshot | null>(null);
+  const [channelMetricsStatus, setChannelMetricsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [channelMetricsError, setChannelMetricsError] = useState<string | null>(null);
   const [planTypeFilter, setPlanTypeFilter] = useState<PlanReviewTypeFilter>("all");
   const [planStatusFilter, setPlanStatusFilter] = useState<PlanReviewStatusFilter>("pending");
   const [sessionFocusSignal, setSessionFocusSignal] = useState(0);
@@ -691,6 +736,28 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const metricsHealthVariant = metricsStatus === "loading" ? "slate" : metricStatusVariant(metricsSnapshot?.status);
   const metricsSource = metricsSourceLabel(metricsSnapshot?.diagnostics.source);
   const metricsLastUpdated = metricsSnapshot?.lastUpdatedAt ? displayDate(metricsSnapshot.lastUpdatedAt) : "Not connected";
+  const channelMetricById = useMemo(() => {
+    const lookup = new Map<string, CmoChannelMetric>();
+
+    channelMetricsSnapshot?.metrics.forEach((metric) => lookup.set(metric.id, metric));
+
+    return lookup;
+  }, [channelMetricsSnapshot]);
+  const channelMetricCards = [
+    "facebook_views",
+    "facebook_unique_views",
+    "facebook_engagement",
+    "facebook_post_count",
+    "facebook_video_views",
+    "facebook_follower_count",
+    "facebook_follower_growth",
+    "facebook_link_clicks",
+    "facebook_ctr",
+  ].map((id) => channelMetricById.get(id)).filter((metric): metric is CmoChannelMetric => Boolean(metric));
+  const channelMetricsHealthLabel = channelMetricsStatus === "loading" ? "Loading" : channelMetricStatusLabel(channelMetricsSnapshot?.status);
+  const channelMetricsHealthVariant = channelMetricsStatus === "loading" ? "slate" : channelMetricStatusVariant(channelMetricsSnapshot?.status);
+  const channelMetricsSource = channelSourceLabel(channelMetricsSnapshot?.source);
+  const channelMetricsLastUpdated = channelMetricsSnapshot?.lastUpdatedAt ? displayDate(channelMetricsSnapshot.lastUpdatedAt) : "Not connected";
 
   useEffect(() => {
     const nextTab: AppWorkspaceTab = isWorkspaceTab(tabParam) ? tabParam : "dashboard";
@@ -738,6 +805,44 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
     return () => controller.abort();
   }, [app.id, comparePrevious, dateRange]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      channel: "facebook",
+      range: dateRange,
+    });
+
+    async function loadChannelMetrics() {
+      setChannelMetricsStatus("loading");
+      setChannelMetricsError(null);
+
+      try {
+        const payload = await readJsonResponse<{ data: CmoChannelMetricsSnapshot }>(
+          await fetch(`/api/cmo/apps/${app.id}/channel-metrics?${params.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        );
+
+        if (!controller.signal.aborted) {
+          setChannelMetricsSnapshot(payload.data);
+          setChannelMetricsStatus("ready");
+        }
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setChannelMetricsStatus("error");
+        setChannelMetricsError(loadError instanceof Error ? loadError.message : "Channel metrics load failed");
+      }
+    }
+
+    void loadChannelMetrics();
+
+    return () => controller.abort();
+  }, [app.id, dateRange]);
 
   function selectTab(tab: AppWorkspaceTab, hash?: string) {
     const next = new URLSearchParams(searchParams.toString());
@@ -1288,6 +1393,60 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               <EmptyCopy>{state.taskSummary.message}</EmptyCopy>
             </SectionCard>
           </div>
+
+          <SectionCard title="Channel Performance" icon={<icons.BarChart3 />} action={<Badge variant={channelMetricsHealthVariant}>Facebook: {channelMetricsHealthLabel}</Badge>}>
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
+              <Badge variant="slate">Source: {channelMetricsSource}</Badge>
+              <Badge variant="slate">Updated: {channelMetricsLastUpdated}</Badge>
+              <Badge variant="slate">Range: {dateRangeOptions.find((option) => option.id === dateRange)?.label}</Badge>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+              {channelMetricCards.map((metric) => (
+                <KpiCard
+                  key={metric.id}
+                  label={metric.label}
+                  value={metric.status === "connected" && metric.value !== null ? metric.displayValue : "No data"}
+                  detail={metric.status === "connected" ? metric.caveat || metric.description : "Lens Facebook data not normalized yet."}
+                  muted={metric.status !== "connected"}
+                  status={<Badge variant={channelMetricStatusVariant(metric.status)}>{metric.status === "connected" ? "Connected" : "No data"}</Badge>}
+                />
+              ))}
+              {!channelMetricCards.length ? (
+                <KpiCard
+                  label="Facebook"
+                  value={channelMetricsStatus === "loading" ? "Loading" : "No data"}
+                  detail={channelMetricsError || "No Lens Facebook channel metrics connected yet."}
+                  muted
+                  status={<Badge variant="orange">{channelMetricsStatus === "error" ? "Error" : "Missing"}</Badge>}
+                />
+              ) : null}
+            </div>
+            <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs font-semibold leading-5 text-slate-500">
+              Caveat: Reach/impressions may use Meta media view proxies. App/product metrics remain separate in cmo.app-metrics.v1.
+            </div>
+            {channelMetricsSnapshot?.topPosts?.length ? (
+              <details className="mt-4 rounded-xl border border-slate-100 bg-white p-4">
+                <summary className="cursor-pointer text-sm font-bold text-slate-950">Top posts</summary>
+                <div className="mt-3 grid gap-2">
+                  {channelMetricsSnapshot.topPosts.slice(0, 3).map((post, index) => (
+                    <div key={post.id} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-bold text-slate-950">Post {index + 1}</div>
+                        <Badge variant="slate">{post.bucket ?? "unknown"}</Badge>
+                      </div>
+                      <div className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                        {post.messagePreview || post.postId || "No preview"}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
+                        <span>Views: {post.views ?? "No data"}</span>
+                        <span>Engagement: {post.visibleEngagement ?? "No data"}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+          </SectionCard>
 
           <div className="grid gap-5 xl:grid-cols-3">
             <SectionCard title="Week Plan Summary" icon={<icons.CalendarDays />}>

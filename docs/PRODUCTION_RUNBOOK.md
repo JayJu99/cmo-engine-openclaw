@@ -475,6 +475,51 @@ node scripts/cmo-app-metrics-ingest-smoke.mjs
 
 The smoke script backs up and restores the metrics JSON file after testing. GA4/n8n source-specific integration remains a later phase.
 
+## Channel metrics / Lens Facebook bridge
+
+Phase 2.4 adds a separate `cmo.channel-metrics.v1` contract for channel/content performance. Lens Facebook data must not be forced into `cmo.app-metrics.v1`; app/product metrics stay in the app metrics contract, while Facebook/content metrics stay in the channel metrics contract.
+
+Read endpoint:
+
+```bash
+GET /api/cmo/apps/holdstation-mini-app/channel-metrics?channel=facebook&range=this_week
+```
+
+Normalized file path:
+
+```text
+data/cmo-dashboard/channel-metrics/holdstation-mini-app/facebook.json
+```
+
+The CMO dashboard never calls Facebook/Meta APIs directly in this phase and does not require Agent Main to spawn Lens. It reads only the normalized file-backed snapshot.
+
+Lens remains the source for Facebook collection and reporting. The normalizer searches existing Lens output locations:
+
+```text
+knowledge/holdstation/07 Knowledge/Data/facebook-page/processed/
+knowledge/holdstation/07 Knowledge/Data/facebook-page/raw/
+knowledge/holdstation/07 Knowledge/Data/facebook-page/reports/
+knowledge/holdstation/05 Agents/Lens/Reports/Facebook/Daily/
+knowledge/holdstation/05 Agents/Lens/Reports/Facebook/Weekly/
+knowledge/holdstation/05 Agents/Lens/Reports/Facebook/Monthly/
+```
+
+Run the normalizer:
+
+```bash
+node scripts/cmo-lens-facebook-normalize.mjs
+```
+
+Contract check:
+
+```bash
+node scripts/cmo-channel-metrics-contract-check.mjs
+```
+
+Accepted Facebook channel metric ids are `facebook_views`, `facebook_unique_views`, `facebook_engagement`, `facebook_post_count`, `facebook_video_views`, `facebook_follower_count`, `facebook_follower_growth`, `facebook_link_clicks`, and `facebook_ctr`. Missing metrics remain `null` / `No data`. Reach/impressions should be treated carefully; when Lens only provides media views, the dashboard labels them as views or unique views proxy instead of confirmed reach.
+
+Future path: Lens pipeline generates processed Facebook data, the normalizer writes `facebook.json`, the dashboard reads channel metrics through the endpoint, and n8n can schedule the normalizer later.
+
 ## Run History troubleshooting
 
 Run history is served from normalized run JSON files under `runs/`.

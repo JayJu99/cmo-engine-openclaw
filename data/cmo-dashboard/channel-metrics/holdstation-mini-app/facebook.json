@@ -1,0 +1,122 @@
+{
+  "schemaVersion": "cmo.channel-metrics.v1",
+  "workspaceId": "holdstation",
+  "appId": "holdstation-mini-app",
+  "sourceId": "holdstation__holdstation-mini-app",
+  "channel": "facebook",
+  "source": "not_connected",
+  "dateRange": {
+    "preset": "this_week",
+    "startDate": "2026-05-11",
+    "endDate": "2026-05-17",
+    "timezone": "Asia/Saigon"
+  },
+  "status": "missing",
+  "lastUpdatedAt": null,
+  "metrics": [
+    {
+      "id": "facebook_views",
+      "label": "Facebook Views",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "count",
+      "status": "missing",
+      "description": "Facebook content/page views reported by Lens when available.",
+      "caveat": "Reach/impressions may use Meta media view proxies."
+    },
+    {
+      "id": "facebook_unique_views",
+      "label": "Unique Views Proxy",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "count",
+      "status": "missing",
+      "description": "Unique media/page view proxy reported by Lens when available.",
+      "caveat": "This is a unique views proxy, not confirmed classic reach."
+    },
+    {
+      "id": "facebook_engagement",
+      "label": "Engagement",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "count",
+      "status": "missing",
+      "description": "Visible engagement or page post engagement reported by Lens."
+    },
+    {
+      "id": "facebook_post_count",
+      "label": "Post Count",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "count",
+      "status": "missing",
+      "description": "Processed Facebook posts in the selected range."
+    },
+    {
+      "id": "facebook_video_views",
+      "label": "Video Views",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "count",
+      "status": "missing",
+      "description": "Facebook video views reported by Lens when available."
+    },
+    {
+      "id": "facebook_follower_count",
+      "label": "Followers",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "count",
+      "status": "missing",
+      "description": "Facebook Page follower count when available."
+    },
+    {
+      "id": "facebook_follower_growth",
+      "label": "Follower Growth",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "count",
+      "status": "missing",
+      "description": "Follower growth from Lens if supplied or safely calculated upstream."
+    },
+    {
+      "id": "facebook_link_clicks",
+      "label": "Link Clicks",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "count",
+      "status": "missing",
+      "description": "Facebook link clicks from Lens if confirmed."
+    },
+    {
+      "id": "facebook_ctr",
+      "label": "CTR",
+      "value": null,
+      "displayValue": "No data",
+      "unit": "percent",
+      "status": "missing",
+      "description": "Facebook click-through rate from Lens if confirmed."
+    }
+  ],
+  "diagnostics": {
+    "availableMetrics": [],
+    "missingMetrics": [
+      "facebook_views",
+      "facebook_unique_views",
+      "facebook_engagement",
+      "facebook_post_count",
+      "facebook_video_views",
+      "facebook_follower_count",
+      "facebook_follower_growth",
+      "facebook_link_clicks",
+      "facebook_ctr"
+    ],
+    "notes": [
+      "No usable Lens Facebook numeric metrics found.",
+      "No Lens Facebook files found in expected output locations.",
+      "Missing input directories: knowledge/holdstation/07 Knowledge/Data/facebook-page/processed, knowledge/holdstation/07 Knowledge/Data/facebook-page/raw, knowledge/holdstation/07 Knowledge/Data/facebook-page/reports, knowledge/holdstation/05 Agents/Lens/Reports/Facebook/Daily, knowledge/holdstation/05 Agents/Lens/Reports/Facebook/Weekly, knowledge/holdstation/05 Agents/Lens/Reports/Facebook/Monthly.",
+      "Facebook channel metrics are separate from cmo.app-metrics.v1 product metrics.",
+      "Reach/impressions may use Meta media view proxies when available."
+    ]
+  }
+}
