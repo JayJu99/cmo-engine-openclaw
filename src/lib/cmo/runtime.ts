@@ -71,7 +71,7 @@ interface FallbackComposition {
   suggestedActions: CMOAppChatResponse["suggestedActions"];
 }
 
-type FallbackIntent = "greeting" | "start_session" | "strategic_recommendation" | "context_explanation" | "general";
+type FallbackIntent = "greeting" | "start_session" | "strategic_recommendation" | "context_explanation" | "business_metrics" | "general";
 
 function runtimeModeFromStatus(status: CMORuntimeStatus): CmoRuntimeMode {
   if (status === "connected" || status === "live") {
@@ -91,6 +91,7 @@ function includedContextLabels(input: CmoRuntimeTurnInput): string[] {
     app_memory: "App Memory",
     latest_sessions: "Latest Sessions",
     promotion_candidates: "Memory Candidates",
+    business_metrics: "Business Metrics",
   };
 
   return input.contextPack.items
@@ -131,6 +132,10 @@ function normalizeMessage(value: string): string {
 function fallbackIntent(message: string): FallbackIntent {
   const normalized = normalizeMessage(message);
 
+  if (/\b(defillama|dex volume|aggregator volume|business metrics|fees|fee|revenue|volume 24h|volume 7d|volume 30d)\b/.test(normalized)) {
+    return "business_metrics";
+  }
+
   if (/^(hi|hello|hey|yo|chao|xin chao|alo|hi there|hello there)$/.test(normalized)) {
     return "greeting";
   }
@@ -157,6 +162,42 @@ function runtimeNote(reason: string): string {
   return reason === "Live runtime unavailable for app chat; fallback used."
     ? "Live app-chat is unavailable; fallback generated this response from workspace context."
     : `${reason} Fallback generated this response from workspace context.`;
+}
+
+function businessMetricsFallbackAnswer(input: CmoRuntimeTurnInput, note: string): FallbackComposition {
+  const item = input.contextPack.items.find((contextItem) => contextItem.kind === "business_metrics");
+
+  if (!item?.content) {
+    return {
+      answer: [
+        "I do not have connected DefiLlama business metrics in this local context pack yet.",
+        "",
+        "CMO should only answer exact DefiLlama business metrics from `cmo.business-metrics.v1` JSON files. It should not use the Vault Markdown snapshot as the exact-number source of truth and should not infer missing values.",
+        "",
+        "## Runtime Note",
+        "",
+        note,
+      ].join("\n"),
+      suggestedActions: DEFAULT_FALLBACK_ACTIONS,
+    };
+  }
+
+  return {
+    answer: [
+      "## DefiLlama Business Metrics",
+      "",
+      item.content,
+      "",
+      "## Source Boundary",
+      "",
+      "These numbers come from the app-scoped `cmo.business-metrics.v1` JSON handoff files. The Vault Markdown snapshot is for human review/provenance only.",
+      "",
+      "## Runtime Note",
+      "",
+      note,
+    ].join("\n"),
+    suggestedActions: DEFAULT_FALLBACK_ACTIONS,
+  };
 }
 
 function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackComposition {
@@ -217,6 +258,10 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
         ...DEFAULT_FALLBACK_ACTIONS,
       ],
     };
+  }
+
+  if (intent === "business_metrics") {
+    return businessMetricsFallbackAnswer(input, note);
   }
 
   if (intent === "start_session" || intent === "general") {

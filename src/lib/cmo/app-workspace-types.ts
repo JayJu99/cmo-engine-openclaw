@@ -20,6 +20,7 @@ export type CmoBusinessMetricStatus = "connected" | "missing" | "partial" | "pla
 export type CmoBusinessMetricSourceType = "defillama";
 export type CmoBusinessMetricDomain = "business";
 export type CmoBusinessMetricGroup = "dex_aggregator_volume" | "fees_usd";
+export type CmoBusinessMetricsResolverStatus = "connected" | "partial" | "missing";
 export type TaskTrackerStatus = "connected" | "not_connected" | "fallback";
 export type TaskSummarySource = "task-tracker" | "vault" | "placeholder";
 export type ContextGraphHintSourceType = "markdown-link" | "session-reference" | "promotion-candidate" | "raw-capture" | "keyword-match";
@@ -450,6 +451,25 @@ export interface CmoBusinessMetric {
   caveat?: string;
 }
 
+export interface CmoBusinessMetricsResolverGroup {
+  metricGroup: CmoBusinessMetricGroup;
+  status: CmoBusinessMetricsResolverStatus;
+  metrics: CmoBusinessMetric[];
+}
+
+export interface CmoBusinessMetricsResolverResult {
+  schemaVersion: "cmo.business-metrics-resolver.v1";
+  workspaceId: string;
+  appId: string;
+  sourceId: string;
+  source: CmoBusinessMetricSourceType;
+  status: CmoBusinessMetricsResolverStatus;
+  lastUpdatedAt: string | null;
+  groups: CmoBusinessMetricsResolverGroup[];
+  summaryText: string;
+  caveats: string[];
+}
+
 export interface AppPlan {
   id: string;
   appId: string;
@@ -546,7 +566,7 @@ export interface CMOContextQualitySummary {
 export type ContextPackPolicyVersion = "context-pack-v1";
 export type CmoRuntimeMode = "live" | "fallback" | "configured_but_unreachable";
 export type ContextPackRuntimeMode = CmoRuntimeMode | "connected" | "not_configured" | "runtime_error";
-export type ContextItemKind = "current_priority" | "app_memory" | "latest_sessions" | "promotion_candidates";
+export type ContextItemKind = "current_priority" | "app_memory" | "latest_sessions" | "promotion_candidates" | "business_metrics";
 export type CmoRuntimeErrorReason =
   | "unsupported_chat_turn"
   | "timeout"
@@ -560,7 +580,7 @@ export interface ContextItem {
   title: string;
   source: {
     sourceId: string;
-    type: "vault_note" | "vault_bundle" | "session_store" | "derived_candidates";
+    type: "vault_note" | "vault_bundle" | "session_store" | "derived_candidates" | "business_metrics_json";
     label: string;
     path?: string;
   };

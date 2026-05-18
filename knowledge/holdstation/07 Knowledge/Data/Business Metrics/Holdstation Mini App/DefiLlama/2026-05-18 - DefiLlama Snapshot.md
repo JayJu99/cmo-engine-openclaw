@@ -1,6 +1,6 @@
 # 2026-05-18 - DefiLlama Business Metrics Snapshot
 
-Generated at: 2026-05-18T09:27:30.944Z
+Generated at: 2026-05-18T09:48:15.326Z
 App: Holdstation Wallet Miniapp
 Workspace: holdstation
 CMO appId: holdstation-mini-app

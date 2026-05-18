@@ -490,6 +490,7 @@ Read endpoints:
 ```bash
 GET /api/cmo/apps/holdstation-mini-app/business-metrics?source=defillama&group=dex_aggregator_volume
 GET /api/cmo/apps/holdstation-mini-app/business-metrics?source=defillama&group=fees_usd
+GET /api/cmo/apps/holdstation-mini-app/business-metrics/resolver?source=defillama
 ```
 
 Production uses the same ingest key as app metrics:
@@ -523,6 +524,8 @@ Values must be finite numbers or `null`. Missing values remain `null` / `No data
 
 The Holdstation Mini App dashboard shows these DefiLlama business metrics in a separate `Business Metrics — DefiLlama` card. It does not mix them into app/product metrics (`cmo.app-metrics.v1`) or Facebook/channel metrics (`cmo.channel-metrics.v1`). If one DefiLlama group is missing, that group shows `No data` while the other group remains visible.
 
+CMO Chat receives a compact resolver summary from `cmo.business-metrics-resolver.v1` in the app-turn context pack when DefiLlama JSON-backed values exist. The context item is source-typed as `business_metrics_json`, contains summary text only, and uses the JSON files as source of truth. The Vault Markdown snapshot is not used for exact numbers.
+
 Vault snapshot:
 
 ```bash
@@ -550,6 +553,7 @@ Dashboard/snapshot check:
 
 ```bash
 node scripts/cmo-business-metrics-dashboard-check.mjs
+node scripts/cmo-business-metrics-resolver-check.mjs
 ```
 
 ## Channel metrics / Lens Facebook bridge

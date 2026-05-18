@@ -22,6 +22,7 @@ import type {
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
 import { appNoteTemplates, getAppWorkspace, HOLDSTATION_WORKSPACE_ID } from "@/lib/cmo/app-workspaces";
+import { resolveBusinessMetrics } from "@/lib/cmo/business-metrics-resolver";
 import { getOpenClawWorkspaceId } from "@/lib/cmo/config";
 import { analyzeContextQuality, summarizeContextQuality } from "@/lib/cmo/context-quality";
 import { CmoAdapterError } from "@/lib/cmo/errors";
@@ -663,6 +664,39 @@ async function promotionCandidatesItem(app: AppWorkspace, maxItemChars: number):
   };
 }
 
+async function businessMetricsItem(app: AppWorkspace, maxItemChars: number): Promise<ContextItem | null> {
+  const resolved = await resolveBusinessMetrics({
+    appId: app.id,
+    source: "defillama",
+  });
+
+  if (!resolved || resolved.status === "missing") {
+    return null;
+  }
+
+  const limited = limitedContent(resolved.summaryText, Math.min(maxItemChars, 2_200));
+
+  return {
+    id: `${app.id}-defillama-business-metrics`,
+    kind: "business_metrics",
+    title: "Business Metrics — DefiLlama",
+    source: {
+      sourceId: app.sourceId,
+      type: "business_metrics_json",
+      label: "DefiLlama Business Metrics",
+      path: "data/cmo-dashboard/business-metrics/holdstation-mini-app/defillama",
+    },
+    inclusionReason: "App-scoped DefiLlama business metrics are included from cmo.business-metrics.v1 JSON when available.",
+    exists: true,
+    content: limited.content,
+    contentPreview: compactText(resolved.summaryText, 420),
+    contextQuality: resolved.status === "connected" ? "confirmed" : "draft",
+    tokenEstimate: tokenEstimate(limited.content),
+    truncated: limited.truncated,
+    itemCount: resolved.groups.filter((group) => group.status !== "missing").length,
+  };
+}
+
 interface AppMarkdownFile {
   relativePath: string;
   content: string;
@@ -1158,6 +1192,7 @@ function contextBrief(app: AppWorkspace, contextPack: ContextPack): CMOContextBr
     app_memory: "App Memory",
     latest_sessions: "Latest Sessions",
     promotion_candidates: "Memory Candidates",
+    business_metrics: "Business Metrics",
   };
 
   return {
@@ -1200,12 +1235,14 @@ export async function buildContextPack(options: BuildContextPackOptions): Promis
 
   const maxItemChars = options.maxItemChars ?? DEFAULT_MAX_ITEM_CHARS;
   const runtimeMode = options.runtimeMode ?? "fallback";
-  const items = [
+  const canonicalItems = [
     await priorityItem(app, maxItemChars),
     await appMemoryItem(app, maxItemChars),
     await latestSessionsItem(app, maxItemChars),
     await promotionCandidatesItem(app, maxItemChars),
   ];
+  const metricsItem = await businessMetricsItem(app, maxItemChars);
+  const items = metricsItem ? [...canonicalItems, metricsItem] : canonicalItems;
   const graphContext = await buildGraphContextHints(app, workspaceId, registryEntry.sourceId, items);
   const usedItems = items.filter((item) => item.exists);
   const missingItems = items.filter((item) => !item.exists);

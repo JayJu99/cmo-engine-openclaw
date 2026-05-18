@@ -1823,6 +1823,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               <Badge variant="slate">Source: DefiLlama</Badge>
               <Badge variant="slate">App: Holdstation Wallet Miniapp</Badge>
               <Badge variant="slate">Last updated: {businessMetricsLastUpdated ? displayDate(businessMetricsLastUpdated) : "Not connected"}</Badge>
+              <Badge variant={hasAnyBusinessMetrics ? "green" : "slate"}>Available to CMO Chat</Badge>
               <Badge variant="slate">Contract: cmo.business-metrics.v1</Badge>
             </div>
 
