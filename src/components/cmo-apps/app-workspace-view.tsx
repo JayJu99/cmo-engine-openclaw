@@ -24,6 +24,8 @@ import type {
   CmoAppMetric,
   CmoAppMetricDateRangePreset,
   CmoAppMetricsSnapshot,
+  CmoBusinessMetric,
+  CmoBusinessMetricsSnapshot,
   CmoChannelMetric,
   CmoChannelMetricsSyncStatus,
   CmoChannelMetricsSnapshot,
@@ -604,6 +606,97 @@ function channelMetricBadgeVariant(metric: CmoChannelMetric | undefined): "green
   return metric?.status === "partial" ? "orange" : "green";
 }
 
+function businessMetricStatusLabel(status: CmoBusinessMetric["status"] | CmoBusinessMetricsSnapshot["status"] | undefined): string {
+  if (status === "connected") {
+    return "Connected";
+  }
+
+  if (status === "partial") {
+    return "Partial";
+  }
+
+  if (status === "placeholder") {
+    return "Placeholder";
+  }
+
+  return "Missing";
+}
+
+function businessMetricStatusVariant(status: CmoBusinessMetric["status"] | CmoBusinessMetricsSnapshot["status"] | undefined): "green" | "orange" | "red" | "slate" {
+  if (status === "connected") {
+    return "green";
+  }
+
+  if (status === "partial" || status === "placeholder") {
+    return "orange";
+  }
+
+  return status === "missing" ? "red" : "slate";
+}
+
+function businessMetricDisplayValue(metric: CmoBusinessMetric | undefined): string {
+  if (!metric || metric.value === null || metric.value === undefined) {
+    return "No data";
+  }
+
+  if (metric.displayValue && metric.displayValue !== "No data") {
+    return metric.displayValue;
+  }
+
+  if (metric.unit === "percent") {
+    return `${Number(metric.value.toFixed(2)).toLocaleString("en-US")}%`;
+  }
+
+  if (metric.unit === "usd") {
+    return `$${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(metric.value)}`;
+  }
+
+  return new Intl.NumberFormat("en-US").format(metric.value);
+}
+
+function businessMetricHasData(metric: CmoBusinessMetric | undefined): boolean {
+  return typeof metric?.value === "number" && Number.isFinite(metric.value);
+}
+
+function businessMetricBadgeLabel(metric: CmoBusinessMetric | undefined): string {
+  return businessMetricHasData(metric) ? businessMetricStatusLabel(metric?.status) : "No data";
+}
+
+function businessMetricBadgeVariant(metric: CmoBusinessMetric | undefined): "green" | "orange" | "slate" {
+  if (!businessMetricHasData(metric)) {
+    return "slate";
+  }
+
+  return metric?.status === "partial" ? "orange" : "green";
+}
+
+function businessSnapshotHasData(snapshot: CmoBusinessMetricsSnapshot | null): boolean {
+  return Boolean(snapshot?.metrics.some((metric) => businessMetricHasData(metric)));
+}
+
+function businessCombinedStatus(snapshots: Array<CmoBusinessMetricsSnapshot | null>, loadStatus: "idle" | "loading" | "ready" | "error"): CmoBusinessMetricsSnapshot["status"] | undefined {
+  if (loadStatus === "loading") {
+    return undefined;
+  }
+
+  const available = snapshots.filter((snapshot): snapshot is CmoBusinessMetricsSnapshot => Boolean(snapshot));
+
+  if (!available.length || available.every((snapshot) => !businessSnapshotHasData(snapshot))) {
+    return "missing";
+  }
+
+  return available.every((snapshot) => snapshot.status === "connected") ? "connected" : "partial";
+}
+
+function businessLatestTimestamp(snapshots: Array<CmoBusinessMetricsSnapshot | null>): string | null {
+  const timestamps = snapshots
+    .flatMap((snapshot) => [snapshot?.lastUpdatedAt, snapshot?.source.fetchedAt])
+    .filter((value): value is string => typeof value === "string" && !Number.isNaN(Date.parse(value)))
+    .sort((left, right) => Date.parse(right) - Date.parse(left));
+
+  return timestamps[0] ?? null;
+}
+
 function ChannelMetricTile({
   metric,
   label,
@@ -624,6 +717,26 @@ function ChannelMetricTile({
       </div>
       <div className={cn("mt-3 font-bold tracking-tight", hasData ? "text-slate-950" : "text-slate-400", valueClass)}>{channelMetricDisplayValue(metric)}</div>
       {metric?.caveat && size !== "compact" ? <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{metric.caveat}</div> : null}
+    </div>
+  );
+}
+
+function BusinessMetricTile({
+  metric,
+  label,
+}: {
+  metric?: CmoBusinessMetric;
+  label?: string;
+}) {
+  const hasData = businessMetricHasData(metric);
+
+  return (
+    <div className="rounded-xl border border-slate-100 bg-white px-4 py-3 shadow-sm">
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-xs font-bold uppercase text-slate-400">{label ?? metric?.label ?? "Metric"}</div>
+        <Badge variant={businessMetricBadgeVariant(metric)}>{businessMetricBadgeLabel(metric)}</Badge>
+      </div>
+      <div className={cn("mt-3 text-xl font-bold tracking-tight", hasData ? "text-slate-950" : "text-slate-400")}>{businessMetricDisplayValue(metric)}</div>
     </div>
   );
 }
@@ -789,6 +902,10 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [channelMetricsError, setChannelMetricsError] = useState<string | null>(null);
   const [channelSyncStatus, setChannelSyncStatus] = useState<CmoChannelMetricsSyncStatus | null>(null);
   const [channelSyncLoadStatus, setChannelSyncLoadStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [dexBusinessMetricsSnapshot, setDexBusinessMetricsSnapshot] = useState<CmoBusinessMetricsSnapshot | null>(null);
+  const [feesBusinessMetricsSnapshot, setFeesBusinessMetricsSnapshot] = useState<CmoBusinessMetricsSnapshot | null>(null);
+  const [businessMetricsStatus, setBusinessMetricsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [businessMetricsError, setBusinessMetricsError] = useState<string | null>(null);
   const [planTypeFilter, setPlanTypeFilter] = useState<PlanReviewTypeFilter>("all");
   const [planStatusFilter, setPlanStatusFilter] = useState<PlanReviewStatusFilter>("pending");
   const [sessionFocusSignal, setSessionFocusSignal] = useState(0);
@@ -870,6 +987,29 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const channelMetricsLastSuccess = channelSyncStatus?.lastSuccessAt ? displayDate(channelSyncStatus.lastSuccessAt) : "Not tracked";
   const channelSyncLabel = channelSyncLoadStatus === "loading" ? "Loading" : channelSyncStatusLabel(channelSyncStatus?.status);
   const channelSyncVariant = channelSyncLoadStatus === "loading" ? "slate" : channelSyncStatusVariant(channelSyncStatus?.status);
+  const dexBusinessMetricById = useMemo(() => {
+    const lookup = new Map<string, CmoBusinessMetric>();
+
+    dexBusinessMetricsSnapshot?.metrics.forEach((metric) => lookup.set(metric.id, metric));
+
+    return lookup;
+  }, [dexBusinessMetricsSnapshot]);
+  const feesBusinessMetricById = useMemo(() => {
+    const lookup = new Map<string, CmoBusinessMetric>();
+
+    feesBusinessMetricsSnapshot?.metrics.forEach((metric) => lookup.set(metric.id, metric));
+
+    return lookup;
+  }, [feesBusinessMetricsSnapshot]);
+  const dexBusinessMetric = (id: string) => dexBusinessMetricById.get(id);
+  const feesBusinessMetric = (id: string) => feesBusinessMetricById.get(id);
+  const businessMetricsCombinedStatus = businessCombinedStatus([dexBusinessMetricsSnapshot, feesBusinessMetricsSnapshot], businessMetricsStatus);
+  const businessMetricsHealthLabel = businessMetricsStatus === "loading" ? "Loading" : businessMetricStatusLabel(businessMetricsCombinedStatus);
+  const businessMetricsHealthVariant = businessMetricsStatus === "loading" ? "slate" : businessMetricStatusVariant(businessMetricsCombinedStatus);
+  const businessMetricsLastUpdated = businessLatestTimestamp([dexBusinessMetricsSnapshot, feesBusinessMetricsSnapshot]);
+  const hasDexBusinessMetrics = businessSnapshotHasData(dexBusinessMetricsSnapshot);
+  const hasFeesBusinessMetrics = businessSnapshotHasData(feesBusinessMetricsSnapshot);
+  const hasAnyBusinessMetrics = hasDexBusinessMetrics || hasFeesBusinessMetrics;
 
   useEffect(() => {
     const nextTab: AppWorkspaceTab = isWorkspaceTab(tabParam) ? tabParam : "dashboard";
@@ -955,6 +1095,55 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
     return () => controller.abort();
   }, [app.id, dateRange]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadBusinessMetrics() {
+      setBusinessMetricsStatus("loading");
+      setBusinessMetricsError(null);
+
+      try {
+        const [dexResult, feesResult] = await Promise.allSettled([
+          readJsonResponse<{ data: CmoBusinessMetricsSnapshot }>(
+            await fetch(`/api/cmo/apps/${app.id}/business-metrics?source=defillama&group=dex_aggregator_volume`, {
+              cache: "no-store",
+              signal: controller.signal,
+            }),
+          ),
+          readJsonResponse<{ data: CmoBusinessMetricsSnapshot }>(
+            await fetch(`/api/cmo/apps/${app.id}/business-metrics?source=defillama&group=fees_usd`, {
+              cache: "no-store",
+              signal: controller.signal,
+            }),
+          ),
+        ]);
+
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setDexBusinessMetricsSnapshot(dexResult.status === "fulfilled" ? dexResult.value.data : null);
+        setFeesBusinessMetricsSnapshot(feesResult.status === "fulfilled" ? feesResult.value.data : null);
+        setBusinessMetricsStatus(dexResult.status === "fulfilled" || feesResult.status === "fulfilled" ? "ready" : "error");
+
+        if (dexResult.status === "rejected" && feesResult.status === "rejected") {
+          setBusinessMetricsError("Business metrics load failed");
+        }
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setBusinessMetricsStatus("error");
+        setBusinessMetricsError(loadError instanceof Error ? loadError.message : "Business metrics load failed");
+      }
+    }
+
+    void loadBusinessMetrics();
+
+    return () => controller.abort();
+  }, [app.id]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1618,6 +1807,70 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             ) : (
               <div className="mt-3 text-xs font-semibold text-slate-500">No top posts attached to this snapshot.</div>
             )}
+          </SectionCard>
+
+          <SectionCard
+            title="Business Metrics — DefiLlama"
+            icon={<icons.BarChart3 />}
+            action={
+              <div className="flex flex-wrap justify-end gap-2">
+                <Badge variant="blue">DefiLlama</Badge>
+                <Badge variant={businessMetricsHealthVariant}>{businessMetricsHealthLabel}</Badge>
+              </div>
+            }
+          >
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
+              <Badge variant="slate">Source: DefiLlama</Badge>
+              <Badge variant="slate">App: Holdstation Wallet Miniapp</Badge>
+              <Badge variant="slate">Last updated: {businessMetricsLastUpdated ? displayDate(businessMetricsLastUpdated) : "Not connected"}</Badge>
+              <Badge variant="slate">Contract: cmo.business-metrics.v1</Badge>
+            </div>
+
+            <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold leading-6 text-slate-600">
+              {businessMetricsError
+                || (hasAnyBusinessMetrics
+                  ? "Business metrics are loaded from normalized DefiLlama handoff JSON. Values are rolling-window snapshots."
+                  : "No DefiLlama business metrics connected yet.")}
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-bold text-slate-950">DEX Aggregator Volume</div>
+                    <div className="mt-1 text-xs font-semibold text-slate-500">{hasDexBusinessMetrics ? "Loaded from DefiLlama handoff." : "No data for this group yet."}</div>
+                  </div>
+                  <Badge variant={businessMetricStatusVariant(dexBusinessMetricsSnapshot?.status)}>{businessMetricStatusLabel(dexBusinessMetricsSnapshot?.status)}</Badge>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <BusinessMetricTile metric={dexBusinessMetric("dex_aggregator_volume_24h")} label="24h" />
+                  <BusinessMetricTile metric={dexBusinessMetric("dex_aggregator_volume_7d")} label="7d" />
+                  <BusinessMetricTile metric={dexBusinessMetric("dex_aggregator_volume_30d")} label="30d" />
+                  <BusinessMetricTile metric={dexBusinessMetric("dex_aggregator_volume_cumulative")} label="Cumulative" />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-bold text-slate-950">Fees / Revenue</div>
+                    <div className="mt-1 text-xs font-semibold text-slate-500">{hasFeesBusinessMetrics ? "Loaded from DefiLlama handoff." : "No data for this group yet."}</div>
+                  </div>
+                  <Badge variant={businessMetricStatusVariant(feesBusinessMetricsSnapshot?.status)}>{businessMetricStatusLabel(feesBusinessMetricsSnapshot?.status)}</Badge>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  <BusinessMetricTile metric={feesBusinessMetric("fees_24h")} label="24h" />
+                  <BusinessMetricTile metric={feesBusinessMetric("fees_7d")} label="7d" />
+                  <BusinessMetricTile metric={feesBusinessMetric("fees_30d")} label="30d" />
+                  <BusinessMetricTile metric={feesBusinessMetric("fees_annualized")} label="Annualized" />
+                  <BusinessMetricTile metric={feesBusinessMetric("fees_cumulative")} label="Cumulative" />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 rounded-xl border border-slate-100 bg-white px-4 py-3 text-xs font-semibold leading-5 text-slate-500">
+              JSON files remain the machine-readable source of truth. CMO does not call DefiLlama directly and does not merge these metrics into app/product or channel metrics.
+            </div>
           </SectionCard>
 
           <div className="grid gap-5 xl:grid-cols-3">

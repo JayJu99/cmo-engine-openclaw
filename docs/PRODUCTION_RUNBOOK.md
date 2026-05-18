@@ -519,7 +519,23 @@ data/cmo-dashboard/business-metrics/holdstation-mini-app/defillama/dex_aggregato
 data/cmo-dashboard/business-metrics/holdstation-mini-app/defillama/fees_usd.json
 ```
 
-Values must be finite numbers or `null`. Missing values remain `null` / `No data`; CMO does not compute fake revenue, volume, clicks, or conversion metrics. `sourceStats` and `provenance` are preserved when supplied. If `provenance.safeToWriteVaultSnapshot = true`, Phase 2.8A still only preserves that provenance flag in JSON; Vault markdown snapshot writing is intentionally deferred to a later phase to avoid raw snapshot spam.
+Values must be finite numbers or `null`. Missing values remain `null` / `No data`; CMO does not compute fake revenue, volume, clicks, or conversion metrics. `sourceStats` and `provenance` are preserved when supplied.
+
+The Holdstation Mini App dashboard shows these DefiLlama business metrics in a separate `Business Metrics — DefiLlama` card. It does not mix them into app/product metrics (`cmo.app-metrics.v1`) or Facebook/channel metrics (`cmo.channel-metrics.v1`). If one DefiLlama group is missing, that group shows `No data` while the other group remains visible.
+
+Vault snapshot:
+
+```bash
+node scripts/cmo-business-metrics-vault-snapshot.mjs
+```
+
+The snapshot writer reads the JSON source of truth and writes or updates one Markdown review file per day:
+
+```text
+knowledge/holdstation/07 Knowledge/Data/Business Metrics/Holdstation Mini App/DefiLlama/YYYY-MM-DD - DefiLlama Snapshot.md
+```
+
+The Markdown snapshot is for human review and provenance only. The JSON files remain the source of truth for machine-readable metrics. DefiLlama values should be treated as latest rolling-window snapshots, not fixed calendar-period accounting close data.
 
 Smoke:
 
@@ -529,6 +545,12 @@ node scripts/cmo-metrics-handoff-smoke.mjs
 ```
 
 The smoke script backs up and restores the DefiLlama business metrics JSON files after testing.
+
+Dashboard/snapshot check:
+
+```bash
+node scripts/cmo-business-metrics-dashboard-check.mjs
+```
 
 ## Channel metrics / Lens Facebook bridge
 
