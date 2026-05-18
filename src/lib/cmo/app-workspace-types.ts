@@ -16,6 +16,10 @@ export type CmoChannelMetricStatus = "connected" | "missing" | "partial" | "plac
 export type CmoChannelMetricDateRangePreset = "today" | "yesterday" | "last_7_days" | "last_30_days" | "this_week" | "this_month" | "custom";
 export type CmoChannel = "facebook";
 export type CmoChannelMetricsSyncStatusValue = "success" | "failed" | "partial" | "skipped";
+export type CmoBusinessMetricStatus = "connected" | "missing" | "partial" | "placeholder";
+export type CmoBusinessMetricSourceType = "defillama";
+export type CmoBusinessMetricDomain = "business";
+export type CmoBusinessMetricGroup = "dex_aggregator_volume" | "fees_usd";
 export type TaskTrackerStatus = "connected" | "not_connected" | "fallback";
 export type TaskSummarySource = "task-tracker" | "vault" | "placeholder";
 export type ContextGraphHintSourceType = "markdown-link" | "session-reference" | "promotion-candidate" | "raw-capture" | "keyword-match";
@@ -403,6 +407,47 @@ export interface CmoChannelMetricsSyncStatus {
   availableMetrics: string[];
   missingMetrics: string[];
   notes: string[];
+}
+
+export interface CmoBusinessMetricsSnapshot {
+  schemaVersion: "cmo.business-metrics.v1";
+  workspaceId: string;
+  appId: string;
+  sourceId: string;
+  source: {
+    type: CmoBusinessMetricSourceType;
+    fetchedAt: string;
+    label?: string;
+  };
+  metricDomain: CmoBusinessMetricDomain;
+  metricGroup: CmoBusinessMetricGroup;
+  dateRange: {
+    preset?: string;
+    startDate?: string;
+    endDate?: string;
+    timezone?: string;
+  };
+  status: CmoBusinessMetricStatus;
+  lastUpdatedAt: string | null;
+  metrics: CmoBusinessMetric[];
+  diagnostics: {
+    availableMetrics: string[];
+    missingMetrics: string[];
+    notes: string[];
+  };
+  sourceStats?: Record<string, unknown>;
+  provenance?: Record<string, unknown>;
+}
+
+export interface CmoBusinessMetric {
+  id: string;
+  label: string;
+  value: number | null;
+  displayValue: string;
+  unit?: "usd" | "count" | "ratio" | "percent";
+  status: CmoBusinessMetricStatus;
+  description?: string;
+  caveat?: string;
 }
 
 export interface AppPlan {

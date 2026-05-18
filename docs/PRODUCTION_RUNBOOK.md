@@ -475,6 +475,61 @@ node scripts/cmo-app-metrics-ingest-smoke.mjs
 
 The smoke script backs up and restores the metrics JSON file after testing. GA4/n8n source-specific integration remains a later phase.
 
+## Business metrics handoff / DefiLlama
+
+Phase 2.8A adds a separate `cmo.business-metrics.v1` bridge for normalized DefiLlama business metrics. This is not a direct DefiLlama connector; n8n or another external workflow fetches and normalizes the data, then posts handoff bundles to CMO.
+
+Handoff endpoint:
+
+```bash
+POST /api/cmo/apps/holdstation-mini-app/metrics/handoff
+```
+
+Read endpoints:
+
+```bash
+GET /api/cmo/apps/holdstation-mini-app/business-metrics?source=defillama&group=dex_aggregator_volume
+GET /api/cmo/apps/holdstation-mini-app/business-metrics?source=defillama&group=fees_usd
+```
+
+Production uses the same ingest key as app metrics:
+
+```bash
+CMO_METRICS_INGEST_API_KEY=<strong-ingest-key>
+x-cmo-metrics-ingest-key: <strong-ingest-key>
+```
+
+Accepted handoff scope:
+
+- `workspaceId = holdstation`
+- `app.appId = holdstation-mini-app`
+- `app.sourceId = holdstation__holdstation-mini-app`
+- `source.type = defillama`
+- `metricDomain = business`
+
+Accepted metric groups and ids:
+
+- `dex_aggregator_volume`: `dex_aggregator_volume_24h`, `dex_aggregator_volume_7d`, `dex_aggregator_volume_30d`, `dex_aggregator_volume_cumulative`
+- `fees_usd`: `fees_annualized`, `fees_24h`, `fees_7d`, `fees_30d`, `fees_cumulative`
+
+The dashboard writes normalized snapshots to:
+
+```text
+data/cmo-dashboard/business-metrics/holdstation-mini-app/defillama/dex_aggregator_volume.json
+data/cmo-dashboard/business-metrics/holdstation-mini-app/defillama/fees_usd.json
+```
+
+Values must be finite numbers or `null`. Missing values remain `null` / `No data`; CMO does not compute fake revenue, volume, clicks, or conversion metrics. `sourceStats` and `provenance` are preserved when supplied. If `provenance.safeToWriteVaultSnapshot = true`, Phase 2.8A still only preserves that provenance flag in JSON; Vault markdown snapshot writing is intentionally deferred to a later phase to avoid raw snapshot spam.
+
+Smoke:
+
+```bash
+CMO_METRICS_INGEST_API_KEY=<strong-ingest-key> \
+node scripts/cmo-metrics-handoff-smoke.mjs
+```
+
+The smoke script backs up and restores the DefiLlama business metrics JSON files after testing.
+
 ## Channel metrics / Lens Facebook bridge
 
 Phase 2.4 adds a separate `cmo.channel-metrics.v1` contract for channel/content performance. Lens Facebook data must not be forced into `cmo.app-metrics.v1`; app/product metrics stay in the app metrics contract, while Facebook/content metrics stay in the channel metrics contract.
