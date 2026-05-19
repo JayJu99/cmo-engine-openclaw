@@ -341,6 +341,30 @@ type SessionFilter = "all" | "live" | "fallback" | "saved" | "raw";
 type ContextDrawerTab = "context" | "decision" | "metadata" | "vault";
 type PlanReviewTypeFilter = "all" | "decisions" | "tasks" | "memory";
 type PlanReviewStatusFilter = "pending" | "approved" | "skipped";
+type AggregatorChartMode = "transactions" | "volume";
+type PartnerChartMode = "daily_volume" | "volume_share" | "daily_transactions" | "transaction_share";
+
+type DuneAggregatorPoint = {
+  date: string;
+  countTx: number;
+  cumulativeTxCount: number;
+  dailyVolume: number;
+  cumulativeVolume: number;
+  feeAmount: number;
+};
+
+type DunePartnerPoint = {
+  date: string;
+  partnerCode: string;
+  volume: number;
+  countTx: number;
+};
+
+type DunePartnerSummaryRow = {
+  partnerCode: string;
+  totalVolume: number;
+  totalTransactions: number;
+};
 
 const dateRangeOptions: Array<{ id: CmoAppMetricDateRangePreset; label: string }> = [
   { id: "this_week", label: "This week" },
@@ -705,6 +729,473 @@ function businessLatestTimestamp(snapshots: Array<CmoBusinessMetricsSnapshot | n
   return timestamps[0] ?? null;
 }
 
+const DUNE_CHART_COLORS = ["#2563eb", "#0f766e", "#f59e0b", "#dc2626", "#7c3aed", "#0891b2", "#65a30d", "#be185d", "#64748b"];
+
+function recordNumber(record: Record<string, unknown>, key: string): number {
+  const value = record[key];
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  return 0;
+}
+
+function recordString(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function compactCount(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    notation: Math.abs(value) >= 10_000 ? "compact" : "standard",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function compactUsd(value: number): string {
+  return `$${new Intl.NumberFormat("en-US", {
+    notation: Math.abs(value) >= 10_000 ? "compact" : "standard",
+    maximumFractionDigits: Math.abs(value) >= 10_000 ? 1 : 0,
+  }).format(value)}`;
+}
+
+function shortDateLabel(value: string): string {
+  if (!value) {
+    return "";
+  }
+
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(parsed);
+}
+
+function seriesRecords(snapshot: CmoBusinessMetricsSnapshot | null, id: string): Array<Record<string, unknown>> {
+  return snapshot?.series?.find((series) => series.id === id)?.points ?? [];
+}
+
+function tableRecords(snapshot: CmoBusinessMetricsSnapshot | null, id: string): Array<Record<string, unknown>> {
+  return snapshot?.tables?.find((table) => table.id === id)?.rows ?? [];
+}
+
+function duneAggregatorPoints(snapshot: CmoBusinessMetricsSnapshot | null): DuneAggregatorPoint[] {
+  return seriesRecords(snapshot, "wld_aggregator_daily_series")
+    .map((record) => ({
+      date: recordString(record, "evt_block_date"),
+      countTx: recordNumber(record, "count_tx"),
+      cumulativeTxCount: recordNumber(record, "cumulative_tx_count"),
+      dailyVolume: recordNumber(record, "daily_volume"),
+      cumulativeVolume: recordNumber(record, "cumulative_volume"),
+      feeAmount: recordNumber(record, "fee_amount"),
+    }))
+    .filter((point) => point.date)
+    .sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function dunePartnerPoints(snapshot: CmoBusinessMetricsSnapshot | null): DunePartnerPoint[] {
+  return seriesRecords(snapshot, "wld_partner_daily_series")
+    .map((record) => ({
+      date: recordString(record, "evt_block_date"),
+      partnerCode: recordString(record, "partnerCode") || "Unknown",
+      volume: recordNumber(record, "volume"),
+      countTx: recordNumber(record, "count_tx"),
+    }))
+    .filter((point) => point.date)
+    .sort((left, right) => left.date.localeCompare(right.date) || left.partnerCode.localeCompare(right.partnerCode));
+}
+
+function dunePartnerSummaryRows(snapshot: CmoBusinessMetricsSnapshot | null): DunePartnerSummaryRow[] {
+  return tableRecords(snapshot, "wld_partner_summary")
+    .map((record) => ({
+      partnerCode: recordString(record, "partnerCode") || "Unknown",
+      totalVolume: recordNumber(record, "total_volume"),
+      totalTransactions: recordNumber(record, "total_transactions"),
+    }))
+    .filter((row) => row.totalVolume > 0 || row.totalTransactions > 0)
+    .sort((left, right) => right.totalVolume - left.totalVolume);
+}
+
+function topNPlusOther(rows: DunePartnerSummaryRow[], valueFor: (row: DunePartnerSummaryRow) => number, limit = 8): DunePartnerSummaryRow[] {
+  const sorted = [...rows].sort((left, right) => valueFor(right) - valueFor(left));
+  const top = sorted.slice(0, limit);
+  const rest = sorted.slice(limit);
+
+  if (!rest.length) {
+    return top;
+  }
+
+  const other = rest.reduce(
+    (acc, row) => ({
+      partnerCode: "Other",
+      totalVolume: acc.totalVolume + row.totalVolume,
+      totalTransactions: acc.totalTransactions + row.totalTransactions,
+    }),
+    { partnerCode: "Other", totalVolume: 0, totalTransactions: 0 },
+  );
+
+  return [...top, other];
+}
+
+function partnerCodesByTotal(points: DunePartnerPoint[], field: "volume" | "countTx", limit = 8): string[] {
+  const totals = new Map<string, number>();
+
+  points.forEach((point) => {
+    totals.set(point.partnerCode, (totals.get(point.partnerCode) ?? 0) + point[field]);
+  });
+
+  const sorted = [...totals.entries()]
+    .filter(([, value]) => value > 0)
+    .sort((left, right) => right[1] - left[1])
+    .map(([partner]) => partner);
+
+  return sorted.length > limit ? [...sorted.slice(0, limit), "Other"] : sorted;
+}
+
+function partnerDailyRows(points: DunePartnerPoint[], field: "volume" | "countTx", partners: string[]): Array<{ date: string; values: Record<string, number>; total: number }> {
+  const topPartners = partners.filter((partner) => partner !== "Other");
+  const byDate = new Map<string, Record<string, number>>();
+
+  points.forEach((point) => {
+    const bucket = topPartners.includes(point.partnerCode) ? point.partnerCode : "Other";
+    const values = byDate.get(point.date) ?? {};
+
+    values[bucket] = (values[bucket] ?? 0) + point[field];
+    byDate.set(point.date, values);
+  });
+
+  return [...byDate.entries()]
+    .map(([date, values]) => ({
+      date,
+      values,
+      total: partners.reduce((sum, partner) => sum + (values[partner] ?? 0), 0),
+    }))
+    .sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function EmptyChart({ message }: { message: string }) {
+  return (
+    <div className="flex h-64 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-white text-sm font-semibold text-slate-400">
+      {message}
+    </div>
+  );
+}
+
+function ChartTabs({
+  options,
+  active,
+  onChange,
+}: {
+  options: Array<{ id: string; label: string }>;
+  active: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          onClick={() => onChange(option.id)}
+          className={cn(
+            "rounded-lg border px-3 py-2 text-xs font-bold transition",
+            active === option.id
+              ? "border-slate-950 bg-slate-950 text-white"
+              : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50",
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function AggregatorComboChart({ snapshot, mode }: { snapshot: CmoBusinessMetricsSnapshot | null; mode: AggregatorChartMode }) {
+  const points = duneAggregatorPoints(snapshot);
+
+  if (!points.length) {
+    return <EmptyChart message="No Dune aggregator series connected yet." />;
+  }
+
+  const width = 720;
+  const height = 286;
+  const left = 54;
+  const right = 34;
+  const top = 28;
+  const bottom = 48;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const barField = mode === "transactions" ? "countTx" : "dailyVolume";
+  const lineField = mode === "transactions" ? "cumulativeTxCount" : "cumulativeVolume";
+  const barLabel = mode === "transactions" ? "count_tx" : "daily_volume";
+  const lineLabel = mode === "transactions" ? "cumulative_tx_count" : "cumulative_volume";
+  const format = mode === "transactions" ? compactCount : compactUsd;
+  const barMax = Math.max(...points.map((point) => point[barField]), 1);
+  const lineMax = Math.max(...points.map((point) => point[lineField]), 1);
+  const xFor = (index: number) => left + (points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth);
+  const barWidth = Math.max(8, Math.min(26, plotWidth / Math.max(points.length, 1) * 0.5));
+  const yForBar = (value: number) => top + plotHeight - (value / barMax) * plotHeight;
+  const yForLine = (value: number) => top + plotHeight - (value / lineMax) * plotHeight;
+  const linePath = points.map((point, index) => `${index === 0 ? "M" : "L"} ${xFor(index)} ${yForLine(point[lineField])}`).join(" ");
+  const labelIndexes = new Set([0, Math.floor((points.length - 1) / 2), points.length - 1]);
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-100 bg-white">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={mode === "transactions" ? "Count Daily Transaction chart" : "Daily Volume in USD chart"} className="h-72 w-full">
+        <rect x="0" y="0" width={width} height={height} fill="white" />
+        {[0, 0.25, 0.5, 0.75, 1].map((tick) => (
+          <g key={tick}>
+            <line x1={left} x2={width - right} y1={top + plotHeight * tick} y2={top + plotHeight * tick} stroke="#e2e8f0" strokeDasharray={tick === 1 ? "0" : "4 5"} />
+          </g>
+        ))}
+        {points.map((point, index) => {
+          const x = xFor(index);
+          const y = yForBar(point[barField]);
+          const barHeight = top + plotHeight - y;
+
+          return (
+            <g key={`${point.date}-${index}`}>
+              <title>{`${point.date}\n${barLabel}: ${format(point[barField])}\n${lineLabel}: ${format(point[lineField])}`}</title>
+              <rect x={x - barWidth / 2} y={y} width={barWidth} height={barHeight} rx="4" fill="#2563eb" opacity="0.76" />
+              {labelIndexes.has(index) ? <text x={x} y={height - 18} textAnchor="middle" className="fill-slate-400 text-[11px] font-semibold">{shortDateLabel(point.date)}</text> : null}
+            </g>
+          );
+        })}
+        <path d={linePath} fill="none" stroke="#f59e0b" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        {points.map((point, index) => (
+          <circle key={`${point.date}-line`} cx={xFor(index)} cy={yForLine(point[lineField])} r="4" fill="#f59e0b" stroke="white" strokeWidth="2">
+            <title>{`${point.date}\n${barLabel}: ${format(point[barField])}\n${lineLabel}: ${format(point[lineField])}`}</title>
+          </circle>
+        ))}
+        <text x={left} y="18" className="fill-slate-500 text-[11px] font-bold">{mode === "transactions" ? "Bar: daily tx" : "Bar: daily volume"}</text>
+        <text x={width - right} y="18" textAnchor="end" className="fill-slate-500 text-[11px] font-bold">{mode === "transactions" ? "Line: cumulative tx" : "Line: cumulative volume"}</text>
+        <text x={left} y={top + 8} className="fill-slate-400 text-[10px] font-semibold">{format(barMax)}</text>
+        <text x={width - right} y={top + 8} textAnchor="end" className="fill-slate-400 text-[10px] font-semibold">{format(lineMax)}</text>
+      </svg>
+    </div>
+  );
+}
+
+function PartnerStackedBarChart({
+  snapshot,
+  field,
+}: {
+  snapshot: CmoBusinessMetricsSnapshot | null;
+  field: "volume" | "countTx";
+}) {
+  const points = dunePartnerPoints(snapshot);
+  const partners = partnerCodesByTotal(points, field);
+  const rows = partnerDailyRows(points, field, partners);
+
+  if (!rows.length || !partners.length) {
+    return <EmptyChart message="No Dune partner daily series connected yet." />;
+  }
+
+  const width = 720;
+  const height = 286;
+  const left = 54;
+  const right = 28;
+  const top = 28;
+  const bottom = 62;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const maxTotal = Math.max(...rows.map((row) => row.total), 1);
+  const format = field === "volume" ? compactUsd : compactCount;
+  const xFor = (index: number) => left + (rows.length === 1 ? plotWidth / 2 : (index / (rows.length - 1)) * plotWidth);
+  const barWidth = Math.max(10, Math.min(30, plotWidth / Math.max(rows.length, 1) * 0.52));
+  const labelIndexes = new Set([0, Math.floor((rows.length - 1) / 2), rows.length - 1]);
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-100 bg-white">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={field === "volume" ? "Daily Partner Volume chart" : "Daily Partner Transaction Count chart"} className="h-72 w-full">
+        <rect x="0" y="0" width={width} height={height} fill="white" />
+        {[0, 0.25, 0.5, 0.75, 1].map((tick) => (
+          <line key={tick} x1={left} x2={width - right} y1={top + plotHeight * tick} y2={top + plotHeight * tick} stroke="#e2e8f0" strokeDasharray={tick === 1 ? "0" : "4 5"} />
+        ))}
+        {rows.map((row, rowIndex) => {
+          const x = xFor(rowIndex);
+          let running = 0;
+
+          return (
+            <g key={row.date}>
+              {partners.map((partner, partnerIndex) => {
+                const value = row.values[partner] ?? 0;
+                const y = top + plotHeight - ((running + value) / maxTotal) * plotHeight;
+                const segmentHeight = (value / maxTotal) * plotHeight;
+                running += value;
+
+                if (value <= 0) {
+                  return null;
+                }
+
+                return (
+                  <rect key={partner} x={x - barWidth / 2} y={y} width={barWidth} height={segmentHeight} fill={DUNE_CHART_COLORS[partnerIndex % DUNE_CHART_COLORS.length]}>
+                    <title>{`${row.date}\n${partner}: ${format(value)}\nTotal: ${format(row.total)}`}</title>
+                  </rect>
+                );
+              })}
+              {labelIndexes.has(rowIndex) ? <text x={x} y={height - 28} textAnchor="middle" className="fill-slate-400 text-[11px] font-semibold">{shortDateLabel(row.date)}</text> : null}
+            </g>
+          );
+        })}
+        <text x={left} y="18" className="fill-slate-500 text-[11px] font-bold">{field === "volume" ? "Stacked daily volume" : "Stacked daily tx"}</text>
+        <text x={left} y={top + 8} className="fill-slate-400 text-[10px] font-semibold">{format(maxTotal)}</text>
+      </svg>
+      <div className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-3">
+        {partners.map((partner, index) => (
+          <span key={partner} className="inline-flex items-center gap-2 text-xs font-semibold text-slate-500">
+            <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: DUNE_CHART_COLORS[index % DUNE_CHART_COLORS.length] }} />
+            {partner}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PartnerDonutChart({
+  snapshot,
+  field,
+}: {
+  snapshot: CmoBusinessMetricsSnapshot | null;
+  field: "totalVolume" | "totalTransactions";
+}) {
+  const rows = topNPlusOther(dunePartnerSummaryRows(snapshot), (row) => row[field], 8).filter((row) => row[field] > 0);
+
+  if (!rows.length) {
+    return <EmptyChart message="No Dune partner summary table connected yet." />;
+  }
+
+  const total = rows.reduce((sum, row) => sum + row[field], 0);
+  const format = field === "totalVolume" ? compactUsd : compactCount;
+  const radius = 72;
+  const circumference = 2 * Math.PI * radius;
+  const segments = rows.reduce<Array<{ row: DunePartnerSummaryRow; dash: number; offset: number }>>((acc, row) => {
+    const previousOffset = acc.reduce((sum, segment) => sum + segment.dash, 0);
+    const dash = total > 0 ? row[field] / total * circumference : 0;
+
+    return [...acc, { row, dash, offset: previousOffset }];
+  }, []);
+
+  return (
+    <div className="grid gap-4 rounded-xl border border-slate-100 bg-white p-4 md:grid-cols-[220px_1fr]">
+      <svg viewBox="0 0 220 220" role="img" aria-label={field === "totalVolume" ? "Partner Volume donut chart" : "Partner Transaction Count donut chart"} className="mx-auto h-56 w-56">
+        <circle cx="110" cy="110" r={radius} fill="none" stroke="#e2e8f0" strokeWidth="28" />
+        {segments.map(({ row, dash, offset }, index) => {
+          const value = row[field];
+
+          return (
+            <circle
+              key={row.partnerCode}
+              cx="110"
+              cy="110"
+              r={radius}
+              fill="none"
+              stroke={DUNE_CHART_COLORS[index % DUNE_CHART_COLORS.length]}
+              strokeWidth="28"
+              strokeDasharray={`${dash} ${circumference - dash}`}
+              strokeDashoffset={-offset}
+              transform="rotate(-90 110 110)"
+            >
+              <title>{`${row.partnerCode}: ${format(value)} (${total > 0 ? Number((value / total * 100).toFixed(1)) : 0}%)`}</title>
+            </circle>
+          );
+        })}
+        <text x="110" y="106" textAnchor="middle" className="fill-slate-950 text-[20px] font-bold">{format(total)}</text>
+        <text x="110" y="128" textAnchor="middle" className="fill-slate-400 text-[11px] font-bold uppercase">total</text>
+      </svg>
+      <div className="grid content-center gap-2">
+        {rows.map((row, index) => {
+          const value = row[field];
+          const share = total > 0 ? value / total * 100 : 0;
+
+          return (
+            <div key={row.partnerCode} className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: DUNE_CHART_COLORS[index % DUNE_CHART_COLORS.length] }} />
+                <span className="truncate text-xs font-bold text-slate-600">{row.partnerCode}</span>
+              </div>
+              <div className="text-right text-xs font-bold text-slate-950">{format(value)} <span className="text-slate-400">{Number(share.toFixed(1))}%</span></div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DuneBusinessCharts({
+  aggregatorSnapshot,
+  partnerSnapshot,
+  aggregatorMode,
+  partnerMode,
+  onAggregatorModeChange,
+  onPartnerModeChange,
+}: {
+  aggregatorSnapshot: CmoBusinessMetricsSnapshot | null;
+  partnerSnapshot: CmoBusinessMetricsSnapshot | null;
+  aggregatorMode: AggregatorChartMode;
+  partnerMode: PartnerChartMode;
+  onAggregatorModeChange: (mode: AggregatorChartMode) => void;
+  onPartnerModeChange: (mode: PartnerChartMode) => void;
+}) {
+  return (
+    <div className="mt-5 grid gap-4">
+      <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="text-sm font-bold text-slate-950">WLD Aggregator Charts</div>
+            <div className="mt-1 text-xs font-semibold text-slate-500">Bars show daily values. Lines show cumulative values from the stored Dune series.</div>
+          </div>
+          <ChartTabs
+            active={aggregatorMode}
+            onChange={(value) => onAggregatorModeChange(value as AggregatorChartMode)}
+            options={[
+              { id: "transactions", label: "Count Daily Transaction" },
+              { id: "volume", label: "Daily Volume in USD" },
+            ]}
+          />
+        </div>
+        <AggregatorComboChart snapshot={aggregatorSnapshot} mode={aggregatorMode} />
+      </div>
+
+      <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="text-sm font-bold text-slate-950">Partner Stats Charts</div>
+            <div className="mt-1 text-xs font-semibold text-slate-500">Top 8 partners are shown individually; the rest are grouped into Other.</div>
+          </div>
+          <ChartTabs
+            active={partnerMode}
+            onChange={(value) => onPartnerModeChange(value as PartnerChartMode)}
+            options={[
+              { id: "daily_volume", label: "Daily Partner Volume" },
+              { id: "volume_share", label: "Partner Volume" },
+              { id: "daily_transactions", label: "Daily Partner Transaction Count" },
+              { id: "transaction_share", label: "Partner Transaction Count" },
+            ]}
+          />
+        </div>
+        {partnerMode === "daily_volume" ? <PartnerStackedBarChart snapshot={partnerSnapshot} field="volume" /> : null}
+        {partnerMode === "volume_share" ? <PartnerDonutChart snapshot={partnerSnapshot} field="totalVolume" /> : null}
+        {partnerMode === "daily_transactions" ? <PartnerStackedBarChart snapshot={partnerSnapshot} field="countTx" /> : null}
+        {partnerMode === "transaction_share" ? <PartnerDonutChart snapshot={partnerSnapshot} field="totalTransactions" /> : null}
+      </div>
+    </div>
+  );
+}
+
 function ChannelMetricTile({
   metric,
   label,
@@ -902,6 +1393,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [contextDrawerTab, setContextDrawerTab] = useState<ContextDrawerTab>("decision");
   const [dateRange, setDateRange] = useState<CmoAppMetricDateRangePreset>("this_week");
   const [comparePrevious, setComparePrevious] = useState(false);
+  const showChannelPerformance = app.id !== "holdstation-mini-app";
   const [metricsSnapshot, setMetricsSnapshot] = useState<CmoAppMetricsSnapshot | null>(null);
   const [metricsStatus, setMetricsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [metricsError, setMetricsError] = useState<string | null>(null);
@@ -914,6 +1406,8 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [feesBusinessMetricsSnapshot, setFeesBusinessMetricsSnapshot] = useState<CmoBusinessMetricsSnapshot | null>(null);
   const [businessMetricsStatus, setBusinessMetricsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [businessMetricsError, setBusinessMetricsError] = useState<string | null>(null);
+  const [aggregatorChartMode, setAggregatorChartMode] = useState<AggregatorChartMode>("transactions");
+  const [partnerChartMode, setPartnerChartMode] = useState<PartnerChartMode>("daily_volume");
   const [planTypeFilter, setPlanTypeFilter] = useState<PlanReviewTypeFilter>("all");
   const [planStatusFilter, setPlanStatusFilter] = useState<PlanReviewStatusFilter>("pending");
   const [sessionFocusSignal, setSessionFocusSignal] = useState(0);
@@ -1067,6 +1561,10 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   }, [app.id, comparePrevious, dateRange]);
 
   useEffect(() => {
+    if (!showChannelPerformance) {
+      return;
+    }
+
     const controller = new AbortController();
     const params = new URLSearchParams({
       channel: "facebook",
@@ -1102,7 +1600,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     void loadChannelMetrics();
 
     return () => controller.abort();
-  }, [app.id, dateRange]);
+  }, [app.id, dateRange, showChannelPerformance]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1154,6 +1652,10 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   }, [app.id]);
 
   useEffect(() => {
+    if (!showChannelPerformance) {
+      return;
+    }
+
     const controller = new AbortController();
     const params = new URLSearchParams({
       channel: "facebook",
@@ -1187,7 +1689,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     void loadChannelSyncStatus();
 
     return () => controller.abort();
-  }, [app.id]);
+  }, [app.id, showChannelPerformance]);
 
   function selectTab(tab: AppWorkspaceTab, hash?: string) {
     const next = new URLSearchParams(searchParams.toString());
@@ -1739,83 +2241,85 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             </SectionCard>
           </div>
 
-          <SectionCard
-            title="Channel Performance"
-            icon={<icons.BarChart3 />}
-            action={
-              <div className="flex flex-wrap justify-end gap-2">
-                <Badge variant="blue">Facebook</Badge>
-                <Badge variant={channelMetricsHealthVariant}>{channelMetricsHealthLabel}</Badge>
+          {showChannelPerformance ? (
+            <SectionCard
+              title="Channel Performance"
+              icon={<icons.BarChart3 />}
+              action={
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Badge variant="blue">Facebook</Badge>
+                  <Badge variant={channelMetricsHealthVariant}>{channelMetricsHealthLabel}</Badge>
+                </div>
+              }
+            >
+              <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
+                <Badge variant="slate">Source: {channelMetricsSource}</Badge>
+                <Badge variant="slate">Last synced: {channelMetricsLastUpdated}</Badge>
+                <Badge variant="slate">Last success: {channelMetricsLastSuccess}</Badge>
+                <Badge variant={channelSyncVariant}>Sync: {channelSyncLabel}</Badge>
+                <Badge variant="slate">Range: {dateRangeOptions.find((option) => option.id === dateRange)?.label}</Badge>
               </div>
-            }
-          >
-            <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
-              <Badge variant="slate">Source: {channelMetricsSource}</Badge>
-              <Badge variant="slate">Last synced: {channelMetricsLastUpdated}</Badge>
-              <Badge variant="slate">Last success: {channelMetricsLastSuccess}</Badge>
-              <Badge variant={channelSyncVariant}>Sync: {channelSyncLabel}</Badge>
-              <Badge variant="slate">Range: {dateRangeOptions.find((option) => option.id === dateRange)?.label}</Badge>
-            </div>
-            <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold leading-6 text-slate-600">
-              {channelMetricsError || `${channelStatusCopy(channelMetricsSnapshot?.status)} ${channelSyncStatusCopy(channelSyncStatus)}`}
-            </div>
+              <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold leading-6 text-slate-600">
+                {channelMetricsError || `${channelStatusCopy(channelMetricsSnapshot?.status)} ${channelSyncStatusCopy(channelSyncStatus)}`}
+              </div>
 
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <ChannelMetricTile metric={channelMetric("facebook_views")} label="Views" size="primary" />
-              <ChannelMetricTile metric={channelMetric("facebook_unique_views")} label="Unique Views Proxy" size="primary" />
-              <ChannelMetricTile metric={channelMetric("facebook_engagement")} label="Engagement" size="primary" />
-              <ChannelMetricTile metric={channelMetric("facebook_follower_count")} label="Followers" size="primary" />
-            </div>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <ChannelMetricTile metric={channelMetric("facebook_views")} label="Views" size="primary" />
+                <ChannelMetricTile metric={channelMetric("facebook_unique_views")} label="Unique Views Proxy" size="primary" />
+                <ChannelMetricTile metric={channelMetric("facebook_engagement")} label="Engagement" size="primary" />
+                <ChannelMetricTile metric={channelMetric("facebook_follower_count")} label="Followers" size="primary" />
+              </div>
 
-            <div className="mt-3 grid gap-3 md:grid-cols-3">
-              <ChannelMetricTile metric={channelMetric("facebook_post_count")} label="Posts" />
-              <ChannelMetricTile metric={channelMetric("facebook_video_views")} label="Video Views" />
-              <ChannelMetricTile metric={channelMetric("facebook_follower_growth")} label="Follower Growth" />
-            </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <ChannelMetricTile metric={channelMetric("facebook_post_count")} label="Posts" />
+                <ChannelMetricTile metric={channelMetric("facebook_video_views")} label="Video Views" />
+                <ChannelMetricTile metric={channelMetric("facebook_follower_growth")} label="Follower Growth" />
+              </div>
 
-            <div className="mt-4 rounded-xl border border-slate-100 bg-white px-4 py-3">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="text-xs font-bold uppercase text-slate-400">Missing data</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-600">Waiting for confirmed click source from Lens or analytics.</div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="slate">Link Clicks: {channelMetricDisplayValue(channelMetric("facebook_link_clicks"))}</Badge>
-                  <Badge variant="slate">CTR: {channelMetricDisplayValue(channelMetric("facebook_ctr"))}</Badge>
+              <div className="mt-4 rounded-xl border border-slate-100 bg-white px-4 py-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-xs font-bold uppercase text-slate-400">Missing data</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-600">Waiting for confirmed click source from Lens or analytics.</div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="slate">Link Clicks: {channelMetricDisplayValue(channelMetric("facebook_link_clicks"))}</Badge>
+                    <Badge variant="slate">CTR: {channelMetricDisplayValue(channelMetric("facebook_ctr"))}</Badge>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs font-semibold leading-5 text-slate-500">
-              Caveat: Reach/impressions may use Meta media view proxies. App/product metrics remain separate in cmo.app-metrics.v1.
-            </div>
+              <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs font-semibold leading-5 text-slate-500">
+                Caveat: Reach/impressions may use Meta media view proxies. App/product metrics remain separate in cmo.app-metrics.v1.
+              </div>
 
-            {channelMetricsSnapshot?.topPosts?.length ? (
-              <details className="mt-4 rounded-xl border border-slate-100 bg-white p-4">
-                <summary className="cursor-pointer text-sm font-bold text-slate-950">Top posts</summary>
-                <div className="mt-3 grid gap-2">
-                  {channelMetricsSnapshot.topPosts.slice(0, 3).map((post, index) => (
-                    <div key={post.id} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-bold text-slate-950">Post {index + 1}</div>
-                        <Badge variant="slate">{post.bucket ?? "unknown"}</Badge>
+              {channelMetricsSnapshot?.topPosts?.length ? (
+                <details className="mt-4 rounded-xl border border-slate-100 bg-white p-4">
+                  <summary className="cursor-pointer text-sm font-bold text-slate-950">Top posts</summary>
+                  <div className="mt-3 grid gap-2">
+                    {channelMetricsSnapshot.topPosts.slice(0, 3).map((post, index) => (
+                      <div key={post.id} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-sm font-bold text-slate-950">Post {index + 1}</div>
+                          <Badge variant="slate">{post.bucket ?? "unknown"}</Badge>
+                        </div>
+                        <div className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                          {post.messagePreview || post.postId || "No preview"}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
+                          <span>Views: {post.views === null || post.views === undefined ? "No data" : new Intl.NumberFormat("en-US").format(post.views)}</span>
+                          <span>Engagement: {post.visibleEngagement === null || post.visibleEngagement === undefined ? "No data" : new Intl.NumberFormat("en-US").format(post.visibleEngagement)}</span>
+                          <span>Rate: {post.engagementRate === null || post.engagementRate === undefined ? "No data" : `${Number(post.engagementRate.toFixed(2)).toLocaleString("en-US")}%`}</span>
+                        </div>
                       </div>
-                      <div className="mt-1 text-xs font-semibold leading-5 text-slate-500">
-                        {post.messagePreview || post.postId || "No preview"}
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
-                        <span>Views: {post.views === null || post.views === undefined ? "No data" : new Intl.NumberFormat("en-US").format(post.views)}</span>
-                        <span>Engagement: {post.visibleEngagement === null || post.visibleEngagement === undefined ? "No data" : new Intl.NumberFormat("en-US").format(post.visibleEngagement)}</span>
-                        <span>Rate: {post.engagementRate === null || post.engagementRate === undefined ? "No data" : `${Number(post.engagementRate.toFixed(2)).toLocaleString("en-US")}%`}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            ) : (
-              <div className="mt-3 text-xs font-semibold text-slate-500">No top posts attached to this snapshot.</div>
-            )}
-          </SectionCard>
+                    ))}
+                  </div>
+                </details>
+              ) : (
+                <div className="mt-3 text-xs font-semibold text-slate-500">No top posts attached to this snapshot.</div>
+              )}
+            </SectionCard>
+          ) : null}
 
           <SectionCard
             title="Business Metrics - Dune"
@@ -1880,8 +2384,17 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               </div>
             </div>
 
+            <DuneBusinessCharts
+              aggregatorSnapshot={dexBusinessMetricsSnapshot}
+              partnerSnapshot={feesBusinessMetricsSnapshot}
+              aggregatorMode={aggregatorChartMode}
+              partnerMode={partnerChartMode}
+              onAggregatorModeChange={setAggregatorChartMode}
+              onPartnerModeChange={setPartnerChartMode}
+            />
+
             <div className="mt-3 rounded-xl border border-slate-100 bg-white px-4 py-3 text-xs font-semibold leading-5 text-slate-500">
-              Dune / Worldchain JSON files remain the machine-readable source of truth. CMO does not call Dune directly, and deprecated DefiLlama data is not used for Mini App metric answers.
+              Dune / Worldchain JSON files remain the machine-readable source of truth. n8n exports Dune data into CMO, CMO does not call Dune directly, and deprecated DefiLlama data is not used for Mini App metric answers.
             </div>
           </SectionCard>
 

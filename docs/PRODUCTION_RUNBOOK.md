@@ -531,6 +531,14 @@ Values must be finite numbers or `null`. Missing values remain `null` / `No data
 
 The Holdstation Mini App dashboard shows these Dune / Worldchain business metrics in a separate `Business Metrics - Dune` card. It does not mix them into app/product metrics (`cmo.app-metrics.v1`) or Facebook/channel metrics (`cmo.channel-metrics.v1`). If one Dune group is missing, that group shows `No data` while the other group remains visible.
 
+The same card renders compact charts from the stored JSON payload only:
+
+- `wld_aggregator_daily.series[0].points`: Count Daily Transaction and Daily Volume in USD.
+- `wld_partner_stats_daily.series[0].points`: Daily Partner Volume and Daily Partner Transaction Count.
+- `wld_partner_stats_daily.tables[0].rows`: Partner Volume and Partner Transaction Count share charts.
+
+Facebook/Lens Channel Performance is hidden on the Holdstation Mini App dashboard because those channel metrics are not the authoritative Mini App business/traffic source. Keep Facebook metrics in `cmo.channel-metrics.v1` for the correct app surface; do not merge them into Dune or app/product metrics.
+
 CMO Chat receives a compact resolver summary from `cmo.business-metrics-resolver.v1` in the app-turn context pack when Dune JSON-backed values exist. The context item is source-typed as `business_metrics_json`, contains summary text only, and uses Dune JSON files as source of truth. The Vault Markdown snapshot is not used for exact numbers.
 
 Vault snapshot:
@@ -567,6 +575,7 @@ Dashboard/snapshot check:
 ```bash
 node scripts/cmo-business-metrics-dashboard-check.mjs
 node scripts/cmo-business-metrics-resolver-check.mjs
+node scripts/cmo-dune-business-metrics-chart-check.mjs
 ```
 
 ## Channel metrics / Lens Facebook bridge
