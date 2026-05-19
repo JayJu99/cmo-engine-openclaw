@@ -635,12 +635,20 @@ function businessMetricStatusVariant(status: CmoBusinessMetric["status"] | CmoBu
 }
 
 function businessMetricDisplayValue(metric: CmoBusinessMetric | undefined): string {
-  if (!metric || metric.value === null || metric.value === undefined) {
+  if (!metric || !businessMetricHasData(metric)) {
     return "No data";
   }
 
   if (metric.displayValue && metric.displayValue !== "No data") {
     return metric.displayValue;
+  }
+
+  if (metric.textValue) {
+    return metric.textValue;
+  }
+
+  if (typeof metric.value !== "number" || !Number.isFinite(metric.value)) {
+    return "No data";
   }
 
   if (metric.unit === "percent") {
@@ -655,7 +663,7 @@ function businessMetricDisplayValue(metric: CmoBusinessMetric | undefined): stri
 }
 
 function businessMetricHasData(metric: CmoBusinessMetric | undefined): boolean {
-  return typeof metric?.value === "number" && Number.isFinite(metric.value);
+  return (typeof metric?.value === "number" && Number.isFinite(metric.value)) || Boolean(metric?.textValue) || Boolean(metric?.displayValue && metric.displayValue !== "No data");
 }
 
 function businessMetricBadgeLabel(metric: CmoBusinessMetric | undefined): string {
@@ -690,7 +698,7 @@ function businessCombinedStatus(snapshots: Array<CmoBusinessMetricsSnapshot | nu
 
 function businessLatestTimestamp(snapshots: Array<CmoBusinessMetricsSnapshot | null>): string | null {
   const timestamps = snapshots
-    .flatMap((snapshot) => [snapshot?.lastUpdatedAt, snapshot?.source.fetchedAt])
+    .flatMap((snapshot) => snapshot && businessSnapshotHasData(snapshot) ? [snapshot.lastUpdatedAt, snapshot.source.fetchedAt] : [])
     .filter((value): value is string => typeof value === "string" && !Number.isNaN(Date.parse(value)))
     .sort((left, right) => Date.parse(right) - Date.parse(left));
 
@@ -1106,13 +1114,13 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
       try {
         const [dexResult, feesResult] = await Promise.allSettled([
           readJsonResponse<{ data: CmoBusinessMetricsSnapshot }>(
-            await fetch(`/api/cmo/apps/${app.id}/business-metrics?source=defillama&group=dex_aggregator_volume`, {
+            await fetch(`/api/cmo/apps/${app.id}/business-metrics?source=dune&group=wld_aggregator_daily`, {
               cache: "no-store",
               signal: controller.signal,
             }),
           ),
           readJsonResponse<{ data: CmoBusinessMetricsSnapshot }>(
-            await fetch(`/api/cmo/apps/${app.id}/business-metrics?source=defillama&group=fees_usd`, {
+            await fetch(`/api/cmo/apps/${app.id}/business-metrics?source=dune&group=wld_partner_stats_daily`, {
               cache: "no-store",
               signal: controller.signal,
             }),
@@ -1810,18 +1818,20 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
           </SectionCard>
 
           <SectionCard
-            title="Business Metrics — DefiLlama"
+            title="Business Metrics - Dune"
             icon={<icons.BarChart3 />}
             action={
               <div className="flex flex-wrap justify-end gap-2">
-                <Badge variant="blue">DefiLlama</Badge>
+                <Badge variant="blue">Dune</Badge>
                 <Badge variant={businessMetricsHealthVariant}>{businessMetricsHealthLabel}</Badge>
               </div>
             }
           >
             <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
-              <Badge variant="slate">Source: DefiLlama</Badge>
+              <Badge variant="slate">Source: Dune / Worldchain</Badge>
               <Badge variant="slate">App: Holdstation Wallet Miniapp</Badge>
+              <Badge variant="slate">Query: holdstation_wld_aggregator_tx</Badge>
+              <Badge variant="slate">Query: Partner Stats on WLD</Badge>
               <Badge variant="slate">Last updated: {businessMetricsLastUpdated ? displayDate(businessMetricsLastUpdated) : "Not connected"}</Badge>
               <Badge variant={hasAnyBusinessMetrics ? "green" : "slate"}>Available to CMO Chat</Badge>
               <Badge variant="slate">Contract: cmo.business-metrics.v1</Badge>
@@ -1830,47 +1840,48 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold leading-6 text-slate-600">
               {businessMetricsError
                 || (hasAnyBusinessMetrics
-                  ? "Business metrics are loaded from normalized DefiLlama handoff JSON. Values are rolling-window snapshots."
-                  : "No DefiLlama business metrics connected yet.")}
+                  ? "Business metrics are loaded from normalized Dune / Worldchain handoff JSON. Dune is authoritative for Holdstation Mini App metrics."
+                  : "No Dune business metrics connected yet.")}
             </div>
 
             <div className="grid gap-4 xl:grid-cols-2">
               <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <div>
-                    <div className="text-sm font-bold text-slate-950">DEX Aggregator Volume</div>
-                    <div className="mt-1 text-xs font-semibold text-slate-500">{hasDexBusinessMetrics ? "Loaded from DefiLlama handoff." : "No data for this group yet."}</div>
+                    <div className="text-sm font-bold text-slate-950">WLD Aggregator Daily</div>
+                    <div className="mt-1 text-xs font-semibold text-slate-500">{hasDexBusinessMetrics ? "Loaded from Dune handoff." : "No data for this group yet."}</div>
                   </div>
                   <Badge variant={businessMetricStatusVariant(dexBusinessMetricsSnapshot?.status)}>{businessMetricStatusLabel(dexBusinessMetricsSnapshot?.status)}</Badge>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <BusinessMetricTile metric={dexBusinessMetric("dex_aggregator_volume_24h")} label="24h" />
-                  <BusinessMetricTile metric={dexBusinessMetric("dex_aggregator_volume_7d")} label="7d" />
-                  <BusinessMetricTile metric={dexBusinessMetric("dex_aggregator_volume_30d")} label="30d" />
-                  <BusinessMetricTile metric={dexBusinessMetric("dex_aggregator_volume_cumulative")} label="Cumulative" />
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  <BusinessMetricTile metric={dexBusinessMetric("wld_aggregator_latest_daily_tx")} label="Latest Daily Transactions" />
+                  <BusinessMetricTile metric={dexBusinessMetric("wld_aggregator_cumulative_tx")} label="Cumulative Transactions" />
+                  <BusinessMetricTile metric={dexBusinessMetric("wld_aggregator_latest_daily_volume_usd")} label="Latest Daily Volume" />
+                  <BusinessMetricTile metric={dexBusinessMetric("wld_aggregator_cumulative_volume_usd")} label="Cumulative Volume" />
+                  <BusinessMetricTile metric={dexBusinessMetric("wld_aggregator_latest_fee_usd")} label="Latest Fee Amount" />
                 </div>
               </div>
 
               <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <div>
-                    <div className="text-sm font-bold text-slate-950">Fees / Revenue</div>
-                    <div className="mt-1 text-xs font-semibold text-slate-500">{hasFeesBusinessMetrics ? "Loaded from DefiLlama handoff." : "No data for this group yet."}</div>
+                    <div className="text-sm font-bold text-slate-950">Partner Stats</div>
+                    <div className="mt-1 text-xs font-semibold text-slate-500">{hasFeesBusinessMetrics ? "Loaded from Dune handoff." : "No data for this group yet."}</div>
                   </div>
                   <Badge variant={businessMetricStatusVariant(feesBusinessMetricsSnapshot?.status)}>{businessMetricStatusLabel(feesBusinessMetricsSnapshot?.status)}</Badge>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  <BusinessMetricTile metric={feesBusinessMetric("fees_24h")} label="24h" />
-                  <BusinessMetricTile metric={feesBusinessMetric("fees_7d")} label="7d" />
-                  <BusinessMetricTile metric={feesBusinessMetric("fees_30d")} label="30d" />
-                  <BusinessMetricTile metric={feesBusinessMetric("fees_annualized")} label="Annualized" />
-                  <BusinessMetricTile metric={feesBusinessMetric("fees_cumulative")} label="Cumulative" />
+                  <BusinessMetricTile metric={feesBusinessMetric("wld_partner_total_volume_usd")} label="Partner Total Volume" />
+                  <BusinessMetricTile metric={feesBusinessMetric("wld_partner_total_transactions")} label="Partner Total Transactions" />
+                  <BusinessMetricTile metric={feesBusinessMetric("wld_partner_active_count")} label="Active Partners" />
+                  <BusinessMetricTile metric={feesBusinessMetric("wld_partner_top_by_volume")} label="Top Partner by Volume" />
+                  <BusinessMetricTile metric={feesBusinessMetric("wld_partner_top_by_tx")} label="Top Partner by Transactions" />
                 </div>
               </div>
             </div>
 
             <div className="mt-3 rounded-xl border border-slate-100 bg-white px-4 py-3 text-xs font-semibold leading-5 text-slate-500">
-              JSON files remain the machine-readable source of truth. CMO does not call DefiLlama directly and does not merge these metrics into app/product or channel metrics.
+              Dune / Worldchain JSON files remain the machine-readable source of truth. CMO does not call Dune directly, and deprecated DefiLlama data is not used for Mini App metric answers.
             </div>
           </SectionCard>
 

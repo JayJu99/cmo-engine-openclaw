@@ -3,6 +3,7 @@ import { readBusinessMetricsSnapshot } from "@/lib/cmo/business-metrics";
 import type {
   CmoBusinessMetric,
   CmoBusinessMetricGroup,
+  CmoBusinessMetricSourceType,
   CmoBusinessMetricsResolverGroup,
   CmoBusinessMetricsResolverResult,
   CmoBusinessMetricsResolverStatus,
@@ -10,12 +11,13 @@ import type {
 } from "@/lib/cmo/app-workspace-types";
 
 const SUPPORTED_APP_ID = "holdstation-mini-app";
-const SUPPORTED_SOURCE = "defillama";
-const GROUPS: CmoBusinessMetricGroup[] = ["dex_aggregator_volume", "fees_usd"];
+const AUTHORITATIVE_SOURCE: CmoBusinessMetricSourceType = "dune";
+const AUTHORITATIVE_GROUPS: CmoBusinessMetricGroup[] = ["wld_aggregator_daily", "wld_partner_stats_daily"];
+const DEPRECATED_DEFILLAMA_GROUPS: CmoBusinessMetricGroup[] = ["dex_aggregator_volume", "fees_usd"];
 const CAVEATS = [
-  "DefiLlama values are latest rolling-window snapshots, not fixed calendar-period accounting close data.",
-  "JSON business metrics files are source of truth.",
-  "n8n is the DefiLlama exporter; CMO does not call DefiLlama directly.",
+  "Dune / Worldchain JSON business metrics files are the authoritative source of truth for Holdstation Mini App metrics.",
+  "n8n exports normalized Dune data; CMO does not call Dune directly.",
+  "DefiLlama is deprecated and non-authoritative for Holdstation Mini App metrics.",
   "Vault Markdown snapshots are human-readable review/provenance only.",
 ];
 
@@ -25,7 +27,7 @@ export interface ResolveBusinessMetricsOptions {
 }
 
 function metricHasValue(metric: CmoBusinessMetric): boolean {
-  return typeof metric.value === "number" && Number.isFinite(metric.value);
+  return typeof metric.value === "number" && Number.isFinite(metric.value) || Boolean(metric.textValue) || (metric.displayValue !== "No data" && Boolean(metric.displayValue));
 }
 
 function groupStatus(snapshot: CmoBusinessMetricsSnapshot | null): CmoBusinessMetricsResolverStatus {
@@ -49,7 +51,7 @@ function displayValue(metric: CmoBusinessMetric | undefined): string {
     return "No data";
   }
 
-  return metric.displayValue && metric.displayValue !== "No data" ? metric.displayValue : String(metric.value);
+  return metric.displayValue && metric.displayValue !== "No data" ? metric.displayValue : metric.textValue ?? String(metric.value);
 }
 
 function metricById(metrics: CmoBusinessMetric[]): Map<string, CmoBusinessMetric> {
@@ -67,13 +69,49 @@ function latestTimestamp(snapshots: Array<CmoBusinessMetricsSnapshot | null>): s
     .sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null;
 }
 
-function buildSummaryText(groups: CmoBusinessMetricsResolverGroup[], lastUpdatedAt: string | null): string {
+function queryNames(snapshots: Array<CmoBusinessMetricsSnapshot | null>): string[] {
+  return snapshots
+    .map((snapshot) => snapshot?.source.queryName)
+    .filter((value): value is string => typeof value === "string" && Boolean(value.trim()));
+}
+
+function buildDuneSummaryText(groups: CmoBusinessMetricsResolverGroup[], lastUpdatedAt: string | null, names: string[]): string {
+  const aggregator = metricById(groups.find((group) => group.metricGroup === "wld_aggregator_daily")?.metrics ?? []);
+  const partners = metricById(groups.find((group) => group.metricGroup === "wld_partner_stats_daily")?.metrics ?? []);
+
+  return [
+    "Business Metrics - Dune / Worldchain",
+    "Source: cmo.business-metrics.v1 JSON files. n8n exports normalized Dune payloads; CMO does not call Dune directly.",
+    "Authoritative source for Holdstation Mini App metrics: Dune / Worldchain.",
+    `Dune queries: ${names.length ? names.join(" / ") : "holdstation_wld_aggregator_tx / Partner Stats on WLD"}.`,
+    `Last updated/fetched: ${lastUpdatedAt ?? "No connected timestamp"}.`,
+    "",
+    "WLD Aggregator Daily:",
+    `- Latest daily transactions: ${displayValue(aggregator.get("wld_aggregator_latest_daily_tx"))}`,
+    `- Cumulative transactions: ${displayValue(aggregator.get("wld_aggregator_cumulative_tx"))}`,
+    `- Latest daily volume: ${displayValue(aggregator.get("wld_aggregator_latest_daily_volume_usd"))}`,
+    `- Cumulative volume: ${displayValue(aggregator.get("wld_aggregator_cumulative_volume_usd"))}`,
+    `- Latest fee amount: ${displayValue(aggregator.get("wld_aggregator_latest_fee_usd"))}`,
+    "",
+    "Partner Stats:",
+    `- Partner total volume: ${displayValue(partners.get("wld_partner_total_volume_usd"))}`,
+    `- Partner total transactions: ${displayValue(partners.get("wld_partner_total_transactions"))}`,
+    `- Active partners: ${displayValue(partners.get("wld_partner_active_count"))}`,
+    `- Top partner by volume: ${displayValue(partners.get("wld_partner_top_by_volume"))}`,
+    `- Top partner by transactions: ${displayValue(partners.get("wld_partner_top_by_tx"))}`,
+    "",
+    "Caveats:",
+    ...CAVEATS.map((caveat) => `- ${caveat}`),
+  ].join("\n");
+}
+
+function buildDeprecatedDefiLlamaSummaryText(groups: CmoBusinessMetricsResolverGroup[], lastUpdatedAt: string | null): string {
   const dex = metricById(groups.find((group) => group.metricGroup === "dex_aggregator_volume")?.metrics ?? []);
   const fees = metricById(groups.find((group) => group.metricGroup === "fees_usd")?.metrics ?? []);
 
   return [
-    "Business Metrics — DefiLlama",
-    "Source: cmo.business-metrics.v1 JSON files. n8n exports normalized DefiLlama payloads; CMO does not call DefiLlama directly.",
+    "Deprecated Business Metrics - DefiLlama",
+    "Source: cmo.business-metrics.v1 JSON files. DefiLlama is retained only for backward compatibility and is not authoritative for Holdstation Mini App.",
     `Last updated/fetched: ${lastUpdatedAt ?? "No connected timestamp"}.`,
     "",
     "DEX Aggregator Volume:",
@@ -90,12 +128,19 @@ function buildSummaryText(groups: CmoBusinessMetricsResolverGroup[], lastUpdated
     `- Cumulative: ${displayValue(fees.get("fees_cumulative"))}`,
     "",
     "Caveats:",
-    ...CAVEATS.map((caveat) => `- ${caveat}`),
+    "- DefiLlama is deprecated and non-authoritative for Holdstation Mini App metrics.",
+    "- Use Dune / Worldchain metrics for CMO Chat answers and dashboard decisions.",
   ].join("\n");
 }
 
 export async function resolveBusinessMetrics(options: ResolveBusinessMetricsOptions): Promise<CmoBusinessMetricsResolverResult | null> {
-  if (options.appId !== SUPPORTED_APP_ID || (options.source && options.source !== SUPPORTED_SOURCE)) {
+  if (options.appId !== SUPPORTED_APP_ID) {
+    return null;
+  }
+
+  const source: CmoBusinessMetricSourceType = options.source === "defillama" ? "defillama" : AUTHORITATIVE_SOURCE;
+
+  if (options.source && options.source !== "dune" && options.source !== "defillama") {
     return null;
   }
 
@@ -105,14 +150,15 @@ export async function resolveBusinessMetrics(options: ResolveBusinessMetricsOpti
     return null;
   }
 
+  const metricGroups = source === "dune" ? AUTHORITATIVE_GROUPS : DEPRECATED_DEFILLAMA_GROUPS;
   const snapshots = await Promise.all(
-    GROUPS.map((group) => readBusinessMetricsSnapshot({
+    metricGroups.map((group) => readBusinessMetricsSnapshot({
       appId: app.id,
-      source: SUPPORTED_SOURCE,
+      source,
       group,
     })),
   );
-  const groups = GROUPS.map((metricGroup, index): CmoBusinessMetricsResolverGroup => {
+  const groups = metricGroups.map((metricGroup, index): CmoBusinessMetricsResolverGroup => {
     const snapshot = snapshots[index] ?? null;
 
     return {
@@ -122,17 +168,23 @@ export async function resolveBusinessMetrics(options: ResolveBusinessMetricsOpti
     };
   });
   const lastUpdatedAt = latestTimestamp(snapshots);
+  const summaryText = source === "dune"
+    ? buildDuneSummaryText(groups, lastUpdatedAt, queryNames(snapshots))
+    : buildDeprecatedDefiLlamaSummaryText(groups, lastUpdatedAt);
 
   return {
     schemaVersion: "cmo.business-metrics-resolver.v1",
     workspaceId: app.workspaceId,
     appId: app.id,
     sourceId: app.sourceId,
-    source: SUPPORTED_SOURCE,
+    source,
     status: resolverStatus(groups),
     lastUpdatedAt,
     groups,
-    summaryText: buildSummaryText(groups, lastUpdatedAt),
-    caveats: CAVEATS,
+    summaryText,
+    caveats: source === "dune" ? CAVEATS : [
+      "DefiLlama is deprecated and non-authoritative for Holdstation Mini App metrics.",
+      "Use Dune / Worldchain metrics for CMO Chat answers and dashboard decisions.",
+    ],
   };
 }

@@ -667,7 +667,7 @@ async function promotionCandidatesItem(app: AppWorkspace, maxItemChars: number):
 async function businessMetricsItem(app: AppWorkspace, maxItemChars: number): Promise<ContextItem | null> {
   const resolved = await resolveBusinessMetrics({
     appId: app.id,
-    source: "defillama",
+    source: "dune",
   });
 
   if (!resolved || resolved.status === "missing") {
@@ -677,16 +677,16 @@ async function businessMetricsItem(app: AppWorkspace, maxItemChars: number): Pro
   const limited = limitedContent(resolved.summaryText, Math.min(maxItemChars, 2_200));
 
   return {
-    id: `${app.id}-defillama-business-metrics`,
+    id: `${app.id}-dune-business-metrics`,
     kind: "business_metrics",
-    title: "Business Metrics — DefiLlama",
+    title: "Business Metrics - Dune / Worldchain",
     source: {
       sourceId: app.sourceId,
       type: "business_metrics_json",
-      label: "DefiLlama Business Metrics",
-      path: "data/cmo-dashboard/business-metrics/holdstation-mini-app/defillama",
+      label: "Dune Business Metrics",
+      path: "data/cmo-dashboard/business-metrics/holdstation-mini-app/dune",
     },
-    inclusionReason: "App-scoped DefiLlama business metrics are included from cmo.business-metrics.v1 JSON when available.",
+    inclusionReason: "App-scoped Dune / Worldchain business metrics are included from cmo.business-metrics.v1 JSON when available.",
     exists: true,
     content: limited.content,
     contentPreview: compactText(resolved.summaryText, 420),

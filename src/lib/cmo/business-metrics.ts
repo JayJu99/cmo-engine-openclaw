@@ -5,45 +5,109 @@ import { getAppWorkspace } from "@/lib/cmo/app-workspaces";
 import type {
   CmoBusinessMetric,
   CmoBusinessMetricGroup,
+  CmoBusinessMetricSeries,
   CmoBusinessMetricSourceType,
   CmoBusinessMetricStatus,
+  CmoBusinessMetricTable,
   CmoBusinessMetricsSnapshot,
 } from "@/lib/cmo/app-workspace-types";
 
 const BUSINESS_METRICS_DIR = path.join(process.cwd(), "data", "cmo-dashboard", "business-metrics");
 const DEFAULT_TIMEZONE = process.env.CMO_VAULT_TIME_ZONE ?? "Asia/Saigon";
 const SUPPORTED_APP_ID = "holdstation-mini-app";
-const SUPPORTED_SOURCE: CmoBusinessMetricSourceType = "defillama";
 const SUPPORTED_DOMAIN = "business";
+const AUTHORITATIVE_SOURCE: CmoBusinessMetricSourceType = "dune";
 
 const metricDefinitionsByGroup: Record<
   CmoBusinessMetricGroup,
   Array<Pick<CmoBusinessMetric, "id" | "label" | "unit" | "description">>
 > = {
+  wld_aggregator_daily: [
+    {
+      id: "wld_aggregator_latest_daily_tx",
+      label: "Latest Daily Transactions",
+      unit: "count",
+      description: "Latest daily WLD aggregator transaction count from Dune / Worldchain handoff.",
+    },
+    {
+      id: "wld_aggregator_cumulative_tx",
+      label: "Cumulative Transactions",
+      unit: "count",
+      description: "Cumulative WLD aggregator transaction count from Dune / Worldchain handoff.",
+    },
+    {
+      id: "wld_aggregator_latest_daily_volume_usd",
+      label: "Latest Daily Volume",
+      unit: "usd",
+      description: "Latest daily WLD aggregator volume in USD from Dune / Worldchain handoff.",
+    },
+    {
+      id: "wld_aggregator_cumulative_volume_usd",
+      label: "Cumulative Volume",
+      unit: "usd",
+      description: "Cumulative WLD aggregator volume in USD from Dune / Worldchain handoff.",
+    },
+    {
+      id: "wld_aggregator_latest_fee_usd",
+      label: "Latest Fee Amount",
+      unit: "usd",
+      description: "Latest WLD aggregator fee amount in USD from Dune / Worldchain handoff.",
+    },
+  ],
+  wld_partner_stats_daily: [
+    {
+      id: "wld_partner_total_volume_usd",
+      label: "Partner Total Volume",
+      unit: "usd",
+      description: "Total WLD partner volume in USD from Dune / Worldchain handoff.",
+    },
+    {
+      id: "wld_partner_total_transactions",
+      label: "Partner Total Transactions",
+      unit: "count",
+      description: "Total WLD partner transaction count from Dune / Worldchain handoff.",
+    },
+    {
+      id: "wld_partner_active_count",
+      label: "Active Partners",
+      unit: "count",
+      description: "Active WLD partner count from Dune / Worldchain handoff.",
+    },
+    {
+      id: "wld_partner_top_by_volume",
+      label: "Top Partner by Volume",
+      description: "Top WLD partner by volume from Dune / Worldchain handoff.",
+    },
+    {
+      id: "wld_partner_top_by_tx",
+      label: "Top Partner by Transactions",
+      description: "Top WLD partner by transaction count from Dune / Worldchain handoff.",
+    },
+  ],
   dex_aggregator_volume: [
     {
       id: "dex_aggregator_volume_24h",
       label: "DEX Volume 24h",
       unit: "usd",
-      description: "Holdstation Mini App DEX aggregator volume over the latest 24-hour window supplied by DefiLlama handoff.",
+      description: "Deprecated DefiLlama DEX aggregator volume over the latest 24-hour window.",
     },
     {
       id: "dex_aggregator_volume_7d",
       label: "DEX Volume 7d",
       unit: "usd",
-      description: "Holdstation Mini App DEX aggregator volume over the latest 7-day window supplied by DefiLlama handoff.",
+      description: "Deprecated DefiLlama DEX aggregator volume over the latest 7-day window.",
     },
     {
       id: "dex_aggregator_volume_30d",
       label: "DEX Volume 30d",
       unit: "usd",
-      description: "Holdstation Mini App DEX aggregator volume over the latest 30-day window supplied by DefiLlama handoff.",
+      description: "Deprecated DefiLlama DEX aggregator volume over the latest 30-day window.",
     },
     {
       id: "dex_aggregator_volume_cumulative",
       label: "DEX Volume Cumulative",
       unit: "usd",
-      description: "Cumulative Holdstation Mini App DEX aggregator volume supplied by DefiLlama handoff.",
+      description: "Deprecated DefiLlama cumulative DEX aggregator volume.",
     },
   ],
   fees_usd: [
@@ -51,33 +115,47 @@ const metricDefinitionsByGroup: Record<
       id: "fees_annualized",
       label: "Fees Annualized",
       unit: "usd",
-      description: "Annualized fees supplied by DefiLlama handoff.",
+      description: "Deprecated DefiLlama annualized fees.",
     },
     {
       id: "fees_24h",
       label: "Fees 24h",
       unit: "usd",
-      description: "Fees over the latest 24-hour window supplied by DefiLlama handoff.",
+      description: "Deprecated DefiLlama fees over the latest 24-hour window.",
     },
     {
       id: "fees_7d",
       label: "Fees 7d",
       unit: "usd",
-      description: "Fees over the latest 7-day window supplied by DefiLlama handoff.",
+      description: "Deprecated DefiLlama fees over the latest 7-day window.",
     },
     {
       id: "fees_30d",
       label: "Fees 30d",
       unit: "usd",
-      description: "Fees over the latest 30-day window supplied by DefiLlama handoff.",
+      description: "Deprecated DefiLlama fees over the latest 30-day window.",
     },
     {
       id: "fees_cumulative",
       label: "Fees Cumulative",
       unit: "usd",
-      description: "Cumulative fees supplied by DefiLlama handoff.",
+      description: "Deprecated DefiLlama cumulative fees.",
     },
   ],
+};
+
+const allowedGroupsBySource: Record<CmoBusinessMetricSourceType, CmoBusinessMetricGroup[]> = {
+  dune: ["wld_aggregator_daily", "wld_partner_stats_daily"],
+  defillama: ["dex_aggregator_volume", "fees_usd"],
+};
+
+const requiredSeriesByGroup: Partial<Record<CmoBusinessMetricGroup, string[]>> = {
+  wld_aggregator_daily: ["wld_aggregator_daily_series"],
+  wld_partner_stats_daily: ["wld_partner_daily_series"],
+};
+
+const requiredTablesByGroup: Partial<Record<CmoBusinessMetricGroup, string[]>> = {
+  wld_partner_stats_daily: ["wld_partner_summary"],
 };
 
 export interface ReadBusinessMetricsOptions {
@@ -124,8 +202,17 @@ function businessStatus(value: unknown, fallback: CmoBusinessMetricStatus = "mis
   return value === "connected" || value === "missing" || value === "partial" || value === "placeholder" ? value : fallback;
 }
 
+function businessSource(value: unknown): CmoBusinessMetricSourceType | null {
+  return value === "dune" || value === "defillama" ? value : null;
+}
+
 function businessGroup(value: unknown): CmoBusinessMetricGroup | null {
-  return value === "dex_aggregator_volume" || value === "fees_usd" ? value : null;
+  return value === "wld_aggregator_daily" ||
+    value === "wld_partner_stats_daily" ||
+    value === "dex_aggregator_volume" ||
+    value === "fees_usd"
+    ? value
+    : null;
 }
 
 function metricDefinitions(group: CmoBusinessMetricGroup): Array<Pick<CmoBusinessMetric, "id" | "label" | "unit" | "description">> {
@@ -180,6 +267,10 @@ function ensureDateRange(value: unknown): CmoBusinessMetricsSnapshot["dateRange"
   };
 }
 
+function metricHasData(metric: CmoBusinessMetric): boolean {
+  return typeof metric.value === "number" && Number.isFinite(metric.value) || Boolean(metric.textValue) || (metric.displayValue !== "No data" && Boolean(metric.displayValue));
+}
+
 function normalizeMetricForRead(group: CmoBusinessMetricGroup, value: unknown): CmoBusinessMetric | null {
   if (!isRecord(value) || typeof value.id !== "string") {
     return null;
@@ -192,13 +283,19 @@ function normalizeMetricForRead(group: CmoBusinessMetricGroup, value: unknown): 
   }
 
   const metricValue = typeof value.value === "number" && Number.isFinite(value.value) ? value.value : null;
-  const status = metricValue === null ? "missing" : businessStatus(value.status, "connected");
+  const textValue = typeof value.textValue === "string" && value.textValue.trim() ? value.textValue.trim() : undefined;
+  const displayValue = typeof value.displayValue === "string" && value.displayValue.trim()
+    ? value.displayValue.trim()
+    : textValue ?? (metricValue === null ? "No data" : String(metricValue));
+  const requestedStatus = businessStatus(value.status, metricValue === null && !textValue ? "missing" : "connected");
+  const status = metricValue === null && !textValue && displayValue === "No data" && requestedStatus === "connected" ? "missing" : requestedStatus;
 
   return {
     id: definition.id,
     label: typeof value.label === "string" && value.label.trim() ? value.label.trim() : definition.label,
     value: metricValue,
-    displayValue: typeof value.displayValue === "string" && value.displayValue.trim() ? value.displayValue.trim() : metricValue === null ? "No data" : String(metricValue),
+    textValue,
+    displayValue,
     unit: value.unit === "usd" || value.unit === "count" || value.unit === "ratio" || value.unit === "percent" ? value.unit : definition.unit,
     status,
     description: typeof value.description === "string" && value.description.trim() ? value.description.trim() : definition.description,
@@ -215,19 +312,26 @@ function normalizeMetricForHandoff(group: CmoBusinessMetricGroup, input: unknown
     throw new BusinessMetricsHandoffError(`Unsupported metric id for ${group}: ${id || "missing"}.`, 400, "metrics_handoff_unsupported_metric");
   }
 
-  if (record.value !== null && !(typeof record.value === "number" && Number.isFinite(record.value))) {
+  if (record.value !== null && record.value !== undefined && !(typeof record.value === "number" && Number.isFinite(record.value))) {
     throw new BusinessMetricsHandoffError(`Metric ${id} value must be a finite number or null.`, 400, "metrics_handoff_invalid_metric_value");
   }
 
   const metricValue = typeof record.value === "number" && Number.isFinite(record.value) ? record.value : null;
-  const requestedStatus = businessStatus(record.status, metricValue === null ? "missing" : "connected");
-  const status = metricValue === null ? requestedStatus === "placeholder" ? "placeholder" : "missing" : requestedStatus;
+  const textValue = typeof record.textValue === "string" && record.textValue.trim() ? record.textValue.trim() : undefined;
+  const displayValue = typeof record.displayValue === "string" && record.displayValue.trim()
+    ? record.displayValue.trim()
+    : textValue ?? (metricValue === null ? "No data" : String(metricValue));
+  const requestedStatus = businessStatus(record.status, metricValue === null && !textValue && displayValue === "No data" ? "missing" : "connected");
+  const status = metricValue === null && !textValue && displayValue === "No data"
+    ? requestedStatus === "placeholder" ? "placeholder" : "missing"
+    : requestedStatus;
 
   return {
     id,
     label: typeof record.label === "string" && record.label.trim() ? record.label.trim() : definition.label,
     value: metricValue,
-    displayValue: typeof record.displayValue === "string" && record.displayValue.trim() ? record.displayValue.trim() : metricValue === null ? "No data" : String(metricValue),
+    textValue,
+    displayValue,
     unit: record.unit === "usd" || record.unit === "count" || record.unit === "ratio" || record.unit === "percent" ? record.unit : definition.unit,
     status,
     description: typeof record.description === "string" && record.description.trim() ? record.description.trim() : definition.description,
@@ -235,15 +339,56 @@ function normalizeMetricForHandoff(group: CmoBusinessMetricGroup, input: unknown
   };
 }
 
+function normalizeSeriesValue(value: unknown): CmoBusinessMetricSeries[] {
+  const input = Array.isArray(value) ? value : isRecord(value) ? [value] : [];
+
+  return input
+    .filter(isRecord)
+    .map((record) => ({
+      id: typeof record.id === "string" && record.id.trim() ? record.id.trim() : "",
+      points: Array.isArray(record.points) ? record.points.filter(isRecord) : [],
+    }))
+    .filter((series) => series.id);
+}
+
+function normalizeTableValue(value: unknown): CmoBusinessMetricTable[] {
+  const input = Array.isArray(value) ? value : isRecord(value) ? [value] : [];
+
+  return input
+    .filter(isRecord)
+    .map((record) => ({
+      id: typeof record.id === "string" && record.id.trim() ? record.id.trim() : "",
+      rows: Array.isArray(record.rows) ? record.rows.filter(isRecord) : [],
+    }))
+    .filter((table) => table.id);
+}
+
+function validateDuneStructuredData(group: CmoBusinessMetricGroup, series: CmoBusinessMetricSeries[], tables: CmoBusinessMetricTable[]) {
+  const requiredSeries = requiredSeriesByGroup[group] ?? [];
+  const requiredTables = requiredTablesByGroup[group] ?? [];
+
+  for (const id of requiredSeries) {
+    if (!series.some((item) => item.id === id && item.points.length > 0)) {
+      throw new BusinessMetricsHandoffError(`Dune metricGroup ${group} requires series ${id} with points.`, 400, "metrics_handoff_missing_series");
+    }
+  }
+
+  for (const id of requiredTables) {
+    if (!tables.some((item) => item.id === id && item.rows.length > 0)) {
+      throw new BusinessMetricsHandoffError(`Dune metricGroup ${group} requires table ${id} with rows.`, 400, "metrics_handoff_missing_table");
+    }
+  }
+}
+
 function snapshotStatus(metrics: CmoBusinessMetric[]): CmoBusinessMetricsSnapshot["status"] {
-  const numericOrPartialCount = metrics.filter((metric) => metric.value !== null || metric.status === "connected" || metric.status === "partial").length;
-  const connectedCount = metrics.filter((metric) => metric.status === "connected" && metric.value !== null).length;
+  const connectedCount = metrics.filter((metric) => metric.status === "connected" && metricHasData(metric)).length;
+  const availableCount = metrics.filter(metricHasData).length;
 
   if (connectedCount === metrics.length) {
     return "connected";
   }
 
-  if (numericOrPartialCount > 0) {
+  if (availableCount > 0) {
     return "partial";
   }
 
@@ -251,11 +396,11 @@ function snapshotStatus(metrics: CmoBusinessMetric[]): CmoBusinessMetricsSnapsho
 }
 
 function availableMetricIds(metrics: CmoBusinessMetric[]): string[] {
-  return metrics.filter((metric) => metric.value !== null && metric.status !== "missing" && metric.status !== "placeholder").map((metric) => metric.id);
+  return metrics.filter((metric) => metric.status !== "missing" && metric.status !== "placeholder" && metricHasData(metric)).map((metric) => metric.id);
 }
 
 function missingMetricIds(metrics: CmoBusinessMetric[]): string[] {
-  return metrics.filter((metric) => metric.value === null || metric.status === "missing" || metric.status === "placeholder").map((metric) => metric.id);
+  return metrics.filter((metric) => metric.status === "missing" || metric.status === "placeholder" || !metricHasData(metric)).map((metric) => metric.id);
 }
 
 function businessMetricsFilePath(appId: string, source: CmoBusinessMetricSourceType, group: CmoBusinessMetricGroup): string {
@@ -294,14 +439,19 @@ function normalizeSnapshot(value: unknown, fallback: CmoBusinessMetricsSnapshot)
   return {
     ...fallback,
     source: {
-      type: source.type === SUPPORTED_SOURCE ? source.type : SUPPORTED_SOURCE,
+      type: fallback.source.type,
       fetchedAt: typeof source.fetchedAt === "string" && !Number.isNaN(Date.parse(source.fetchedAt)) ? source.fetchedAt : fallback.source.fetchedAt,
-      label: typeof source.label === "string" && source.label.trim() ? source.label.trim() : undefined,
+      sourceId: typeof source.sourceId === "string" && source.sourceId.trim() ? source.sourceId.trim() : fallback.source.sourceId,
+      label: typeof source.label === "string" && source.label.trim() ? source.label.trim() : fallback.source.label,
+      queryId: typeof source.queryId === "string" && source.queryId.trim() ? source.queryId.trim() : fallback.source.queryId,
+      queryName: typeof source.queryName === "string" && source.queryName.trim() ? source.queryName.trim() : fallback.source.queryName,
     },
     dateRange: isRecord(value.dateRange) ? ensureDateRange(value.dateRange) : fallback.dateRange,
     status: businessStatus(value.status, snapshotStatus(metrics)),
     lastUpdatedAt: typeof value.lastUpdatedAt === "string" && !Number.isNaN(Date.parse(value.lastUpdatedAt)) ? value.lastUpdatedAt : null,
     metrics,
+    series: normalizeSeriesValue(value.series),
+    tables: normalizeTableValue(value.tables),
     diagnostics: {
       availableMetrics: stringArray(diagnostics.availableMetrics).length ? stringArray(diagnostics.availableMetrics) : availableMetricIds(metrics),
       missingMetrics: stringArray(diagnostics.missingMetrics).length ? stringArray(diagnostics.missingMetrics) : missingMetricIds(metrics),
@@ -310,6 +460,22 @@ function normalizeSnapshot(value: unknown, fallback: CmoBusinessMetricsSnapshot)
     sourceStats: isRecord(value.sourceStats) ? value.sourceStats : undefined,
     provenance: isRecord(value.provenance) ? value.provenance : undefined,
   };
+}
+
+function sourceLabel(source: CmoBusinessMetricSourceType): string {
+  return source === "dune" ? "Dune" : "DefiLlama (deprecated)";
+}
+
+function defaultQueryName(group: CmoBusinessMetricGroup): string | undefined {
+  if (group === "wld_aggregator_daily") {
+    return "holdstation_wld_aggregator_tx";
+  }
+
+  if (group === "wld_partner_stats_daily") {
+    return "Partner Stats on WLD";
+  }
+
+  return undefined;
 }
 
 export function normalizeBusinessMetricsHandoffPayload(appId: string, payload: unknown): CmoBusinessMetricsSnapshot {
@@ -331,13 +497,24 @@ export function normalizeBusinessMetricsHandoffPayload(appId: string, payload: u
 
   const appRecord = ensureRecord(record.app, "app is required.", "metrics_handoff_invalid_app");
   const sourceRecord = ensureRecord(record.source, "source is required.", "metrics_handoff_invalid_source");
+  const source = businessSource(sourceRecord.type);
+
+  if (!source) {
+    throw new BusinessMetricsHandoffError("Only Dune and deprecated DefiLlama business metrics handoff are supported.", 400, "metrics_handoff_unsupported_source");
+  }
 
   if (record.workspaceId !== app.workspaceId || appRecord.appId !== app.id || appRecord.sourceId !== app.sourceId) {
     throw new BusinessMetricsHandoffError("workspaceId, app.appId, and app.sourceId must match the Holdstation Mini App scope.", 403, "metrics_handoff_scope_mismatch");
   }
 
-  if (sourceRecord.type !== SUPPORTED_SOURCE) {
-    throw new BusinessMetricsHandoffError("Only DefiLlama metrics handoff is supported in Phase 2.8A.", 400, "metrics_handoff_unsupported_source");
+  const externalSourceId = typeof sourceRecord.sourceId === "string" && sourceRecord.sourceId.trim()
+    ? sourceRecord.sourceId.trim()
+    : typeof sourceRecord.id === "string" && sourceRecord.id.trim()
+      ? sourceRecord.id.trim()
+      : source;
+
+  if (source === "dune" && externalSourceId !== "dune") {
+    throw new BusinessMetricsHandoffError("Dune handoff sourceId must be dune when supplied.", 403, "metrics_handoff_source_id_mismatch");
   }
 
   if (typeof sourceRecord.fetchedAt !== "string" || Number.isNaN(Date.parse(sourceRecord.fetchedAt))) {
@@ -345,13 +522,13 @@ export function normalizeBusinessMetricsHandoffPayload(appId: string, payload: u
   }
 
   if (record.metricDomain !== SUPPORTED_DOMAIN) {
-    throw new BusinessMetricsHandoffError("Only business metricDomain is supported in Phase 2.8A.", 400, "metrics_handoff_unsupported_domain");
+    throw new BusinessMetricsHandoffError("Only business metricDomain is supported.", 400, "metrics_handoff_unsupported_domain");
   }
 
   const group = businessGroup(record.metricGroup);
 
-  if (!group) {
-    throw new BusinessMetricsHandoffError("Unsupported metricGroup.", 400, "metrics_handoff_unsupported_group");
+  if (!group || !allowedGroupsBySource[source].includes(group)) {
+    throw new BusinessMetricsHandoffError(`Unsupported metricGroup for ${source}.`, 400, "metrics_handoff_unsupported_group");
   }
 
   if (!Array.isArray(record.metrics)) {
@@ -372,6 +549,12 @@ export function normalizeBusinessMetricsHandoffPayload(appId: string, payload: u
   const metrics = metricDefinitions(group).map((definition) => suppliedMetrics.find((metric) => metric.id === definition.id) ?? defaultMetric(definition));
   const diagnosticsRecord = ensureRecord(record.diagnostics, "diagnostics is required.", "metrics_handoff_invalid_diagnostics");
   const provenanceRecord = ensureRecord(record.provenance, "provenance is required.", "metrics_handoff_invalid_provenance");
+  const series = normalizeSeriesValue(record.series);
+  const tables = normalizeTableValue(record.tables);
+
+  if (source === "dune") {
+    validateDuneStructuredData(group, series, tables);
+  }
 
   return {
     schemaVersion: "cmo.business-metrics.v1",
@@ -379,9 +562,12 @@ export function normalizeBusinessMetricsHandoffPayload(appId: string, payload: u
     appId: app.id,
     sourceId: app.sourceId,
     source: {
-      type: SUPPORTED_SOURCE,
+      type: source,
       fetchedAt: sourceRecord.fetchedAt,
-      label: typeof sourceRecord.label === "string" && sourceRecord.label.trim() ? sourceRecord.label.trim() : "DefiLlama",
+      sourceId: externalSourceId,
+      label: typeof sourceRecord.label === "string" && sourceRecord.label.trim() ? sourceRecord.label.trim() : sourceLabel(source),
+      queryId: typeof sourceRecord.queryId === "string" && sourceRecord.queryId.trim() ? sourceRecord.queryId.trim() : undefined,
+      queryName: typeof sourceRecord.queryName === "string" && sourceRecord.queryName.trim() ? sourceRecord.queryName.trim() : defaultQueryName(group),
     },
     metricDomain: SUPPORTED_DOMAIN,
     metricGroup: group,
@@ -389,10 +575,14 @@ export function normalizeBusinessMetricsHandoffPayload(appId: string, payload: u
     status: snapshotStatus(metrics),
     lastUpdatedAt: new Date().toISOString(),
     metrics,
+    ...(series.length ? { series } : {}),
+    ...(tables.length ? { tables } : {}),
     diagnostics: {
       availableMetrics: stringArray(diagnosticsRecord.availableMetrics).length ? stringArray(diagnosticsRecord.availableMetrics) : availableMetricIds(metrics),
       missingMetrics: stringArray(diagnosticsRecord.missingMetrics).length ? stringArray(diagnosticsRecord.missingMetrics) : missingMetricIds(metrics),
-      notes: stringArray(diagnosticsRecord.notes).length ? stringArray(diagnosticsRecord.notes) : ["Imported from normalized DefiLlama metrics handoff."],
+      notes: stringArray(diagnosticsRecord.notes).length
+        ? stringArray(diagnosticsRecord.notes)
+        : [source === "dune" ? "Imported from normalized Dune / Worldchain metrics handoff." : "Imported from deprecated DefiLlama metrics handoff."],
     },
     sourceStats: isRecord(record.sourceStats) ? record.sourceStats : undefined,
     provenance: provenanceRecord,
@@ -412,10 +602,10 @@ export async function ingestBusinessMetricsHandoff(options: IngestBusinessMetric
 }
 
 export async function readBusinessMetricsSnapshot(options: ReadBusinessMetricsOptions): Promise<CmoBusinessMetricsSnapshot | null> {
-  const source = options.source === SUPPORTED_SOURCE || !options.source ? SUPPORTED_SOURCE : null;
+  const source = options.source ? businessSource(options.source) : AUTHORITATIVE_SOURCE;
   const group = businessGroup(options.group);
 
-  if (options.appId !== SUPPORTED_APP_ID || !source || !group) {
+  if (options.appId !== SUPPORTED_APP_ID || !source || !group || !allowedGroupsBySource[source].includes(group)) {
     return null;
   }
 
@@ -433,7 +623,9 @@ export async function readBusinessMetricsSnapshot(options: ReadBusinessMetricsOp
     source: {
       type: source,
       fetchedAt: new Date(0).toISOString(),
-      label: "DefiLlama",
+      sourceId: source,
+      label: sourceLabel(source),
+      queryName: defaultQueryName(group),
     },
     metricDomain: SUPPORTED_DOMAIN,
     metricGroup: group,
@@ -446,7 +638,7 @@ export async function readBusinessMetricsSnapshot(options: ReadBusinessMetricsOp
     diagnostics: {
       availableMetrics: [],
       missingMetrics: metricDefinitions(group).map((metric) => metric.id),
-      notes: ["No DefiLlama business metrics handoff file connected yet."],
+      notes: [`No ${sourceLabel(source)} business metrics handoff file connected yet.`],
     },
   };
 
@@ -461,7 +653,9 @@ export async function readBusinessMetricsSnapshot(options: ReadBusinessMetricsOp
       diagnostics: {
         availableMetrics: availableMetricIds(metrics),
         missingMetrics: missingMetricIds(metrics),
-        notes: snapshot.diagnostics.notes.length ? snapshot.diagnostics.notes : ["Loaded from DefiLlama business metrics handoff."],
+        notes: snapshot.diagnostics.notes.length
+          ? snapshot.diagnostics.notes
+          : [source === "dune" ? "Loaded from authoritative Dune / Worldchain business metrics handoff." : "Loaded from deprecated DefiLlama business metrics handoff."],
       },
     };
   } catch {

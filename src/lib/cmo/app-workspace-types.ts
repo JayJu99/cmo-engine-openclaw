@@ -17,9 +17,9 @@ export type CmoChannelMetricDateRangePreset = "today" | "yesterday" | "last_7_da
 export type CmoChannel = "facebook";
 export type CmoChannelMetricsSyncStatusValue = "success" | "failed" | "partial" | "skipped";
 export type CmoBusinessMetricStatus = "connected" | "missing" | "partial" | "placeholder";
-export type CmoBusinessMetricSourceType = "defillama";
+export type CmoBusinessMetricSourceType = "defillama" | "dune";
 export type CmoBusinessMetricDomain = "business";
-export type CmoBusinessMetricGroup = "dex_aggregator_volume" | "fees_usd";
+export type CmoBusinessMetricGroup = "dex_aggregator_volume" | "fees_usd" | "wld_aggregator_daily" | "wld_partner_stats_daily";
 export type CmoBusinessMetricsResolverStatus = "connected" | "partial" | "missing";
 export type TaskTrackerStatus = "connected" | "not_connected" | "fallback";
 export type TaskSummarySource = "task-tracker" | "vault" | "placeholder";
@@ -418,7 +418,10 @@ export interface CmoBusinessMetricsSnapshot {
   source: {
     type: CmoBusinessMetricSourceType;
     fetchedAt: string;
+    sourceId?: string;
     label?: string;
+    queryId?: string;
+    queryName?: string;
   };
   metricDomain: CmoBusinessMetricDomain;
   metricGroup: CmoBusinessMetricGroup;
@@ -436,6 +439,8 @@ export interface CmoBusinessMetricsSnapshot {
     missingMetrics: string[];
     notes: string[];
   };
+  series?: CmoBusinessMetricSeries[];
+  tables?: CmoBusinessMetricTable[];
   sourceStats?: Record<string, unknown>;
   provenance?: Record<string, unknown>;
 }
@@ -444,11 +449,22 @@ export interface CmoBusinessMetric {
   id: string;
   label: string;
   value: number | null;
+  textValue?: string;
   displayValue: string;
   unit?: "usd" | "count" | "ratio" | "percent";
   status: CmoBusinessMetricStatus;
   description?: string;
   caveat?: string;
+}
+
+export interface CmoBusinessMetricSeries {
+  id: string;
+  points: Array<Record<string, unknown>>;
+}
+
+export interface CmoBusinessMetricTable {
+  id: string;
+  rows: Array<Record<string, unknown>>;
 }
 
 export interface CmoBusinessMetricsResolverGroup {

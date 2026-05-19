@@ -132,7 +132,7 @@ function normalizeMessage(value: string): string {
 function fallbackIntent(message: string): FallbackIntent {
   const normalized = normalizeMessage(message);
 
-  if (/\b(defillama|dex volume|aggregator volume|business metrics|fees|fee|revenue|volume 24h|volume 7d|volume 30d)\b/.test(normalized)) {
+  if (/\b(dune|worldchain|wld|partner stats|partner|aggregator|business metrics|traffic|transactions|transaction|fees|fee|revenue|volume 24h|volume 7d|volume 30d|defillama)\b/.test(normalized)) {
     return "business_metrics";
   }
 
@@ -170,9 +170,9 @@ function businessMetricsFallbackAnswer(input: CmoRuntimeTurnInput, note: string)
   if (!item?.content) {
     return {
       answer: [
-        "I do not have connected DefiLlama business metrics in this local context pack yet.",
+        "I do not have connected Dune / Worldchain business metrics in this local context pack yet.",
         "",
-        "CMO should only answer exact DefiLlama business metrics from `cmo.business-metrics.v1` JSON files. It should not use the Vault Markdown snapshot as the exact-number source of truth and should not infer missing values.",
+        "CMO should only answer exact Holdstation Mini App business metrics from authoritative Dune / Worldchain `cmo.business-metrics.v1` JSON files. It should not use DefiLlama, the Vault Markdown snapshot, or inferred values as the exact-number source of truth.",
         "",
         "## Runtime Note",
         "",
@@ -184,13 +184,13 @@ function businessMetricsFallbackAnswer(input: CmoRuntimeTurnInput, note: string)
 
   return {
     answer: [
-      "## DefiLlama Business Metrics",
+      "## Dune / Worldchain Business Metrics",
       "",
       item.content,
       "",
       "## Source Boundary",
       "",
-      "These numbers come from the app-scoped `cmo.business-metrics.v1` JSON handoff files. The Vault Markdown snapshot is for human review/provenance only.",
+      "These numbers come from app-scoped Dune / Worldchain `cmo.business-metrics.v1` JSON handoff files. DefiLlama is deprecated for Holdstation Mini App metrics, and the Vault Markdown snapshot is for human review/provenance only.",
       "",
       "## Runtime Note",
       "",

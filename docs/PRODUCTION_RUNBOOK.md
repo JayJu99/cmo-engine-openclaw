@@ -475,9 +475,9 @@ node scripts/cmo-app-metrics-ingest-smoke.mjs
 
 The smoke script backs up and restores the metrics JSON file after testing. GA4/n8n source-specific integration remains a later phase.
 
-## Business metrics handoff / DefiLlama
+## Business metrics handoff / Dune
 
-Phase 2.8A adds a separate `cmo.business-metrics.v1` bridge for normalized DefiLlama business metrics. This is not a direct DefiLlama connector; n8n or another external workflow fetches and normalizes the data, then posts handoff bundles to CMO.
+Phase 2.9A makes Dune / Worldchain the authoritative `cmo.business-metrics.v1` source for Holdstation Mini App business and traffic metrics. This is not a direct Dune connector; n8n or another external workflow fetches and normalizes the data, then posts handoff bundles to CMO.
 
 Handoff endpoint:
 
@@ -488,9 +488,9 @@ POST /api/cmo/apps/holdstation-mini-app/metrics/handoff
 Read endpoints:
 
 ```bash
-GET /api/cmo/apps/holdstation-mini-app/business-metrics?source=defillama&group=dex_aggregator_volume
-GET /api/cmo/apps/holdstation-mini-app/business-metrics?source=defillama&group=fees_usd
-GET /api/cmo/apps/holdstation-mini-app/business-metrics/resolver?source=defillama
+GET /api/cmo/apps/holdstation-mini-app/business-metrics?source=dune&group=wld_aggregator_daily
+GET /api/cmo/apps/holdstation-mini-app/business-metrics?source=dune&group=wld_partner_stats_daily
+GET /api/cmo/apps/holdstation-mini-app/business-metrics/resolver?source=dune
 ```
 
 Production uses the same ingest key as app metrics:
@@ -505,26 +505,33 @@ Accepted handoff scope:
 - `workspaceId = holdstation`
 - `app.appId = holdstation-mini-app`
 - `app.sourceId = holdstation__holdstation-mini-app`
-- `source.type = defillama`
+- `source.type = dune`
+- `source.sourceId = dune` when supplied
 - `metricDomain = business`
 
 Accepted metric groups and ids:
 
-- `dex_aggregator_volume`: `dex_aggregator_volume_24h`, `dex_aggregator_volume_7d`, `dex_aggregator_volume_30d`, `dex_aggregator_volume_cumulative`
-- `fees_usd`: `fees_annualized`, `fees_24h`, `fees_7d`, `fees_30d`, `fees_cumulative`
+- `wld_aggregator_daily`: `wld_aggregator_latest_daily_tx`, `wld_aggregator_cumulative_tx`, `wld_aggregator_latest_daily_volume_usd`, `wld_aggregator_cumulative_volume_usd`, `wld_aggregator_latest_fee_usd`
+- `wld_partner_stats_daily`: `wld_partner_total_volume_usd`, `wld_partner_total_transactions`, `wld_partner_active_count`, `wld_partner_top_by_volume`, `wld_partner_top_by_tx`
+
+Dune structured payload requirements:
+
+- `wld_aggregator_daily` must include series `wld_aggregator_daily_series` with points containing `evt_block_date`, `count_tx`, `cumulative_tx_count`, `daily_volume`, `cumulative_volume`, and `fee_amount`.
+- `wld_partner_stats_daily` must include series `wld_partner_daily_series` with points containing `evt_block_date`, `partnerCode`, `volume`, and `count_tx`.
+- `wld_partner_stats_daily` must include table `wld_partner_summary` with rows containing `partnerCode`, `total_volume`, `total_transactions`, `volume_share_pct`, `tx_share_pct`, and `active_days`.
 
 The dashboard writes normalized snapshots to:
 
 ```text
-data/cmo-dashboard/business-metrics/holdstation-mini-app/defillama/dex_aggregator_volume.json
-data/cmo-dashboard/business-metrics/holdstation-mini-app/defillama/fees_usd.json
+data/cmo-dashboard/business-metrics/holdstation-mini-app/dune/wld_aggregator_daily.json
+data/cmo-dashboard/business-metrics/holdstation-mini-app/dune/wld_partner_stats_daily.json
 ```
 
 Values must be finite numbers or `null`. Missing values remain `null` / `No data`; CMO does not compute fake revenue, volume, clicks, or conversion metrics. `sourceStats` and `provenance` are preserved when supplied.
 
-The Holdstation Mini App dashboard shows these DefiLlama business metrics in a separate `Business Metrics — DefiLlama` card. It does not mix them into app/product metrics (`cmo.app-metrics.v1`) or Facebook/channel metrics (`cmo.channel-metrics.v1`). If one DefiLlama group is missing, that group shows `No data` while the other group remains visible.
+The Holdstation Mini App dashboard shows these Dune / Worldchain business metrics in a separate `Business Metrics - Dune` card. It does not mix them into app/product metrics (`cmo.app-metrics.v1`) or Facebook/channel metrics (`cmo.channel-metrics.v1`). If one Dune group is missing, that group shows `No data` while the other group remains visible.
 
-CMO Chat receives a compact resolver summary from `cmo.business-metrics-resolver.v1` in the app-turn context pack when DefiLlama JSON-backed values exist. The context item is source-typed as `business_metrics_json`, contains summary text only, and uses the JSON files as source of truth. The Vault Markdown snapshot is not used for exact numbers.
+CMO Chat receives a compact resolver summary from `cmo.business-metrics-resolver.v1` in the app-turn context pack when Dune JSON-backed values exist. The context item is source-typed as `business_metrics_json`, contains summary text only, and uses Dune JSON files as source of truth. The Vault Markdown snapshot is not used for exact numbers.
 
 Vault snapshot:
 
@@ -535,19 +542,25 @@ node scripts/cmo-business-metrics-vault-snapshot.mjs
 The snapshot writer reads the JSON source of truth and writes or updates one Markdown review file per day:
 
 ```text
-knowledge/holdstation/07 Knowledge/Data/Business Metrics/Holdstation Mini App/DefiLlama/YYYY-MM-DD - DefiLlama Snapshot.md
+knowledge/holdstation/07 Knowledge/Data/Business Metrics/Holdstation Mini App/Dune/YYYY-MM-DD - Dune Snapshot.md
 ```
 
-The Markdown snapshot is for human review and provenance only. The JSON files remain the source of truth for machine-readable metrics. DefiLlama values should be treated as latest rolling-window snapshots, not fixed calendar-period accounting close data.
+Dune query names currently shown by the dashboard and snapshot are `holdstation_wld_aggregator_tx` and `Partner Stats on WLD`. The Markdown snapshot is for human review and provenance only. The JSON files remain the source of truth for machine-readable metrics. n8n exports Dune data; CMO does not call Dune directly.
+
+DefiLlama backward compatibility:
+
+- The old `source=defillama` endpoints may remain available for historical files and older handoff clients.
+- DefiLlama is deprecated and non-authoritative for Holdstation Mini App metrics.
+- CMO Chat and the main dashboard should not use DefiLlama as the Mini App metric source of truth.
 
 Smoke:
 
 ```bash
 CMO_METRICS_INGEST_API_KEY=<strong-ingest-key> \
-node scripts/cmo-metrics-handoff-smoke.mjs
+node scripts/cmo-dune-business-metrics-check.mjs
 ```
 
-The smoke script backs up and restores the DefiLlama business metrics JSON files after testing.
+The Dune check backs up and restores the Dune business metrics JSON files after testing. The older `node scripts/cmo-metrics-handoff-smoke.mjs` still verifies deprecated DefiLlama backward compatibility.
 
 Dashboard/snapshot check:
 
