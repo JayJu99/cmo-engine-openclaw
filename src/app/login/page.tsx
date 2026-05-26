@@ -3,21 +3,12 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getAuthFeatureFlags, getCurrentUser } from "@/lib/cmo/auth";
+import { toSafeRelativePath } from "@/lib/cmo/redirects";
 
 export const dynamic = "force-dynamic";
 
 function safeNextPath(value: string | string[] | undefined): string {
-  const candidate = Array.isArray(value) ? value[0] : value;
-
-  if (!candidate || !candidate.startsWith("/") || candidate.startsWith("//")) {
-    return "/";
-  }
-
-  if (candidate.startsWith("/auth/") || candidate.startsWith("/login")) {
-    return "/";
-  }
-
-  return candidate;
+  return toSafeRelativePath(Array.isArray(value) ? value[0] : value);
 }
 
 function errorMessage(code: string | string[] | undefined): string {

@@ -1,18 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { getAuthFeatureFlags } from "@/lib/cmo/auth";
+import { toPublicRedirectUrl, toSafeRelativePath } from "@/lib/cmo/redirects";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 function safeNextPath(value: string | null): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) {
-    return "/";
-  }
-
-  if (value.startsWith("/auth/") || value.startsWith("/login")) {
-    return "/";
-  }
-
-  return value;
+  return toSafeRelativePath(value);
 }
 
 export async function GET(request: NextRequest) {
@@ -23,7 +16,9 @@ export async function GET(request: NextRequest) {
 
   if (!flags.enabled || !flags.hasPublicConfig || !code) {
     return NextResponse.redirect(
-      new URL(`/login?next=${encodeURIComponent(next)}&error=callback_failed`, request.url),
+      toPublicRedirectUrl(request, `/login?next=${encodeURIComponent(next)}&error=callback_failed`, {
+        allowAuthPaths: true,
+      }),
     );
   }
 
@@ -32,9 +27,11 @@ export async function GET(request: NextRequest) {
 
   if (error) {
     return NextResponse.redirect(
-      new URL(`/login?next=${encodeURIComponent(next)}&error=callback_failed`, request.url),
+      toPublicRedirectUrl(request, `/login?next=${encodeURIComponent(next)}&error=callback_failed`, {
+        allowAuthPaths: true,
+      }),
     );
   }
 
-  return NextResponse.redirect(new URL(next, request.url));
+  return NextResponse.redirect(toPublicRedirectUrl(request, next));
 }

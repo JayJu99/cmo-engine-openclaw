@@ -2,20 +2,11 @@ import { redirect } from "next/navigation";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { getAuthFeatureFlags } from "@/lib/cmo/auth";
+import { toPublicRedirectUrl, toSafeRelativePath } from "@/lib/cmo/redirects";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 function safeNextPath(value: FormDataEntryValue | null): string {
-  const candidate = typeof value === "string" ? value : "";
-
-  if (!candidate || !candidate.startsWith("/") || candidate.startsWith("//")) {
-    return "/";
-  }
-
-  if (candidate.startsWith("/auth/") || candidate.startsWith("/login")) {
-    return "/";
-  }
-
-  return candidate;
+  return toSafeRelativePath(typeof value === "string" ? value : "");
 }
 
 export async function POST(request: NextRequest) {
@@ -48,5 +39,5 @@ export async function POST(request: NextRequest) {
     redirect(`/login?next=${encodeURIComponent(next)}&error=invalid_credentials`);
   }
 
-  return NextResponse.redirect(new URL(next, request.url));
+  return NextResponse.redirect(toPublicRedirectUrl(request, next));
 }

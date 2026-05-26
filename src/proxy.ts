@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
+import { toPublicRedirectUrl } from "@/lib/cmo/redirects";
+
 const BASIC_AUTH_REALM = "CMO Engine Dashboard";
 
 function isBasicAuthEnabled(): boolean {
@@ -170,11 +172,13 @@ async function resolveSupabaseAuth(request: NextRequest): Promise<NextResponse |
     return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   }
 
-  const loginUrl = request.nextUrl.clone();
-  loginUrl.pathname = "/login";
-  loginUrl.search = `?next=${encodeURIComponent(safeReturnPath(request))}`;
-
-  return NextResponse.redirect(loginUrl);
+  return NextResponse.redirect(
+    toPublicRedirectUrl(
+      request,
+      `/login?next=${encodeURIComponent(safeReturnPath(request))}`,
+      { allowAuthPaths: true },
+    ),
+  );
 }
 
 export async function proxy(request: NextRequest) {
