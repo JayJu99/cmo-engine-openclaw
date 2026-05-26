@@ -18,6 +18,8 @@ interface DashboardAuthStatus {
   email: string | null;
   displayName: string | null;
   workspaceCount: number;
+  role: string;
+  isOwnerOrAdmin: boolean;
 }
 
 function Logo() {
@@ -54,7 +56,7 @@ function AuthStatusCard({
           : "Supabase auth disabled";
   const subtitle =
     authStatus.state === "signed_in"
-      ? `${authStatus.workspaceCount} workspace${authStatus.workspaceCount === 1 ? "" : "s"}`
+      ? `${authStatus.role} / ${authStatus.workspaceCount} workspace${authStatus.workspaceCount === 1 ? "" : "s"}`
       : authStatus.state === "signed_out"
         ? authStatus.authRequired
           ? "Login required"
@@ -116,7 +118,7 @@ export function DashboardShell({
             <Logo />
           </div>
           <nav className="flex-1 space-y-2 px-4 py-6">
-            {navItems.map((item) => {
+            {navItems.filter((item) => !item.systemOnly || authStatus.isOwnerOrAdmin).map((item) => {
               const Icon = icons[item.icon as IconName];
               const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
               return (

@@ -3,6 +3,7 @@ type NavItem = {
   href: string;
   icon: string;
   count?: number;
+  systemOnly?: boolean;
 };
 
 export const navItems: NavItem[] = [
@@ -10,7 +11,7 @@ export const navItems: NavItem[] = [
   { label: "Apps", href: "/apps", icon: "Grid2X2" },
   { label: "Daily Notes", href: "/daily", icon: "FileText" },
   { label: "Vault", href: "/vault", icon: "Package" },
-  { label: "Settings", href: "/ops", icon: "Settings" },
+  { label: "Settings", href: "/ops", icon: "Settings", systemOnly: true },
 ];
 
 export const agents = [

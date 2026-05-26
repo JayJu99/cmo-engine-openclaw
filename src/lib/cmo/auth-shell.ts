@@ -1,7 +1,8 @@
 import "server-only";
 
 import { getAuthFeatureFlags, getCurrentUser } from "@/lib/cmo/auth";
-import { getCurrentUserWorkspaceMemberships } from "@/lib/cmo/workspace-memberships";
+import { getCurrentUserRole } from "@/lib/cmo/permissions";
+import type { CmoAccessRole } from "@/lib/cmo/permission-model";
 
 export interface CmoAuthShellStatus {
   authEnabled: boolean;
@@ -10,6 +11,8 @@ export interface CmoAuthShellStatus {
   email: string | null;
   displayName: string | null;
   workspaceCount: number;
+  role: CmoAccessRole;
+  isOwnerOrAdmin: boolean;
 }
 
 export async function getCmoAuthShellStatus(): Promise<CmoAuthShellStatus> {
@@ -23,6 +26,8 @@ export async function getCmoAuthShellStatus(): Promise<CmoAuthShellStatus> {
       email: null,
       displayName: null,
       workspaceCount: 0,
+      role: "legacy_admin",
+      isOwnerOrAdmin: true,
     };
   }
 
@@ -34,6 +39,8 @@ export async function getCmoAuthShellStatus(): Promise<CmoAuthShellStatus> {
       email: null,
       displayName: null,
       workspaceCount: 0,
+      role: "anonymous",
+      isOwnerOrAdmin: false,
     };
   }
 
@@ -47,10 +54,12 @@ export async function getCmoAuthShellStatus(): Promise<CmoAuthShellStatus> {
       email: null,
       displayName: null,
       workspaceCount: 0,
+      role: "anonymous",
+      isOwnerOrAdmin: false,
     };
   }
 
-  const memberships = await getCurrentUserWorkspaceMemberships(user);
+  const role = await getCurrentUserRole(user);
 
   return {
     authEnabled: true,
@@ -58,6 +67,8 @@ export async function getCmoAuthShellStatus(): Promise<CmoAuthShellStatus> {
     state: "signed_in",
     email: user.email,
     displayName: user.displayName,
-    workspaceCount: memberships?.memberships.length ?? 0,
+    workspaceCount: role.workspaceCount,
+    role: role.role,
+    isOwnerOrAdmin: role.isOwnerOrAdmin,
   };
 }
