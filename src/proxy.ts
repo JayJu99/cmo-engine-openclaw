@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
+import {
+  isSupabaseAuthProtectedPath,
+  isSupabaseAuthPublicPath,
+} from "@/lib/cmo/auth-route-guard";
 import { toPublicRedirectUrl } from "@/lib/cmo/redirects";
 
 const BASIC_AUTH_REALM = "CMO Engine Dashboard";
@@ -19,22 +23,6 @@ function isCmoAuthRequired(): boolean {
 
 function isBasicAuthProtectedPath(pathname: string): boolean {
   return pathname.startsWith("/api/cmo/") || !pathname.startsWith("/api/");
-}
-
-function isSupabaseAuthProtectedPath(pathname: string): boolean {
-  return (
-    pathname === "/apps" ||
-    pathname.startsWith("/apps/") ||
-    pathname.startsWith("/api/apps/") ||
-    pathname === "/api/cmo/chat" ||
-    pathname.startsWith("/api/cmo/vault/") ||
-    pathname === "/api/cmo/vault" ||
-    pathname.startsWith("/api/vault/")
-  );
-}
-
-function isSupabaseAuthPublicPath(pathname: string): boolean {
-  return pathname === "/login" || pathname.startsWith("/auth/") || pathname === "/logout";
 }
 
 function safeReturnPath(request: NextRequest): string {
