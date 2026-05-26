@@ -1,9 +1,42 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { createServerClient } from "@supabase/ssr";
 
 const BASIC_AUTH_REALM = "CMO Engine Dashboard";
 
 function isBasicAuthEnabled(): boolean {
   return process.env.DASHBOARD_BASIC_AUTH_ENABLED === "true";
+}
+
+function isCmoAuthEnabled(): boolean {
+  return process.env.CMO_AUTH_ENABLED === "true";
+}
+
+function isCmoAuthRequired(): boolean {
+  return process.env.CMO_AUTH_REQUIRED === "true";
+}
+
+function isBasicAuthProtectedPath(pathname: string): boolean {
+  return pathname.startsWith("/api/cmo/") || !pathname.startsWith("/api/");
+}
+
+function isSupabaseAuthProtectedPath(pathname: string): boolean {
+  return (
+    pathname === "/apps" ||
+    pathname.startsWith("/apps/") ||
+    pathname.startsWith("/api/apps/") ||
+    pathname === "/api/cmo/chat" ||
+    pathname.startsWith("/api/cmo/vault/") ||
+    pathname === "/api/cmo/vault" ||
+    pathname.startsWith("/api/vault/")
+  );
+}
+
+function isSupabaseAuthPublicPath(pathname: string): boolean {
+  return pathname === "/login" || pathname.startsWith("/auth/") || pathname === "/logout";
+}
+
+function safeReturnPath(request: NextRequest): string {
+  return `${request.nextUrl.pathname}${request.nextUrl.search}`;
 }
 
 function fixedTimeEqual(actual: string, expected: string): boolean {
@@ -78,17 +111,89 @@ function unauthorizedResponse(): Response {
   });
 }
 
-export function proxy(request: NextRequest) {
-  if (!isBasicAuthEnabled() || isAuthorized(request)) {
+function supabaseConfigAvailable(): boolean {
+  return Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  );
+}
+
+async function resolveSupabaseAuth(request: NextRequest): Promise<NextResponse | null> {
+  if (
+    !isCmoAuthEnabled() ||
+    !isCmoAuthRequired() ||
+    isSupabaseAuthPublicPath(request.nextUrl.pathname) ||
+    !isSupabaseAuthProtectedPath(request.nextUrl.pathname)
+  ) {
     return NextResponse.next();
   }
 
-  return unauthorizedResponse();
+  if (!supabaseConfigAvailable()) {
+    return NextResponse.json(
+      { error: "Supabase auth is required but not configured." },
+      { status: 503 },
+    );
+  }
+
+  let supabaseResponse = NextResponse.next({
+    request,
+  });
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+          supabaseResponse = NextResponse.next({
+            request,
+          });
+          cookiesToSet.forEach(({ name, value, options }) => {
+            supabaseResponse.cookies.set(name, value, options);
+          });
+        },
+      },
+    },
+  );
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (user) {
+    return supabaseResponse;
+  }
+
+  if (request.nextUrl.pathname.startsWith("/api/")) {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  }
+
+  const loginUrl = request.nextUrl.clone();
+  loginUrl.pathname = "/login";
+  loginUrl.search = `?next=${encodeURIComponent(safeReturnPath(request))}`;
+
+  return NextResponse.redirect(loginUrl);
+}
+
+export async function proxy(request: NextRequest) {
+  if (
+    isBasicAuthEnabled() &&
+    isBasicAuthProtectedPath(request.nextUrl.pathname) &&
+    !isAuthorized(request)
+  ) {
+    return unauthorizedResponse();
+  }
+
+  return resolveSupabaseAuth(request);
 }
 
 export const config = {
   matcher: [
     "/api/cmo/:path*",
+    "/api/apps/:path*",
+    "/api/vault/:path*",
     "/((?!api|_next|favicon.ico|.*\\..*).*)",
   ],
 };

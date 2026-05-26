@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { DashboardShell } from "@/components/dashboard/shell";
+import { getCmoAuthShellStatus } from "@/lib/cmo/auth-shell";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -18,18 +19,20 @@ export const metadata: Metadata = {
   description: "AI command center for OpenClaw marketing agents",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const authStatus = await getCmoAuthShellStatus();
+
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-[#fbfcff] text-slate-950">
-        <DashboardShell>{children}</DashboardShell>
+        <DashboardShell authStatus={authStatus}>{children}</DashboardShell>
       </body>
     </html>
   );

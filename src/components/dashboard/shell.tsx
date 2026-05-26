@@ -11,6 +11,15 @@ import { icons, type IconName } from "@/components/dashboard/icons";
 import { RunBriefButton } from "@/components/dashboard/run-brief-button";
 import { cn } from "@/lib/utils";
 
+interface DashboardAuthStatus {
+  authEnabled: boolean;
+  authRequired: boolean;
+  state: "disabled" | "signed_in" | "signed_out" | "misconfigured";
+  email: string | null;
+  displayName: string | null;
+  workspaceCount: number;
+}
+
 function Logo() {
   return (
     <div className="flex items-center gap-3">
@@ -26,7 +35,77 @@ function Logo() {
   );
 }
 
-export function DashboardShell({ children }: { children: React.ReactNode }) {
+function AuthStatusCard({
+  authStatus,
+  compact = false,
+}: {
+  authStatus: DashboardAuthStatus;
+  compact?: boolean;
+}) {
+  const pathname = usePathname();
+  const next = encodeURIComponent(pathname || "/");
+  const title =
+    authStatus.state === "signed_in"
+      ? authStatus.displayName || authStatus.email || "Signed in"
+      : authStatus.state === "signed_out"
+        ? "Signed out"
+        : authStatus.state === "misconfigured"
+          ? "Auth misconfigured"
+          : "Supabase auth disabled";
+  const subtitle =
+    authStatus.state === "signed_in"
+      ? `${authStatus.workspaceCount} workspace${authStatus.workspaceCount === 1 ? "" : "s"}`
+      : authStatus.state === "signed_out"
+        ? authStatus.authRequired
+          ? "Login required"
+          : "Legacy access allowed"
+        : authStatus.state === "misconfigured"
+          ? "Check Supabase env"
+          : "Legacy admin mode";
+
+  return (
+    <div className={cn("rounded-2xl border border-slate-200 bg-white p-4 shadow-sm", compact && "p-3")}>
+      <div className="flex items-center gap-3">
+        <div
+          className={cn(
+            "size-2 rounded-full",
+            authStatus.state === "signed_in" && "bg-emerald-500",
+            authStatus.state === "signed_out" && "bg-slate-400",
+            authStatus.state === "disabled" && "bg-orange-500",
+            authStatus.state === "misconfigured" && "bg-red-500",
+          )}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold text-slate-950">{title}</div>
+          <div className="text-xs text-slate-500">{subtitle}</div>
+        </div>
+      </div>
+      {authStatus.authEnabled ? (
+        <div className="mt-3 flex gap-2">
+          {authStatus.state === "signed_in" ? (
+            <form action="/auth/signout" method="post">
+              <Button type="submit" variant="outline" size="sm">
+                Logout
+              </Button>
+            </form>
+          ) : (
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/login?next=${next}`}>Login</Link>
+            </Button>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function DashboardShell({
+  children,
+  authStatus,
+}: {
+  children: React.ReactNode;
+  authStatus: DashboardAuthStatus;
+}) {
   const pathname = usePathname();
 
   return (
@@ -68,6 +147,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             })}
           </nav>
           <div className="space-y-4 p-5">
+            <AuthStatusCard authStatus={authStatus} />
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-center gap-3">
                 <div className="grid size-11 place-items-center rounded-full bg-gradient-to-br from-slate-200 to-slate-100 text-sm font-bold text-slate-700">
@@ -98,7 +178,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         <div className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/86 px-4 py-4 backdrop-blur-xl lg:px-8 xl:hidden">
           <div className="flex items-center justify-between gap-4">
             <Logo />
-            <Badge variant="orange">Phase 1</Badge>
+            <div className="flex items-center gap-3">
+              <Badge variant="orange">Phase 1</Badge>
+              <AuthStatusCard authStatus={authStatus} compact />
+            </div>
           </div>
         </div>
         <main className="mx-auto w-full max-w-[1720px] px-4 py-6 lg:px-8 xl:px-10">
