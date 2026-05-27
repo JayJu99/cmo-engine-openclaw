@@ -136,18 +136,46 @@ async function indexedContextSnapshot(input: ContextPipelineShadowInput): Promis
   sources: ContextPipelineShadowSource[];
   warnings: string[];
 }> {
-  const resolverOutput = await resolveIndexedContextDryRun(input);
+  let resolverOutput = await resolveIndexedContextDryRun(input);
   const preview = await buildIndexedContextPreview({ resolverOutput });
-  const sources = [
+  let sources = [
     ...preview.contextPreview.sessions.map(previewSource),
     ...preview.contextPreview.captures.map(previewSource),
     ...preview.contextPreview.candidates.map(previewSource),
   ];
+  const warnings = [...preview.warnings];
+
+  if (input.query?.trim() && sources.length === 0 && resolverOutput.workspaceId) {
+    const fallbackOutput = await resolveIndexedContextDryRun({
+      ...input,
+      query: undefined,
+    });
+    const fallbackPreview = await buildIndexedContextPreview({ resolverOutput: fallbackOutput });
+    const fallbackSources = [
+      ...fallbackPreview.contextPreview.sessions.map(previewSource),
+      ...fallbackPreview.contextPreview.captures.map(previewSource),
+      ...fallbackPreview.contextPreview.candidates.map(previewSource),
+    ];
+
+    if (fallbackSources.length) {
+      resolverOutput = fallbackOutput;
+      sources = fallbackSources.map((source) => ({
+        ...source,
+        whySelected: `${source.whySelected} Query filter had no metadata matches; included as recent indexed context for shadow comparison.`,
+      }));
+      warnings.push(`query_filter_no_matches:${input.query.trim()}; using recent indexed records for shadow comparison`);
+      for (const warning of fallbackPreview.warnings) {
+        if (!warnings.includes(warning)) {
+          warnings.push(warning);
+        }
+      }
+    }
+  }
 
   return {
     resolverOutput,
     sources,
-    warnings: preview.warnings,
+    warnings,
   };
 }
 

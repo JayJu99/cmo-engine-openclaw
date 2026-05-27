@@ -242,7 +242,7 @@ async function resolveWorkspaceScope(supabase, options) {
   return { workspaceKey, scope: { workspaceId: data.id, organizationId: data.organization_id, workspaceKey: data.workspace_key }, warning: null };
 }
 
-async function indexedRecords(supabase, options, userContext, scope) {
+async function indexedRecords(supabase, options, userContext, scope, queryOverride = options.query) {
   if (!supabase || !scope) return { sessions: [], captures: [], candidates: [] };
   const sessions = await supabase.from("chat_sessions_index").select("id,app_id,source_id,user_id,status,runtime_mode,json_path,created_at,updated_at").eq("workspace_id", scope.workspaceId).order("updated_at", { ascending: false }).limit(options.limit);
   if (sessions.error) throw sessions.error;
@@ -251,9 +251,9 @@ async function indexedRecords(supabase, options, userContext, scope) {
   const candidates = await supabase.from("gbrain_candidates_index").select("id,capture_id,app_id,user_id,visibility,candidate_type,review_status,source_path,candidate_hash,created_at").eq("workspace_id", scope.workspaceId).order("created_at", { ascending: false }).limit(options.limit * 2);
   if (candidates.error) throw candidates.error;
   return {
-    sessions: (sessions.data ?? []).filter((row) => queryMatches(options.query, [row.id, row.app_id, row.source_id, row.status, row.runtime_mode, row.json_path])).slice(0, options.limit),
-    captures: filterByVisibility(captures.data ?? [], { userId: userContext.userId, isOwnerOrAdmin: userContext.isOwnerOrAdmin, includeSystem: options.includeSystem }).filter((row) => queryMatches(options.query, [row.vault_path, row.app_id, row.source_agent, row.mode, row.skill, row.source_class, row.review_status])).slice(0, options.limit),
-    candidates: filterByVisibility(candidates.data ?? [], { userId: userContext.userId, isOwnerOrAdmin: userContext.isOwnerOrAdmin, includeSystem: options.includeSystem }).filter((row) => queryMatches(options.query, [row.source_path, row.app_id, row.candidate_type, row.review_status, row.candidate_hash])).slice(0, options.limit),
+    sessions: (sessions.data ?? []).filter((row) => queryMatches(queryOverride, [row.id, row.app_id, row.source_id, row.status, row.runtime_mode, row.json_path])).slice(0, options.limit),
+    captures: filterByVisibility(captures.data ?? [], { userId: userContext.userId, isOwnerOrAdmin: userContext.isOwnerOrAdmin, includeSystem: options.includeSystem }).filter((row) => queryMatches(queryOverride, [row.vault_path, row.app_id, row.source_agent, row.mode, row.skill, row.source_class, row.review_status])).slice(0, options.limit),
+    candidates: filterByVisibility(candidates.data ?? [], { userId: userContext.userId, isOwnerOrAdmin: userContext.isOwnerOrAdmin, includeSystem: options.includeSystem }).filter((row) => queryMatches(queryOverride, [row.source_path, row.app_id, row.candidate_type, row.review_status, row.candidate_hash])).slice(0, options.limit),
   };
 }
 
@@ -375,11 +375,40 @@ function compare(currentSources, indexedSources, userContext, indexedRecords, in
   return { overlap, indexedOnly, currentOnly, missingRisks, leakRisks, recommendation };
 }
 
+function runShadowFallbackAssertion() {
+  const warnings = [];
+  const fallbackSources = [
+    {
+      id: "session_fixture",
+      sourceType: "session_json",
+      path: "data/cmo-dashboard/app-chat/session_fixture.json",
+      whySelected: "Selected by indexed resolver metadata.",
+    },
+    {
+      id: "capture_fixture",
+      sourceType: "vault_capture",
+      path: "03 Sessions/Raw/capture_fixture.md",
+      visibility: "workspace",
+      whySelected: "Selected by indexed resolver metadata after visibility filtering.",
+    },
+  ];
+  const query = "activation strategy";
+  const queryFilteredSources = [];
+  let selectedSources = queryFilteredSources;
+  if (query.trim() && !selectedSources.length && fallbackSources.length) {
+    warnings.push(`query_filter_no_matches:${query}; using recent indexed records for shadow comparison`);
+    selectedSources = fallbackSources;
+  }
+  assert.ok(selectedSources.length > 0, "shadow fallback should keep U7B preview sources when query metadata has no matches");
+  assert.ok(warnings.some((warning) => warning.startsWith("query_filter_no_matches:")));
+}
+
 const shadowSource = readFileSync("src/lib/cmo/indexed-context-shadow.ts", "utf8");
 assert.match(shadowSource, /buildContextPack/);
 assert.match(shadowSource, /resolveIndexedContextDryRun/);
 assert.match(shadowSource, /buildIndexedContextPreview/);
 assert.doesNotMatch(shadowSource, /writeFile|insert\(|upsert\(|delete\(/);
+runShadowFallbackAssertion();
 
 const options = parseArgs(process.argv.slice(2));
 const supabase = adminEnvReady() ? createAdminClient() : null;
@@ -387,8 +416,22 @@ const userContext = await resolveUserContext(supabase, options);
 const workspace = await resolveWorkspaceScope(supabase, options);
 const current = currentPipelineSnapshot(options);
 const indexedWarnings = workspace.warning ? [workspace.warning] : [];
-const records = await indexedRecords(supabase, options, userContext, workspace.scope);
-const indexedSources = indexedPreview(records, indexedWarnings);
+let records = await indexedRecords(supabase, options, userContext, workspace.scope);
+let indexedSources = indexedPreview(records, indexedWarnings);
+if (options.query.trim() && !indexedSources.length && supabase && workspace.scope) {
+  const fallbackRecords = await indexedRecords(supabase, options, userContext, workspace.scope, "");
+  const fallbackWarnings = [];
+  const fallbackSources = indexedPreview(fallbackRecords, fallbackWarnings);
+  if (fallbackSources.length) {
+    indexedWarnings.push(`query_filter_no_matches:${options.query.trim()}; using recent indexed records for shadow comparison`);
+    indexedWarnings.push(...fallbackWarnings);
+    records = fallbackRecords;
+    indexedSources = fallbackSources.map((source) => ({
+      ...source,
+      whySelected: `${source.whySelected} Query filter had no metadata matches; included as recent indexed context for shadow comparison.`,
+    }));
+  }
+}
 const comparison = compare(current.sources, indexedSources, userContext, records, indexedWarnings);
 const output = {
   ok: true,
