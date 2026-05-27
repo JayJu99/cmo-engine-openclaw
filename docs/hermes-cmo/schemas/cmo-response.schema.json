@@ -1,0 +1,326 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cmo-engine.local/hermes-cmo/schemas/cmo-response.schema.json",
+  "title": "Hermes CMO Response",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "request_id",
+    "session_id",
+    "turn_id",
+    "status",
+    "answer_basis",
+    "clarifying_question",
+    "answer",
+    "structured_output",
+    "delegations",
+    "artifacts",
+    "memory_suggestions",
+    "activity_summary"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "hermes.cmo.response.v1"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "turn_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "needs_user_input",
+        "delegated",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "answer_basis": {
+      "type": "object",
+      "required": [
+        "mode",
+        "missing_inputs",
+        "assumptions_used",
+        "user_can_override",
+        "suggested_user_inputs"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "fully_grounded",
+            "assumption_based",
+            "needs_user_input"
+          ]
+        },
+        "missing_inputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "assumptions_used": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "assumption",
+                  "reason",
+                  "impact"
+                ],
+                "properties": {
+                  "assumption": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "impact": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": true
+              }
+            ]
+          }
+        },
+        "user_can_override": {
+          "type": "boolean"
+        },
+        "suggested_user_inputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "clarifying_question": {
+      "type": "object",
+      "required": [
+        "required",
+        "question",
+        "reason",
+        "missing_inputs"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "question": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "missing_inputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "answer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "format",
+            "title",
+            "summary",
+            "decision",
+            "body"
+          ],
+          "properties": {
+            "format": {
+              "enum": [
+                "markdown",
+                "plain_text",
+                "json"
+              ]
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            },
+            "summary": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "structured_output": {
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "delegations": {
+      "type": "array"
+    },
+    "artifacts": {
+      "type": "array"
+    },
+    "memory_suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "activity_summary": {
+      "type": "object",
+      "required": [
+        "events_count",
+        "final_state"
+      ],
+      "properties": {
+        "events_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "final_state": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "needs_user_input"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "answer": {
+            "type": "null"
+          },
+          "structured_output": {
+            "type": "null"
+          },
+          "answer_basis": {
+            "properties": {
+              "mode": {
+                "const": "needs_user_input"
+              }
+            }
+          },
+          "clarifying_question": {
+            "properties": {
+              "required": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "answer_basis": {
+            "properties": {
+              "mode": {
+                "const": "assumption_based"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          }
+        },
+        "required": [
+          "answer_basis"
+        ]
+      },
+      "then": {
+        "properties": {
+          "answer_basis": {
+            "properties": {
+              "missing_inputs": {
+                "minItems": 1
+              },
+              "assumptions_used": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "not": {
+    "anyOf": [
+      {
+        "required": [
+          "direct_vault_write"
+        ],
+        "properties": {
+          "direct_vault_write": {
+            "const": true
+          }
+        }
+      },
+      {
+        "required": [
+          "direct_memory_mutation"
+        ],
+        "properties": {
+          "direct_memory_mutation": {
+            "const": true
+          }
+        }
+      }
+    ]
+  },
+  "additionalProperties": true
+}
+

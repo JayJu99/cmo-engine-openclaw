@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cmo-engine.local/hermes-cmo/schemas/cmo-request.schema.json",
+  "title": "Hermes CMO Request",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "request_id",
+    "session_id",
+    "turn_id",
+    "created_at",
+    "workspace",
+    "user",
+    "intent",
+    "context_pack",
+    "constraints",
+    "ui"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "hermes.cmo.request.v1"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "turn_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace": {
+      "type": "object",
+      "required": [
+        "workspace_id",
+        "app_id",
+        "app_name"
+      ],
+      "properties": {
+        "workspace_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "app_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "app_name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "user": {
+      "type": "object",
+      "required": [
+        "user_id"
+      ],
+      "properties": {
+        "user_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "intent": {
+      "type": "object",
+      "required": [
+        "mode",
+        "user_message"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "cmo.default"
+          ]
+        },
+        "user_message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "explicit_command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "context_pack": {
+      "type": "object",
+      "required": [
+        "current_priority",
+        "selected_context",
+        "recent_session_summary",
+        "indexed_context_supplement",
+        "artifacts_in"
+      ],
+      "properties": {
+        "current_priority": {
+          "type": "array"
+        },
+        "selected_context": {
+          "type": "array"
+        },
+        "recent_session_summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "indexed_context_supplement": {
+          "type": "array"
+        },
+        "artifacts_in": {
+          "type": "array"
+        }
+      },
+      "additionalProperties": true
+    },
+    "constraints": {
+      "type": "object",
+      "required": [
+        "no_direct_vault_write",
+        "no_direct_memory_mutation",
+        "vault_agent_delegation_allowed",
+        "vault_agent_requires_save_intent",
+        "kanban_enabled",
+        "demo_mode",
+        "allowed_agents",
+        "allowed_surf_modes"
+      ],
+      "properties": {
+        "no_direct_vault_write": {
+          "const": true
+        },
+        "no_direct_memory_mutation": {
+          "const": true
+        },
+        "vault_agent_delegation_allowed": {
+          "type": "boolean"
+        },
+        "vault_agent_requires_save_intent": {
+          "const": true
+        },
+        "kanban_enabled": {
+          "type": "boolean"
+        },
+        "demo_mode": {
+          "type": "boolean"
+        },
+        "allowed_agents": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "echo",
+              "surf",
+              "vault_agent"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "allowed_surf_modes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "surf.default",
+              "surf.x",
+              "surf.trend",
+              "surf.pulse"
+            ]
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "ui": {
+      "type": "object",
+      "required": [
+        "activity_stream_required",
+        "heartbeat_required"
+      ],
+      "properties": {
+        "activity_stream_required": {
+          "type": "boolean"
+        },
+        "heartbeat_required": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "required": [
+          "direct_vault_write"
+        ],
+        "properties": {
+          "direct_vault_write": {
+            "const": true
+          }
+        }
+      },
+      {
+        "required": [
+          "direct_memory_mutation"
+        ],
+        "properties": {
+          "direct_memory_mutation": {
+            "const": true
+          }
+        }
+      }
+    ]
+  },
+  "additionalProperties": true
+}
+

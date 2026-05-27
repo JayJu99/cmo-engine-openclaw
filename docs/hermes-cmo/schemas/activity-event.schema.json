@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cmo-engine.local/hermes-cmo/schemas/activity-event.schema.json",
+  "title": "Hermes Activity Event",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "request_id",
+    "session_id",
+    "turn_id",
+    "seq",
+    "created_at",
+    "source",
+    "type",
+    "status",
+    "user_visible",
+    "message",
+    "data"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "hermes.activity.event.v1"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "turn_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "agent",
+        "mode"
+      ],
+      "properties": {
+        "agent": {
+          "enum": [
+            "cmo",
+            "echo",
+            "surf",
+            "vault_agent"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "cmo.default",
+            "echo.default",
+            "surf.default",
+            "surf.x",
+            "surf.trend",
+            "surf.pulse",
+            "vault.write"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "type": {
+      "enum": [
+        "run.started",
+        "run.heartbeat",
+        "stage.started",
+        "stage.completed",
+        "context.loaded",
+        "assumption.notice",
+        "clarification.required",
+        "clarification.asked",
+        "plan.created",
+        "delegation.created",
+        "delegation.started",
+        "delegation.waiting",
+        "delegation.completed",
+        "artifact.created",
+        "memory_suggestion.created",
+        "vault_agent.delegation.created",
+        "vault_agent.delegation.started",
+        "vault_agent.delegation.completed",
+        "vault_agent.delegation.failed",
+        "run.completed",
+        "run.failed"
+      ]
+    },
+    "status": {
+      "enum": [
+        "queued",
+        "running",
+        "waiting",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "user_visible": {
+      "type": "boolean"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "data": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}
+

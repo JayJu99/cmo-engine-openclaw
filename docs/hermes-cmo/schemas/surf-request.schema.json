@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cmo-engine.local/hermes-cmo/schemas/surf-request.schema.json",
+  "title": "Hermes Surf Request",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "delegation_id",
+    "mode",
+    "task",
+    "scope",
+    "output_requirements"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "hermes.surf.request.v1"
+    },
+    "delegation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "enum": [
+        "surf.default",
+        "surf.x",
+        "surf.trend",
+        "surf.pulse"
+      ]
+    },
+    "task": {
+      "type": "object",
+      "required": [
+        "type",
+        "objective",
+        "questions"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "scope": {
+      "type": "object",
+      "required": [
+        "time_window",
+        "sources",
+        "language"
+      ],
+      "properties": {
+        "time_window": {
+          "type": "string"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "language": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "output_requirements": {
+      "type": "object",
+      "required": [
+        "separate_verified_facts",
+        "separate_weak_signals",
+        "include_unknowns",
+        "include_claim_boundaries_for_echo"
+      ],
+      "properties": {
+        "separate_verified_facts": {
+          "const": true
+        },
+        "separate_weak_signals": {
+          "const": true
+        },
+        "include_unknowns": {
+          "const": true
+        },
+        "include_claim_boundaries_for_echo": {
+          "const": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
+

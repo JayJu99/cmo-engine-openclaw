@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cmo-engine.local/hermes-cmo/schemas/echo-request.schema.json",
+  "title": "Hermes Echo Request",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "delegation_id",
+    "task",
+    "content_brief",
+    "claim_boundaries",
+    "constraints"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "hermes.echo.request.v1"
+    },
+    "delegation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task": {
+      "type": "object",
+      "required": [
+        "type",
+        "objective"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "content_brief": {
+      "type": "object",
+      "required": [
+        "audience",
+        "angle",
+        "tone",
+        "language",
+        "format"
+      ],
+      "properties": {
+        "audience": {
+          "type": "string"
+        },
+        "angle": {
+          "type": "string"
+        },
+        "tone": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "claim_boundaries": {
+      "type": "object",
+      "required": [
+        "safe_to_use",
+        "do_not_use",
+        "required_disclaimers"
+      ],
+      "properties": {
+        "safe_to_use": {
+          "type": "array"
+        },
+        "do_not_use": {
+          "type": "array"
+        },
+        "required_disclaimers": {
+          "type": "array"
+        }
+      },
+      "additionalProperties": true
+    },
+    "constraints": {
+      "type": "object",
+      "required": [
+        "no_new_claims",
+        "no_research"
+      ],
+      "properties": {
+        "no_new_claims": {
+          "const": true
+        },
+        "no_research": {
+          "const": true
+        },
+        "max_variants": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "not": {
+    "required": [
+      "direct_vault_write"
+    ],
+    "properties": {
+      "direct_vault_write": {
+        "const": true
+      }
+    }
+  },
+  "additionalProperties": true
+}
+

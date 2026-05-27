@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cmo-engine.local/hermes-cmo/schemas/delegation.schema.json",
+  "title": "Hermes Delegation Request",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "delegation_id",
+    "parent_request_id",
+    "parent_session_id",
+    "target",
+    "objective",
+    "input",
+    "expected_output"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "hermes.delegation.request.v1"
+    },
+    "delegation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target": {
+      "type": "object",
+      "required": [
+        "agent",
+        "mode"
+      ],
+      "properties": {
+        "agent": {
+          "enum": [
+            "echo",
+            "surf",
+            "vault_agent"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "echo.default",
+            "surf.default",
+            "surf.x",
+            "surf.trend",
+            "surf.pulse",
+            "vault.write"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1
+    },
+    "input": {
+      "type": "object",
+      "required": [
+        "brief",
+        "context",
+        "constraints"
+      ],
+      "properties": {
+        "brief": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context": {
+          "type": "array"
+        },
+        "constraints": {
+          "type": "array"
+        }
+      },
+      "additionalProperties": true
+    },
+    "expected_output": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "target": {
+            "properties": {
+              "agent": {
+                "const": "surf"
+              }
+            },
+            "required": [
+              "agent"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "surf.default",
+                  "surf.x",
+                  "surf.trend",
+                  "surf.pulse"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "target": {
+            "properties": {
+              "agent": {
+                "const": "echo"
+              }
+            },
+            "required": [
+              "agent"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "mode": {
+                "const": "echo.default"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "target": {
+            "properties": {
+              "agent": {
+                "const": "vault_agent"
+              }
+            },
+            "required": [
+              "agent"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "mode": {
+                "const": "vault.write"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": true
+}
+

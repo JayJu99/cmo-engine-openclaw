@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cmo-engine.local/hermes-cmo/schemas/vault-agent-request.schema.json",
+  "title": "Hermes Vault Agent Request",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "delegation_id",
+    "parent_request_id",
+    "parent_session_id",
+    "mode",
+    "save_intent",
+    "content",
+    "write_policy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "hermes.vault_agent.request.v1"
+    },
+    "delegation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "const": "vault.write"
+    },
+    "save_intent": {
+      "type": "object",
+      "required": [
+        "source",
+        "evidence"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "user_explicit_request",
+            "explicit_save_action",
+            "user_confirmation"
+          ]
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "content": {
+      "type": "object",
+      "required": [
+        "type",
+        "title",
+        "body"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "write_policy": {
+      "type": "object",
+      "required": [
+        "direct_write_by_cmo",
+        "vault_agent_required",
+        "requires_confirmation"
+      ],
+      "properties": {
+        "direct_write_by_cmo": {
+          "const": false
+        },
+        "vault_agent_required": {
+          "const": true
+        },
+        "requires_confirmation": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
+
