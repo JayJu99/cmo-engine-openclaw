@@ -56,6 +56,7 @@ export interface CMOVaultCaptureEvent {
   captureMode?: CMOVaultCaptureMode;
   title?: string;
   id?: string;
+  appId?: string;
   sessionId?: string;
   requestId?: string;
   createdAt: string;

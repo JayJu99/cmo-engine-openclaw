@@ -4,6 +4,7 @@ import { dirname, isAbsolute, normalize, relative, resolve } from "node:path";
 
 import { buildCaptureTarget, CMO_ENGINE_VAULT_PATH } from "./vault-capture-paths";
 import { renderCaptureMarkdown } from "./vault-capture-renderer";
+import { indexVaultCapture } from "./supabase-indexing";
 import type { CMOVaultCaptureEvent, CMOVaultCaptureTarget } from "./vault-capture-types";
 
 const KNOWN_CAPTURE_FOLDERS = new Set([
@@ -92,6 +93,10 @@ export async function saveCaptureToCmoEngineVault(event: CMOVaultCaptureEvent, o
     await mkdir(dirname(candidateIndexPath), { recursive: true });
     await writeFile(candidateIndexPath, indexPayload, { encoding: "utf8", flag: "wx" });
   }
+  await indexVaultCapture({
+    event,
+    relativePath: finalRelative,
+  });
 
   return {
     ok: true,

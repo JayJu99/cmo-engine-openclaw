@@ -25,6 +25,10 @@ export function isCmoAuthRequired(): boolean {
   return envValue("CMO_AUTH_REQUIRED") === "true";
 }
 
+export function isCmoSupabaseIndexingEnabled(): boolean {
+  return envValue("CMO_SUPABASE_INDEXING_ENABLED") === "true";
+}
+
 export function getSupabasePublicConfig(): SupabasePublicConfig {
   const missing = missingEnv(["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY"]);
 

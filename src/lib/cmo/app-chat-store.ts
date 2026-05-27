@@ -36,6 +36,7 @@ import { executeMixedCmoEcho, isMixedCmoEchoRequest, mixedEchoNeedsClarification
 import { buildCmoEvidenceRuntimeMessage, executeCmoSurfEvidence } from "@/lib/cmo/cmo-surf-orchestrator";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
+import { indexChatMessages, indexChatSession } from "@/lib/cmo/supabase-indexing";
 import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { autoCaptureTurnOnce } from "@/lib/cmo/vault-auto-capture";
@@ -262,6 +263,10 @@ function safeId(value: string): string {
 
 function sessionPath(sessionId: string): string {
   return path.join(APP_CHAT_DIR, `${safeId(sessionId)}.json`);
+}
+
+function sessionJsonIndexPath(sessionId: string): string {
+  return path.relative(process.cwd(), sessionPath(sessionId)).replaceAll("\\", "/");
 }
 
 async function readJsonFile(filePath: string): Promise<unknown | null> {
@@ -962,6 +967,15 @@ export async function createAppChatSession(
     };
     await writeJsonFile(sessionPath(sessionId), persistedSession);
   }
+  await indexChatSession({
+    session: persistedSession,
+    jsonPath: sessionJsonIndexPath(sessionId),
+    auditCreated: !continuedSession,
+  });
+  await indexChatMessages({
+    session: persistedSession,
+    messages: session.messages.slice(-2),
+  });
 
   return {
     messageId: assistantId,
@@ -1220,6 +1234,15 @@ async function appendLocalCommandTurn(
   };
 
   await writeJsonFile(sessionPath(session.id), updated);
+  await indexChatSession({
+    session: updated,
+    jsonPath: sessionJsonIndexPath(session.id),
+    auditCreated: false,
+  });
+  await indexChatMessages({
+    session: updated,
+    messages: [userMessage, assistantMessage],
+  });
 
   return {
     messageId: assistantId,

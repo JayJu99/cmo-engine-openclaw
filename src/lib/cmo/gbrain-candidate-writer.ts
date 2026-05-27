@@ -10,7 +10,24 @@ const VALID_TYPES = new Set(["lesson", "decision", "entity", "content_pattern", 
 type WriteStatus = "written" | "skipped_duplicate" | "skipped_guardrail" | "dry_run";
 
 export interface GBrainCandidateWriteOptions { vaultRoot?: string; write?: boolean; createdAt?: string; }
-export interface GBrainCandidateWriteResult { status: WriteStatus; candidateHash: string; relativePath?: string; candidateType: string; proposedText: string; reason?: string; markdown?: string; }
+export interface GBrainCandidateWriteResult {
+  status: WriteStatus;
+  candidateHash: string;
+  relativePath?: string;
+  candidateType: string;
+  proposedText: string;
+  reason?: string;
+  markdown?: string;
+  createdAt?: string;
+  sourcePath?: string;
+  workspaceId?: string;
+  workspaceGroup?: string;
+  project?: string;
+  appId?: string;
+  userId?: string;
+  visibility?: "private" | "workspace" | "organization" | "system";
+  reviewStatus?: string;
+}
 
 function sha(value: string): string { return createHash("sha256").update(value).digest("hex").slice(0, 16); }
 function yaml(value: unknown): string { return JSON.stringify(value ?? ""); }
@@ -67,6 +84,28 @@ function warningFor(result: GBrainExtractionResult): string {
   if (result.sourceClass === "execution_artifact") return "Execution artifact: content/style candidate only, not fact.";
   if (result.sourceClass === "cmo_interpretation") return "CMO interpretation: decision candidate only, not promoted truth.";
   return "Review required before any promotion.";
+}
+
+function appIdForWorkspace(result: GBrainExtractionResult): string | undefined {
+  if (result.workspaceId === "world-app-holdstation-mini-app" || /holdstation mini app/i.test(result.project)) {
+    return "holdstation-mini-app";
+  }
+
+  return result.workspaceId || undefined;
+}
+
+function indexMetadata(result: GBrainExtractionResult, createdAt: string) {
+  return {
+    createdAt,
+    sourcePath: result.capturePath,
+    workspaceId: result.workspaceId,
+    workspaceGroup: result.workspaceGroup,
+    project: result.project,
+    appId: appIdForWorkspace(result),
+    userId: result.userId,
+    visibility: "private" as const,
+    reviewStatus: "review_candidate",
+  };
 }
 
 function renderCandidate(result: GBrainExtractionResult, candidate: GBrainMemoryCandidate, candidateHash: string, sourceHash: string, createdAt: string): { title: string; markdown: string } {
@@ -154,15 +193,16 @@ export function writeGBrainMemoryCandidates(results: GBrainExtractionResult[], o
       const hashScope = entity ? `${result.workspaceId}\nentity\n${entity.toLowerCase()}` : `${result.capturePath}\n${candidate.candidate_type}\n${candidate.proposed_text}`;
       const candidateHash = sha(hashScope);
       const guardrail = allowedByGuardrail(result, candidate);
-      if (guardrail) { out.push({ status: "skipped_guardrail", candidateHash, candidateType: candidate.candidate_type, proposedText: candidate.proposed_text, reason: guardrail }); continue; }
+      const metadata = indexMetadata(result, createdAt);
+      if (guardrail) { out.push({ status: "skipped_guardrail", candidateHash, candidateType: candidate.candidate_type, proposedText: candidate.proposed_text, reason: guardrail, ...metadata }); continue; }
       const rendered = renderCandidate(result, candidate, candidateHash, sourceHash, createdAt);
       const filename = `${createdAt.slice(0, 10)} - ${slug(candidate.candidate_type)} - ${slug(titleSeed(result, candidate))} - ${candidateHash}.md`;
       const abs = join(dir, filename);
       const rel = relative(vaultRoot, abs);
       if (!rel.startsWith(CANDIDATE_FOLDER + "/")) throw new Error(`Candidate path escapes proposal folder: ${rel}`);
-      if (existing.has(candidateHash) || existsSync(abs)) { out.push({ status: "skipped_duplicate", candidateHash, relativePath: rel, candidateType: candidate.candidate_type, proposedText: candidate.proposed_text }); continue; }
+      if (existing.has(candidateHash) || existsSync(abs)) { out.push({ status: "skipped_duplicate", candidateHash, relativePath: rel, candidateType: candidate.candidate_type, proposedText: candidate.proposed_text, ...metadata }); continue; }
       if (write) { writeFileSync(abs, rendered.markdown); existing.add(candidateHash); }
-      out.push({ status: write ? "written" : "dry_run", candidateHash, relativePath: rel, candidateType: candidate.candidate_type, proposedText: candidate.proposed_text, markdown: write ? undefined : rendered.markdown });
+      out.push({ status: write ? "written" : "dry_run", candidateHash, relativePath: rel, candidateType: candidate.candidate_type, proposedText: candidate.proposed_text, markdown: write ? undefined : rendered.markdown, ...metadata });
     }
   }
   return out;

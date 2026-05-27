@@ -143,6 +143,7 @@ export function buildCapturePreviewEvent(input: CMOVaultCapturePreviewInput): CM
     type: eventType,
     captureMode: "dry_run",
     title: titleFor(eventType, topic, createdAt),
+    appId: input.appId,
     sessionId: input.sessionId,
     requestId: input.messageId,
     createdAt,
