@@ -92,6 +92,7 @@ function includedContextLabels(input: CmoRuntimeTurnInput): string[] {
     latest_sessions: "Latest Sessions",
     promotion_candidates: "Memory Candidates",
     business_metrics: "Business Metrics",
+    indexed_context_supplement: "Indexed Context Supplement",
   };
 
   return input.contextPack.items

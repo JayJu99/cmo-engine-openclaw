@@ -17,6 +17,7 @@ import type {
   CmoAssumptionReviewStatus,
   CmoDecisionLayer,
   CmoDecisionReviewStatus,
+  CmoIndexedContextStatus,
   CmoMemoryCandidateReviewStatus,
   CmoSuggestedActionReviewStatus,
   CmoTaskCandidateReviewStatus,
@@ -37,6 +38,7 @@ import { buildCmoEvidenceRuntimeMessage, executeCmoSurfEvidence } from "@/lib/cm
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
 import { indexChatMessages, indexChatSession } from "@/lib/cmo/supabase-indexing";
+import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/lib/cmo/indexed-context-canary";
 import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { autoCaptureTurnOnce } from "@/lib/cmo/vault-auto-capture";
@@ -557,6 +559,10 @@ function normalizeAuthMode(value: unknown): CmoAuthMode | undefined {
   return value === "supabase" || value === "legacy" ? value : undefined;
 }
 
+function normalizeIndexedContextStatus(value: unknown): CmoIndexedContextStatus | undefined {
+  return value === "off" || value === "skipped" || value === "used" ? value : undefined;
+}
+
 function messageUserMetadata(identity: CmoServerUserIdentity): Pick<CMOChatMessage, "authMode" | "userId" | "userEmail"> {
   return {
     authMode: identity.authMode,
@@ -628,6 +634,9 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             runtimeErrorReason: normalizeRuntimeErrorReason(message.runtimeErrorReason),
             contextUsedCount: typeof message.contextUsedCount === "number" && Number.isFinite(message.contextUsedCount) ? Math.max(0, Math.floor(message.contextUsedCount)) : undefined,
             graphHintCount: typeof message.graphHintCount === "number" && Number.isFinite(message.graphHintCount) ? Math.max(0, Math.floor(message.graphHintCount)) : undefined,
+            indexedContextStatus: normalizeIndexedContextStatus(message.indexedContextStatus),
+            indexedContextSourcesCount: typeof message.indexedContextSourcesCount === "number" && Number.isFinite(message.indexedContextSourcesCount) ? Math.max(0, Math.floor(message.indexedContextSourcesCount)) : undefined,
+            indexedContextFallbackReason: normalizeOptionalString(message.indexedContextFallbackReason),
           };
         })
         .filter((message): message is CMOChatMessage => Boolean(message))
@@ -671,6 +680,9 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     graphHints,
     graphHintCount: typeof value.graphHintCount === "number" && Number.isFinite(value.graphHintCount) ? Math.max(0, Math.floor(value.graphHintCount)) : graphHints.length,
     graphStatus: normalizeGraphStatus(value.graphStatus),
+    indexedContextStatus: normalizeIndexedContextStatus(value.indexedContextStatus),
+    indexedContextSourcesCount: typeof value.indexedContextSourcesCount === "number" && Number.isFinite(value.indexedContextSourcesCount) ? Math.max(0, Math.floor(value.indexedContextSourcesCount)) : undefined,
+    indexedContextFallbackReason: normalizeOptionalString(value.indexedContextFallbackReason),
     decisionLayer,
     assumptions: normalizeStringList(value.assumptions),
     suggestedActions: normalizeSuggestedActions(value.suggestedActions),
@@ -709,7 +721,7 @@ export async function createAppChatSession(
         reason: "Live app-chat intentionally bypassed for fallback smoke.",
       })
     : await getRuntimeRegistry().selectRuntime();
-  const contextPackResult = withContextPackMessage(
+  const baseContextPackResult = withContextPackMessage(
     await buildContextPack({
       workspaceId: request.workspaceId,
       appId: request.appId,
@@ -717,6 +729,22 @@ export async function createAppChatSession(
     }),
     request.message,
   );
+  const indexedContextSupplement = await buildIndexedContextSupplement({
+    appId: request.appId,
+    query: request.message,
+    limit: 6,
+    userId: userIdentity.userId ?? "",
+    userEmail: userIdentity.userEmail,
+    isOwnerOrAdmin: userIdentity.authMode === "legacy",
+  });
+  const indexedContextStatus: CmoIndexedContextStatus = indexedContextSupplement.used
+    ? "used"
+    : indexedContextSupplement.enabled
+      ? "skipped"
+      : "off";
+  const indexedContextSourcesCount = indexedContextSupplement.sources.length;
+  const indexedContextFallbackReason = indexedContextSupplement.fallbackReason;
+  const contextPackResult = applyIndexedContextSupplement(baseContextPackResult, indexedContextSupplement);
   const { contextPackage, contextUsed, missingContext, contextDiagnostics, contextQualitySummary } = contextPackResult;
   const graphHints = contextPackage.graphHints ?? [];
   const graphHintCount = contextPackage.graphHintCount ?? graphHints.length;
@@ -914,6 +942,9 @@ export async function createAppChatSession(
     graphHints,
     graphHintCount,
     graphStatus,
+    indexedContextStatus,
+    indexedContextSourcesCount,
+    ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
     decisionLayer,
     messages: [
       ...(continuedSession?.messages ?? []),
@@ -937,6 +968,9 @@ export async function createAppChatSession(
         ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
         contextUsedCount: contextUsed.length,
         graphHintCount,
+        indexedContextStatus,
+        indexedContextSourcesCount,
+        ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
       },
     ],
   };
@@ -1001,6 +1035,9 @@ export async function createAppChatSession(
     graphHints,
     graphHintCount,
     graphStatus,
+    indexedContextStatus,
+    indexedContextSourcesCount,
+    ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
     decisionLayer,
     rawCapturePath: persistedSession.rawCapturePath,
     rawCaptureStatus: persistedSession.rawCaptureStatus,

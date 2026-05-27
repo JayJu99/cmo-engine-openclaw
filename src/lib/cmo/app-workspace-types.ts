@@ -585,7 +585,14 @@ export interface CMOContextQualitySummary {
 export type ContextPackPolicyVersion = "context-pack-v1";
 export type CmoRuntimeMode = "live" | "fallback" | "configured_but_unreachable";
 export type ContextPackRuntimeMode = CmoRuntimeMode | "connected" | "not_configured" | "runtime_error";
-export type ContextItemKind = "current_priority" | "app_memory" | "latest_sessions" | "promotion_candidates" | "business_metrics";
+export type ContextItemKind =
+  | "current_priority"
+  | "app_memory"
+  | "latest_sessions"
+  | "promotion_candidates"
+  | "business_metrics"
+  | "indexed_context_supplement";
+export type CmoIndexedContextStatus = "off" | "skipped" | "used";
 export type CmoRuntimeErrorReason =
   | "unsupported_chat_turn"
   | "timeout"
@@ -599,7 +606,7 @@ export interface ContextItem {
   title: string;
   source: {
     sourceId: string;
-    type: "vault_note" | "vault_bundle" | "session_store" | "derived_candidates" | "business_metrics_json";
+    type: "vault_note" | "vault_bundle" | "session_store" | "derived_candidates" | "business_metrics_json" | "indexed_context_preview";
     label: string;
     path?: string;
   };
@@ -747,6 +754,9 @@ export interface CMOChatMessage {
   runtimeErrorReason?: CmoRuntimeErrorReason;
   contextUsedCount?: number;
   graphHintCount?: number;
+  indexedContextStatus?: CmoIndexedContextStatus;
+  indexedContextSourcesCount?: number;
+  indexedContextFallbackReason?: string;
 }
 
 export interface CMOChatSession {
@@ -781,6 +791,9 @@ export interface CMOChatSession {
   graphHints?: ContextGraphHint[];
   graphHintCount?: number;
   graphStatus?: ContextGraphStatus;
+  indexedContextStatus?: CmoIndexedContextStatus;
+  indexedContextSourcesCount?: number;
+  indexedContextFallbackReason?: string;
   decisionLayer?: CmoDecisionLayer;
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
@@ -835,6 +848,9 @@ export interface CMOAppChatResponse {
   graphHints?: ContextGraphHint[];
   graphHintCount?: number;
   graphStatus?: ContextGraphStatus;
+  indexedContextStatus?: CmoIndexedContextStatus;
+  indexedContextSourcesCount?: number;
+  indexedContextFallbackReason?: string;
   decisionLayer?: CmoDecisionLayer;
   rawCapturePath?: string;
   rawCaptureStatus?: "saved" | "failed" | "pending";

@@ -29,6 +29,23 @@ export function isCmoSupabaseIndexingEnabled(): boolean {
   return envValue("CMO_SUPABASE_INDEXING_ENABLED") === "true";
 }
 
+export function isCmoIndexedContextEnabled(): boolean {
+  return envValue("CMO_INDEXED_CONTEXT_ENABLED") === "true";
+}
+
+export function getCmoIndexedContextCanaryApps(): string[] {
+  const configured = envValue("CMO_INDEXED_CONTEXT_CANARY_APPS") || "holdstation-mini-app";
+
+  return configured
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function getCmoIndexedContextMode(): "supplemental" | string {
+  return envValue("CMO_INDEXED_CONTEXT_MODE") || "supplemental";
+}
+
 export function getSupabasePublicConfig(): SupabasePublicConfig {
   const missing = missingEnv(["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY"]);
 

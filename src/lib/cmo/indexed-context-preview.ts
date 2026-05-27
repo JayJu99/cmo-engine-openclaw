@@ -11,7 +11,7 @@ import type {
 } from "@/lib/cmo/indexed-context-resolver";
 import { CMO_ENGINE_VAULT_PATH } from "@/lib/cmo/vault-capture-paths";
 
-const APP_CHAT_DIR = path.join(process.cwd(), "data", "cmo-dashboard", "app-chat");
+const APP_CHAT_DIR = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "cmo-dashboard", "app-chat");
 const APP_CHAT_PREFIX = "data/cmo-dashboard/app-chat/";
 const SESSION_EXCERPT_CHARS = 560;
 const CAPTURE_EXCERPT_CHARS = 700;
@@ -89,7 +89,7 @@ function safeResolveSessionJson(appChatRoot: string, requestedPath: string | nul
 
   const normalized = requestedPath.replaceAll("\\", "/");
   const repoRelativePath = normalized.startsWith(APP_CHAT_PREFIX) ? normalized : `${APP_CHAT_PREFIX}${normalized}`;
-  const resolved = path.resolve(process.cwd(), repoRelativePath);
+  const resolved = path.resolve(/*turbopackIgnore: true*/ process.cwd(), repoRelativePath);
   return isInside(appChatRoot, resolved) ? resolved : null;
 }
 

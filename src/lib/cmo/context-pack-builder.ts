@@ -1193,6 +1193,7 @@ function contextBrief(app: AppWorkspace, contextPack: ContextPack): CMOContextBr
     latest_sessions: "Latest Sessions",
     promotion_candidates: "Memory Candidates",
     business_metrics: "Business Metrics",
+    indexed_context_supplement: "Indexed Context Supplement",
   };
 
   return {
