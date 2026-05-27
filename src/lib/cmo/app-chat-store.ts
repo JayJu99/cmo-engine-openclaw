@@ -11,6 +11,7 @@ import type {
   CMOChatMessage,
   CMOChatSession,
   CMORuntimeStatus,
+  CmoAuthMode,
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
   CmoAssumptionReviewStatus,
@@ -35,6 +36,7 @@ import { executeMixedCmoEcho, isMixedCmoEchoRequest, mixedEchoNeedsClarification
 import { buildCmoEvidenceRuntimeMessage, executeCmoSurfEvidence } from "@/lib/cmo/cmo-surf-orchestrator";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
+import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { autoCaptureTurnOnce } from "@/lib/cmo/vault-auto-capture";
 
@@ -546,6 +548,30 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
+function normalizeAuthMode(value: unknown): CmoAuthMode | undefined {
+  return value === "supabase" || value === "legacy" ? value : undefined;
+}
+
+function messageUserMetadata(identity: CmoServerUserIdentity): Pick<CMOChatMessage, "authMode" | "userId" | "userEmail"> {
+  return {
+    authMode: identity.authMode,
+    ...(identity.userId ? { userId: identity.userId } : {}),
+    ...(identity.userEmail ? { userEmail: identity.userEmail } : {}),
+  };
+}
+
+function assistantSourceMetadata(
+  identity: CmoServerUserIdentity,
+  userMessageId: string,
+): Pick<CMOChatMessage, "authMode" | "sourceUserId" | "sourceUserEmail" | "sourceUserMessageId"> {
+  return {
+    authMode: identity.authMode,
+    ...(identity.userId ? { sourceUserId: identity.userId } : {}),
+    ...(identity.userEmail ? { sourceUserEmail: identity.userEmail } : {}),
+    sourceUserMessageId: userMessageId,
+  };
+}
+
 function appendMessage(session: CMOChatSession, message: CMOChatMessage): CMOChatSession {
   return {
     ...session,
@@ -584,6 +610,12 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             role,
             content: stringValue(message.content),
             createdAt: stringValue(message.createdAt, new Date(0).toISOString()),
+            authMode: normalizeAuthMode(message.authMode),
+            userId: normalizeOptionalString(message.userId),
+            userEmail: normalizeOptionalString(message.userEmail),
+            sourceUserId: normalizeOptionalString(message.sourceUserId),
+            sourceUserEmail: normalizeOptionalString(message.sourceUserEmail),
+            sourceUserMessageId: normalizeOptionalString(message.sourceUserMessageId),
             runtimeMode: normalizeRuntimeMode(message.runtimeMode, normalizeRuntimeStatus(message.runtimeStatus, false), false),
             runtimeStatus: normalizeRuntimeStatus(message.runtimeStatus, false),
             runtimeProvider: normalizeRuntimeProvider(message.runtimeProvider),
@@ -607,6 +639,12 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     appId,
     appName,
     topic: stringValue(value.topic),
+    authMode: normalizeAuthMode(value.authMode),
+    userId: normalizeOptionalString(value.userId),
+    userEmail: normalizeOptionalString(value.userEmail),
+    organizationId: normalizeOptionalString(value.organizationId),
+    createdByUserId: normalizeOptionalString(value.createdByUserId),
+    createdByEmail: normalizeOptionalString(value.createdByEmail),
     messages,
     contextUsed,
     status: value.status === "running" || value.status === "failed" ? value.status : "completed",
@@ -642,7 +680,10 @@ function normalizeSession(value: unknown): CMOChatSession | null {
   };
 }
 
-export async function createAppChatSession(body: unknown): Promise<CMOAppChatResponse> {
+export async function createAppChatSession(
+  body: unknown,
+  userIdentity: CmoServerUserIdentity = legacyUserIdentity(),
+): Promise<CMOAppChatResponse> {
   const request = normalizeAppChatRequest(body);
   const now = new Date().toISOString();
   const existingSession = request.sessionId ? await readAppChatSession(request.sessionId) : null;
@@ -652,7 +693,7 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
   const localCommand = continuedSession ? parseLocalChatCommand(request.message) : null;
 
   if (localCommand && continuedSession) {
-    return handleLocalChatCommand(localCommand, request, continuedSession, now, messageId, assistantId);
+    return handleLocalChatCommand(localCommand, request, continuedSession, now, messageId, assistantId, userIdentity);
   }
 
   const runtime = request.forceFallback
@@ -840,6 +881,12 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     appId: request.appId,
     appName: request.appName,
     topic: continuedSession?.topic || request.topic || request.message.slice(0, 96),
+    authMode: continuedSession?.authMode ?? userIdentity.authMode,
+    userId: continuedSession?.userId ?? userIdentity.userId,
+    userEmail: continuedSession?.userEmail ?? userIdentity.userEmail,
+    organizationId: continuedSession?.organizationId ?? userIdentity.organizationId,
+    createdByUserId: continuedSession?.createdByUserId ?? userIdentity.createdByUserId,
+    createdByEmail: continuedSession?.createdByEmail ?? userIdentity.createdByEmail,
     status,
     createdAt: continuedSession?.createdAt ?? now,
     updatedAt: now,
@@ -870,12 +917,14 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
         role: "user",
         content: request.message,
         createdAt: now,
+        ...messageUserMetadata(userIdentity),
       },
       {
         id: assistantId,
         role: "assistant",
         content: answer,
         createdAt: now,
+        ...assistantSourceMetadata(userIdentity, messageId),
         runtimeMode,
         runtimeStatus,
         ...(runtimeProvider ? { runtimeProvider } : {}),
@@ -895,6 +944,7 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     session,
     assistantMessageId: assistantId,
     sourceUserMessageId: messageId,
+    userIdentity,
     answer,
     routeKind: "app-chat-response",
     runtimeSource: runtimeProvider,
@@ -1141,18 +1191,21 @@ async function appendLocalCommandTurn(
   now: string,
   messageId: string,
   assistantId: string,
+  userIdentity: CmoServerUserIdentity,
 ): Promise<CMOAppChatResponse> {
   const userMessage: CMOChatMessage = {
     id: messageId,
     role: "user",
     content: request.message,
     createdAt: now,
+    ...messageUserMetadata(userIdentity),
   };
   const assistantMessage: CMOChatMessage = {
     id: assistantId,
     role: "assistant",
     content: answer,
     createdAt: now,
+    ...assistantSourceMetadata(userIdentity, messageId),
     runtimeMode: session.runtimeMode,
     runtimeStatus: session.runtimeStatus,
     runtimeProvider: "dashboard",
@@ -1201,6 +1254,7 @@ async function handleLocalChatCommand(
   now: string,
   messageId: string,
   assistantId: string,
+  userIdentity: CmoServerUserIdentity,
 ): Promise<CMOAppChatResponse> {
   if (command.type === "pending_summary") {
     const answer = [
@@ -1213,7 +1267,7 @@ async function handleLocalChatCommand(
       "Nothing is pushed to Task Tracker or promoted to App Memory automatically.",
     ].join("\n");
 
-    return appendLocalCommandTurn(session, request, answer, now, messageId, assistantId);
+    return appendLocalCommandTurn(session, request, answer, now, messageId, assistantId, userIdentity);
   }
 
   const layer = session.decisionLayer;
@@ -1226,6 +1280,7 @@ async function handleLocalChatCommand(
       now,
       messageId,
       assistantId,
+      userIdentity,
     );
   }
 
@@ -1238,7 +1293,7 @@ async function handleLocalChatCommand(
       "Nothing was changed.",
     ].join("\n");
 
-    return appendLocalCommandTurn(session, request, answer, now, messageId, assistantId);
+    return appendLocalCommandTurn(session, request, answer, now, messageId, assistantId, userIdentity);
   }
 
   const reviewedSession = await updateDecisionLayerReview({
@@ -1256,7 +1311,7 @@ async function handleLocalChatCommand(
     command.boundaryCopy,
   ].join(" ");
 
-  return appendLocalCommandTurn(updatedSession, request, answer, now, messageId, assistantId);
+  return appendLocalCommandTurn(updatedSession, request, answer, now, messageId, assistantId, userIdentity);
 }
 
 export async function updateAppChatSessionMetadata(

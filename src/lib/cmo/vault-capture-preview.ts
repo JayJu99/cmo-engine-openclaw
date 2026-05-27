@@ -13,7 +13,15 @@ export interface CMOVaultCapturePreviewInput {
   workspaceId?: string;
   workspaceGroup?: string;
   project?: string;
+  authMode?: "supabase" | "legacy";
   userId?: string;
+  userEmail?: string;
+  organizationId?: string;
+  createdByUserId?: string;
+  createdByEmail?: string;
+  sourceUserId?: string;
+  sourceUserEmail?: string;
+  sourceUserMessageId?: string;
   sourceUrls?: string[];
   related?: string[];
 }
@@ -138,7 +146,15 @@ export function buildCapturePreviewEvent(input: CMOVaultCapturePreviewInput): CM
     sessionId: input.sessionId,
     requestId: input.messageId,
     createdAt,
+    authMode: input.authMode,
     userId: input.userId,
+    userEmail: input.userEmail,
+    organizationId: input.organizationId,
+    createdByUserId: input.createdByUserId,
+    createdByEmail: input.createdByEmail,
+    sourceUserId: input.sourceUserId,
+    sourceUserEmail: input.sourceUserEmail,
+    sourceUserMessageId: input.sourceUserMessageId,
     workspaceId: workspace.workspaceId,
     workspaceGroup: workspace.workspaceGroup,
     project: workspace.project,

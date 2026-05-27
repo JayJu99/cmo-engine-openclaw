@@ -6,6 +6,7 @@ import {
   isCmoAuthRequired,
 } from "@/lib/supabase/config";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { legacyUserIdentity, supabaseUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 
 export interface CmoCurrentUser {
   id: string;
@@ -154,4 +155,17 @@ export function getLegacyOwnerContextIfAuthDisabled(): CmoLegacyOwnerContext | n
     isAuthenticated: false,
     reason: "auth_disabled",
   };
+}
+
+export async function getServerUserIdentity(): Promise<CmoServerUserIdentity> {
+  const context = await requireRequestUserIfAuthRequired();
+
+  if (context.mode === "supabase") {
+    return supabaseUserIdentity({
+      userId: context.userId,
+      userEmail: context.email,
+    });
+  }
+
+  return legacyUserIdentity();
 }

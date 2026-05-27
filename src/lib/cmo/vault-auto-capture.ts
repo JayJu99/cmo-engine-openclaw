@@ -4,6 +4,7 @@ import { buildCapturePreviewEvent } from "./vault-capture-preview";
 import { extractCaptureTestMarker } from "./vault-capture-paths";
 import { cmoEngineVaultRoot, saveCaptureToCmoEngineVault } from "./vault-capture-writer";
 import type { CMOAppChatRequest, CMOChatSession } from "./app-workspace-types";
+import type { CmoServerUserIdentity } from "./user-metadata";
 import type { CMOVaultCaptureEvent, CMOVaultCaptureEventType, CMOVaultSourceClass } from "./vault-capture-types";
 
 interface AutoCaptureContext {
@@ -11,6 +12,7 @@ interface AutoCaptureContext {
   session: CMOChatSession;
   assistantMessageId: string;
   sourceUserMessageId?: string;
+  userIdentity?: CmoServerUserIdentity;
   answer: string;
   /** Test/instrumentation-only proposed type for derived secondary attempts; UI eventType must never be passed here. */
   proposedCaptureType?: CMOVaultCaptureEventType;
@@ -216,11 +218,23 @@ export async function autoCaptureTurnOnce(ctx: AutoCaptureContext): Promise<Auto
   }
 
   const fanOutWarnings = ["Auto-capture fan-out guard active: one assistant message can write only this single selected capture."];
+  const authMode = ctx.userIdentity?.authMode ?? ctx.session.authMode;
+  const userId = ctx.userIdentity?.userId ?? ctx.session.userId;
+  const userEmail = ctx.userIdentity?.userEmail ?? ctx.session.userEmail;
   const event = buildCapturePreviewEvent({
     appId: ctx.request.appId,
     workspaceId: ctx.request.appId,
     sessionId: ctx.session.id,
     messageId: ctx.assistantMessageId,
+    authMode,
+    userId,
+    userEmail,
+    organizationId: ctx.userIdentity?.organizationId ?? ctx.session.organizationId,
+    createdByUserId: ctx.userIdentity?.createdByUserId ?? ctx.session.createdByUserId,
+    createdByEmail: ctx.userIdentity?.createdByEmail ?? ctx.session.createdByEmail,
+    sourceUserId: userId,
+    sourceUserEmail: userEmail,
+    sourceUserMessageId: ctx.sourceUserMessageId,
     eventType: classification.type,
     content: ctx.answer,
     createdAt: ctx.session.updatedAt,
@@ -235,6 +249,7 @@ export async function autoCaptureTurnOnce(ctx: AutoCaptureContext): Promise<Auto
     captureMode: "auto_raw",
     captureOrigin: "auto",
     gbrainStatus: "pending",
+    visibility: "workspace",
     messageId: ctx.assistantMessageId,
     requestId: ctx.assistantMessageId,
     reviewStatus: classification.reviewStatus === "raw" || classification.reviewStatus === "review_candidate" ? classification.reviewStatus : undefined,
@@ -247,6 +262,8 @@ export async function autoCaptureTurnOnce(ctx: AutoCaptureContext): Promise<Auto
       runtime_label: ctx.runtimeLabel,
       runtime_provider: ctx.runtimeProvider,
       runtime_agent: ctx.runtimeAgent,
+      auth_mode: authMode,
+      source_user_message_id: ctx.sourceUserMessageId,
     },
   };
   if (extractCaptureTestMarker(ctx.request.message)) {

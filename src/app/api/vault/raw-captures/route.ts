@@ -1,5 +1,7 @@
 import { saveRawCapture } from "@/lib/cmo/vault-files";
 import type { RawCaptureRequest } from "@/lib/cmo/app-workspace-types";
+import { getServerUserIdentity } from "@/lib/cmo/auth";
+import { applyServerUserIdentity } from "@/lib/cmo/user-metadata";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,7 +46,9 @@ export async function POST(request: Request) {
       );
     }
 
-    return Response.json(await saveRawCapture(body), { status: 201 });
+    const serverBody = applyServerUserIdentity(body, await getServerUserIdentity());
+
+    return Response.json(await saveRawCapture(serverBody), { status: 201 });
   } catch (error) {
     if (error instanceof SyntaxError) {
       return Response.json(

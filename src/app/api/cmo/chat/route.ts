@@ -1,5 +1,6 @@
 import { readDashboardChats, startDashboardChat } from "@/lib/cmo/adapter";
 import { createAppChatSession, isAppChatPayload, readAppChatSessions } from "@/lib/cmo/app-chat-store";
+import { getServerUserIdentity } from "@/lib/cmo/auth";
 import { cmoErrorResponse } from "@/lib/cmo/errors";
 
 const CMO_CHAT_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
@@ -34,7 +35,7 @@ export async function POST(request: Request) {
     const body = await readRequestPayload(request);
 
     if (isAppChatPayload(body)) {
-      return Response.json(await createAppChatSession(body), { status: 200 });
+      return Response.json(await createAppChatSession(body, await getServerUserIdentity()), { status: 200 });
     }
 
     const result = await startDashboardChat(body);

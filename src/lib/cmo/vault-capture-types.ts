@@ -10,6 +10,7 @@ export type CMOVaultCaptureEventType =
   | "ops_event";
 
 export type CMOVaultCaptureMode = "off" | "dry_run" | "manual" | "auto_raw";
+export type CMOVaultCaptureAuthMode = "supabase" | "legacy";
 
 export type CMOVaultSourceAgent = "CMO" | "Echo" | "Surf";
 
@@ -37,7 +38,7 @@ export type CMOVaultReviewStatus =
   | "rejected"
   | "superseded";
 
-export type CMOVaultVisibility = "private" | "internal";
+export type CMOVaultVisibility = "private" | "workspace" | "organization" | "system" | "internal";
 
 export interface CMOVaultEvidenceLink {
   label?: string;
@@ -58,7 +59,15 @@ export interface CMOVaultCaptureEvent {
   sessionId?: string;
   requestId?: string;
   createdAt: string;
+  authMode?: CMOVaultCaptureAuthMode;
   userId?: string;
+  userEmail?: string;
+  organizationId?: string;
+  createdByUserId?: string;
+  createdByEmail?: string;
+  sourceUserId?: string;
+  sourceUserEmail?: string;
+  sourceUserMessageId?: string;
   workspaceId?: string;
   workspaceGroup?: string;
   project?: string;
