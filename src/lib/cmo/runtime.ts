@@ -164,6 +164,15 @@ function runtimeNote(reason: string): string {
     : `${reason} Fallback generated this response from workspace context.`;
 }
 
+export function cleanFallbackAnswerFormatting(answer: string): string {
+  return answer
+    .replace(/^##\s+Context Used\s+Contex(?:t)?\s*$/gim, "## Context Used")
+    .replace(/^(##\s+Context Used)\s+Contex(?:t)?\s*$/gim, "$1")
+    .replace(/(\n##\s+Context Used\s*\n\s*){2,}/gi, "\n## Context Used\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function businessMetricsFallbackAnswer(input: CmoRuntimeTurnInput, note: string): FallbackComposition {
   const item = input.contextPack.items.find((contextItem) => contextItem.kind === "business_metrics");
 
@@ -424,7 +433,7 @@ export class FallbackRuntime implements CmoRuntime {
     const fallback = fallbackAnswer(input, this.reason);
 
     return {
-      answer: fallback.answer,
+      answer: cleanFallbackAnswerFormatting(fallback.answer),
       assumptions: [],
       suggestedActions: fallback.suggestedActions,
       runtimeStatus: this.status,

@@ -195,6 +195,55 @@ function validateHermesEchoResponse(value: unknown): HermesEchoResponse | null {
   };
 }
 
+function compactText(value: string, max = 500): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function structuredErrorMessage(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  for (const key of ["error", "message", "detail", "blocker", "reason"]) {
+    if (typeof value[key] === "string" && value[key].trim()) {
+      return value[key].trim();
+    }
+  }
+
+  if (typeof value.code === "string" && value.code.trim()) {
+    return value.code.trim();
+  }
+
+  return null;
+}
+
+async function hermesHttpFailureReason(response: Response, agentLabel: string): Promise<string> {
+  let detail = "";
+
+  try {
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const data = await response.json() as unknown;
+      detail = structuredErrorMessage(data) ?? compactText(JSON.stringify(data));
+    } else {
+      detail = compactText(await response.text());
+    }
+  } catch {
+    detail = "";
+  }
+
+  const base = `${agentLabel} returned HTTP ${response.status}.`;
+  const category = response.status === 502
+    ? " Upstream gateway/runtime error from Hermes or its reverse proxy."
+    : response.status === 404
+      ? " Endpoint not found; check Hermes route configuration."
+      : response.status === 401 || response.status === 403
+        ? " Authentication/authorization failed; check Hermes API key configuration."
+        : "";
+
+  return detail ? `${base}${category} Detail: ${detail}` : `${base}${category}`;
+}
+
 export async function executeHermesEcho(brief: HermesEchoBrief): Promise<HermesEchoExecutionResult> {
   const baseUrl = process.env.CMO_HERMES_BASE_URL?.replace(/\/+$/g, "");
   const apiKey = process.env.CMO_HERMES_API_KEY;
@@ -226,7 +275,7 @@ export async function executeHermesEcho(brief: HermesEchoBrief): Promise<HermesE
     });
 
     if (!response.ok) {
-      return { ok: false, failureReason: `Hermes Echo returned HTTP ${response.status}.` };
+      return { ok: false, failureReason: await hermesHttpFailureReason(response, "Hermes Echo") };
     }
 
     let data: unknown;
@@ -313,7 +362,7 @@ export async function executeHermesSurf(brief: HermesSurfBrief): Promise<HermesS
     });
 
     if (!response.ok) {
-      return { ok: false, failureReason: `Hermes Surf returned HTTP ${response.status}.` };
+      return { ok: false, failureReason: await hermesHttpFailureReason(response, "Hermes Surf") };
     }
 
     let data: unknown;
@@ -371,7 +420,7 @@ export async function executeHermesSurfLast30Days(brief: HermesSurfLast30DaysBri
     });
 
     if (!response.ok) {
-      return { ok: false, failureReason: `Hermes Surf Last30Days returned HTTP ${response.status}.` };
+      return { ok: false, failureReason: await hermesHttpFailureReason(response, "Hermes Surf Last30Days") };
     }
 
     let data: unknown;
@@ -430,7 +479,7 @@ export async function executeHermesSurfX(brief: HermesSurfXBrief): Promise<Herme
     });
 
     if (!response.ok) {
-      return { ok: false, failureReason: `Hermes Surf X returned HTTP ${response.status}.` };
+      return { ok: false, failureReason: await hermesHttpFailureReason(response, "Hermes Surf X") };
     }
 
     let data: unknown;
