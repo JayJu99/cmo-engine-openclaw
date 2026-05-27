@@ -1,0 +1,53 @@
+{
+  "schema_version": "hermes.cmo.request.v1",
+  "request_id": "req_20260528_vault_001",
+  "session_id": "session_h1_demo",
+  "turn_id": "turn_vault_001",
+  "created_at": "2026-05-28T10:20:00+07:00",
+  "workspace": {
+    "workspace_id": "world-app-holdstation-mini-app",
+    "app_id": "holdstation-mini-app",
+    "app_name": "Holdstation Mini App"
+  },
+  "user": {
+    "user_id": "server_derived_user_id",
+    "display_name": "Jay"
+  },
+  "intent": {
+    "mode": "cmo.default",
+    "user_message": "Lưu lại decision này: CMO không được write Vault trực tiếp, chỉ delegate cho Vault Agent khi có save intent.",
+    "explicit_command": "save"
+  },
+  "context_pack": {
+    "current_priority": [],
+    "selected_context": [
+      {
+        "type": "architecture_decision",
+        "title": "CMO Vault boundary",
+        "content": "CMO cannot write Vault directly. CMO can delegate to Vault Agent when save intent is explicit."
+      }
+    ],
+    "recent_session_summary": null,
+    "indexed_context_supplement": [],
+    "artifacts_in": []
+  },
+  "constraints": {
+    "no_direct_vault_write": true,
+    "no_direct_memory_mutation": true,
+    "vault_agent_delegation_allowed": true,
+    "vault_agent_requires_save_intent": true,
+    "kanban_enabled": false,
+    "demo_mode": true,
+    "allowed_agents": ["echo", "surf", "vault_agent"],
+    "allowed_surf_modes": [
+      "surf.default",
+      "surf.x",
+      "surf.trend",
+      "surf.pulse"
+    ]
+  },
+  "ui": {
+    "activity_stream_required": true,
+    "heartbeat_required": true
+  }
+}

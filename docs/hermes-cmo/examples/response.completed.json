@@ -1,0 +1,63 @@
+{
+  "schema_version": "hermes.cmo.response.v1",
+  "request_id": "req_20260528_strategy_001",
+  "session_id": "session_h1_demo",
+  "turn_id": "turn_strategy_001",
+  "status": "completed",
+  "answer_basis": {
+    "mode": "fully_grounded",
+    "missing_inputs": [],
+    "assumptions_used": [],
+    "user_can_override": true,
+    "suggested_user_inputs": []
+  },
+  "clarifying_question": {
+    "required": false,
+    "question": null,
+    "reason": null,
+    "missing_inputs": []
+  },
+  "answer": {
+    "format": "markdown",
+    "title": "Demo readiness review",
+    "summary": "The plan is directionally strong for demo, but it needs a clearer first action, visible agent heartbeat, and one measurable activation loop.",
+    "decision": "Proceed with revisions",
+    "body": "Recommendation: keep the demo scope narrow. Show the user request, CMO reasoning boundary, Activity Stream progress, and final recommendation. Do not introduce Kanban or durable workflow yet."
+  },
+  "structured_output": {
+    "diagnosis": [
+      "The plan is aligned with demo readiness rather than production workflow.",
+      "The main gap is making the activation loop observable and measurable."
+    ],
+    "recommendations": [
+      "Prioritize Activity Stream and Heartbeat visibility.",
+      "Keep Kanban out of the demo.",
+      "Use memory_suggestion for weak memory-worthy outputs."
+    ],
+    "risks": [
+      "Adding durable workflow too early will blur the demo story.",
+      "Unsupported activation claims would weaken trust."
+    ],
+    "next_steps": [
+      "Define the exact first action the demo user should take.",
+      "Show when CMO is waiting on Surf or Echo.",
+      "Keep CMO Engine persistence unchanged."
+    ]
+  },
+  "delegations": [],
+  "artifacts": [],
+  "memory_suggestions": [
+    {
+      "suggestion_id": "mem_sug_001",
+      "type": "architecture_decision",
+      "title": "H1 demo uses Activity Stream before Kanban",
+      "reason": "This boundary is likely useful for later implementation phases.",
+      "confidence": "medium",
+      "requires_user_save_intent": true
+    }
+  ],
+  "activity_summary": {
+    "events_count": 5,
+    "final_state": "completed"
+  }
+}

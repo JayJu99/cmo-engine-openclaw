@@ -1,0 +1,31 @@
+{
+  "schema_version": "hermes.cmo.response.v1",
+  "request_id": "req_20260528_002",
+  "session_id": "session_abc",
+  "turn_id": "turn_def",
+  "status": "needs_user_input",
+  "answer_basis": {
+    "mode": "needs_user_input",
+    "missing_inputs": ["review_lens"],
+    "assumptions_used": [],
+    "user_can_override": true,
+    "suggested_user_inputs": [
+      "Tell CMO whether to review strategy, execution risk, demo readiness, or content quality"
+    ]
+  },
+  "clarifying_question": {
+    "required": true,
+    "question": "Bạn muốn mình review plan này theo góc strategy, execution risk, demo readiness, hay content quality?",
+    "reason": "The request is broad and a review lens is required for a reliable answer.",
+    "missing_inputs": ["review_lens"]
+  },
+  "answer": null,
+  "structured_output": null,
+  "delegations": [],
+  "artifacts": [],
+  "memory_suggestions": [],
+  "activity_summary": {
+    "events_count": 3,
+    "final_state": "waiting_for_user"
+  }
+}

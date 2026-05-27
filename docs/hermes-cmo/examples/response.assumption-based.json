@@ -1,0 +1,63 @@
+{
+  "schema_version": "hermes.cmo.response.v1",
+  "request_id": "req_20260528_001",
+  "session_id": "session_abc",
+  "turn_id": "turn_abc",
+  "status": "completed",
+  "answer_basis": {
+    "mode": "assumption_based",
+    "missing_inputs": ["latest campaign metrics"],
+    "assumptions_used": [
+      {
+        "assumption": "The current goal is demo readiness, not full production readiness.",
+        "reason": "The request context mentions demo scope.",
+        "impact": "Recommendations prioritize simple, visible user feedback loops over durable workflow infrastructure."
+      }
+    ],
+    "user_can_override": true,
+    "suggested_user_inputs": [
+      "Confirm whether the goal is demo readiness or production readiness",
+      "Provide latest campaign metrics"
+    ]
+  },
+  "clarifying_question": {
+    "required": false,
+    "question": null,
+    "reason": null,
+    "missing_inputs": []
+  },
+  "answer": {
+    "format": "markdown",
+    "title": "Review kế hoạch Holdstation Mini App",
+    "summary": "Plan hiện tại ổn về hướng chiến lược, nhưng cần làm rõ activation loop và measurement layer.",
+    "decision": "Proceed with revisions",
+    "body": "Mình đang thiếu latest campaign metrics. Vì vậy mình giả định goal hiện tại là demo readiness, không phải production readiness. Nếu giả định này đúng, recommendation là ưu tiên Activity Stream, Heartbeat, và một activation loop dễ thấy trước khi thêm Kanban."
+  },
+  "structured_output": {
+    "diagnosis": [
+      "The strategy is coherent for a demo-readiness objective.",
+      "The plan still lacks campaign metrics and measurement detail."
+    ],
+    "recommendations": [
+      "Show Activity Stream and Heartbeat in the demo.",
+      "Keep Kanban as post-demo production workflow.",
+      "Ask for campaign metrics before making scale decisions."
+    ],
+    "risks": [
+      "Without metrics, CMO should not recommend SCALE.",
+      "If the true goal is production readiness, the recommendation is under-scoped."
+    ],
+    "next_steps": [
+      "Confirm demo readiness vs production readiness.",
+      "Provide latest campaign metrics if available.",
+      "Define the single activation metric the demo should show."
+    ]
+  },
+  "delegations": [],
+  "artifacts": [],
+  "memory_suggestions": [],
+  "activity_summary": {
+    "events_count": 8,
+    "final_state": "completed"
+  }
+}
