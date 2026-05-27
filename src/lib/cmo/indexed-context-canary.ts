@@ -280,6 +280,29 @@ async function previewIndexedRecordsForCanary(
   };
 }
 
+async function resolveAndPreviewForCanary(
+  input: IndexedContextResolverInput,
+): Promise<{
+  ok: boolean;
+  workspaceId?: string;
+  sources: IndexedContextSupplementSource[];
+  warnings: string[];
+}> {
+  const resolverOutput = await resolveIndexedContextDryRun({
+    ...input,
+    includeSystem: false,
+    limit: Math.min(input.limit ?? 6, 6),
+  });
+  const preview = await previewIndexedRecordsForCanary(resolverOutput.records);
+
+  return {
+    ok: resolverOutput.ok,
+    workspaceId: resolverOutput.workspaceId,
+    sources: preview.sources,
+    warnings: [...new Set([...resolverOutput.warnings, ...preview.warnings])],
+  };
+}
+
 function supplementText(sources: IndexedContextSupplementSource[]): string {
   return [
     "## Indexed Context Supplement",
@@ -346,25 +369,42 @@ export async function buildIndexedContextSupplement(
   }
 
   try {
-    const resolverOutput = await resolveIndexedContextDryRun({
-      ...input,
-      includeSystem: false,
-      limit: Math.min(input.limit ?? 6, 6),
-    });
-    const preview = await previewIndexedRecordsForCanary(resolverOutput.records);
-    const warnings = [...new Set([...resolverOutput.warnings, ...preview.warnings])];
+    let preview = await resolveAndPreviewForCanary(input);
+    const warnings = [...preview.warnings];
+    let queryFallbackNotice: string | undefined;
+
+    if (input.query?.trim() && preview.sources.length === 0 && preview.workspaceId && warnings.length === 0) {
+      const fallbackPreview = await resolveAndPreviewForCanary({
+        ...input,
+        query: undefined,
+      });
+
+      if (fallbackPreview.sources.length && fallbackPreview.warnings.length === 0) {
+        queryFallbackNotice = `query_filter_no_matches:${input.query.trim()}; using recent indexed records for canary supplement`;
+        preview = {
+          ...fallbackPreview,
+          sources: fallbackPreview.sources.map((source) => ({
+            ...source,
+            whySelected: `${source.whySelected} Query filter had no metadata matches; included as recent indexed context for canary supplement.`,
+          })),
+          warnings: [queryFallbackNotice],
+        };
+      } else if (fallbackPreview.warnings.length) {
+        warnings.push(...fallbackPreview.warnings);
+      }
+    }
 
     if (warnings.length) {
       return skipped(input.appId, "indexed_context_warnings", warnings);
     }
 
-    if (!resolverOutput.ok) {
+    if (!preview.ok) {
       return skipped(input.appId, "indexed_context_not_ok", warnings);
     }
 
     const sources = preview.sources;
     if (!sources.length) {
-      return skipped(input.appId, "no_preview_sources");
+      return skipped(input.appId, input.query?.trim() ? "no_preview_sources_after_query_fallback" : "no_preview_sources");
     }
 
     const text = supplementText(sources);
@@ -376,7 +416,7 @@ export async function buildIndexedContextSupplement(
       mode: "supplemental",
       sources,
       text,
-      warnings: [],
+      warnings: queryFallbackNotice ? [queryFallbackNotice] : [],
     };
   } catch (error) {
     return skipped(input.appId, error instanceof Error ? error.message : "indexed_context_canary_failed");
@@ -462,5 +502,6 @@ export const __indexedContextCanaryTest = {
   compactText,
   canaryEnabledForApp,
   previewIndexedRecordsForCanary,
+  resolveAndPreviewForCanary,
   supplementText,
 };
