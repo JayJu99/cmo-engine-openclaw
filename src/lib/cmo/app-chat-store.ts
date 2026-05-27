@@ -30,8 +30,13 @@ import { buildContextPack, withContextPackMessage } from "@/lib/cmo/context-pack
 import { summarizeContextQuality } from "@/lib/cmo/context-quality";
 import { buildDecisionLayer } from "@/lib/cmo/decision-layer";
 import { CmoAdapterError } from "@/lib/cmo/errors";
+import { routeIntentForMessage } from "@/lib/cmo/app-routing-intent";
+import { executeMixedCmoEcho, isMixedCmoEchoRequest, mixedEchoNeedsClarification, buildMixedCmoEchoRuntimeMessage, maybeHandleEchoBridge } from "@/lib/cmo/echo-bridge";
+import { buildCmoEvidenceRuntimeMessage, executeCmoSurfEvidence } from "@/lib/cmo/cmo-surf-orchestrator";
+import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
+import { autoCaptureTurnOnce } from "@/lib/cmo/vault-auto-capture";
 
 const APP_CHAT_DIR = path.join(process.cwd(), "data", "cmo-dashboard", "app-chat");
 const DEFAULT_LIMIT = 20;
@@ -628,6 +633,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     suggestedActions: normalizeSuggestedActions(value.suggestedActions),
     savedToVault: value.savedToVault === true,
     rawCapturePath: normalizeOptionalString(value.rawCapturePath),
+    rawCaptureStatus: value.rawCaptureStatus === "saved" || value.rawCaptureStatus === "failed" || value.rawCaptureStatus === "pending" ? value.rawCaptureStatus : undefined,
+    rawCaptureError: normalizeOptionalString(value.rawCaptureError),
     sessionNotePath: normalizeOptionalString(value.sessionNotePath),
     relatedPriority: normalizeOptionalString(value.relatedPriority),
     relatedPlan: normalizeOptionalString(value.relatedPlan),
@@ -669,6 +676,15 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
   const graphHintCount = contextPackage.graphHintCount ?? graphHints.length;
   const graphStatus = contextPackage.graphStatus ?? "empty";
   const sessionId = continuedSession?.id ?? `session_${now.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
+  const routeIntent = routeIntentForMessage(request.message);
+  const allowDirectSurfBridge = routeIntent === "surf_x" || routeIntent === "surf_trend" || routeIntent === "surf_research";
+  const allowDirectEchoBridge = routeIntent === "echo_execution";
+  const surfBridge = allowDirectSurfBridge ? await maybeHandleSurfBridge(request) : { handled: false };
+  const echoBridge = !surfBridge.handled && allowDirectEchoBridge ? await maybeHandleEchoBridge(request) : { handled: false };
+  const mixedCmoEchoRequest = !surfBridge.handled && !echoBridge.handled && routeIntent !== "cmo_review" && isMixedCmoEchoRequest(request.message);
+  const mixedCmoEchoClarification = mixedCmoEchoRequest && mixedEchoNeedsClarification(request.message);
+  const cmoSurfEvidence = !surfBridge.handled && !echoBridge.handled && !mixedCmoEchoRequest && routeIntent !== "cmo_review" ? await executeCmoSurfEvidence(request) : undefined;
+  const cmoSurfClarification = cmoSurfEvidence?.plan.action === "need_clarification";
   let answer = "";
   let status: CMOChatSession["status"] = "completed";
   let assumptions: string[] = [];
@@ -685,10 +701,34 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
   let runtimeAgent: string | undefined;
 
   try {
+    if ((surfBridge.handled && surfBridge.response) || (echoBridge.handled && echoBridge.response)) {
+      const bridgeResponse = surfBridge.handled && surfBridge.response ? surfBridge.response : echoBridge.response;
+      if (!bridgeResponse) {
+        throw new Error("Hermes bridge handled the request without a response payload");
+      }
+      answer = bridgeResponse.answer;
+      assumptions = bridgeResponse.assumptions;
+      suggestedActions = bridgeResponse.suggestedActions;
+      isDevelopmentFallback = false;
+      isRuntimeFallback = bridgeResponse.isRuntimeFallback === true;
+      runtimeStatus = bridgeResponse.isRuntimeFallback ? "live_failed_then_fallback" : "live";
+      runtimeMode = bridgeResponse.isRuntimeFallback ? "fallback" : "live";
+      attemptedRuntimeMode = bridgeResponse.isRuntimeFallback ? "live" : undefined;
+      runtimeLabel = surfBridge.handled ? "Hermes Surf Direct Bridge" : "Hermes Echo Execution Bridge";
+      runtimeError = bridgeResponse.runtimeError ?? "";
+      runtimeErrorReason = bridgeResponse.runtimeError ? "execution_error" : undefined;
+      runtimeProvider = bridgeResponse.runtimeProvider;
+      runtimeAgent = bridgeResponse.runtimeAgent;
+      status = "completed";
+    } else {
     const runtimeResult = await runtime.runTurn({
       contextPack: contextPackage.contextPack,
       contextPackage,
-      message: request.message,
+      message: mixedCmoEchoRequest && !mixedCmoEchoClarification
+        ? buildMixedCmoEchoRuntimeMessage(request.message)
+        : cmoSurfEvidence && (cmoSurfEvidence.plan.action === "call_surf" || cmoSurfEvidence.plan.action === "call_surf_x")
+          ? buildCmoEvidenceRuntimeMessage(request.message, cmoSurfEvidence)
+          : request.message,
       history: continuedSession?.messages ?? [],
       request,
       contextUsed,
@@ -708,12 +748,70 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     runtimeErrorReason = runtimeResult.runtimeErrorReason;
     runtimeProvider = runtimeResult.runtimeProvider;
     runtimeAgent = runtimeResult.runtimeAgent;
+    if (cmoSurfClarification) {
+      answer = [
+        "## Need Clarification",
+        "",
+        "I can make the CMO decision, but key decision context is missing. Surf was not called yet.",
+        "",
+        ...((cmoSurfEvidence?.plan.clarificationQuestions ?? []).map((question) => `- ${question}`)),
+      ].join("\n");
+      assumptions = [];
+      suggestedActions = [{ type: "clarification", label: "Provide decision-critical context before CMO calls Surf." }];
+      runtimeProvider = "dashboard";
+      runtimeAgent = "cmo";
+      isRuntimeFallback = false;
+      runtimeError = "";
+      runtimeErrorReason = undefined;
+    } else if (mixedCmoEchoClarification) {
+      answer = [
+        "## Need Clarification",
+        "",
+        "I can run CMO-led strategy first and then use Echo for final copy, but this request says key goal/source/audience/context is unclear.",
+        "",
+        "Please provide the missing goal, source/context, target audience, or campaign direction. Echo was not called.",
+      ].join("\n");
+      assumptions = [];
+      suggestedActions = [{ type: "clarification", label: "Provide the missing context before CMO orchestrates Echo." }];
+      runtimeProvider = "dashboard";
+      runtimeAgent = "cmo";
+      isRuntimeFallback = false;
+      runtimeError = "";
+      runtimeErrorReason = undefined;
+    } else if (cmoSurfEvidence?.plan.action === "call_surf" || cmoSurfEvidence?.plan.action === "call_surf_x") {
+      runtimeLabel = cmoSurfEvidence.plan.action === "call_surf_x" ? "CMO → Hermes Surf X Evidence Orchestration" : "CMO → Hermes Surf Evidence Orchestration";
+      runtimeProvider = "hermes";
+      runtimeAgent = cmoSurfEvidence.plan.action === "call_surf_x" ? "surf-x+cmo" : "surf+cmo";
+      if (cmoSurfEvidence.failureReason) {
+        isRuntimeFallback = true;
+        runtimeStatus = "live_failed_then_fallback";
+        runtimeMode = "fallback";
+        attemptedRuntimeMode = "live";
+        runtimeError = cmoSurfEvidence.failureReason;
+        runtimeErrorReason = "execution_error";
+      }
+    } else if (mixedCmoEchoRequest) {
+      const mixedEchoResult = await executeMixedCmoEcho(request, answer);
+      answer = mixedEchoResult.answer;
+      assumptions = mixedEchoResult.assumptions;
+      suggestedActions = mixedEchoResult.suggestedActions;
+      isRuntimeFallback = mixedEchoResult.isRuntimeFallback === true;
+      runtimeStatus = mixedEchoResult.isRuntimeFallback ? "live_failed_then_fallback" : "live";
+      runtimeMode = mixedEchoResult.isRuntimeFallback ? "fallback" : "live";
+      attemptedRuntimeMode = mixedEchoResult.isRuntimeFallback ? "live" : attemptedRuntimeMode;
+      runtimeLabel = "CMO → Hermes Echo Orchestration";
+      runtimeError = mixedEchoResult.runtimeError ?? "";
+      runtimeErrorReason = mixedEchoResult.runtimeError ? "execution_error" : runtimeErrorReason;
+      runtimeProvider = mixedEchoResult.runtimeProvider;
+      runtimeAgent = mixedEchoResult.runtimeAgent;
+    }
     if (request.forceFallback) {
       attemptedRuntimeMode = "live";
       runtimeError = "Live app-chat intentionally bypassed for fallback smoke.";
       runtimeErrorReason = "execution_error";
     }
     status = runtimeResult.runtimeError && !runtimeResult.isRuntimeFallback ? "failed" : "completed";
+    }
   } catch (error) {
     status = "failed";
     runtimeStatus = "runtime_error";
@@ -791,6 +889,30 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
 
   await writeJsonFile(sessionPath(sessionId), session);
 
+  let persistedSession = session;
+  const autoCapture = status === "completed" ? await autoCaptureTurnOnce({
+    request,
+    session,
+    assistantMessageId: assistantId,
+    sourceUserMessageId: messageId,
+    answer,
+    routeKind: "app-chat-response",
+    runtimeSource: runtimeProvider,
+    assistantFooterSourceLabel: runtimeLabel,
+    runtimeLabel,
+    runtimeProvider,
+    runtimeAgent,
+  }) : { ok: false, savedToVault: false, warnings: [], error: "Chat response failed; auto capture skipped" };
+  if (status === "completed") {
+    persistedSession = {
+      ...session,
+      rawCapturePath: autoCapture.relativePath,
+      rawCaptureStatus: autoCapture.ok ? "saved" : "failed",
+      ...(autoCapture.error ? { rawCaptureError: autoCapture.error } : {}),
+    };
+    await writeJsonFile(sessionPath(sessionId), persistedSession);
+  }
+
   return {
     messageId: assistantId,
     sessionId,
@@ -816,6 +938,9 @@ export async function createAppChatSession(body: unknown): Promise<CMOAppChatRes
     graphHintCount,
     graphStatus,
     decisionLayer,
+    rawCapturePath: persistedSession.rawCapturePath,
+    rawCaptureStatus: persistedSession.rawCaptureStatus,
+    rawCaptureError: persistedSession.rawCaptureError,
   };
 }
 
@@ -1136,7 +1261,7 @@ async function handleLocalChatCommand(
 
 export async function updateAppChatSessionMetadata(
   sessionId: string,
-  patch: Pick<CMOChatSession, "savedToVault" | "rawCapturePath" | "sessionNotePath" | "relatedPriority" | "relatedPlan" | "relatedTasks">,
+  patch: Pick<CMOChatSession, "savedToVault" | "rawCapturePath" | "rawCaptureStatus" | "rawCaptureError" | "sessionNotePath" | "relatedPriority" | "relatedPlan" | "relatedTasks">,
 ): Promise<CMOChatSession | null> {
   const session = await readAppChatSession(sessionId);
 

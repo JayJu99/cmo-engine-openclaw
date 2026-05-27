@@ -2,6 +2,8 @@ import { readDashboardChats, startDashboardChat } from "@/lib/cmo/adapter";
 import { createAppChatSession, isAppChatPayload, readAppChatSessions } from "@/lib/cmo/app-chat-store";
 import { cmoErrorResponse } from "@/lib/cmo/errors";
 
+const CMO_CHAT_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -14,6 +16,11 @@ function limitFromRequest(request: Request): number {
 
 async function readRequestPayload(request: Request): Promise<unknown> {
   const text = await request.text();
+  const bodyBytes = new TextEncoder().encode(text).byteLength;
+
+  if (bodyBytes > CMO_CHAT_BODY_LIMIT_BYTES) {
+    throw new Error(`CMO chat request body is too large (${bodyBytes} bytes). Limit is ${CMO_CHAT_BODY_LIMIT_BYTES} bytes. Please split the prompt or attach/source long material instead of pasting it into one chat turn.`);
+  }
 
   if (!text.trim()) {
     return {};

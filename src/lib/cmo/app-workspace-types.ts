@@ -284,6 +284,8 @@ export interface CMOSessionSummary {
   graphStatus?: ContextGraphStatus;
   savedToVault: boolean;
   rawCapturePath?: string;
+  rawCaptureStatus?: "saved" | "failed" | "pending";
+  rawCaptureError?: string;
   sessionNotePath?: string;
 }
 
@@ -770,11 +772,13 @@ export interface CMOChatSession {
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
   savedToVault?: boolean;
-  rawCapturePath?: string;
   sessionNotePath?: string;
   relatedPriority?: string;
   relatedPlan?: string;
   relatedTasks?: string[];
+  rawCapturePath?: string;
+  rawCaptureStatus?: "saved" | "failed" | "pending";
+  rawCaptureError?: string;
 }
 
 export interface CMOAppChatRequest {
@@ -819,6 +823,9 @@ export interface CMOAppChatResponse {
   graphHintCount?: number;
   graphStatus?: ContextGraphStatus;
   decisionLayer?: CmoDecisionLayer;
+  rawCapturePath?: string;
+  rawCaptureStatus?: "saved" | "failed" | "pending";
+  rawCaptureError?: string;
 }
 
 export interface RawCaptureRequest {

@@ -30,6 +30,19 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
   return payload as T;
 }
 
+type AppCapturePreviewEventType = "cmo_session" | "echo_output" | "surf_research" | "surf_x_signal" | "last30days_trend" | "pulse_pack" | "cmo_decision";
+type AppCapturePreviewResult = { ok: boolean; mode: "dry_run"; savedToVault: false; target?: { relativePath: string; folder: string; filename: string }; markdown?: string; warnings: string[]; error?: string };
+type AppCaptureSaveResult = { ok: boolean; savedToVault: true; target?: { relativePath: string; folder: string; filename: string }; writtenPath?: string; relativePath?: string; markdown?: string; warnings: string[]; error?: string };
+const appCaptureEventOptions: Array<{ label: string; value: AppCapturePreviewEventType }> = [
+  { label: "CMO Session", value: "cmo_session" },
+  { label: "Echo Output", value: "echo_output" },
+  { label: "Surf Research", value: "surf_research" },
+  { label: "Surf X Signal", value: "surf_x_signal" },
+  { label: "Last30Days Trend", value: "last30days_trend" },
+  { label: "Pulse Pack", value: "pulse_pack" },
+  { label: "CMO Decision", value: "cmo_decision" },
+];
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -150,6 +163,7 @@ function isBackendContextHeading(value: string): boolean {
 function renderAssistantContent(content: string) {
   const lines = content.split(/\r?\n/);
 
+
   return (
     <div className="space-y-3">
       {lines.map((line, index) => {
@@ -236,6 +250,11 @@ export function CMOChatPanel({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [savedSessionNotePath, setSavedSessionNotePath] = useState<string | null>(null);
   const [rawCapturePath, setRawCapturePath] = useState<string | null>(null);
+  const [capturePreviewEventType, setCapturePreviewEventType] = useState<AppCapturePreviewEventType>("cmo_session");
+  const [capturePreview, setCapturePreview] = useState<AppCapturePreviewResult | null>(null);
+  const [capturePreviewLoading, setCapturePreviewLoading] = useState(false);
+  const [captureSave, setCaptureSave] = useState<AppCaptureSaveResult | null>(null);
+  const [captureSaveLoading, setCaptureSaveLoading] = useState(false);
   const [isDevelopmentFallback, setIsDevelopmentFallback] = useState(false);
   const [isRuntimeFallback, setIsRuntimeFallback] = useState(false);
   const [runtimeStatus, setRuntimeStatus] = useState<CMORuntimeStatus | null>(initialRuntimeStatus);
@@ -249,6 +268,7 @@ export function CMOChatPanel({
   const activeDisplaySessionId = activeSessionId ?? sessionId ?? selectedSession?.id ?? null;
   const activeSavedToVault = selectedSession?.savedToVault || Boolean(savedSessionNotePath);
   const activeRawCaptured = Boolean(selectedSession?.rawCapturePath || rawCapturePath);
+  const activeRawCaptureStatus = selectedSession?.rawCaptureStatus;
 
   useEffect(() => {
     let isMounted = true;
@@ -407,6 +427,7 @@ export function CMOChatPanel({
       );
 
       setSessionId(response.sessionId);
+      setRawCapturePath(response.rawCapturePath ?? null);
       setIsDevelopmentFallback(response.isDevelopmentFallback);
       setIsRuntimeFallback(response.isRuntimeFallback === true);
       setRuntimeStatus(response.runtimeStatus);
@@ -474,6 +495,60 @@ export function CMOChatPanel({
     inputRef.current?.focus();
   }
 
+  async function previewVaultCapture(message?: CMOChatMessage) {
+    const targetMessage = message ?? [...messages].reverse().find((item) => item.role === "assistant") ?? messages[messages.length - 1];
+    setCapturePreviewLoading(true);
+    try {
+      const result = await readJsonResponse<AppCapturePreviewResult>(await fetch("/api/cmo/vault/capture-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appId: app.id,
+          sessionId: sessionId ?? activeSessionId ?? selectedSession?.id,
+          messageId: targetMessage?.id,
+          eventType: capturePreviewEventType,
+          content: targetMessage?.content,
+          topic: app.name,
+          project: app.name,
+          workspaceId: app.id,
+        }),
+      }));
+      setCapturePreview(result);
+      setCaptureSave(null);
+    } catch (previewError) {
+      setCapturePreview({ ok: false, mode: "dry_run", savedToVault: false, warnings: [], error: previewError instanceof Error ? previewError.message : "Failed to build capture preview" });
+    } finally {
+      setCapturePreviewLoading(false);
+    }
+  }
+
+  async function saveVaultCapture() {
+    const targetMessage = [...messages].reverse().find((item) => item.role === "assistant") ?? messages[messages.length - 1];
+    setCaptureSaveLoading(true);
+    try {
+      const result = await readJsonResponse<AppCaptureSaveResult>(await fetch("/api/cmo/vault/capture-save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appId: app.id,
+          sessionId: sessionId ?? activeSessionId ?? selectedSession?.id,
+          messageId: targetMessage?.id,
+          eventType: capturePreviewEventType,
+          content: targetMessage?.content,
+          topic: app.name,
+          project: app.name,
+          workspaceId: app.id,
+          confirmed: true,
+        }),
+      }));
+      setCaptureSave(result);
+    } catch (saveError) {
+      setCaptureSave({ ok: false, savedToVault: true, warnings: [], error: saveError instanceof Error ? saveError.message : "Failed to save capture" });
+    } finally {
+      setCaptureSaveLoading(false);
+    }
+  }
+
   return (
     <div id="cmo-session" className="space-y-5">
       <Card className="overflow-hidden">
@@ -533,7 +608,7 @@ export function CMOChatPanel({
                   ) : null}
                   {message.role === "assistant" ? renderAssistantContent(message.content) : <div className="whitespace-pre-wrap">{message.content}</div>}
                   {message.role === "assistant" && assistantProvenance(message, activeSavedToVault, activeRawCaptured) ? (
-                    <div className="mt-4 border-t border-slate-100 pt-3 text-xs font-semibold text-slate-400">
+                    <div className={cn("mt-4 border-t pt-3 text-xs font-semibold", activeRawCaptureStatus === "failed" ? "border-rose-100 text-rose-600" : "border-emerald-100 text-emerald-700")}>
                       {assistantProvenance(message, activeSavedToVault, activeRawCaptured)}
                     </div>
                   ) : null}
@@ -560,12 +635,45 @@ export function CMOChatPanel({
 
         <div className="border-t border-slate-100 bg-white p-4">
           <div className="flex flex-col gap-3">
+            <div className="rounded-2xl border border-dashed border-indigo-200 bg-indigo-50/60 p-3 text-xs text-slate-700">
+              <div className="flex flex-wrap items-center gap-2">
+                <strong className="text-slate-950">Advanced / Debug Vault Capture</strong>
+                <select value={capturePreviewEventType} onChange={(event) => setCapturePreviewEventType(event.target.value as AppCapturePreviewEventType)} className="rounded-lg border border-indigo-200 bg-white px-2 py-1 font-semibold text-indigo-700">
+                  {appCaptureEventOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <Button variant="outline" size="sm" disabled={capturePreviewLoading || !messages.length} onClick={() => void previewVaultCapture()}>
+                  {capturePreviewLoading ? "Building preview..." : "Preview latest assistant message"}
+                </Button>
+                <Button variant="outline" size="sm" disabled>Write disabled in Phase 2.11F</Button>
+              </div>
+              <div className="mt-2 font-medium">Default auto-capture saves raw notes automatically. Use this dry-run/manual panel only for debugging.</div>
+            </div>
+            {capturePreview ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm shadow-sm">
+                <div className="mb-2 text-xs font-bold uppercase tracking-wide text-indigo-600">Capture Target</div>
+                <div className="font-mono text-xs text-slate-700">{capturePreview.target?.relativePath ?? "No target"}</div>
+                <div className="my-3 flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full bg-emerald-50 px-2 py-1 font-bold text-emerald-700">savedToVault: {captureSave?.ok ? "true" : "false"}</span>
+                  <span className="rounded-full bg-slate-100 px-2 py-1 font-bold">mode: {capturePreview.mode}</span>
+                  <Button variant="outline" size="sm" disabled={captureSaveLoading || !capturePreview.ok} onClick={() => void saveVaultCapture()}>
+                    {captureSaveLoading ? "Saving..." : "Save to CMO Engine Vault"}
+                  </Button>
+                </div>
+                {capturePreview.warnings.length ? <ul className="mb-3 list-disc pl-4 text-xs text-amber-700">{capturePreview.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+                {capturePreview.error ? <div className="mb-3 text-xs font-semibold text-rose-600">{capturePreview.error}</div> : null}
+                {captureSave?.ok ? <div className="mb-3 rounded-xl bg-emerald-50 p-3 text-xs font-semibold text-emerald-700">Saved to CMO Engine Vault: <span className="font-mono">{captureSave.relativePath ?? captureSave.target?.relativePath}</span></div> : null}
+                {captureSave?.error ? <div className="mb-3 text-xs font-semibold text-rose-600">{captureSave.error}</div> : null}
+                <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Markdown Preview</div>
+                <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-950 p-3 text-xs text-slate-50">{capturePreview.markdown ?? "No markdown generated."}</pre>
+                <div className="mt-3 text-xs font-semibold text-slate-500">Safety Notice: Default auto-capture saves raw notes automatically. Use this dry-run/manual panel only for debugging.</div>
+              </div>
+            ) : null}
             <div className="flex flex-wrap gap-2">
               {[
                 "What should I review next?",
                 "Mark action 1 reviewed",
                 "Save this session",
-                "Capture to raw vault",
+                "Capture to raw vault (legacy/debug)",
               ].map((command) => (
                 <button
                   key={command}

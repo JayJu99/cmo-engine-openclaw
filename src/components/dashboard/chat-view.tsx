@@ -17,6 +17,13 @@ type ChatMessage = {
   status?: CmoChatRun["status"];
 };
 
+
+type CapturePreviewEventType = "cmo_session" | "echo_output" | "surf_research" | "surf_x_signal" | "last30days_trend" | "pulse_pack" | "cmo_decision" | "memory_candidate" | "ops_event";
+type CapturePreviewResult = { ok: boolean; mode: "dry_run"; savedToVault: false; target?: { relativePath: string; folder: string; filename: string }; markdown?: string; warnings: string[]; error?: string };
+const captureEventOptions: Array<{ label: string; value: CapturePreviewEventType }> = [
+  { label: "CMO Session", value: "cmo_session" }, { label: "Echo Output", value: "echo_output" }, { label: "Surf Research", value: "surf_research" }, { label: "Surf X Signal", value: "surf_x_signal" }, { label: "Last30Days Trend", value: "last30days_trend" }, { label: "Pulse Pack", value: "pulse_pack" }, { label: "CMO Decision", value: "cmo_decision" }, { label: "Memory Candidate", value: "memory_candidate" }, { label: "Ops Event", value: "ops_event" },
+];
+
 export type ChatContextPreview = {
   type: "action" | "signal" | "campaign" | "run";
   title: string;
@@ -129,6 +136,9 @@ function messagesFromRun(chatRun: CmoChatRun): ChatMessage[] {
 export function ChatView({ initialQuestion = "", initialContext = null }: ChatViewProps) {
   const router = useRouter();
   const [input, setInput] = useState(initialQuestion);
+  const [captureEventType, setCaptureEventType] = useState<CapturePreviewEventType>("cmo_session");
+  const [capturePreview, setCapturePreview] = useState<CapturePreviewResult | null>(null);
+  const [capturePreviewLoading, setCapturePreviewLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([welcomeMessage]);
   const [history, setHistory] = useState<CmoChatRunIndexItem[]>([]);
   const [activeContext, setActiveContext] = useState<ChatContextPreview | null>(initialContext);
@@ -358,6 +368,22 @@ export function ChatView({ initialQuestion = "", initialContext = null }: ChatVi
     }
   }
 
+  async function previewVaultCapture(message: ChatMessage) {
+    setCapturePreviewLoading(true);
+    try {
+      const result = await readJsonResponse<CapturePreviewResult>(await fetch("/api/cmo/vault/capture-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: selectedRunId ?? activeRunId ?? undefined, messageId: message.id, eventType: captureEventType, content: message.content, topic: activeContext?.title, project: activeContext?.title }),
+      }));
+      setCapturePreview(result);
+    } catch (error) {
+      setCapturePreview({ ok: false, mode: "dry_run", savedToVault: false, warnings: [], error: error instanceof Error ? error.message : "Failed to build capture preview" });
+    } finally {
+      setCapturePreviewLoading(false);
+    }
+  }
+
   return (
     <PageChrome title="CMO Chat" description="Ask the CMO agent direct questions using the latest dashboard context" primary="New Chat" onPrimaryClick={resetChat}>
       <Card className="grid min-h-[calc(100vh-220px)] overflow-hidden lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -397,7 +423,7 @@ export function ChatView({ initialQuestion = "", initialContext = null }: ChatVi
                       {statusLabel(message.status)}
                     </div>
                   ) : null}
-                  <div className="whitespace-pre-wrap">{message.content}</div>
+                  <div className="whitespace-pre-wrap">{message.content}{message.role === "assistant" ? <div className="mt-3"><Button variant="outline" size="sm" disabled={capturePreviewLoading} onClick={() => void previewVaultCapture(message)}>{capturePreviewLoading ? "Building preview..." : "Preview Vault Capture"}</Button></div> : null}</div>
                 </div>
               </div>
             ))}
@@ -421,7 +447,12 @@ export function ChatView({ initialQuestion = "", initialContext = null }: ChatVi
                 {activeContext.meta ? <span className="text-xs font-semibold text-slate-500">{activeContext.meta}</span> : null}
               </div>
             ) : null}
-            <div className="flex flex-col gap-3 md:flex-row">
+            <div className="mb-3 rounded-2xl border border-dashed border-indigo-200 bg-indigo-50/60 p-3 text-xs text-slate-700">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><strong>Vault Capture Preview</strong><select value={captureEventType} onChange={(event) => setCaptureEventType(event.target.value as CapturePreviewEventType)} className="rounded-lg border border-indigo-200 bg-white px-2 py-1 font-semibold text-indigo-700">{captureEventOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+                    <div className="mb-2">This is a dry-run preview. No Vault file has been written.</div><Button variant="outline" size="sm" disabled>Write disabled in Phase 2.11F</Button>
+                  </div>
+                  {capturePreview ? <div className="mb-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm shadow-sm"><div className="font-mono text-xs text-slate-700">{capturePreview.target?.relativePath ?? "No target"}</div><div className="my-2 flex flex-wrap gap-2 text-xs"><span className="rounded-full bg-emerald-50 px-2 py-1 font-bold text-emerald-700">savedToVault false</span><span className="rounded-full bg-slate-100 px-2 py-1 font-bold">{capturePreview.mode}</span></div>{capturePreview.warnings.length ? <ul className="mb-2 list-disc pl-4 text-xs text-amber-700">{capturePreview.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}{capturePreview.error ? <div className="text-xs font-semibold text-rose-600">{capturePreview.error}</div> : null}<pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-950 p-3 text-xs text-slate-50">{capturePreview.markdown ?? "No markdown generated."}</pre><div className="mt-2 text-xs font-semibold text-slate-500">Safety Notice: This is a dry-run preview. No Vault file has been written.</div></div> : null}
+                  <div className="flex flex-col gap-3 md:flex-row">
               <textarea
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
