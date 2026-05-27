@@ -725,9 +725,10 @@ export async function callOpenClawAppTurnRuntime(
   config: OpenClawCmoRuntimeConfig,
   history: CMOChatMessage[],
   sessionId?: string,
+  timeoutMs = getCmoAppTurnRequestTimeoutMs(),
 ): Promise<OpenClawCmoResult> {
   if (config.kind === "vps-cmo-adapter") {
-    const response = await postRemoteAppTurn(appTurnBody(contextPackage, history, sessionId));
+    const response = await postRemoteAppTurn(appTurnBody(contextPackage, history, sessionId), { timeoutMs });
 
     return {
       answer: response.data.answer,
@@ -745,7 +746,7 @@ export async function callOpenClawAppTurnRuntime(
   const response = await requestRuntimeJson<unknown>(config, config.endpoint, {
     method: "POST",
     body: appTurnBody(contextPackage, history, sessionId),
-    timeoutMs: getCmoAppTurnRequestTimeoutMs(),
+    timeoutMs,
   });
 
   return normalizeAppTurnRuntimeResult(response.data, config);

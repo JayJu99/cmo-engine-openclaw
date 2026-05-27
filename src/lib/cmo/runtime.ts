@@ -11,6 +11,7 @@ import type {
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
 import { summarizeContextQuality } from "@/lib/cmo/context-quality";
+import { getCmoFallbackFastAfterMs, getCmoLiveAppTurnTimeoutMs } from "@/lib/cmo/config";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import {
   callOpenClawAppTurnRuntime,
@@ -50,6 +51,10 @@ export interface CmoRuntimeTurnResult {
   runtimeAgent?: string;
   isDevelopmentFallback: boolean;
   isRuntimeFallback?: boolean;
+  liveAttemptStartedAt?: string;
+  liveAttemptDurationMs?: number;
+  fallbackDurationMs?: number;
+  timeoutMs?: number;
 }
 
 export interface CmoRuntime {
@@ -431,7 +436,9 @@ export class FallbackRuntime implements CmoRuntime {
   }
 
   async runTurn(input: CmoRuntimeTurnInput): Promise<CmoRuntimeTurnResult> {
+    const fallbackStartedAt = Date.now();
     const fallback = fallbackAnswer(input, this.reason);
+    const fallbackDurationMs = Date.now() - fallbackStartedAt;
 
     return {
       answer: cleanFallbackAnswerFormatting(fallback.answer),
@@ -443,6 +450,7 @@ export class FallbackRuntime implements CmoRuntime {
       runtimeProvider: "fallback",
       isDevelopmentFallback: true,
       isRuntimeFallback: true,
+      fallbackDurationMs,
     };
   }
 }
@@ -477,8 +485,19 @@ export class LiveOpenClawRuntime implements CmoRuntime {
       }).runTurn(input);
     }
 
+    const timeoutMs = Math.min(getCmoLiveAppTurnTimeoutMs(), getCmoFallbackFastAfterMs());
+    const liveAttemptStartedAt = new Date().toISOString();
+    const liveAttemptStartedMs = Date.now();
+
     try {
-      const result = await callOpenClawAppTurnRuntime(input.contextPackage, availability.config, input.history, input.request.sessionId);
+      const result = await callOpenClawAppTurnRuntime(
+        input.contextPackage,
+        availability.config,
+        input.history,
+        input.request.sessionId,
+        timeoutMs,
+      );
+      const liveAttemptDurationMs = Date.now() - liveAttemptStartedMs;
 
       return {
         answer: result.answer,
@@ -492,17 +511,29 @@ export class LiveOpenClawRuntime implements CmoRuntime {
         runtimeAgent: result.runtimeAgent ?? "cmo",
         isDevelopmentFallback: false,
         isRuntimeFallback: false,
+        liveAttemptStartedAt,
+        liveAttemptDurationMs,
+        timeoutMs,
       };
     } catch (error) {
+      const liveAttemptDurationMs = Date.now() - liveAttemptStartedMs;
       const runtimeError = error instanceof Error ? error.message : "OpenClaw CMO runtime failed";
       const runtimeErrorReason = classifyAppTurnErrorReason(error);
       logAppTurnFailure(runtimeErrorReason, runtimeError, error);
+      console.warn("[cmo-runtime] Live app-turn diagnostic.", {
+        reason: runtimeErrorReason,
+        runtimeLabel: availability.label,
+        liveAttemptDurationMs,
+        timeoutMs,
+      });
+      const fallbackStartedMs = Date.now();
       const fallback = await new FallbackRuntime({
         status: "live_failed_then_fallback",
         mode: "fallback",
         label: availability.label,
         reason: "Live runtime unavailable for app chat; fallback used.",
       }).runTurn(input);
+      const fallbackDurationMs = Date.now() - fallbackStartedMs;
 
       return {
         ...fallback,
@@ -516,6 +547,10 @@ export class LiveOpenClawRuntime implements CmoRuntime {
         runtimeAgent: fallback.runtimeAgent,
         isDevelopmentFallback: true,
         isRuntimeFallback: true,
+        liveAttemptStartedAt,
+        liveAttemptDurationMs,
+        fallbackDurationMs,
+        timeoutMs,
       };
     }
   }

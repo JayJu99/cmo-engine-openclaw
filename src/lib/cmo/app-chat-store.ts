@@ -45,6 +45,13 @@ import { autoCaptureTurnOnce } from "@/lib/cmo/vault-auto-capture";
 
 const APP_CHAT_DIR = path.join(process.cwd(), "data", "cmo-dashboard", "app-chat");
 const DEFAULT_LIMIT = 20;
+const CONTEXT_SIZE_WARNING_CHARS = 32_000;
+const INDEXED_SUPPLEMENT_WARNING_CHARS = 4_000;
+
+export interface CmoAppChatTimingInput {
+  requestReceivedAt?: string;
+  authDurationMs?: number;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -555,6 +562,10 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
+function normalizeOptionalNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
+}
+
 function normalizeAuthMode(value: unknown): CmoAuthMode | undefined {
   return value === "supabase" || value === "legacy" ? value : undefined;
 }
@@ -637,6 +648,19 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             indexedContextStatus: normalizeIndexedContextStatus(message.indexedContextStatus),
             indexedContextSourcesCount: typeof message.indexedContextSourcesCount === "number" && Number.isFinite(message.indexedContextSourcesCount) ? Math.max(0, Math.floor(message.indexedContextSourcesCount)) : undefined,
             indexedContextFallbackReason: normalizeOptionalString(message.indexedContextFallbackReason),
+            requestReceivedAt: normalizeOptionalString(message.requestReceivedAt),
+            liveAttemptStartedAt: normalizeOptionalString(message.liveAttemptStartedAt),
+            liveAttemptDurationMs: normalizeOptionalNonNegativeNumber(message.liveAttemptDurationMs),
+            fallbackDurationMs: normalizeOptionalNonNegativeNumber(message.fallbackDurationMs),
+            totalDurationMs: normalizeOptionalNonNegativeNumber(message.totalDurationMs),
+            timeoutMs: normalizeOptionalNonNegativeNumber(message.timeoutMs),
+            contextSourceCount: normalizeOptionalNonNegativeNumber(message.contextSourceCount),
+            contextCharLength: normalizeOptionalNonNegativeNumber(message.contextCharLength),
+            indexedSupplementCharLength: normalizeOptionalNonNegativeNumber(message.indexedSupplementCharLength),
+            authDurationMs: normalizeOptionalNonNegativeNumber(message.authDurationMs),
+            sessionResolutionDurationMs: normalizeOptionalNonNegativeNumber(message.sessionResolutionDurationMs),
+            contextPackBuildDurationMs: normalizeOptionalNonNegativeNumber(message.contextPackBuildDurationMs),
+            indexedContextBuildDurationMs: normalizeOptionalNonNegativeNumber(message.indexedContextBuildDurationMs),
           };
         })
         .filter((message): message is CMOChatMessage => Boolean(message))
@@ -683,6 +707,19 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     indexedContextStatus: normalizeIndexedContextStatus(value.indexedContextStatus),
     indexedContextSourcesCount: typeof value.indexedContextSourcesCount === "number" && Number.isFinite(value.indexedContextSourcesCount) ? Math.max(0, Math.floor(value.indexedContextSourcesCount)) : undefined,
     indexedContextFallbackReason: normalizeOptionalString(value.indexedContextFallbackReason),
+    requestReceivedAt: normalizeOptionalString(value.requestReceivedAt),
+    liveAttemptStartedAt: normalizeOptionalString(value.liveAttemptStartedAt),
+    liveAttemptDurationMs: normalizeOptionalNonNegativeNumber(value.liveAttemptDurationMs),
+    fallbackDurationMs: normalizeOptionalNonNegativeNumber(value.fallbackDurationMs),
+    totalDurationMs: normalizeOptionalNonNegativeNumber(value.totalDurationMs),
+    timeoutMs: normalizeOptionalNonNegativeNumber(value.timeoutMs),
+    contextSourceCount: normalizeOptionalNonNegativeNumber(value.contextSourceCount),
+    contextCharLength: normalizeOptionalNonNegativeNumber(value.contextCharLength),
+    indexedSupplementCharLength: normalizeOptionalNonNegativeNumber(value.indexedSupplementCharLength),
+    authDurationMs: normalizeOptionalNonNegativeNumber(value.authDurationMs),
+    sessionResolutionDurationMs: normalizeOptionalNonNegativeNumber(value.sessionResolutionDurationMs),
+    contextPackBuildDurationMs: normalizeOptionalNonNegativeNumber(value.contextPackBuildDurationMs),
+    indexedContextBuildDurationMs: normalizeOptionalNonNegativeNumber(value.indexedContextBuildDurationMs),
     decisionLayer,
     assumptions: normalizeStringList(value.assumptions),
     suggestedActions: normalizeSuggestedActions(value.suggestedActions),
@@ -700,11 +737,16 @@ function normalizeSession(value: unknown): CMOChatSession | null {
 export async function createAppChatSession(
   body: unknown,
   userIdentity: CmoServerUserIdentity = legacyUserIdentity(),
+  timing: CmoAppChatTimingInput = {},
 ): Promise<CMOAppChatResponse> {
+  const requestStartedMs = Date.now();
+  const requestReceivedAt = timing.requestReceivedAt ?? new Date().toISOString();
   const request = normalizeAppChatRequest(body);
   const now = new Date().toISOString();
+  const sessionResolutionStartedMs = Date.now();
   const existingSession = request.sessionId ? await readAppChatSession(request.sessionId) : null;
   const continuedSession = existingSession?.appId === request.appId ? existingSession : null;
+  const sessionResolutionDurationMs = Date.now() - sessionResolutionStartedMs;
   const messageId = `msg_${randomUUID().slice(0, 12)}`;
   const assistantId = `msg_${randomUUID().slice(0, 12)}`;
   const localCommand = continuedSession ? parseLocalChatCommand(request.message) : null;
@@ -721,6 +763,7 @@ export async function createAppChatSession(
         reason: "Live app-chat intentionally bypassed for fallback smoke.",
       })
     : await getRuntimeRegistry().selectRuntime();
+  const contextPackBuildStartedMs = Date.now();
   const baseContextPackResult = withContextPackMessage(
     await buildContextPack({
       workspaceId: request.workspaceId,
@@ -729,6 +772,8 @@ export async function createAppChatSession(
     }),
     request.message,
   );
+  const contextPackBuildDurationMs = Date.now() - contextPackBuildStartedMs;
+  const indexedContextBuildStartedMs = Date.now();
   const indexedContextSupplement = await buildIndexedContextSupplement({
     appId: request.appId,
     query: request.message,
@@ -737,6 +782,7 @@ export async function createAppChatSession(
     userEmail: userIdentity.userEmail,
     isOwnerOrAdmin: userIdentity.authMode === "legacy",
   });
+  const indexedContextBuildDurationMs = Date.now() - indexedContextBuildStartedMs;
   const indexedContextStatus: CmoIndexedContextStatus = indexedContextSupplement.used
     ? "used"
     : indexedContextSupplement.enabled
@@ -746,6 +792,25 @@ export async function createAppChatSession(
   const indexedContextFallbackReason = indexedContextSupplement.fallbackReason;
   const contextPackResult = applyIndexedContextSupplement(baseContextPackResult, indexedContextSupplement);
   const { contextPackage, contextUsed, missingContext, contextDiagnostics, contextQualitySummary } = contextPackResult;
+  const contextSourceCount = contextPackage.contextPack.items.filter((item) => item.exists).length;
+  const contextCharLength = contextPackage.contextPack.items.reduce((total, item) => total + item.content.length, 0);
+  const indexedSupplementCharLength = indexedContextSupplement.used ? indexedContextSupplement.text.length : 0;
+  if (contextCharLength > CONTEXT_SIZE_WARNING_CHARS) {
+    console.warn("[cmo-app-chat] Context pack is large; live app-turn may time out.", {
+      appId: request.appId,
+      sessionId: continuedSession?.id,
+      contextCharLength,
+      contextSourceCount,
+    });
+  }
+  if (indexedSupplementCharLength > INDEXED_SUPPLEMENT_WARNING_CHARS) {
+    console.warn("[cmo-app-chat] Indexed context supplement is large; keeping supplemental context bounded is recommended.", {
+      appId: request.appId,
+      sessionId: continuedSession?.id,
+      indexedSupplementCharLength,
+      indexedContextSourcesCount,
+    });
+  }
   const graphHints = contextPackage.graphHints ?? [];
   const graphHintCount = contextPackage.graphHintCount ?? graphHints.length;
   const graphStatus = contextPackage.graphStatus ?? "empty";
@@ -773,6 +838,10 @@ export async function createAppChatSession(
   let runtimeErrorReason: CmoRuntimeErrorReason | undefined;
   let runtimeProvider: string | undefined;
   let runtimeAgent: string | undefined;
+  let liveAttemptStartedAt: string | undefined;
+  let liveAttemptDurationMs: number | undefined;
+  let fallbackDurationMs: number | undefined;
+  let timeoutMs: number | undefined;
 
   try {
     if ((surfBridge.handled && surfBridge.response) || (echoBridge.handled && echoBridge.response)) {
@@ -822,6 +891,10 @@ export async function createAppChatSession(
     runtimeErrorReason = runtimeResult.runtimeErrorReason;
     runtimeProvider = runtimeResult.runtimeProvider;
     runtimeAgent = runtimeResult.runtimeAgent;
+    liveAttemptStartedAt = runtimeResult.liveAttemptStartedAt;
+    liveAttemptDurationMs = runtimeResult.liveAttemptDurationMs;
+    fallbackDurationMs = runtimeResult.fallbackDurationMs;
+    timeoutMs = runtimeResult.timeoutMs;
     if (cmoSurfClarification) {
       answer = [
         "## Need Clarification",
@@ -908,6 +981,22 @@ export async function createAppChatSession(
     runtimeAssumptions: assumptions,
     runtimeSuggestedActions: suggestedActions,
   });
+  const totalDurationMs = Date.now() - requestStartedMs;
+  const timingMetadata = {
+    requestReceivedAt,
+    ...(typeof timing.authDurationMs === "number" ? { authDurationMs: Math.max(0, Math.floor(timing.authDurationMs)) } : {}),
+    sessionResolutionDurationMs,
+    contextPackBuildDurationMs,
+    indexedContextBuildDurationMs,
+    ...(liveAttemptStartedAt ? { liveAttemptStartedAt } : {}),
+    ...(typeof liveAttemptDurationMs === "number" ? { liveAttemptDurationMs } : {}),
+    ...(typeof fallbackDurationMs === "number" ? { fallbackDurationMs } : {}),
+    totalDurationMs,
+    ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
+    contextSourceCount,
+    contextCharLength,
+    indexedSupplementCharLength,
+  };
 
   const session: CMOChatSession = {
     id: sessionId,
@@ -945,6 +1034,7 @@ export async function createAppChatSession(
     indexedContextStatus,
     indexedContextSourcesCount,
     ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
+    ...timingMetadata,
     decisionLayer,
     messages: [
       ...(continuedSession?.messages ?? []),
@@ -971,6 +1061,7 @@ export async function createAppChatSession(
         indexedContextStatus,
         indexedContextSourcesCount,
         ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
+        ...timingMetadata,
       },
     ],
   };
@@ -993,8 +1084,13 @@ export async function createAppChatSession(
     runtimeAgent,
   }) : { ok: false, savedToVault: false, warnings: [], error: "Chat response failed; auto capture skipped" };
   if (status === "completed") {
+    const finalTotalDurationMs = Date.now() - requestStartedMs;
     persistedSession = {
       ...session,
+      totalDurationMs: finalTotalDurationMs,
+      messages: session.messages.map((message) =>
+        message.id === assistantId ? { ...message, totalDurationMs: finalTotalDurationMs } : message,
+      ),
       rawCapturePath: autoCapture.relativePath,
       rawCaptureStatus: autoCapture.ok ? "saved" : "failed",
       ...(autoCapture.error ? { rawCaptureError: autoCapture.error } : {}),
@@ -1038,6 +1134,8 @@ export async function createAppChatSession(
     indexedContextStatus,
     indexedContextSourcesCount,
     ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
+    ...timingMetadata,
+    totalDurationMs: persistedSession.totalDurationMs ?? timingMetadata.totalDurationMs,
     decisionLayer,
     rawCapturePath: persistedSession.rawCapturePath,
     rawCaptureStatus: persistedSession.rawCaptureStatus,

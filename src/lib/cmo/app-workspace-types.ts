@@ -757,6 +757,19 @@ export interface CMOChatMessage {
   indexedContextStatus?: CmoIndexedContextStatus;
   indexedContextSourcesCount?: number;
   indexedContextFallbackReason?: string;
+  requestReceivedAt?: string;
+  liveAttemptStartedAt?: string;
+  liveAttemptDurationMs?: number;
+  fallbackDurationMs?: number;
+  totalDurationMs?: number;
+  timeoutMs?: number;
+  contextSourceCount?: number;
+  contextCharLength?: number;
+  indexedSupplementCharLength?: number;
+  authDurationMs?: number;
+  sessionResolutionDurationMs?: number;
+  contextPackBuildDurationMs?: number;
+  indexedContextBuildDurationMs?: number;
 }
 
 export interface CMOChatSession {
@@ -794,6 +807,19 @@ export interface CMOChatSession {
   indexedContextStatus?: CmoIndexedContextStatus;
   indexedContextSourcesCount?: number;
   indexedContextFallbackReason?: string;
+  requestReceivedAt?: string;
+  liveAttemptStartedAt?: string;
+  liveAttemptDurationMs?: number;
+  fallbackDurationMs?: number;
+  totalDurationMs?: number;
+  timeoutMs?: number;
+  contextSourceCount?: number;
+  contextCharLength?: number;
+  indexedSupplementCharLength?: number;
+  authDurationMs?: number;
+  sessionResolutionDurationMs?: number;
+  contextPackBuildDurationMs?: number;
+  indexedContextBuildDurationMs?: number;
   decisionLayer?: CmoDecisionLayer;
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
@@ -851,6 +877,19 @@ export interface CMOAppChatResponse {
   indexedContextStatus?: CmoIndexedContextStatus;
   indexedContextSourcesCount?: number;
   indexedContextFallbackReason?: string;
+  requestReceivedAt?: string;
+  liveAttemptStartedAt?: string;
+  liveAttemptDurationMs?: number;
+  fallbackDurationMs?: number;
+  totalDurationMs?: number;
+  timeoutMs?: number;
+  contextSourceCount?: number;
+  contextCharLength?: number;
+  indexedSupplementCharLength?: number;
+  authDurationMs?: number;
+  sessionResolutionDurationMs?: number;
+  contextPackBuildDurationMs?: number;
+  indexedContextBuildDurationMs?: number;
   decisionLayer?: CmoDecisionLayer;
   rawCapturePath?: string;
   rawCaptureStatus?: "saved" | "failed" | "pending";

@@ -38,6 +38,14 @@ export function getOpenClawCmoTimeoutMs(): number {
   return positiveIntEnv("OPENCLAW_CMO_TIMEOUT_MS", 60_000);
 }
 
+export function getCmoLiveAppTurnTimeoutMs(): number {
+  return positiveIntEnv("CMO_LIVE_APP_TURN_TIMEOUT_MS", 12_000);
+}
+
+export function getCmoFallbackFastAfterMs(): number {
+  return positiveIntEnv("CMO_FALLBACK_FAST_AFTER_MS", getCmoLiveAppTurnTimeoutMs());
+}
+
 export function getCmoAppTurnRequestTimeoutMs(): number {
-  return positiveIntEnv("CMO_APP_TURN_REQUEST_TIMEOUT_MS", positiveIntEnv("OPENCLAW_CMO_TIMEOUT_MS", 120_000));
+  return positiveIntEnv("CMO_APP_TURN_REQUEST_TIMEOUT_MS", getCmoLiveAppTurnTimeoutMs());
 }

@@ -32,10 +32,15 @@ async function readRequestPayload(request: Request): Promise<unknown> {
 
 export async function POST(request: Request) {
   try {
+    const requestReceivedAt = new Date().toISOString();
     const body = await readRequestPayload(request);
 
     if (isAppChatPayload(body)) {
-      return Response.json(await createAppChatSession(body, await getServerUserIdentity()), { status: 200 });
+      const authStartedMs = Date.now();
+      const userIdentity = await getServerUserIdentity();
+      const authDurationMs = Date.now() - authStartedMs;
+
+      return Response.json(await createAppChatSession(body, userIdentity, { requestReceivedAt, authDurationMs }), { status: 200 });
     }
 
     const result = await startDashboardChat(body);

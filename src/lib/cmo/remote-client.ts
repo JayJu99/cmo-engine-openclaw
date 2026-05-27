@@ -495,11 +495,14 @@ export async function postRemoteChat(body: unknown): Promise<RemoteJsonResponse<
   };
 }
 
-export async function postRemoteAppTurn(body: CmoAppTurnRequest): Promise<RemoteJsonResponse<CmoAppTurnResponse>> {
+export async function postRemoteAppTurn(
+  body: CmoAppTurnRequest,
+  options: { timeoutMs?: number } = {},
+): Promise<RemoteJsonResponse<CmoAppTurnResponse>> {
   const response = await requestRemoteJson<unknown>("/cmo/app-turn", {
     method: "POST",
     body,
-    timeoutMs: getCmoAppTurnRequestTimeoutMs(),
+    timeoutMs: options.timeoutMs ?? getCmoAppTurnRequestTimeoutMs(),
   });
 
   return {
