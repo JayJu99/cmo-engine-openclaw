@@ -1,6 +1,10 @@
 import "server-only";
 
 import { buildContextPack } from "@/lib/cmo/context-pack-builder";
+import {
+  resolveCanonicalContextPreview,
+  type IndexedCanonicalContextSource,
+} from "@/lib/cmo/indexed-canonical-context";
 import { buildIndexedContextPreview, type IndexedContextPreviewItem } from "@/lib/cmo/indexed-context-preview";
 import {
   resolveIndexedContextDryRun,
@@ -24,6 +28,7 @@ export interface ContextPipelineShadowSource {
   excerpt?: string;
   whySelected: string;
   legacyContext?: boolean;
+  origin?: "current_pipeline" | "indexed_preview" | "canonical_context";
 }
 
 export interface ContextPipelineShadowOutput {
@@ -60,7 +65,7 @@ function compactText(value: string | undefined | null, maxChars = 420): string {
     return text;
   }
 
-  return `${text.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+  return `${text.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
 function sourceKey(source: ContextPipelineShadowSource): string {
@@ -96,6 +101,7 @@ async function currentContextSnapshot(input: ContextPipelineShadowInput): Promis
       quality: item.contextQuality,
       excerpt: compactText(item.contentPreview || item.content),
       whySelected: item.inclusionReason,
+      origin: "current_pipeline",
     }));
 
     for (const hint of result.contextPack.graphHints ?? []) {
@@ -108,6 +114,7 @@ async function currentContextSnapshot(input: ContextPipelineShadowInput): Promis
         quality: hint.confidence,
         excerpt: compactText(hint.contentPreview),
         whySelected: hint.reason,
+        origin: "current_pipeline",
       });
     }
 
@@ -128,6 +135,21 @@ function previewSource(source: IndexedContextPreviewItem): ContextPipelineShadow
     excerpt: compactText(source.excerpt),
     whySelected: source.whySelected,
     legacyContext: source.visibility === "legacy_or_workspace",
+    origin: "indexed_preview",
+  };
+}
+
+function canonicalSource(source: IndexedCanonicalContextSource): ContextPipelineShadowSource {
+  return {
+    id: source.id,
+    sourceType: source.sourceType,
+    title: source.title,
+    path: source.path ?? source.key ?? null,
+    status: source.status,
+    quality: source.quality,
+    excerpt: compactText(source.excerpt),
+    whySelected: source.whySelected,
+    origin: "canonical_context",
   };
 }
 
@@ -138,14 +160,14 @@ async function indexedContextSnapshot(input: ContextPipelineShadowInput): Promis
 }> {
   let resolverOutput = await resolveIndexedContextDryRun(input);
   const preview = await buildIndexedContextPreview({ resolverOutput });
-  let sources = [
+  let indexedPreviewSources = [
     ...preview.contextPreview.sessions.map(previewSource),
     ...preview.contextPreview.captures.map(previewSource),
     ...preview.contextPreview.candidates.map(previewSource),
   ];
   const warnings = [...preview.warnings];
 
-  if (input.query?.trim() && sources.length === 0 && resolverOutput.workspaceId) {
+  if (input.query?.trim() && indexedPreviewSources.length === 0 && resolverOutput.workspaceId) {
     const fallbackOutput = await resolveIndexedContextDryRun({
       ...input,
       query: undefined,
@@ -159,7 +181,7 @@ async function indexedContextSnapshot(input: ContextPipelineShadowInput): Promis
 
     if (fallbackSources.length) {
       resolverOutput = fallbackOutput;
-      sources = fallbackSources.map((source) => ({
+      indexedPreviewSources = fallbackSources.map((source) => ({
         ...source,
         whySelected: `${source.whySelected} Query filter had no metadata matches; included as recent indexed context for shadow comparison.`,
       }));
@@ -171,6 +193,21 @@ async function indexedContextSnapshot(input: ContextPipelineShadowInput): Promis
       }
     }
   }
+
+  const canonical = await resolveCanonicalContextPreview({
+    appId: input.appId,
+    workspaceKey: input.workspaceKey,
+    limit: input.limit,
+  });
+  for (const warning of canonical.warnings) {
+    if (!warnings.includes(warning)) {
+      warnings.push(warning);
+    }
+  }
+  const sources = [
+    ...canonical.sources.map(canonicalSource),
+    ...indexedPreviewSources,
+  ];
 
   return {
     resolverOutput,
@@ -215,8 +252,8 @@ function leakRisks(input: ContextPipelineShadowInput, indexed: {
 
 function missingRisks(current: ContextPipelineShadowSource[], indexed: ContextPipelineShadowSource[]): string[] {
   const risks: string[] = [];
-  const indexedTypes = new Set(indexed.map((source) => source.sourceType));
-  const currentTypes = new Set(current.map((source) => source.sourceType));
+  const indexedTypes = new Set(indexed.filter((source) => source.status !== "missing").map((source) => source.sourceType));
+  const currentTypes = new Set(current.filter((source) => source.status !== "missing").map((source) => source.sourceType));
   for (const required of ["current_priority", "app_memory", "business_metrics"]) {
     if (currentTypes.has(required) && !indexedTypes.has(required)) {
       risks.push(`indexed_missing_${required}`);
@@ -243,7 +280,11 @@ function recommendation(input: {
     return "needs_more_data";
   }
 
-  if (input.indexed.length >= 2 && input.indexed.length >= Math.min(input.current.length, 2)) {
+  const hasIndexedPreviewSource = input.indexed.some((source) =>
+    source.sourceType === "session_json" || source.sourceType === "vault_capture" || source.sourceType === "gbrain_candidate"
+  );
+
+  if (hasIndexedPreviewSource && input.indexed.length >= 2 && input.indexed.length >= Math.min(input.current.length, 2)) {
     return "canary_indexed";
   }
 

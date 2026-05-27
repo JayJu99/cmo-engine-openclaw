@@ -62,7 +62,7 @@ function createAdminClient() {
 
 function compactText(value, maxChars = 420) {
   const text = (value ?? "").replace(/\s+/g, " ").trim();
-  return text.length <= maxChars ? text : `${text.slice(0, maxChars - 1).trimEnd()}…`;
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars - 3).trimEnd()}...`;
 }
 
 function workspaceKeyFor(input) {
@@ -158,6 +158,7 @@ function currentPipelineSnapshot(options) {
       title: "Current Priority",
       status: "snapshot",
       whySelected: "Canonical current context pipeline source.",
+      origin: "current_pipeline",
     },
     {
       id: `${options.appId}-app-memory`,
@@ -165,6 +166,7 @@ function currentPipelineSnapshot(options) {
       title: "App Memory",
       status: "snapshot",
       whySelected: "Canonical current context pipeline source.",
+      origin: "current_pipeline",
     },
     {
       id: `${options.appId}-business-metrics`,
@@ -172,6 +174,7 @@ function currentPipelineSnapshot(options) {
       title: "Business Metrics",
       status: "snapshot",
       whySelected: "Canonical current context pipeline source when metrics JSON exists.",
+      origin: "current_pipeline",
     },
     {
       id: `${options.appId}-promotion-candidates`,
@@ -179,6 +182,7 @@ function currentPipelineSnapshot(options) {
       title: "Memory Candidates",
       status: "snapshot",
       whySelected: "Canonical current context pipeline source.",
+      origin: "current_pipeline",
     },
   ];
 
@@ -205,6 +209,7 @@ function currentPipelineSnapshot(options) {
           createdAt: session.createdAt ?? null,
           excerpt: compactText(excerpt),
           whySelected: "Current pipeline includes recent app sessions.",
+          origin: "current_pipeline",
         });
       } catch (error) {
         warnings.push(`Current session snapshot skipped invalid JSON ${path.basename(filePath)}: ${error instanceof Error ? error.message : "invalid"}`);
@@ -212,6 +217,39 @@ function currentPipelineSnapshot(options) {
     }
   } else {
     warnings.push(`App chat directory missing: ${APP_CHAT_DIR}`);
+  }
+
+  return { sources, warnings };
+}
+
+function canonicalIndexedSources(currentSources, options) {
+  const canonicalTypes = ["current_priority", "app_memory", "business_metrics", "promotion_candidates"];
+  const warnings = [];
+  const sources = currentSources
+    .filter((source) => canonicalTypes.includes(source.sourceType))
+    .map((source) => ({
+      ...source,
+      id: `canonical:${source.id}`,
+      status: source.status === "missing" ? "missing" : "included",
+      whySelected: `Canonical context adapter: ${source.whySelected}`,
+      origin: "canonical_context",
+    }));
+  const presentTypes = new Set(sources.map((source) => source.sourceType));
+
+  for (const sourceType of canonicalTypes) {
+    if (!presentTypes.has(sourceType)) {
+      sources.push({
+        id: `${options.appId}-canonical-${sourceType}`,
+        sourceType,
+        title: sourceType.replaceAll("_", " "),
+        status: "missing",
+        excerpt: "",
+        whySelected: "Canonical context adapter expected this source, but it was unavailable in the current context snapshot.",
+        warning: `canonical_${sourceType}_missing`,
+        origin: "canonical_context",
+      });
+      warnings.push(`canonical_${sourceType}_missing`);
+    }
   }
 
   return { sources, warnings };
@@ -288,6 +326,7 @@ function indexedPreview(records, warnings) {
         excerpt: sessionExcerpt(safePath),
         whySelected: "Selected by indexed resolver metadata.",
         legacyContext: !record.user_id,
+        origin: "indexed_preview",
       });
     } catch (error) {
       warnings.push(`Indexed session preview failed ${record.id}: ${error instanceof Error ? error.message : "read failed"}`);
@@ -312,6 +351,7 @@ function indexedPreview(records, warnings) {
         excerpt: captureExcerpt(safePath),
         whySelected: "Selected by indexed resolver metadata after visibility filtering.",
         legacyContext: !record.user_id,
+        origin: "indexed_preview",
       });
     } catch (error) {
       warnings.push(`Indexed capture preview failed ${record.id}: ${error instanceof Error ? error.message : "read failed"}`);
@@ -333,6 +373,7 @@ function indexedPreview(records, warnings) {
         excerpt: captureExcerpt(safePath),
         whySelected: "Selected by indexed resolver metadata after visibility filtering.",
         legacyContext: !record.user_id,
+        origin: "indexed_preview",
       });
     } catch (error) {
       warnings.push(`Indexed candidate preview failed ${record.id}: ${error instanceof Error ? error.message : "read failed"}`);
@@ -356,8 +397,8 @@ function compare(currentSources, indexedSources, userContext, indexedRecords, in
   const indexedOnly = [...indexedKeys].filter((key) => !currentKeys.has(key));
   const currentOnly = [...currentKeys].filter((key) => !indexedKeys.has(key));
   const missingRisks = [];
-  const indexedTypes = new Set(indexedSources.map((source) => source.sourceType));
-  const currentTypes = new Set(currentSources.map((source) => source.sourceType));
+  const indexedTypes = new Set(indexedSources.filter((source) => source.status !== "missing").map((source) => source.sourceType));
+  const currentTypes = new Set(currentSources.filter((source) => source.status !== "missing").map((source) => source.sourceType));
   for (const required of ["current_priority", "app_memory", "business_metrics"]) {
     if (currentTypes.has(required) && !indexedTypes.has(required)) missingRisks.push(`indexed_missing_${required}`);
   }
@@ -371,7 +412,12 @@ function compare(currentSources, indexedSources, userContext, indexedRecords, in
   if (legacy) leakRisks.push(`legacy_context_null_user:${legacy}`);
   let recommendation = "needs_more_data";
   if (leakRisks.some((risk) => !risk.startsWith("legacy_context_null_user"))) recommendation = "keep_current";
-  else if (!indexedWarnings.length && !missingRisks.length && indexedSources.length >= 2) recommendation = "canary_indexed";
+  else if (
+    !indexedWarnings.length &&
+    !missingRisks.length &&
+    indexedSources.length >= 2 &&
+    indexedSources.some((source) => ["session_json", "vault_capture", "gbrain_candidate"].includes(source.sourceType))
+  ) recommendation = "canary_indexed";
   return { overlap, indexedOnly, currentOnly, missingRisks, leakRisks, recommendation };
 }
 
@@ -403,18 +449,38 @@ function runShadowFallbackAssertion() {
   assert.ok(warnings.some((warning) => warning.startsWith("query_filter_no_matches:")));
 }
 
+function runCanonicalShadowAssertion() {
+  const currentSources = [
+    { id: "priority", sourceType: "current_priority", status: "snapshot", whySelected: "Current priority" },
+    { id: "memory", sourceType: "app_memory", status: "snapshot", whySelected: "App memory" },
+    { id: "metrics", sourceType: "business_metrics", status: "snapshot", whySelected: "Business metrics" },
+  ];
+  const canonical = canonicalIndexedSources(currentSources, { appId: "holdstation-mini-app" });
+  const sourceTypes = new Set(canonical.sources.map((source) => source.sourceType));
+  assert.ok(sourceTypes.has("current_priority"), "canonical adapter should expose current priority");
+  assert.ok(sourceTypes.has("app_memory"), "canonical adapter should expose app memory");
+  assert.ok(sourceTypes.has("business_metrics"), "canonical adapter should expose business metrics");
+  const comparison = compare(currentSources, canonical.sources, { userId: DEFAULT_USER_ID, isOwnerOrAdmin: false }, { captures: [], candidates: [] }, []);
+  assert.ok(!comparison.missingRisks.includes("indexed_missing_current_priority"));
+  assert.ok(!comparison.missingRisks.includes("indexed_missing_app_memory"));
+  assert.ok(!comparison.missingRisks.includes("indexed_missing_business_metrics"));
+}
+
 const shadowSource = readFileSync("src/lib/cmo/indexed-context-shadow.ts", "utf8");
 assert.match(shadowSource, /buildContextPack/);
 assert.match(shadowSource, /resolveIndexedContextDryRun/);
 assert.match(shadowSource, /buildIndexedContextPreview/);
+assert.match(shadowSource, /resolveCanonicalContextPreview/);
 assert.doesNotMatch(shadowSource, /writeFile|insert\(|upsert\(|delete\(/);
 runShadowFallbackAssertion();
+runCanonicalShadowAssertion();
 
 const options = parseArgs(process.argv.slice(2));
 const supabase = adminEnvReady() ? createAdminClient() : null;
 const userContext = await resolveUserContext(supabase, options);
 const workspace = await resolveWorkspaceScope(supabase, options);
 const current = currentPipelineSnapshot(options);
+const canonical = canonicalIndexedSources(current.sources, options);
 const indexedWarnings = workspace.warning ? [workspace.warning] : [];
 let records = await indexedRecords(supabase, options, userContext, workspace.scope);
 let indexedSources = indexedPreview(records, indexedWarnings);
@@ -432,6 +498,10 @@ if (options.query.trim() && !indexedSources.length && supabase && workspace.scop
     }));
   }
 }
+for (const warning of canonical.warnings) {
+  if (!indexedWarnings.includes(warning)) indexedWarnings.push(warning);
+}
+indexedSources = [...canonical.sources, ...indexedSources];
 const comparison = compare(current.sources, indexedSources, userContext, records, indexedWarnings);
 const output = {
   ok: true,
