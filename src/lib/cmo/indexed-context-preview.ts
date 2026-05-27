@@ -12,6 +12,7 @@ import type {
 import { CMO_ENGINE_VAULT_PATH } from "@/lib/cmo/vault-capture-paths";
 
 const APP_CHAT_DIR = path.join(process.cwd(), "data", "cmo-dashboard", "app-chat");
+const APP_CHAT_PREFIX = "data/cmo-dashboard/app-chat/";
 const SESSION_EXCERPT_CHARS = 560;
 const CAPTURE_EXCERPT_CHARS = 700;
 const CANDIDATE_EXCERPT_CHARS = 520;
@@ -74,6 +75,22 @@ function safeResolveUnder(root: string, requestedPath: string | null | undefined
   const normalized = requestedPath.replaceAll("\\", "/");
   const resolved = path.resolve(root, normalized);
   return isInside(root, resolved) ? resolved : null;
+}
+
+function safeResolveSessionJson(appChatRoot: string, requestedPath: string | null | undefined): string | null {
+  if (!requestedPath) {
+    return null;
+  }
+
+  if (path.isAbsolute(requestedPath)) {
+    const resolved = path.resolve(requestedPath);
+    return isInside(appChatRoot, resolved) ? resolved : null;
+  }
+
+  const normalized = requestedPath.replaceAll("\\", "/");
+  const repoRelativePath = normalized.startsWith(APP_CHAT_PREFIX) ? normalized : `${APP_CHAT_PREFIX}${normalized}`;
+  const resolved = path.resolve(process.cwd(), repoRelativePath);
+  return isInside(appChatRoot, resolved) ? resolved : null;
 }
 
 function parseFrontmatter(markdown: string): { frontmatter: Record<string, string>; body: string } {
@@ -155,7 +172,7 @@ async function previewSession(
   record: IndexedChatSessionRecord,
   input: { appChatRoot: string; warnings: string[] },
 ): Promise<IndexedContextPreviewItem | null> {
-  const safePath = safeResolveUnder(input.appChatRoot, record.jsonPath);
+  const safePath = safeResolveSessionJson(input.appChatRoot, record.jsonPath);
   if (!safePath) {
     input.warnings.push(`Unsafe or missing session json_path skipped: ${record.id}`);
     return null;
@@ -269,6 +286,7 @@ export async function buildIndexedContextPreview(
 export const __indexedContextPreviewTest = {
   compactText,
   safeResolveUnder,
+  safeResolveSessionJson,
   parseFrontmatter,
   recentConversationExcerpt,
   captureExcerpt,

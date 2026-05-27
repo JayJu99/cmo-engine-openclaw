@@ -15,6 +15,7 @@ const WORKSPACE_KEY_BY_APP_ID = {
   "world-app-feeback": "world-app-feeback",
 };
 const APP_CHAT_DIR = path.join(process.cwd(), "data", "cmo-dashboard", "app-chat");
+const APP_CHAT_PREFIX = "data/cmo-dashboard/app-chat/";
 const CMO_ENGINE_VAULT_PATH = process.env.CMO_ENGINE_VAULT_PATH || "/home/ju/.openclaw/workspace/knowledge/cmo-engine-vault";
 const FORBIDDEN_CONTENT_KEYS = new Set(["content", "body", "markdown", "messages", "payload", "contextUsed", "context_used"]);
 const DEFAULT_USER_ID = "00000000-0000-4000-8000-000000000007";
@@ -93,6 +94,18 @@ function safeResolveUnder(root, requestedPath) {
   return isInside(root, resolved) ? resolved : null;
 }
 
+function safeResolveSessionJson(appChatRoot, requestedPath) {
+  if (!requestedPath) return null;
+  if (path.isAbsolute(requestedPath)) {
+    const resolved = path.resolve(requestedPath);
+    return isInside(appChatRoot, resolved) ? resolved : null;
+  }
+  const normalized = requestedPath.replaceAll("\\", "/");
+  const repoRelativePath = normalized.startsWith(APP_CHAT_PREFIX) ? normalized : `${APP_CHAT_PREFIX}${normalized}`;
+  const resolved = path.resolve(process.cwd(), repoRelativePath);
+  return isInside(appChatRoot, resolved) ? resolved : null;
+}
+
 function parseFrontmatter(markdown) {
   if (!markdown.startsWith("---\n")) return { frontmatter: {}, body: markdown };
   const end = markdown.indexOf("\n---", 4);
@@ -153,6 +166,13 @@ function runPathSafetyAssertions() {
   assert.equal(safeResolveUnder(root, "../outside.md"), null);
   assert.equal(safeResolveUnder(root, "/etc/passwd"), null);
   assert.ok(safeResolveUnder(root, "nested/file.md")?.startsWith(root));
+  const appRoot = path.resolve(process.cwd(), "data", "cmo-dashboard", "app-chat");
+  assert.equal(
+    safeResolveSessionJson(appRoot, "data/cmo-dashboard/app-chat/session_test.json"),
+    path.join(appRoot, "session_test.json"),
+  );
+  assert.equal(safeResolveSessionJson(appRoot, "session_test.json"), path.join(appRoot, "session_test.json"));
+  assert.equal(safeResolveSessionJson(appRoot, "../session_test.json"), null);
 }
 
 async function resolveUserContext(supabase, options) {
@@ -262,7 +282,7 @@ async function resolveIndexedRecords(supabase, options, userContext, scope) {
 async function buildPreview(records, warnings) {
   const sessions = [];
   for (const record of records.sessions) {
-    const safePath = safeResolveUnder(APP_CHAT_DIR, record.jsonPath);
+    const safePath = safeResolveSessionJson(APP_CHAT_DIR, record.jsonPath);
     if (!safePath) {
       warnings.push(`Unsafe or missing session json_path skipped: ${record.id}`);
       continue;
