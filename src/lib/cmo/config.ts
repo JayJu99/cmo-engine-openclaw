@@ -79,3 +79,11 @@ export function isCmoHermesCmoChatEnabled(): boolean {
 export function getCmoHermesCmoCanaryApps(): string[] {
   return commaSeparatedEnv("CMO_HERMES_CMO_CANARY_APPS");
 }
+
+export function isCmoHermesCmoOrchestrationEnabled(): boolean {
+  return booleanEnv("CMO_HERMES_CMO_ORCHESTRATION_ENABLED", false);
+}
+
+export function getCmoHermesCmoMaxDelegations(): number {
+  return positiveIntEnv("CMO_HERMES_CMO_MAX_DELEGATIONS", 2);
+}

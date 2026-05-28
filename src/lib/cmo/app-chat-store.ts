@@ -12,15 +12,22 @@ import type {
   CMOChatSession,
   CMORuntimeStatus,
   CmoAuthMode,
+  CmoDecisionLabel,
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
+  CmoStrategyMode,
   CmoAssumptionReviewStatus,
   CmoDecisionLayer,
   CmoDecisionReviewStatus,
   CmoIndexedContextStatus,
+  HermesCmoActivityEventSummary,
+  HermesCmoAgentUsed,
   HermesCmoChatMetadata,
   HermesCmoChatStatus,
+  HermesCmoDelegationSummaryItem,
   HermesCmoDelegationsMode,
+  HermesCmoForbiddenCounters,
+  HermesCmoPlatformPersistenceSummary,
   HermesCmoSafetyCounters,
   CmoMemoryCandidateReviewStatus,
   CmoSuggestedActionReviewStatus,
@@ -49,7 +56,7 @@ import { shouldUseHermesCmoChat } from "@/lib/cmo/hermes-cmo-chat-router";
 import { runHermesCmoRuntime } from "@/lib/cmo/hermes-cmo-runtime";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
-import { indexChatMessages, indexChatSession } from "@/lib/cmo/supabase-indexing";
+import { indexChatMessages, indexChatSession, type CmoIndexResult } from "@/lib/cmo/supabase-indexing";
 import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/lib/cmo/indexed-context-canary";
 import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
@@ -593,7 +600,7 @@ function normalizeHermesCmoChatStatus(value: unknown): HermesCmoChatStatus | und
 }
 
 function normalizeHermesCmoDelegationsMode(value: unknown): HermesCmoDelegationsMode | undefined {
-  return value === HERMES_CMO_PROPOSALS_ONLY ? value : undefined;
+  return value === HERMES_CMO_PROPOSALS_ONLY || value === "echo_surf_bounded" ? value : undefined;
 }
 
 function normalizeHermesCmoCounters(value: unknown): HermesCmoSafetyCounters | undefined {
@@ -602,55 +609,218 @@ function normalizeHermesCmoCounters(value: unknown): HermesCmoSafetyCounters | u
   return validation.ok ? validation.counters : undefined;
 }
 
+function normalizeHermesCmoForbiddenCounters(value: unknown): HermesCmoForbiddenCounters | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const directSupabaseMutations =
+    normalizeOptionalNonNegativeNumber(value.directSupabaseMutations ?? value.supabaseWrites) ?? undefined;
+  const vaultWrites = normalizeOptionalNonNegativeNumber(value.vaultWrites) ?? undefined;
+  const openclawCalls = normalizeOptionalNonNegativeNumber(value.openclawCalls) ?? undefined;
+
+  return typeof vaultWrites === "number" &&
+    typeof openclawCalls === "number" &&
+    typeof directSupabaseMutations === "number"
+    ? {
+        vaultWrites,
+        openclawCalls,
+        directSupabaseMutations,
+      }
+    : undefined;
+}
+
+function normalizeStrategyMode(value: unknown): CmoStrategyMode | undefined {
+  return value === "DIAGNOSE" || value === "FOCUS" || value === "PRIORITIZE" || value === "REVIEW" || value === "RESET"
+    ? value
+    : undefined;
+}
+
+function normalizeDecisionLabel(value: unknown): CmoDecisionLabel | undefined {
+  return value === "KEEP" || value === "CUT" || value === "TEST" || value === "SCALE" || value === "WAIT"
+    ? value
+    : undefined;
+}
+
+function normalizeHermesCmoAgentUsed(value: unknown): HermesCmoAgentUsed | undefined {
+  return value === "cmo" || value === "echo" || value === "surf" ? value : undefined;
+}
+
+function normalizeHermesCmoActivityEvents(value: unknown): HermesCmoActivityEventSummary[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value
+    .map((event): HermesCmoActivityEventSummary | null => {
+      if (!isRecord(event)) {
+        return null;
+      }
+
+      const eventId = stringValue(event.eventId);
+      const type = stringValue(event.type);
+      const status = stringValue(event.status);
+      const message = stringValue(event.message);
+
+      return eventId && type && status && message
+        ? {
+            eventId,
+            type,
+            status,
+            message,
+            userVisible: event.userVisible === true,
+            ...(normalizeHermesCmoAgentUsed(event.sourceAgent) ? { sourceAgent: normalizeHermesCmoAgentUsed(event.sourceAgent) } : {}),
+            ...(stringValue(event.sourceMode) ? { sourceMode: stringValue(event.sourceMode) as HermesCmoActivityEventSummary["sourceMode"] } : {}),
+          }
+        : null;
+    })
+    .filter((event): event is HermesCmoActivityEventSummary => Boolean(event));
+}
+
+function normalizeHermesCmoDelegationSummary(value: unknown): HermesCmoDelegationSummaryItem[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value
+    .map((item): HermesCmoDelegationSummaryItem | null => {
+      if (!isRecord(item)) {
+        return null;
+      }
+
+      const targetAgent = item.targetAgent === "echo" || item.targetAgent === "surf" ? item.targetAgent : null;
+      const mode = stringValue(item.mode) as HermesCmoDelegationSummaryItem["mode"];
+      const status =
+        item.status === "completed" || item.status === "failed" || item.status === "skipped" ? item.status : null;
+      const delegationId = stringValue(item.delegationId);
+      const objective = stringValue(item.objective);
+      const summary = stringValue(item.summary);
+
+      return targetAgent && delegationId && objective && status && summary
+        ? {
+            delegationId,
+            targetAgent,
+            mode,
+            objective,
+            status,
+            summary,
+            ...(stringValue(item.failureReason) ? { failureReason: stringValue(item.failureReason) } : {}),
+          }
+        : null;
+    })
+    .filter((item): item is HermesCmoDelegationSummaryItem => Boolean(item));
+}
+
+function normalizeHermesCmoPlatformPersistenceSummary(value: unknown): HermesCmoPlatformPersistenceSummary | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const status = value.supabaseIndexingStatus;
+
+  if (status !== "indexed" && status !== "skipped" && status !== "failed") {
+    return undefined;
+  }
+
+  return {
+    sessionJsonSaved: value.sessionJsonSaved === true,
+    rawCaptureSaved: value.rawCaptureSaved === true,
+    ...(value.rawCaptureStatus === "saved" || value.rawCaptureStatus === "failed" || value.rawCaptureStatus === "pending"
+      ? { rawCaptureStatus: value.rawCaptureStatus }
+      : {}),
+    supabaseIndexingStatus: status,
+  };
+}
+
+function supabaseIndexingStatus(results: CmoIndexResult[]): HermesCmoPlatformPersistenceSummary["supabaseIndexingStatus"] {
+  if (results.some((result) => result.status === "failed")) {
+    return "failed";
+  }
+
+  if (results.some((result) => result.status === "indexed")) {
+    return "indexed";
+  }
+
+  return "skipped";
+}
+
+function attachHermesCmoPlatformPersistence(
+  session: CMOChatSession,
+  assistantId: string,
+  summary: HermesCmoPlatformPersistenceSummary,
+): CMOChatSession {
+  const metadataWithPersistence = session.hermesCmoMetadata
+    ? {
+        ...session.hermesCmoMetadata,
+        platformPersistenceSummary: summary,
+      }
+    : undefined;
+
+  return {
+    ...session,
+    platformPersistenceSummary: summary,
+    ...(metadataWithPersistence ? { hermesCmoMetadata: metadataWithPersistence } : {}),
+    messages: session.messages.map((message) =>
+      message.id === assistantId
+        ? {
+            ...message,
+            platformPersistenceSummary: summary,
+            ...(message.hermesCmoMetadata
+              ? {
+                  hermesCmoMetadata: {
+                    ...message.hermesCmoMetadata,
+                    platformPersistenceSummary: summary,
+                  },
+                }
+              : {}),
+          }
+        : message,
+    ),
+  };
+}
+
 function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | undefined {
   if (!isRecord(value) || value.runtimeMode !== "hermes_cmo" || value.runtimeStatus !== "live" || value.calledHermesCmo !== true) {
     return undefined;
   }
 
   const counters = normalizeHermesCmoCounters(value.counters);
+  const forbiddenCounters = normalizeHermesCmoForbiddenCounters(value.forbiddenCounters ?? value.counters);
   const requestId = stringValue(value.requestId);
   const responseStatus = stringValue(value.responseStatus);
   const activityEventsCount = normalizeOptionalNonNegativeNumber(value.activityEventsCount);
 
-  if (!counters || !requestId || !responseStatus || typeof activityEventsCount !== "number") {
+  if (!counters || !forbiddenCounters || !requestId || !responseStatus || typeof activityEventsCount !== "number") {
     return undefined;
   }
 
-  const activityEvents = Array.isArray(value.activityEvents)
-    ? value.activityEvents
-        .map((event) => {
-          if (!isRecord(event)) {
-            return null;
-          }
-
-          const eventId = stringValue(event.eventId);
-          const type = stringValue(event.type);
-          const status = stringValue(event.status);
-          const message = stringValue(event.message);
-
-          return eventId && type && status && message
-            ? {
-                eventId,
-                type,
-                status,
-                message,
-                userVisible: event.userVisible === true,
-              }
-            : null;
-        })
-        .filter((event): event is NonNullable<HermesCmoChatMetadata["activityEvents"]>[number] => Boolean(event))
+  const activityEvents = normalizeHermesCmoActivityEvents(value.activityEvents);
+  const delegationSummary = normalizeHermesCmoDelegationSummary(value.delegationSummary);
+  const agentsUsed = Array.isArray(value.agentsUsed)
+    ? value.agentsUsed.map(normalizeHermesCmoAgentUsed).filter((agent): agent is HermesCmoAgentUsed => Boolean(agent))
     : undefined;
+  const platformPersistenceSummary = normalizeHermesCmoPlatformPersistenceSummary(value.platformPersistenceSummary);
 
   return {
     runtimeMode: "hermes_cmo",
     runtimeStatus: "live",
     calledHermesCmo: true,
-    delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+    delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode) ?? HERMES_CMO_PROPOSALS_ONLY,
     counters,
+    forbiddenCounters,
     requestId,
     responseStatus,
+    ...(normalizeStrategyMode(value.strategyMode) ? { strategyMode: normalizeStrategyMode(value.strategyMode) } : {}),
+    ...(stringValue(value.mainBottleneck) ? { mainBottleneck: stringValue(value.mainBottleneck) } : {}),
+    ...(normalizeDecisionLabel(value.decisionLabel) ? { decisionLabel: normalizeDecisionLabel(value.decisionLabel) } : {}),
+    ...(stringValue(value.currentStep) ? { currentStep: stringValue(value.currentStep) } : {}),
     activityEventsCount,
     ...(activityEvents ? { activityEvents } : {}),
+    ...(delegationSummary ? { delegationSummary } : {}),
+    ...(agentsUsed ? { agentsUsed } : {}),
+    ...(typeof value.surfCalls === "number" && Number.isFinite(value.surfCalls) ? { surfCalls: Math.max(0, Math.floor(value.surfCalls)) } : {}),
+    ...(typeof value.echoCalls === "number" && Number.isFinite(value.echoCalls) ? { echoCalls: Math.max(0, Math.floor(value.echoCalls)) } : {}),
+    ...(platformPersistenceSummary ? { platformPersistenceSummary } : {}),
   };
 }
 
@@ -728,6 +898,19 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             hermesCmoErrorReason: normalizeOptionalString(message.hermesCmoErrorReason),
             hermesCmoCounters: normalizeHermesCmoCounters(message.hermesCmoCounters),
             hermesCmoMetadata: normalizeHermesCmoMetadata(message.hermesCmoMetadata),
+            strategyMode: normalizeStrategyMode(message.strategyMode),
+            mainBottleneck: normalizeOptionalString(message.mainBottleneck),
+            decisionLabel: normalizeDecisionLabel(message.decisionLabel),
+            currentStep: normalizeOptionalString(message.currentStep),
+            activityEvents: normalizeHermesCmoActivityEvents(message.activityEvents),
+            delegationSummary: normalizeHermesCmoDelegationSummary(message.delegationSummary),
+            agentsUsed: Array.isArray(message.agentsUsed)
+              ? message.agentsUsed.map(normalizeHermesCmoAgentUsed).filter((agent): agent is HermesCmoAgentUsed => Boolean(agent))
+              : undefined,
+            surfCalls: normalizeOptionalNonNegativeNumber(message.surfCalls),
+            echoCalls: normalizeOptionalNonNegativeNumber(message.echoCalls),
+            forbiddenCounters: normalizeHermesCmoForbiddenCounters(message.forbiddenCounters),
+            platformPersistenceSummary: normalizeHermesCmoPlatformPersistenceSummary(message.platformPersistenceSummary),
             delegationsMode: normalizeHermesCmoDelegationsMode(message.delegationsMode),
             contextUsedCount: typeof message.contextUsedCount === "number" && Number.isFinite(message.contextUsedCount) ? Math.max(0, Math.floor(message.contextUsedCount)) : undefined,
             graphHintCount: typeof message.graphHintCount === "number" && Number.isFinite(message.graphHintCount) ? Math.max(0, Math.floor(message.graphHintCount)) : undefined,
@@ -789,6 +972,19 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     hermesCmoErrorReason: normalizeOptionalString(value.hermesCmoErrorReason),
     hermesCmoCounters: normalizeHermesCmoCounters(value.hermesCmoCounters),
     hermesCmoMetadata: normalizeHermesCmoMetadata(value.hermesCmoMetadata),
+    strategyMode: normalizeStrategyMode(value.strategyMode),
+    mainBottleneck: normalizeOptionalString(value.mainBottleneck),
+    decisionLabel: normalizeDecisionLabel(value.decisionLabel),
+    currentStep: normalizeOptionalString(value.currentStep),
+    activityEvents: normalizeHermesCmoActivityEvents(value.activityEvents),
+    delegationSummary: normalizeHermesCmoDelegationSummary(value.delegationSummary),
+    agentsUsed: Array.isArray(value.agentsUsed)
+      ? value.agentsUsed.map(normalizeHermesCmoAgentUsed).filter((agent): agent is HermesCmoAgentUsed => Boolean(agent))
+      : undefined,
+    surfCalls: normalizeOptionalNonNegativeNumber(value.surfCalls),
+    echoCalls: normalizeOptionalNonNegativeNumber(value.echoCalls),
+    forbiddenCounters: normalizeHermesCmoForbiddenCounters(value.forbiddenCounters),
+    platformPersistenceSummary: normalizeHermesCmoPlatformPersistenceSummary(value.platformPersistenceSummary),
     delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode),
     missingContext,
     contextDiagnostics,
@@ -930,6 +1126,16 @@ export async function createAppChatSession(
   let hermesCmoErrorReason: string | undefined;
   let hermesCmoCounters: HermesCmoSafetyCounters | undefined;
   let hermesCmoMetadata: HermesCmoChatMetadata | undefined;
+  let strategyMode: CmoStrategyMode | undefined;
+  let mainBottleneck: string | undefined;
+  let decisionLabel: CmoDecisionLabel | undefined;
+  let currentStep: string | undefined;
+  let activityEvents: HermesCmoActivityEventSummary[] | undefined;
+  let delegationSummary: HermesCmoDelegationSummaryItem[] | undefined;
+  let agentsUsed: HermesCmoAgentUsed[] | undefined;
+  let surfCalls: number | undefined;
+  let echoCalls: number | undefined;
+  let forbiddenCounters: HermesCmoForbiddenCounters | undefined;
   let delegationsMode: HermesCmoDelegationsMode | undefined;
   let usedHermesCmoChat = false;
 
@@ -982,6 +1188,16 @@ export async function createAppChatSession(
       hermesCmoStatus = mappedHermesResult.hermesCmoStatus;
       hermesCmoCounters = mappedHermesResult.hermesCmoCounters;
       hermesCmoMetadata = mappedHermesResult.hermesCmoMetadata;
+      strategyMode = hermesCmoMetadata.strategyMode;
+      mainBottleneck = hermesCmoMetadata.mainBottleneck;
+      decisionLabel = hermesCmoMetadata.decisionLabel;
+      currentStep = hermesCmoMetadata.currentStep;
+      activityEvents = hermesCmoMetadata.activityEvents;
+      delegationSummary = hermesCmoMetadata.delegationSummary;
+      agentsUsed = hermesCmoMetadata.agentsUsed;
+      surfCalls = hermesCmoMetadata.surfCalls;
+      echoCalls = hermesCmoMetadata.echoCalls;
+      forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
       delegationsMode = mappedHermesResult.delegationsMode;
       usedHermesCmoChat = true;
     } catch (error) {
@@ -1202,6 +1418,16 @@ export async function createAppChatSession(
     ...(hermesCmoErrorReason ? { hermesCmoErrorReason } : {}),
     ...(hermesCmoCounters ? { hermesCmoCounters } : {}),
     ...(hermesCmoMetadata ? { hermesCmoMetadata } : {}),
+    ...(strategyMode ? { strategyMode } : {}),
+    ...(mainBottleneck ? { mainBottleneck } : {}),
+    ...(decisionLabel ? { decisionLabel } : {}),
+    ...(currentStep ? { currentStep } : {}),
+    ...(activityEvents ? { activityEvents } : {}),
+    ...(delegationSummary ? { delegationSummary } : {}),
+    ...(agentsUsed ? { agentsUsed } : {}),
+    ...(typeof surfCalls === "number" ? { surfCalls } : {}),
+    ...(typeof echoCalls === "number" ? { echoCalls } : {}),
+    ...(forbiddenCounters ? { forbiddenCounters } : {}),
     ...(delegationsMode ? { delegationsMode } : {}),
     contextDiagnostics,
     contextQualitySummary,
@@ -1238,6 +1464,16 @@ export async function createAppChatSession(
         ...(hermesCmoErrorReason ? { hermesCmoErrorReason } : {}),
         ...(hermesCmoCounters ? { hermesCmoCounters } : {}),
         ...(hermesCmoMetadata ? { hermesCmoMetadata } : {}),
+        ...(strategyMode ? { strategyMode } : {}),
+        ...(mainBottleneck ? { mainBottleneck } : {}),
+        ...(decisionLabel ? { decisionLabel } : {}),
+        ...(currentStep ? { currentStep } : {}),
+        ...(activityEvents ? { activityEvents } : {}),
+        ...(delegationSummary ? { delegationSummary } : {}),
+        ...(agentsUsed ? { agentsUsed } : {}),
+        ...(typeof surfCalls === "number" ? { surfCalls } : {}),
+        ...(typeof echoCalls === "number" ? { echoCalls } : {}),
+        ...(forbiddenCounters ? { forbiddenCounters } : {}),
         ...(delegationsMode ? { delegationsMode } : {}),
         contextUsedCount: contextUsed.length,
         graphHintCount,
@@ -1280,15 +1516,30 @@ export async function createAppChatSession(
     };
     await writeJsonFile(sessionPath(sessionId), persistedSession);
   }
-  await indexChatSession({
+  const sessionIndexResult = await indexChatSession({
     session: persistedSession,
     jsonPath: sessionJsonIndexPath(sessionId),
     auditCreated: !continuedSession,
   });
-  await indexChatMessages({
+  const messageIndexResults = await indexChatMessages({
     session: persistedSession,
     messages: session.messages.slice(-2),
   });
+  const platformPersistenceSummary: HermesCmoPlatformPersistenceSummary = {
+    sessionJsonSaved: true,
+    rawCaptureSaved: autoCapture.ok === true,
+    ...(persistedSession.rawCaptureStatus ? { rawCaptureStatus: persistedSession.rawCaptureStatus } : {}),
+    supabaseIndexingStatus: supabaseIndexingStatus([sessionIndexResult, ...messageIndexResults]),
+  };
+
+  if (calledHermesCmo && hermesCmoMetadata) {
+    persistedSession = attachHermesCmoPlatformPersistence(persistedSession, assistantId, platformPersistenceSummary);
+    hermesCmoMetadata = {
+      ...hermesCmoMetadata,
+      platformPersistenceSummary,
+    };
+    await writeJsonFile(sessionPath(sessionId), persistedSession);
+  }
 
   return {
     messageId: assistantId,
@@ -1314,6 +1565,17 @@ export async function createAppChatSession(
     ...(hermesCmoErrorReason ? { hermesCmoErrorReason } : {}),
     ...(hermesCmoCounters ? { hermesCmoCounters } : {}),
     ...(hermesCmoMetadata ? { hermesCmoMetadata } : {}),
+    ...(strategyMode ? { strategyMode } : {}),
+    ...(mainBottleneck ? { mainBottleneck } : {}),
+    ...(decisionLabel ? { decisionLabel } : {}),
+    ...(currentStep ? { currentStep } : {}),
+    ...(activityEvents ? { activityEvents } : {}),
+    ...(delegationSummary ? { delegationSummary } : {}),
+    ...(agentsUsed ? { agentsUsed } : {}),
+    ...(typeof surfCalls === "number" ? { surfCalls } : {}),
+    ...(typeof echoCalls === "number" ? { echoCalls } : {}),
+    ...(forbiddenCounters ? { forbiddenCounters } : {}),
+    ...(platformPersistenceSummary ? { platformPersistenceSummary } : {}),
     ...(delegationsMode ? { delegationsMode } : {}),
     contextDiagnostics,
     contextQualitySummary,

@@ -11,14 +11,17 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const runtimeSourcePath = path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-runtime.ts");
 const hermesCmoAgentPath = "/agents/cmo/execute";
 
-const expectedZeroCounters = {
+const expectedCounters = {
   surfCalls: 0,
   echoCalls: 0,
   vaultAgentCalls: 0,
   vaultWrites: 0,
-  supabaseWrites: 0,
-  sessionJsonWrites: 0,
-  rawCaptureWrites: 0,
+  directSupabaseMutations: 0,
+  openclawCalls: 0,
+};
+const forbiddenZeroCounters = {
+  vaultWrites: 0,
+  directSupabaseMutations: 0,
   openclawCalls: 0,
 };
 
@@ -127,11 +130,11 @@ const importPathsFromSource = (source) => {
   return imports;
 };
 
-const assertRuntimeDoesNotImportSubAgentsOrWriters = async () => {
+const assertRuntimeImportsOnlyM1ExecutorsAndNoWriters = async () => {
   const source = await readFile(runtimeSourcePath, "utf8");
   const imports = importPathsFromSource(source);
   const forbiddenImports = [
-    { label: "Hermes Surf/Echo client", pattern: /hermes-client|surf-bridge|echo-bridge|cmo-surf-orchestrator/i },
+    { label: "direct bridge/orchestrator", pattern: /surf-bridge|echo-bridge|cmo-surf-orchestrator/i },
     { label: "Vault writer", pattern: /vault-capture-writer|vault-files|vault-auto-capture/i },
     { label: "Supabase", pattern: /supabase/i },
     { label: "session or raw capture writer", pattern: /app-chat-store|raw-capture|store/i },
@@ -208,7 +211,7 @@ const makeActivityEvents = (requestBody) => [
     message: "Hermes CMO completed strategy-only handling with sub-agent execution disabled.",
     data: {
       sub_agent_execution_allowed: false,
-      safety_counters: expectedZeroCounters,
+      safety_counters: expectedCounters,
     },
   },
   {
@@ -229,7 +232,7 @@ const makeActivityEvents = (requestBody) => [
     message: "Hermes CMO returned a live response without Surf, Echo, Vault Agent, OpenClaw, or write execution.",
     data: {
       final_state: "completed",
-      safety_counters: expectedZeroCounters,
+      safety_counters: expectedCounters,
     },
   },
 ];
@@ -272,7 +275,7 @@ const makeHermesCmoEnvelope = (requestBody) => {
         recommendations: ["Keep H5 unwired from production chat until a later explicit runtime wiring phase."],
         risks: ["Live Hermes CMO endpoint availability is now required; there is no dry-run or fallback mode."],
         next_steps: ["Wire this boundary only after explicit approval for a later phase."],
-        safety_counters: expectedZeroCounters,
+        safety_counters: expectedCounters,
       },
       delegations: [],
       artifacts: [],
@@ -330,14 +333,15 @@ const startHermesCmoContractServer = async () => {
       assert.equal(requestBody.request_id, sampleRequest.request_id);
       assert.deepEqual(requestBody.constraints.allowed_agents, []);
       assert.deepEqual(requestBody.constraints.allowed_surf_modes, []);
+      assert.equal(requestBody.constraints.delegations_mode, "proposals_only");
+      assert.equal(requestBody.constraints.allowSubAgentExecution, false);
       assert.equal(requestBody.constraints.vault_agent_delegation_allowed, false);
       assert.equal(requestBody.constraints.kanban_enabled, false);
       assert.equal(requestBody.constraints.h5_live_adapter?.live_only, true);
       assert.equal(requestBody.constraints.h5_live_adapter?.sub_agent_execution_allowed, false);
       assert.equal(requestBody.constraints.h5_live_adapter?.vault_writes_allowed, false);
-      assert.equal(requestBody.constraints.h5_live_adapter?.supabase_writes_allowed, false);
-      assert.equal(requestBody.constraints.h5_live_adapter?.session_json_writes_allowed, false);
-      assert.equal(requestBody.constraints.h5_live_adapter?.raw_capture_writes_allowed, false);
+      assert.equal(requestBody.constraints.h5_live_adapter?.direct_supabase_mutations_allowed, false);
+      assert.equal(requestBody.constraints.h5_live_adapter?.platform_persistence_owner, "cmo_engine_app_chat_store");
       assert.equal(requestBody.constraints.h5_live_adapter?.openclaw_calls_allowed, false);
 
       writeJson(response, 200, makeHermesCmoEnvelope(requestBody));
@@ -389,6 +393,8 @@ const restoreHermesEnv = (previousEnv) => {
   restoreEnvValue("CMO_HERMES_BASE_URL", previousEnv.CMO_HERMES_BASE_URL);
   restoreEnvValue("CMO_HERMES_API_KEY", previousEnv.CMO_HERMES_API_KEY);
   restoreEnvValue("CMO_HERMES_TIMEOUT_MS", previousEnv.CMO_HERMES_TIMEOUT_MS);
+  restoreEnvValue("CMO_HERMES_CMO_ORCHESTRATION_ENABLED", previousEnv.CMO_HERMES_CMO_ORCHESTRATION_ENABLED);
+  restoreEnvValue("CMO_HERMES_CMO_MAX_DELEGATIONS", previousEnv.CMO_HERMES_CMO_MAX_DELEGATIONS);
 };
 
 const assertMissingLiveConfigFailsClearly = async (runHermesCmoRuntime) => {
@@ -397,6 +403,8 @@ const assertMissingLiveConfigFailsClearly = async (runHermesCmoRuntime) => {
     CMO_HERMES_BASE_URL: process.env.CMO_HERMES_BASE_URL,
     CMO_HERMES_API_KEY: process.env.CMO_HERMES_API_KEY,
     CMO_HERMES_TIMEOUT_MS: process.env.CMO_HERMES_TIMEOUT_MS,
+    CMO_HERMES_CMO_ORCHESTRATION_ENABLED: process.env.CMO_HERMES_CMO_ORCHESTRATION_ENABLED,
+    CMO_HERMES_CMO_MAX_DELEGATIONS: process.env.CMO_HERMES_CMO_MAX_DELEGATIONS,
   };
 
   try {
@@ -404,6 +412,8 @@ const assertMissingLiveConfigFailsClearly = async (runHermesCmoRuntime) => {
     delete process.env.CMO_HERMES_BASE_URL;
     delete process.env.CMO_HERMES_API_KEY;
     delete process.env.CMO_HERMES_TIMEOUT_MS;
+    delete process.env.CMO_HERMES_CMO_ORCHESTRATION_ENABLED;
+    delete process.env.CMO_HERMES_CMO_MAX_DELEGATIONS;
 
     await assert.rejects(
       () => runHermesCmoRuntime(sampleRequest),
@@ -416,7 +426,7 @@ const assertMissingLiveConfigFailsClearly = async (runHermesCmoRuntime) => {
 };
 
 try {
-  await assertRuntimeDoesNotImportSubAgentsOrWriters();
+  await assertRuntimeImportsOnlyM1ExecutorsAndNoWriters();
 
   const { tmpDir, runtimePath } = await compileRuntimeModule();
   const requireFromCheck = createRequire(import.meta.url);
@@ -429,6 +439,8 @@ try {
     CMO_HERMES_BASE_URL: process.env.CMO_HERMES_BASE_URL,
     CMO_HERMES_API_KEY: process.env.CMO_HERMES_API_KEY,
     CMO_HERMES_TIMEOUT_MS: process.env.CMO_HERMES_TIMEOUT_MS,
+    CMO_HERMES_CMO_ORCHESTRATION_ENABLED: process.env.CMO_HERMES_CMO_ORCHESTRATION_ENABLED,
+    CMO_HERMES_CMO_MAX_DELEGATIONS: process.env.CMO_HERMES_CMO_MAX_DELEGATIONS,
   };
 
   let result;
@@ -438,6 +450,8 @@ try {
     process.env.CMO_HERMES_BASE_URL = server.baseUrl;
     process.env.CMO_HERMES_API_KEY = "test-hermes-cmo-live-key";
     process.env.CMO_HERMES_TIMEOUT_MS = "5000";
+    process.env.CMO_HERMES_CMO_ORCHESTRATION_ENABLED = "false";
+    process.env.CMO_HERMES_CMO_MAX_DELEGATIONS = "2";
 
     result = await runHermesCmoRuntime(sampleRequest);
 
@@ -447,11 +461,13 @@ try {
     assert.equal(result.runtimeMode, "live");
     assert.equal(result.calledHermesCmo, true);
     assert.equal(result.hermesCmoAgentPath, hermesCmoAgentPath);
-    assert.deepEqual(result.safety_counters, expectedZeroCounters);
-    assert.deepEqual(result.safety.counters, expectedZeroCounters);
+    assert.deepEqual(result.safety_counters, expectedCounters);
+    assert.deepEqual(result.safety.counters, expectedCounters);
+    assert.deepEqual(result.forbidden_counters, forbiddenZeroCounters);
     assert.equal(result.safety_flags.liveOnly, true);
-    assert.equal(result.safety_flags.calledHermesCmoOnly, true);
-    assert.equal(result.safety_flags.subAgentExecutionDisabled, true);
+    assert.equal(result.safety_flags.calledHermesCmo, true);
+    assert.equal(result.safety_flags.cmoEngineMechanicalExecutor, true);
+    assert.equal(result.safety_flags.subAgentExecutionAllowed, false);
     assert.equal(result.safety_flags.noWrites, true);
     assert.equal(result.response.schema_version, "hermes.cmo.response.v1");
     assert.equal(result.response.structured_output?.runtime_mode, "live");
@@ -478,9 +494,7 @@ try {
         echoCalls: 0,
         vaultAgentCalls: 0,
         vaultWrites: 0,
-        supabaseWrites: 0,
-        sessionJsonWrites: 0,
-        rawCaptureWrites: 0,
+        directSupabaseMutations: 0,
         openclawCalls: 0,
         activityEvents: result.activity_events.length,
       },

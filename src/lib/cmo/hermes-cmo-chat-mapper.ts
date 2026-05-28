@@ -3,7 +3,10 @@ import type {
   CMOChatMessage,
   CMOContextNote,
   ContextItem,
+  HermesCmoActivityEventSummary,
   HermesCmoChatMetadata,
+  HermesCmoDelegationSummaryItem,
+  HermesCmoForbiddenCounters,
   HermesCmoSafetyCounters,
 } from "@/lib/cmo/app-workspace-types";
 import type {
@@ -15,19 +18,15 @@ import type {
 import type { CmoRuntimeTurnInput } from "@/lib/cmo/runtime";
 
 export const HERMES_CMO_PROPOSALS_ONLY = "proposals_only" as const;
+export const HERMES_CMO_BOUNDED_DELEGATIONS = "echo_surf_bounded" as const;
 
-export const HERMES_CMO_REQUIRED_ZERO_COUNTERS = [
-  "surfCalls",
-  "echoCalls",
-  "vaultAgentCalls",
+export const HERMES_CMO_FORBIDDEN_ZERO_COUNTERS = [
   "vaultWrites",
-  "supabaseWrites",
-  "sessionJsonWrites",
-  "rawCaptureWrites",
   "openclawCalls",
+  "directSupabaseMutations",
 ] as const;
 
-export type HermesCmoRequiredZeroCounter = (typeof HERMES_CMO_REQUIRED_ZERO_COUNTERS)[number];
+export type HermesCmoForbiddenZeroCounter = (typeof HERMES_CMO_FORBIDDEN_ZERO_COUNTERS)[number];
 
 export interface HermesCmoChatRequestInput extends CmoRuntimeTurnInput {
   sessionId: string;
@@ -59,7 +58,7 @@ export interface HermesCmoMappedChatResult {
   isRuntimeFallback: false;
   calledHermesCmo: true;
   hermesCmoStatus: "live";
-  delegationsMode: typeof HERMES_CMO_PROPOSALS_ONLY;
+  delegationsMode: typeof HERMES_CMO_PROPOSALS_ONLY | typeof HERMES_CMO_BOUNDED_DELEGATIONS;
   hermesCmoCounters: HermesCmoSafetyCounters;
   hermesCmoMetadata: HermesCmoChatMetadata;
 }
@@ -183,7 +182,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       vault_agent_requires_save_intent: true,
       kanban_enabled: false,
       demo_mode: true,
-      allowed_agents: ["echo", "surf", "vault_agent"],
+      allowed_agents: ["echo", "surf"],
       allowed_surf_modes: ["surf.default", "surf.x", "surf.trend", "surf.pulse"],
       delegations_mode: HERMES_CMO_PROPOSALS_ONLY,
       allowSubAgentExecution: false,
@@ -235,30 +234,75 @@ function extractCounterRecord(value: unknown): Record<string, unknown> | null {
   return null;
 }
 
-export function validateHermesCmoChatCounters(result: unknown): HermesCmoCounterValidation {
-  const rawCounters = extractCounterRecord(result);
+function extractForbiddenCounterRecord(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (isRecord(value.forbidden_counters)) {
+    return value.forbidden_counters;
+  }
+
+  return extractCounterRecord(value);
+}
+
+function extractForbiddenCounters(result: unknown): HermesCmoForbiddenCounters | null {
+  const rawCounters = extractForbiddenCounterRecord(result);
 
   if (!rawCounters) {
+    return null;
+  }
+
+  const directSupabaseMutations = counterNumber(rawCounters.directSupabaseMutations ?? rawCounters.supabaseWrites);
+  const vaultWrites = counterNumber(rawCounters.vaultWrites);
+  const openclawCalls = counterNumber(rawCounters.openclawCalls);
+
+  if (vaultWrites === null || openclawCalls === null || directSupabaseMutations === null) {
+    return null;
+  }
+
+  return {
+    vaultWrites,
+    openclawCalls,
+    directSupabaseMutations,
+  };
+}
+
+export function validateHermesCmoChatCounters(result: unknown): HermesCmoCounterValidation {
+  const rawCounters = extractCounterRecord(result);
+  const forbiddenCounters = extractForbiddenCounters(result);
+
+  if (!rawCounters || !forbiddenCounters) {
     return { ok: false, errorReason: "invalid_counters_schema:missing_safety_counters" };
   }
 
-  const counters: Partial<HermesCmoSafetyCounters> = {};
-
-  for (const key of HERMES_CMO_REQUIRED_ZERO_COUNTERS) {
-    const value = counterNumber(rawCounters[key]);
-
-    if (value === null) {
-      return { ok: false, errorReason: `invalid_counters_schema:${key}` };
-    }
+  for (const key of HERMES_CMO_FORBIDDEN_ZERO_COUNTERS) {
+    const value = forbiddenCounters[key];
 
     if (value !== 0) {
       return { ok: false, errorReason: `forbidden_counter_non_zero:${key}=${value}` };
     }
-
-    counters[key] = value;
   }
 
-  return { ok: true, counters: counters as HermesCmoSafetyCounters };
+  const surfCalls = counterNumber(rawCounters.surfCalls);
+  const echoCalls = counterNumber(rawCounters.echoCalls);
+  const vaultAgentCalls = counterNumber(rawCounters.vaultAgentCalls);
+
+  if (surfCalls === null || echoCalls === null || vaultAgentCalls === null) {
+    return { ok: false, errorReason: "invalid_counters_schema:execution_counters" };
+  }
+
+  return {
+    ok: true,
+    counters: {
+      surfCalls,
+      echoCalls,
+      vaultAgentCalls,
+      vaultWrites: forbiddenCounters.vaultWrites,
+      directSupabaseMutations: forbiddenCounters.directSupabaseMutations,
+      openclawCalls: forbiddenCounters.openclawCalls,
+    },
+  };
 }
 
 function assumptionText(value: string | Record<string, unknown>): string {
@@ -347,26 +391,57 @@ function suggestedActionsFromHermes(response: HermesCmoRuntimeResponse): CMOAppC
       ];
 }
 
+function delegationSummaryFromHermes(result: HermesCmoRuntimeResult): HermesCmoDelegationSummaryItem[] {
+  return result.delegationSummary.map((delegation) => ({
+    delegationId: delegation.delegationId,
+    targetAgent: delegation.targetAgent,
+    mode: delegation.mode,
+    objective: delegation.objective,
+    status: delegation.status,
+    summary: delegation.summary,
+    ...(delegation.failureReason ? { failureReason: delegation.failureReason } : {}),
+  }));
+}
+
+function activityEventsFromHermes(result: HermesCmoRuntimeResult): HermesCmoActivityEventSummary[] {
+  return result.activity_events.map((event: HermesCmoRuntimeActivityEvent) => ({
+    eventId: event.event_id,
+    type: event.type,
+    status: event.status,
+    message: event.message,
+    userVisible: event.user_visible,
+    sourceAgent: event.source.agent,
+    sourceMode: event.source.mode,
+  }));
+}
+
 function metadataFromHermes(
   result: HermesCmoRuntimeResult,
   counters: HermesCmoSafetyCounters,
+  forbiddenCounters: HermesCmoForbiddenCounters,
 ): HermesCmoChatMetadata {
+  const delegationSummary = delegationSummaryFromHermes(result);
+  const activityEvents = activityEventsFromHermes(result);
+
   return {
     runtimeMode: "hermes_cmo",
     runtimeStatus: "live",
     calledHermesCmo: true,
-    delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+    delegationsMode: delegationSummary.length > 0 ? HERMES_CMO_BOUNDED_DELEGATIONS : HERMES_CMO_PROPOSALS_ONLY,
     counters,
+    forbiddenCounters,
     requestId: result.response.request_id,
     responseStatus: result.response.status,
+    ...(result.strategyMode ? { strategyMode: result.strategyMode } : {}),
+    ...(result.mainBottleneck ? { mainBottleneck: result.mainBottleneck } : {}),
+    ...(result.decisionLabel ? { decisionLabel: result.decisionLabel } : {}),
+    ...(result.currentStep ? { currentStep: result.currentStep } : {}),
     activityEventsCount: result.activity_events.length,
-    activityEvents: result.activity_events.map((event: HermesCmoRuntimeActivityEvent) => ({
-      eventId: event.event_id,
-      type: event.type,
-      status: event.status,
-      message: event.message,
-      userVisible: event.user_visible,
-    })),
+    activityEvents,
+    delegationSummary,
+    agentsUsed: result.agentsUsed,
+    surfCalls: result.surfCalls,
+    echoCalls: result.echoCalls,
   };
 }
 
@@ -376,6 +451,14 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
   if (!validation.ok || !validation.counters) {
     throw new Error(validation.errorReason ?? "invalid_counters_schema");
   }
+
+  const forbiddenCounters = extractForbiddenCounters(result);
+
+  if (!forbiddenCounters) {
+    throw new Error("invalid_counters_schema:missing_forbidden_counters");
+  }
+
+  const delegationSummary = delegationSummaryFromHermes(result);
 
   return {
     answer: answerFromHermes(result.response),
@@ -390,8 +473,8 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
     isRuntimeFallback: false,
     calledHermesCmo: true,
     hermesCmoStatus: "live",
-    delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+    delegationsMode: delegationSummary.length > 0 ? HERMES_CMO_BOUNDED_DELEGATIONS : HERMES_CMO_PROPOSALS_ONLY,
     hermesCmoCounters: validation.counters,
-    hermesCmoMetadata: metadataFromHermes(result, validation.counters),
+    hermesCmoMetadata: metadataFromHermes(result, validation.counters, forbiddenCounters),
   };
 }

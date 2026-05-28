@@ -600,17 +600,52 @@ export type CmoRuntimeErrorReason =
   | "empty_answer"
   | "execution_error";
 export type HermesCmoChatStatus = "live" | "failed_then_existing_fallback" | "guardrail_violation_then_existing_fallback";
-export type HermesCmoDelegationsMode = "proposals_only";
+export type HermesCmoDelegationsMode = "proposals_only" | "echo_surf_bounded";
+export type CmoStrategyMode = "DIAGNOSE" | "FOCUS" | "PRIORITIZE" | "REVIEW" | "RESET";
+export type CmoDecisionLabel = "KEEP" | "CUT" | "TEST" | "SCALE" | "WAIT";
+export type HermesCmoAgentUsed = "cmo" | "echo" | "surf";
+export type HermesCmoExecutableMode = "echo.default" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
 
 export interface HermesCmoSafetyCounters {
   surfCalls: number;
   echoCalls: number;
   vaultAgentCalls: number;
   vaultWrites: number;
-  supabaseWrites: number;
-  sessionJsonWrites: number;
-  rawCaptureWrites: number;
+  directSupabaseMutations: number;
   openclawCalls: number;
+}
+
+export interface HermesCmoForbiddenCounters {
+  vaultWrites: number;
+  openclawCalls: number;
+  directSupabaseMutations: number;
+}
+
+export interface HermesCmoActivityEventSummary {
+  eventId: string;
+  type: string;
+  status: string;
+  message: string;
+  userVisible: boolean;
+  sourceAgent?: HermesCmoAgentUsed;
+  sourceMode?: "cmo.default" | HermesCmoExecutableMode;
+}
+
+export interface HermesCmoDelegationSummaryItem {
+  delegationId: string;
+  targetAgent: "echo" | "surf";
+  mode: HermesCmoExecutableMode;
+  objective: string;
+  status: "completed" | "failed" | "skipped";
+  summary: string;
+  failureReason?: string;
+}
+
+export interface HermesCmoPlatformPersistenceSummary {
+  sessionJsonSaved: boolean;
+  rawCaptureSaved: boolean;
+  rawCaptureStatus?: "saved" | "failed" | "pending";
+  supabaseIndexingStatus: "indexed" | "skipped" | "failed";
 }
 
 export interface HermesCmoChatMetadata {
@@ -619,16 +654,20 @@ export interface HermesCmoChatMetadata {
   calledHermesCmo: true;
   delegationsMode: HermesCmoDelegationsMode;
   counters: HermesCmoSafetyCounters;
+  forbiddenCounters: HermesCmoForbiddenCounters;
   requestId: string;
   responseStatus: string;
+  strategyMode?: CmoStrategyMode;
+  mainBottleneck?: string;
+  decisionLabel?: CmoDecisionLabel;
+  currentStep?: string;
   activityEventsCount: number;
-  activityEvents?: Array<{
-    eventId: string;
-    type: string;
-    status: string;
-    message: string;
-    userVisible: boolean;
-  }>;
+  activityEvents?: HermesCmoActivityEventSummary[];
+  delegationSummary?: HermesCmoDelegationSummaryItem[];
+  agentsUsed?: HermesCmoAgentUsed[];
+  surfCalls?: number;
+  echoCalls?: number;
+  platformPersistenceSummary?: HermesCmoPlatformPersistenceSummary;
 }
 
 export interface ContextItem {
@@ -788,6 +827,17 @@ export interface CMOChatMessage {
   hermesCmoErrorReason?: string;
   hermesCmoCounters?: HermesCmoSafetyCounters;
   hermesCmoMetadata?: HermesCmoChatMetadata;
+  strategyMode?: CmoStrategyMode;
+  mainBottleneck?: string;
+  decisionLabel?: CmoDecisionLabel;
+  currentStep?: string;
+  activityEvents?: HermesCmoActivityEventSummary[];
+  delegationSummary?: HermesCmoDelegationSummaryItem[];
+  agentsUsed?: HermesCmoAgentUsed[];
+  surfCalls?: number;
+  echoCalls?: number;
+  forbiddenCounters?: HermesCmoForbiddenCounters;
+  platformPersistenceSummary?: HermesCmoPlatformPersistenceSummary;
   delegationsMode?: HermesCmoDelegationsMode;
   contextUsedCount?: number;
   graphHintCount?: number;
@@ -840,6 +890,17 @@ export interface CMOChatSession {
   hermesCmoErrorReason?: string;
   hermesCmoCounters?: HermesCmoSafetyCounters;
   hermesCmoMetadata?: HermesCmoChatMetadata;
+  strategyMode?: CmoStrategyMode;
+  mainBottleneck?: string;
+  decisionLabel?: CmoDecisionLabel;
+  currentStep?: string;
+  activityEvents?: HermesCmoActivityEventSummary[];
+  delegationSummary?: HermesCmoDelegationSummaryItem[];
+  agentsUsed?: HermesCmoAgentUsed[];
+  surfCalls?: number;
+  echoCalls?: number;
+  forbiddenCounters?: HermesCmoForbiddenCounters;
+  platformPersistenceSummary?: HermesCmoPlatformPersistenceSummary;
   delegationsMode?: HermesCmoDelegationsMode;
   missingContext?: VaultNoteRef[];
   contextDiagnostics?: CMOContextDiagnostics;
@@ -917,6 +978,17 @@ export interface CMOAppChatResponse {
   hermesCmoErrorReason?: string;
   hermesCmoCounters?: HermesCmoSafetyCounters;
   hermesCmoMetadata?: HermesCmoChatMetadata;
+  strategyMode?: CmoStrategyMode;
+  mainBottleneck?: string;
+  decisionLabel?: CmoDecisionLabel;
+  currentStep?: string;
+  activityEvents?: HermesCmoActivityEventSummary[];
+  delegationSummary?: HermesCmoDelegationSummaryItem[];
+  agentsUsed?: HermesCmoAgentUsed[];
+  surfCalls?: number;
+  echoCalls?: number;
+  forbiddenCounters?: HermesCmoForbiddenCounters;
+  platformPersistenceSummary?: HermesCmoPlatformPersistenceSummary;
   delegationsMode?: HermesCmoDelegationsMode;
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;

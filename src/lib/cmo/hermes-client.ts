@@ -57,10 +57,10 @@ export interface HermesSurfBrief {
 
 export interface HermesSurfXBrief {
   handoff_id: string;
-  source_agent: "jay";
+  source_agent: "jay" | "cmo";
   target_agent: "surf";
   research_mode: "x_search";
-  mode: "direct_jay";
+  mode: "direct_jay" | "cmo_orchestrated";
   workspace: string;
   topic: string;
   objective: string;
@@ -77,10 +77,10 @@ export interface HermesSurfXBrief {
 
 export interface HermesSurfLast30DaysBrief {
   handoff_id: string;
-  source_agent: "jay";
+  source_agent: "jay" | "cmo";
   target_agent: "surf";
   research_mode: "last30days";
-  mode: "direct_jay";
+  mode: "direct_jay" | "cmo_orchestrated";
   workspace: string;
   topic: string;
   objective: string;

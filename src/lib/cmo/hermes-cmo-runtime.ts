@@ -1,7 +1,23 @@
+import { getCmoHermesCmoMaxDelegations, isCmoHermesCmoOrchestrationEnabled } from "./config";
+import {
+  executeHermesCmoDelegations,
+  executableDelegations,
+  type HermesCmoDelegationExecution,
+  type HermesCmoDelegationExecutionResult,
+  type HermesCmoForbiddenCounters,
+} from "./hermes-cmo-delegation-executor";
+import {
+  buildCleanCmoSkillKernel,
+  CMO_DECISION_LABELS,
+  CMO_STRATEGIC_MODES,
+  type CmoDecisionLabel,
+  type CmoStrategicMode,
+} from "./hermes-cmo-skill-kernel";
+
 export const HERMES_CMO_RUNTIME_MODE = "live" as const;
 
 export const H5_LIVE_ADAPTER_BOUNDARY =
-  "H5 Hermes CMO live adapter: call the Hermes CMO Agent endpoint only; sub-agent execution and writes remain disabled." as const;
+  "M1 Hermes CMO runtime: Hermes CMO is the strategic brain; CMO Engine mechanically executes bounded Echo/Surf delegations only when enabled." as const;
 
 const HERMES_CMO_AGENT_PATH = "/agents/cmo/execute" as const;
 
@@ -83,22 +99,21 @@ export interface HermesCmoRuntimeRequest {
 }
 
 export interface HermesCmoRuntimeSafetyCounters {
-  surfCalls: 0;
-  echoCalls: 0;
+  surfCalls: number;
+  echoCalls: number;
   vaultAgentCalls: 0;
   vaultWrites: 0;
-  supabaseWrites: 0;
-  sessionJsonWrites: 0;
-  rawCaptureWrites: 0;
+  directSupabaseMutations: 0;
   openclawCalls: 0;
 }
 
 export interface HermesCmoRuntimeSafetyFlags {
   liveOnly: true;
-  calledHermesCmoOnly: true;
-  subAgentExecutionDisabled: true;
+  calledHermesCmo: true;
+  cmoEngineMechanicalExecutor: true;
+  subAgentExecutionAllowed: boolean;
   noWrites: true;
-  notWiredIntoLiveCmoChat: true;
+  noOpenClawCalls: true;
 }
 
 export interface HermesCmoRuntimeSafety {
@@ -116,8 +131,8 @@ export interface HermesCmoRuntimeActivityEvent {
   seq: number;
   created_at: string;
   source: {
-    agent: "cmo";
-    mode: "cmo.default";
+    agent: "cmo" | "echo" | "surf";
+    mode: "cmo.default" | "echo.default" | HermesSurfMode;
   };
   type: HermesActivityType;
   status: HermesActivityStatus;
@@ -182,6 +197,15 @@ export interface HermesCmoRuntimeResult {
   response: HermesCmoRuntimeResponse;
   activity_events: HermesCmoRuntimeActivityEvent[];
   safety_counters: HermesCmoRuntimeSafetyCounters;
+  forbidden_counters: HermesCmoForbiddenCounters;
+  strategyMode?: CmoStrategicMode;
+  mainBottleneck?: string;
+  decisionLabel?: CmoDecisionLabel;
+  currentStep?: string;
+  delegationSummary: HermesCmoDelegationExecution[];
+  agentsUsed: Array<"cmo" | "echo" | "surf">;
+  surfCalls: number;
+  echoCalls: number;
   safety_flags: HermesCmoRuntimeSafetyFlags;
   safety: HermesCmoRuntimeSafety;
 }
@@ -194,6 +218,21 @@ interface HermesCmoAgentConfig {
 interface HermesCmoLivePayload {
   response: HermesCmoRuntimeResponse;
   activityEvents: HermesCmoRuntimeActivityEvent[];
+}
+
+interface HermesCmoRuntimeRequestOptions {
+  orchestrationEnabled: boolean;
+  finalSynthesis?: boolean;
+  delegationResults?: HermesCmoDelegationExecution[];
+}
+
+interface HermesCmoResponseValidationOptions {
+  allowExecutableDelegations: boolean;
+  maxDelegations: number;
+}
+
+interface HermesCmoActivityValidationOptions {
+  allowExecutableDelegationActivity: boolean;
 }
 
 const allowedAgents = new Set<HermesAllowedAgent>(["echo", "surf", "vault_agent"]);
@@ -243,10 +282,14 @@ const activityStatuses = new Set<HermesActivityStatus>([
   "failed",
   "cancelled",
 ]);
-const executedDelegationEventTypes = new Set<HermesActivityType>([
+const strategicModes = new Set<CmoStrategicMode>(CMO_STRATEGIC_MODES);
+const decisionLabels = new Set<CmoDecisionLabel>(CMO_DECISION_LABELS);
+const executableDelegationEventTypes = new Set<HermesActivityType>([
   "delegation.started",
   "delegation.waiting",
   "delegation.completed",
+]);
+const forbiddenDelegationEventTypes = new Set<HermesActivityType>([
   "vault_agent.delegation.started",
   "vault_agent.delegation.completed",
   "vault_agent.delegation.failed",
@@ -267,23 +310,37 @@ const hasOnlyAllowedValues = <T extends string>(values: unknown, allowedValues: 
   values.every((value): value is T => typeof value === "string" && allowedValues.has(value as T)) &&
   new Set(values).size === values.length;
 
-const makeSafetyCounters = (): HermesCmoRuntimeSafetyCounters => ({
-  surfCalls: 0,
-  echoCalls: 0,
+const makeSafetyCounters = (surfCalls = 0, echoCalls = 0): HermesCmoRuntimeSafetyCounters => ({
+  surfCalls,
+  echoCalls,
   vaultAgentCalls: 0,
   vaultWrites: 0,
-  supabaseWrites: 0,
-  sessionJsonWrites: 0,
-  rawCaptureWrites: 0,
+  directSupabaseMutations: 0,
   openclawCalls: 0,
 });
 
-const makeSafetyFlags = (): HermesCmoRuntimeSafetyFlags => ({
+const makeForbiddenCounters = (): HermesCmoForbiddenCounters => ({
+  vaultWrites: 0,
+  openclawCalls: 0,
+  directSupabaseMutations: 0,
+});
+
+const makeEmptyDelegationResult = (): HermesCmoDelegationExecutionResult => ({
+  executions: [],
+  activityEvents: [],
+  surfCalls: 0,
+  echoCalls: 0,
+  agentsUsed: [],
+  forbiddenCounters: makeForbiddenCounters(),
+});
+
+const makeSafetyFlags = (subAgentExecutionAllowed: boolean): HermesCmoRuntimeSafetyFlags => ({
   liveOnly: true,
-  calledHermesCmoOnly: true,
-  subAgentExecutionDisabled: true,
+  calledHermesCmo: true,
+  cmoEngineMechanicalExecutor: true,
+  subAgentExecutionAllowed,
   noWrites: true,
-  notWiredIntoLiveCmoChat: true,
+  noOpenClawCalls: true,
 });
 
 const envEnabled = (value: string | undefined) =>
@@ -449,27 +506,83 @@ export const validateHermesCmoRuntimeRequest = (request: unknown): request is He
   );
 };
 
-const buildHermesCmoLiveRequest = (request: HermesCmoRuntimeRequest): HermesCmoRuntimeRequest => ({
-  ...request,
-  constraints: {
-    ...request.constraints,
-    vault_agent_delegation_allowed: false,
-    kanban_enabled: false,
-    allowed_agents: [],
-    allowed_surf_modes: [],
-    h5_live_adapter: {
-      live_only: true,
-      call_only: "hermes_cmo_agent",
-      sub_agent_execution_allowed: false,
-      delegation_policy: "disabled",
-      vault_writes_allowed: false,
-      supabase_writes_allowed: false,
-      session_json_writes_allowed: false,
-      raw_capture_writes_allowed: false,
-      openclaw_calls_allowed: false,
+const buildHermesCmoLiveRequest = (
+  request: HermesCmoRuntimeRequest,
+  options: HermesCmoRuntimeRequestOptions,
+): HermesCmoRuntimeRequest => {
+  const subAgentExecutionAllowed = options.orchestrationEnabled && options.finalSynthesis !== true;
+  const delegationResultsArtifact = options.delegationResults?.length
+    ? {
+        type: "cmo_engine_delegation_results",
+        schema_version: "hermes.cmo.delegation-results.v1",
+        results: options.delegationResults,
+      }
+    : null;
+
+  return {
+    ...request,
+    skill_kernel: buildCleanCmoSkillKernel(),
+    context_pack: {
+      ...request.context_pack,
+      artifacts_in: delegationResultsArtifact
+        ? [...request.context_pack.artifacts_in, delegationResultsArtifact]
+        : request.context_pack.artifacts_in,
     },
-  },
-});
+    constraints: {
+      ...request.constraints,
+      no_direct_vault_write: true,
+      no_direct_memory_mutation: true,
+      vault_agent_delegation_allowed: false,
+      kanban_enabled: false,
+      allowed_agents: subAgentExecutionAllowed ? ["echo", "surf"] : [],
+      allowed_surf_modes: subAgentExecutionAllowed ? ["surf.default", "surf.x", "surf.trend", "surf.pulse"] : [],
+      delegations_mode: subAgentExecutionAllowed ? "echo_surf_bounded" : "proposals_only",
+      allowSubAgentExecution: subAgentExecutionAllowed,
+      allowSurfExecution: subAgentExecutionAllowed,
+      allowEchoExecution: subAgentExecutionAllowed,
+      allowVaultAgentExecution: false,
+      allowVaultWrites: false,
+      allowDirectSupabaseMutations: false,
+      allowSupabaseWrites: false,
+      allowSessionWrites: false,
+      allowRawCaptureWrites: false,
+      allowOpenClawCalls: false,
+      m1_clean_cmo_skill_kernel: {
+        enabled: true,
+        version: "m1.3",
+        cmo_role: "strategic_brain_orchestrator_reviewer",
+        executor_role: "mechanical_whitelisted_delegation_executor",
+        max_delegations: getCmoHermesCmoMaxDelegations(),
+        final_synthesis: options.finalSynthesis === true,
+        forbidden_targets: ["vault_agent", "openclaw", "supabase", "memory", "arbitrary_tools"],
+      },
+      h5_live_adapter: {
+        live_only: true,
+        call_only: "hermes_cmo_agent",
+        sub_agent_execution_allowed: subAgentExecutionAllowed,
+        delegation_policy: subAgentExecutionAllowed ? "echo_surf_only_bounded" : "disabled",
+        allowed_agents: subAgentExecutionAllowed ? ["echo", "surf"] : [],
+        allowed_surf_modes: subAgentExecutionAllowed ? ["surf.default", "surf.x", "surf.trend", "surf.pulse"] : [],
+        vault_writes_allowed: false,
+        direct_supabase_mutations_allowed: false,
+        openclaw_calls_allowed: false,
+        platform_persistence_owner: "cmo_engine_app_chat_store",
+      },
+      execution_boundary: {
+        sub_agent_execution_allowed: subAgentExecutionAllowed,
+        surf_execution_allowed: subAgentExecutionAllowed,
+        echo_execution_allowed: subAgentExecutionAllowed,
+        vault_agent_execution_allowed: false,
+        vault_writes_allowed: false,
+        direct_supabase_mutations_allowed: false,
+        openclaw_calls_allowed: false,
+        session_persistence_owner: "cmo_engine_app_chat_store",
+        raw_capture_owner: "cmo_engine_app_chat_store",
+        supabase_indexing_owner: "cmo_engine_app_chat_store",
+      },
+    },
+  };
+};
 
 const validateHermesCmoRuntimeAnswer = (answer: unknown): answer is HermesCmoRuntimeAnswer | null => {
   if (answer === null) {
@@ -515,23 +628,66 @@ const isNonExecutedDelegationProposal = (delegation: Record<string, unknown>) =>
   );
 };
 
-const validateDelegationsAreNonExecuted = (delegations: unknown): delegations is Record<string, unknown>[] => {
+const delegationTargetAgent = (delegation: Record<string, unknown>): unknown => {
+  const target = isRecord(delegation.target) ? delegation.target : {};
+
+  return target.agent ?? delegation.target_agent ?? delegation.agent;
+};
+
+const isEchoOrSurfDelegation = (delegation: Record<string, unknown>) => {
+  const agent = delegationTargetAgent(delegation);
+
+  return agent === "echo" || agent === "surf";
+};
+
+const validateDelegations = (
+  delegations: unknown,
+  options: HermesCmoResponseValidationOptions,
+): delegations is Record<string, unknown>[] => {
   if (!Array.isArray(delegations)) {
     return false;
   }
 
-  return delegations.every((delegation) => isRecord(delegation) && isNonExecutedDelegationProposal(delegation));
+  if (!delegations.every(isRecord)) {
+    return false;
+  }
+
+  if (delegations.some((delegation) => !isEchoOrSurfDelegation(delegation))) {
+    return false;
+  }
+
+  if (delegations.some((delegation) => Array.isArray(delegation.delegations) && delegation.delegations.length > 0)) {
+    return false;
+  }
+
+  if (!options.allowExecutableDelegations) {
+    return delegations.every(isNonExecutedDelegationProposal);
+  }
+
+  const normalizedDelegations = executableDelegations(delegations, Number.MAX_SAFE_INTEGER);
+
+  return normalizedDelegations.length === delegations.length && delegations.length <= options.maxDelegations;
 };
 
 export const validateHermesCmoRuntimeResponse = (
   response: unknown,
   request: HermesCmoRuntimeRequest,
+  options: HermesCmoResponseValidationOptions = {
+    allowExecutableDelegations: false,
+    maxDelegations: 0,
+  },
 ): response is HermesCmoRuntimeResponse => {
   if (!isRecord(response)) {
     return false;
   }
 
-  if (response.direct_vault_write === true || response.direct_memory_mutation === true) {
+  if (
+    response.direct_vault_write === true ||
+    response.direct_memory_mutation === true ||
+    response.direct_supabase_mutation === true ||
+    response.direct_supabase_write === true ||
+    response.openclaw_call === true
+  ) {
     return false;
   }
 
@@ -547,7 +703,7 @@ export const validateHermesCmoRuntimeResponse = (
     !validateClarifyingQuestion(response.clarifying_question) ||
     !validateHermesCmoRuntimeAnswer(response.answer) ||
     !(isRecord(response.structured_output) || response.structured_output === null) ||
-    !validateDelegationsAreNonExecuted(response.delegations) ||
+    !validateDelegations(response.delegations, options) ||
     !Array.isArray(response.artifacts) ||
     !Array.isArray(response.memory_suggestions) ||
     !response.memory_suggestions.every(isRecord) ||
@@ -583,13 +739,28 @@ export const validateHermesCmoRuntimeResponse = (
 const validateHermesCmoRuntimeActivityEvent = (
   event: unknown,
   request: HermesCmoRuntimeRequest,
-  expectedSeq: number,
+  options: HermesCmoActivityValidationOptions,
 ): event is HermesCmoRuntimeActivityEvent => {
   if (!isRecord(event)) {
     return false;
   }
 
   const createdAt = event.created_at;
+  const source = isRecord(event.source) ? event.source : null;
+  const sourceAgent = source?.agent;
+  const sourceMode = source?.mode;
+  const eventType = event.type as HermesActivityType;
+  const sourceMatches =
+    (sourceAgent === "cmo" && sourceMode === "cmo.default") ||
+    (sourceAgent === "echo" && sourceMode === "echo.default") ||
+    (sourceAgent === "surf" && allowedSurfModes.has(sourceMode as HermesSurfMode));
+
+  if (
+    forbiddenDelegationEventTypes.has(eventType) ||
+    (!options.allowExecutableDelegationActivity && executableDelegationEventTypes.has(eventType))
+  ) {
+    return false;
+  }
 
   return (
     event.schema_version === "hermes.activity.event.v1" &&
@@ -597,21 +768,25 @@ const validateHermesCmoRuntimeActivityEvent = (
     event.request_id === request.request_id &&
     event.session_id === request.session_id &&
     event.turn_id === request.turn_id &&
-    event.seq === expectedSeq &&
+    typeof event.seq === "number" &&
+    Number.isInteger(event.seq) &&
+    event.seq >= 1 &&
     isNonEmptyString(createdAt) &&
-    isRecord(event.source) &&
-    event.source.agent === "cmo" &&
-    event.source.mode === "cmo.default" &&
-    activityTypes.has(event.type as HermesActivityType) &&
+    sourceMatches &&
+    activityTypes.has(eventType) &&
     activityStatuses.has(event.status as HermesActivityStatus) &&
-    !executedDelegationEventTypes.has(event.type as HermesActivityType) &&
     typeof event.user_visible === "boolean" &&
     isNonEmptyString(event.message) &&
     isRecord(event.data)
   ) && !Number.isNaN(Date.parse(createdAt));
 };
 
-const extractLiveResponsePayload = (payload: unknown, request: HermesCmoRuntimeRequest): HermesCmoLivePayload => {
+const extractLiveResponsePayload = (
+  payload: unknown,
+  request: HermesCmoRuntimeRequest,
+  responseValidation: HermesCmoResponseValidationOptions,
+  activityValidation: HermesCmoActivityValidationOptions,
+): HermesCmoLivePayload => {
   if (!isRecord(payload)) {
     throw new Error("Hermes CMO Agent response payload was not an object.");
   }
@@ -619,20 +794,16 @@ const extractLiveResponsePayload = (payload: unknown, request: HermesCmoRuntimeR
   const responseCandidate = isRecord(payload.response) ? payload.response : payload;
   const activityEventsCandidate = Array.isArray(payload.activity_events) ? payload.activity_events : [];
 
-  if (!validateHermesCmoRuntimeResponse(responseCandidate, request)) {
-    throw new Error("Hermes CMO Agent response did not match hermes.cmo.response.v1 or violated H5 no-execution boundaries.");
+  if (!validateHermesCmoRuntimeResponse(responseCandidate, request, responseValidation)) {
+    throw new Error("Hermes CMO Agent response did not match hermes.cmo.response.v1 or violated M1 execution boundaries.");
   }
 
   if (responseCandidate.activity_summary.events_count !== activityEventsCandidate.length) {
     throw new Error("Hermes CMO Agent activity_summary.events_count did not match returned activity_events length.");
   }
 
-  if (
-    !activityEventsCandidate.every((event, index) =>
-      validateHermesCmoRuntimeActivityEvent(event, request, index + 1),
-    )
-  ) {
-    throw new Error("Hermes CMO Agent activity_events did not match hermes.activity.event.v1 or included executed delegation events.");
+  if (!activityEventsCandidate.every((event) => validateHermesCmoRuntimeActivityEvent(event, request, activityValidation))) {
+    throw new Error("Hermes CMO Agent activity_events did not match hermes.activity.event.v1 or included forbidden delegation events.");
   }
 
   return {
@@ -640,6 +811,106 @@ const extractLiveResponsePayload = (payload: unknown, request: HermesCmoRuntimeR
     activityEvents: activityEventsCandidate,
   };
 };
+
+const normalizeStrategyMode = (value: unknown): CmoStrategicMode | undefined =>
+  typeof value === "string" && strategicModes.has(value.toUpperCase() as CmoStrategicMode)
+    ? (value.toUpperCase() as CmoStrategicMode)
+    : undefined;
+
+const normalizeDecisionLabel = (value: unknown): CmoDecisionLabel | undefined =>
+  typeof value === "string" && decisionLabels.has(value.toUpperCase() as CmoDecisionLabel)
+    ? (value.toUpperCase() as CmoDecisionLabel)
+    : undefined;
+
+const firstString = (values: unknown[]): string | undefined => {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return undefined;
+};
+
+const extractStrategyMode = (response: HermesCmoRuntimeResponse): CmoStrategicMode | undefined => {
+  const structured = isRecord(response.structured_output) ? response.structured_output : {};
+  const answer: Record<string, unknown> = isRecord(response.answer) ? response.answer : {};
+
+  return normalizeStrategyMode(
+    structured.strategyMode ?? structured.strategy_mode ?? structured.cmo_mode ?? answer.strategyMode ?? answer.strategy_mode,
+  );
+};
+
+const extractMainBottleneck = (response: HermesCmoRuntimeResponse): string | undefined => {
+  const structured = isRecord(response.structured_output) ? response.structured_output : {};
+  const answer: Record<string, unknown> = isRecord(response.answer) ? response.answer : {};
+
+  return firstString([
+    structured.mainBottleneck,
+    structured.main_bottleneck,
+    structured.bottleneck,
+    answer.mainBottleneck,
+    answer.main_bottleneck,
+    answer.bottleneck,
+  ]);
+};
+
+const extractDecisionLabel = (response: HermesCmoRuntimeResponse): CmoDecisionLabel | undefined => {
+  const structured = isRecord(response.structured_output) ? response.structured_output : {};
+  const answer: Record<string, unknown> = isRecord(response.answer) ? response.answer : {};
+
+  return normalizeDecisionLabel(
+    structured.decisionLabel ?? structured.decision_label ?? answer.decisionLabel ?? answer.decision_label ?? response.answer?.decision,
+  );
+};
+
+const resequenceActivityEvents = (
+  events: HermesCmoRuntimeActivityEvent[],
+  request: HermesCmoRuntimeRequest,
+): HermesCmoRuntimeActivityEvent[] =>
+  events.map((event, index) => ({
+    ...event,
+    request_id: request.request_id,
+    session_id: request.session_id,
+    turn_id: request.turn_id,
+    seq: index + 1,
+  }));
+
+const currentStepFrom = (
+  response: HermesCmoRuntimeResponse,
+  events: HermesCmoRuntimeActivityEvent[],
+  delegations: HermesCmoDelegationExecution[],
+): string => {
+  if (response.status === "needs_user_input") {
+    return response.clarifying_question.question ?? "Waiting for critical context.";
+  }
+
+  const lastVisibleEvent = [...events].reverse().find((event) => event.user_visible && event.message.trim());
+
+  if (lastVisibleEvent) {
+    return lastVisibleEvent.message;
+  }
+
+  if (delegations.length > 0) {
+    return "CMO synthesized delegated Echo/Surf results.";
+  }
+
+  return response.activity_summary.final_state || "CMO strategy response completed.";
+};
+
+const responseWithActivitySummary = (
+  response: HermesCmoRuntimeResponse,
+  events: HermesCmoRuntimeActivityEvent[],
+): HermesCmoRuntimeResponse => ({
+  ...response,
+  activity_summary: {
+    ...response.activity_summary,
+    events_count: events.length,
+  },
+});
+
+const agentsUsedFrom = (delegationResult: HermesCmoDelegationExecutionResult): Array<"cmo" | "echo" | "surf"> =>
+  Array.from(new Set<"cmo" | "echo" | "surf">(["cmo", ...delegationResult.agentsUsed]));
 
 const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest): Promise<unknown> => {
   const config = getHermesCmoAgentConfig();
@@ -677,19 +948,79 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest): Promise<unk
 
 export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRuntimeResult> {
   if (!validateHermesCmoRuntimeRequest(request)) {
-    throw new Error("Invalid hermes.cmo.request.v1 input for H5 Hermes CMO live runtime.");
+    throw new Error("Invalid hermes.cmo.request.v1 input for M1 Hermes CMO runtime.");
   }
 
-  const outboundRequest = buildHermesCmoLiveRequest(request);
+  const orchestrationEnabled = isCmoHermesCmoOrchestrationEnabled();
+  const maxDelegations = getCmoHermesCmoMaxDelegations();
+  const outboundRequest = buildHermesCmoLiveRequest(request, {
+    orchestrationEnabled,
+  });
 
   if (!validateHermesCmoRuntimeRequest(outboundRequest)) {
-    throw new Error("H5 Hermes CMO live adapter produced an invalid outbound hermes.cmo.request.v1 envelope.");
+    throw new Error("M1 Hermes CMO runtime produced an invalid outbound hermes.cmo.request.v1 envelope.");
   }
 
-  const safetyCounters = makeSafetyCounters();
-  const safetyFlags = makeSafetyFlags();
+  const safetyFlags = makeSafetyFlags(orchestrationEnabled);
   const livePayload = await callHermesCmoAgent(outboundRequest);
-  const { response, activityEvents } = extractLiveResponsePayload(livePayload, outboundRequest);
+  const firstResult = extractLiveResponsePayload(
+    livePayload,
+    outboundRequest,
+    {
+      allowExecutableDelegations: orchestrationEnabled,
+      maxDelegations,
+    },
+    {
+      allowExecutableDelegationActivity: orchestrationEnabled,
+    },
+  );
+  let response = firstResult.response;
+  let activityEvents: HermesCmoRuntimeActivityEvent[] = firstResult.activityEvents;
+  let delegationResult = makeEmptyDelegationResult();
+
+  if (orchestrationEnabled && response.delegations.length > 0 && response.status !== "needs_user_input") {
+    delegationResult = await executeHermesCmoDelegations({
+      parentRequestId: outboundRequest.request_id,
+      sessionId: outboundRequest.session_id,
+      turnId: outboundRequest.turn_id,
+      workspaceSlug: outboundRequest.workspace.app_id,
+      userMessage: outboundRequest.intent.user_message,
+      delegations: response.delegations,
+      maxDelegations,
+    });
+
+    if (delegationResult.executions.length > 0) {
+      const synthesisRequest = buildHermesCmoLiveRequest(outboundRequest, {
+        orchestrationEnabled: false,
+        finalSynthesis: true,
+        delegationResults: delegationResult.executions,
+      });
+
+      if (!validateHermesCmoRuntimeRequest(synthesisRequest)) {
+        throw new Error("M1 Hermes CMO runtime produced an invalid synthesis hermes.cmo.request.v1 envelope.");
+      }
+
+      const synthesisPayload = await callHermesCmoAgent(synthesisRequest);
+      const synthesisResult = extractLiveResponsePayload(
+        synthesisPayload,
+        synthesisRequest,
+        {
+          allowExecutableDelegations: false,
+          maxDelegations: 0,
+        },
+        {
+          allowExecutableDelegationActivity: false,
+        },
+      );
+      response = synthesisResult.response;
+      activityEvents = [...activityEvents, ...delegationResult.activityEvents, ...synthesisResult.activityEvents];
+    }
+  }
+
+  activityEvents = resequenceActivityEvents(activityEvents, outboundRequest);
+  response = responseWithActivitySummary(response, activityEvents);
+  const safetyCounters = makeSafetyCounters(delegationResult.surfCalls, delegationResult.echoCalls);
+  const forbiddenCounters = delegationResult.forbiddenCounters;
 
   return {
     ok: true,
@@ -702,6 +1033,15 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
     response,
     activity_events: activityEvents,
     safety_counters: safetyCounters,
+    forbidden_counters: forbiddenCounters,
+    strategyMode: extractStrategyMode(response),
+    mainBottleneck: extractMainBottleneck(response),
+    decisionLabel: extractDecisionLabel(response),
+    currentStep: currentStepFrom(response, activityEvents, delegationResult.executions),
+    delegationSummary: delegationResult.executions,
+    agentsUsed: agentsUsedFrom(delegationResult),
+    surfCalls: delegationResult.surfCalls,
+    echoCalls: delegationResult.echoCalls,
     safety_flags: safetyFlags,
     safety: {
       runtimeMode: HERMES_CMO_RUNTIME_MODE,

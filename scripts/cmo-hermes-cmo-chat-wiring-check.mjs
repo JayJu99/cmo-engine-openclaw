@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -9,14 +8,17 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cmoDir = path.join(rootDir, "src", "lib", "cmo");
-const forbiddenZeroCounters = {
+const expectedCounters = {
   surfCalls: 0,
   echoCalls: 0,
   vaultAgentCalls: 0,
   vaultWrites: 0,
-  supabaseWrites: 0,
-  sessionJsonWrites: 0,
-  rawCaptureWrites: 0,
+  directSupabaseMutations: 0,
+  openclawCalls: 0,
+};
+const forbiddenZeroCounters = {
+  vaultWrites: 0,
+  directSupabaseMutations: 0,
   openclawCalls: 0,
 };
 
@@ -291,16 +293,36 @@ const makeRuntimeResult = (overrides = {}) => {
     response,
     activity_events: [
       {
+        schema_version: "hermes.activity.event.v1",
         event_id: "evt_h6_001",
+        request_id: "req_h6_msg_001",
+        session_id: "session_h6",
+        turn_id: "msg_001",
+        seq: 1,
+        created_at: "2026-05-28T11:00:01.000Z",
+        source: {
+          agent: "cmo",
+          mode: "cmo.default",
+        },
         type: "run.completed",
         status: "completed",
         message: "Hermes CMO completed.",
         user_visible: true,
+        data: {},
       },
     ],
-    safety_counters: { ...forbiddenZeroCounters },
+    safety_counters: { ...expectedCounters },
+    forbidden_counters: { ...forbiddenZeroCounters },
+    strategyMode: "DIAGNOSE",
+    mainBottleneck: "Activation loop clarity",
+    decisionLabel: "TEST",
+    currentStep: "Hermes CMO completed.",
+    delegationSummary: [],
+    agentsUsed: ["cmo"],
+    surfCalls: 0,
+    echoCalls: 0,
     safety: {
-      counters: { ...forbiddenZeroCounters },
+      counters: { ...expectedCounters },
     },
     ...overrides,
   };
@@ -364,6 +386,7 @@ try {
     assert.equal(hermesRequest.constraints.allowRawCaptureWrites, false);
     assert.equal(hermesRequest.constraints.allowOpenClawCalls, false);
     assert.equal(hermesRequest.constraints.delegations_mode, "proposals_only");
+    assert.deepEqual(hermesRequest.constraints.allowed_agents, ["echo", "surf"]);
 
     const mapped = mapper.mapHermesCmoResponseToChatResult(makeRuntimeResult());
     assert.equal(mapped.runtimeStatus, "live");
@@ -373,7 +396,11 @@ try {
     assert.equal(mapped.calledHermesCmo, true);
     assert.equal(mapped.hermesCmoMetadata.runtimeMode, "hermes_cmo");
     assert.equal(mapped.delegationsMode, "proposals_only");
-    assert.deepEqual(mapped.hermesCmoCounters, forbiddenZeroCounters);
+    assert.deepEqual(mapped.hermesCmoCounters, expectedCounters);
+    assert.deepEqual(mapped.hermesCmoMetadata.forbiddenCounters, forbiddenZeroCounters);
+    assert.equal(mapped.hermesCmoMetadata.strategyMode, "DIAGNOSE");
+    assert.equal(mapped.hermesCmoMetadata.mainBottleneck, "Activation loop clarity");
+    assert.equal(mapped.hermesCmoMetadata.decisionLabel, "TEST");
     assert.match(mapped.answer, /Use Hermes CMO/);
     assert.ok(
       mapped.suggestedActions.some((action) => action.label.includes("proposed surf delegation")),
@@ -382,7 +409,7 @@ try {
 
     const invalidCounters = mapper.validateHermesCmoChatCounters(
       makeRuntimeResult({
-        safety_counters: {
+        forbidden_counters: {
           ...forbiddenZeroCounters,
           vaultWrites: 1,
         },
@@ -397,9 +424,6 @@ try {
     assert.match(source, /failed_then_existing_fallback/);
     assert.match(source, /guardrail_violation_then_existing_fallback/);
 
-    const stashList = execFileSync("git", ["stash", "list"], { cwd: rootDir, encoding: "utf8" });
-    assert.match(stashList, /stash@\{0\}: On main: wip: u7f live timeout background diagnostics/);
-
     console.log(
       JSON.stringify(
         {
@@ -411,7 +435,6 @@ try {
           forbiddenCounterFallbackRequired: true,
           delegationsMode: "proposals_only",
           hermesWriteCounters: forbiddenZeroCounters,
-          u7fStashUntouched: true,
         },
         null,
         2,
@@ -426,6 +449,7 @@ try {
       {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
       },
       null,
       2,
