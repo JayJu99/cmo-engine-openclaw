@@ -8,6 +8,12 @@ export interface HermesEchoBrief {
   objective: string;
   platform?: string;
   audience?: string;
+  brief?: {
+    angle?: string;
+    [key: string]: unknown;
+  };
+  claim_boundaries?: string[];
+  output_contract?: "echo.response.v1";
   source_context: {
     metrics_source?: string;
     allowed_metrics?: string[];
@@ -261,7 +267,14 @@ function validateHermesEchoResponse(value: unknown): HermesEchoResponse | null {
     return null;
   }
 
-  const handoffId = typeof value.handoff_id === "string" ? value.handoff_id : "";
+  const handoffId =
+    typeof value.handoff_id === "string"
+      ? value.handoff_id
+      : typeof value.handoffId === "string"
+        ? value.handoffId
+        : value.schema_version === "echo.response.v1"
+          ? "echo_response"
+          : "";
   const outputs = Array.isArray(value.outputs)
     ? value.outputs.map(normalizeEchoOutput).filter((output): output is HermesEchoOutput => Boolean(output))
     : [];
@@ -292,7 +305,7 @@ function structuredErrorMessage(value: unknown): string | null {
     return null;
   }
 
-  for (const key of ["error", "message", "detail", "blocker", "reason"]) {
+  for (const key of ["error", "message", "detail", "blocker", "reason", "failure_reason", "failureReason"]) {
     if (typeof value[key] === "string" && value[key].trim()) {
       return value[key].trim();
     }
@@ -418,7 +431,14 @@ function validateHermesSurfResponse(value: unknown): HermesSurfResponse | null {
     return null;
   }
 
-  const handoffId = typeof value.handoff_id === "string" ? value.handoff_id : "";
+  const handoffId =
+    typeof value.handoff_id === "string"
+      ? value.handoff_id
+      : typeof value.handoffId === "string"
+        ? value.handoffId
+        : value.schema_version === "surf.response.v1"
+          ? "surf_response"
+          : "";
 
   if (!handoffId) {
     return null;

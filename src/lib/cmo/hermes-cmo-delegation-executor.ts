@@ -122,6 +122,26 @@ function targetMode(delegation: Record<string, unknown>, agent: HermesCmoExecuta
           : "surf.default";
 }
 
+function explicitXResearch(value: string): boolean {
+  const textValue = value.toLowerCase();
+  const hasXResearchSignal =
+    /\b(x|twitter)\s+(research|search|signal|signals|listening|sentiment|scan|evidence)\b/.test(textValue) ||
+    /\b(research|search|scan|analyze|analyse|monitor)\s+(x|twitter)\b/.test(textValue) ||
+    /\bsocial\s+(signal|signals|listening|sentiment|research|scan)\b/.test(textValue);
+
+  return hasXResearchSignal;
+}
+
+function safeSurfMode(mode: HermesCmoExecutableMode, objective: string, brief: string): HermesCmoExecutableMode {
+  const textValue = `${objective}\n${brief}`;
+
+  if (mode === "surf.x" && !explicitXResearch(textValue)) {
+    return /pulse|snapshot|quick scan|quick pulse/i.test(textValue) ? "surf.pulse" : "surf.default";
+  }
+
+  return mode;
+}
+
 function delegationInput(delegation: Record<string, unknown>): Record<string, unknown> {
   return isRecord(delegation.input) ? delegation.input : {};
 }
@@ -137,9 +157,9 @@ function normalizeDelegation(delegation: Record<string, unknown>, index: number)
     return null;
   }
 
-  const mode = targetMode(delegation, agent);
+  const rawMode = targetMode(delegation, agent);
 
-  if (!mode) {
+  if (!rawMode) {
     return null;
   }
 
@@ -148,6 +168,7 @@ function normalizeDelegation(delegation: Record<string, unknown>, index: number)
   const objective = text(delegation.objective ?? task.objective ?? input.brief, `Execute ${agent} delegation ${index + 1}`);
   const brief = text(input.brief, objective);
   const constraints = textList(input.constraints);
+  const mode = agent === "surf" ? safeSurfMode(rawMode, objective, brief) : rawMode;
 
   return {
     raw: delegation,
@@ -186,6 +207,12 @@ function echoBrief(input: ExecutorInput, delegation: NormalizedDelegation, previ
     workspace: cleanWorkspaceSlug(input.workspaceSlug),
     task_type: "cmo_orchestrated_final_copy",
     objective: delegation.objective,
+    platform: /\b(x|twitter)\b/i.test(`${delegation.objective}\n${delegation.brief}\n${input.userMessage}`) ? "x" : undefined,
+    brief: {
+      angle: delegation.brief,
+    },
+    claim_boundaries: [delegation.brief, prior].filter(Boolean),
+    output_contract: "echo.response.v1",
     source_context: {
       raw_request: input.userMessage,
       origin: "cmo_engine_m1_hermes_cmo_orchestration",

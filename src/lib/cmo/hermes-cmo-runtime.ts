@@ -568,6 +568,16 @@ const buildHermesCmoLiveRequest = (
         max_delegations: getCmoHermesCmoMaxDelegations(),
         final_synthesis: options.finalSynthesis === true,
         forbidden_targets: ["vault_agent", "openclaw", "supabase", "memory", "arbitrary_tools"],
+        surf_mode_policy: {
+          "surf.default": "Evidence gathering, evidence gaps, source checks, and general research.",
+          "surf.x": "Only explicit X/Twitter/social-signal research. Never use surf.x just because Echo will write X posts.",
+          "surf.trend": "Trend or last-30-days trend research only.",
+          "surf.pulse": "Pulse, snapshot, or lightweight scan research only.",
+        },
+        echo_policy: {
+          "echo.default": "Content execution and final copy, including X posts.",
+          echo_failure_guardrail: "If Echo fails, do not present Echo-produced final copy as completed.",
+        },
       },
       h5_live_adapter: {
         live_only: true,
@@ -1007,6 +1017,48 @@ const responseWithActivitySummary = (
   },
 });
 
+const echoFailure = (delegationResult: HermesCmoDelegationExecutionResult): HermesCmoDelegationExecution | null =>
+  delegationResult.executions.find(
+    (execution) => execution.targetAgent === "echo" && execution.status !== "completed",
+  ) ?? null;
+
+const responseWithEchoFailureGuardrail = (
+  response: HermesCmoRuntimeResponse,
+  delegationResult: HermesCmoDelegationExecutionResult,
+): HermesCmoRuntimeResponse => {
+  const failedEcho = echoFailure(delegationResult);
+
+  if (!failedEcho || !response.answer) {
+    return response;
+  }
+
+  const reason = failedEcho.failureReason ?? failedEcho.summary;
+  const body = [
+    "Echo did not complete, so CMO Engine is not presenting final copy as Echo-produced.",
+    "",
+    `Echo failure: ${reason}`,
+    "",
+    "Research and strategy can still be reviewed, but final content execution should be retried through Echo.",
+  ].join("\n");
+
+  return {
+    ...response,
+    answer: {
+      ...response.answer,
+      title: "Echo Execution Failed",
+      summary: "CMO completed strategy/research synthesis, but Echo did not complete final copy execution.",
+      decision: "WAIT",
+      body,
+    },
+    structured_output: {
+      ...(isRecord(response.structured_output) ? response.structured_output : {}),
+      echo_failed: true,
+      echo_failure_reason: reason,
+      content_execution_status: "echo_failed_no_final_copy",
+    },
+  };
+};
+
 const agentsUsedFrom = (delegationResult: HermesCmoDelegationExecutionResult): Array<"cmo" | "echo" | "surf"> =>
   Array.from(new Set<"cmo" | "echo" | "surf">(["cmo", ...delegationResult.agentsUsed]));
 
@@ -1117,6 +1169,7 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
 
   activityEvents = resequenceActivityEvents(activityEvents, outboundRequest);
   response = responseWithActivitySummary(response, activityEvents);
+  response = responseWithEchoFailureGuardrail(response, delegationResult);
   const safetyCounters = makeSafetyCounters(delegationResult.surfCalls, delegationResult.echoCalls);
   const forbiddenCounters = delegationResult.forbiddenCounters;
 
