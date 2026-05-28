@@ -61,6 +61,86 @@ function eventLabel(event: HermesCmoActivityEventSummary): string {
   return "CMO analyzing";
 }
 
+function delegationMatchKey(agent: "echo" | "surf" | undefined, mode: string | undefined): string | null {
+  if (!agent) {
+    return null;
+  }
+
+  return `${agent}:${mode ?? "*"}`;
+}
+
+function hasDelegationMatch(matches: Set<string>, agent: "echo" | "surf" | undefined, mode: string | undefined): boolean {
+  if (!agent) {
+    return false;
+  }
+
+  return matches.has(`${agent}:${mode ?? "*"}`) || matches.has(`${agent}:*`);
+}
+
+function delegationOutcomeSets(
+  events: HermesCmoActivityEventSummary[],
+  delegations: HermesCmoDelegationSummaryItem[],
+): { completed: Set<string>; failed: Set<string> } {
+  const completed = new Set<string>();
+  const failed = new Set<string>();
+  const addMatch = (target: Set<string>, agent: "echo" | "surf" | undefined, mode: string | undefined) => {
+    const key = delegationMatchKey(agent, mode);
+
+    if (key) {
+      target.add(key);
+    }
+  };
+
+  events.forEach((event) => {
+    if (!event.userVisible || event.type !== "delegation.completed") {
+      return;
+    }
+
+    if (event.status === "failed") {
+      addMatch(failed, event.sourceAgent === "echo" || event.sourceAgent === "surf" ? event.sourceAgent : undefined, event.sourceMode);
+      return;
+    }
+
+    if (event.status === "completed") {
+      addMatch(completed, event.sourceAgent === "echo" || event.sourceAgent === "surf" ? event.sourceAgent : undefined, event.sourceMode);
+    }
+  });
+
+  delegations.forEach((delegation) => {
+    if (delegation.status === "failed") {
+      addMatch(failed, delegation.targetAgent, delegation.mode);
+      return;
+    }
+
+    if (delegation.status === "completed") {
+      addMatch(completed, delegation.targetAgent, delegation.mode);
+    }
+  });
+
+  return { completed, failed };
+}
+
+function displayStatusForEvent(
+  event: HermesCmoActivityEventSummary,
+  outcomes: { completed: Set<string>; failed: Set<string> },
+): ActivityStatus {
+  const fallback = normalizeStatus(event.status, event.type === "delegation.started" ? "running" : "completed");
+
+  if (event.type !== "delegation.started" || (event.sourceAgent !== "echo" && event.sourceAgent !== "surf")) {
+    return fallback;
+  }
+
+  if (hasDelegationMatch(outcomes.failed, event.sourceAgent, event.sourceMode)) {
+    return "failed";
+  }
+
+  if (hasDelegationMatch(outcomes.completed, event.sourceAgent, event.sourceMode)) {
+    return "completed";
+  }
+
+  return fallback;
+}
+
 function delegationRows(delegations: HermesCmoDelegationSummaryItem[], hasDelegationEvents: boolean): ActivityRow[] {
   if (hasDelegationEvents) {
     return [];
@@ -108,6 +188,7 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
   const firstCmoEvent = events.find((event) => event.userVisible && event.sourceAgent === "cmo");
   const delegationEvents = events.filter((event) => event.userVisible && (event.type === "delegation.started" || event.type === "delegation.completed"));
   const hasDelegationEvents = delegationEvents.length > 0;
+  const delegationOutcomes = delegationOutcomeSets(events, delegations);
 
   if (firstCmoEvent || events.length > 0 || delegations.length > 0 || message?.currentStep || message?.hermesCmoMetadata?.currentStep) {
     rows.push({
@@ -123,7 +204,7 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
     ...delegationEvents.map((event, index): ActivityRow => ({
       key: `${event.eventId}-${index}`,
       label: eventLabel(event),
-      status: normalizeStatus(event.status, event.type === "delegation.started" ? "running" : "completed"),
+      status: displayStatusForEvent(event, delegationOutcomes),
       detail: event.message,
       sourceMode: event.sourceMode,
     })),
