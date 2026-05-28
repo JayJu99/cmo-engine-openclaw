@@ -67,6 +67,11 @@ interface NormalizedDelegation {
   topic?: string;
   topics: string[];
   outputContract?: unknown;
+  platform?: string;
+  contentCount?: number;
+  audience?: string;
+  retryOf?: string;
+  retryReason?: string;
   objective: string;
   brief: string;
   constraints: string[];
@@ -104,6 +109,23 @@ function firstText(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) {
       return value.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function positiveInteger(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+      return value;
+    }
+
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isInteger(parsed) && parsed > 0) {
+        return parsed;
+      }
     }
   }
 
@@ -197,6 +219,11 @@ function normalizeDelegation(delegation: Record<string, unknown>, index: number)
     ...textList(task.topics),
     ...textList(input.topics),
   ];
+  const platform = firstText(delegation.platform, task.platform, input.platform, surface);
+  const contentCount = positiveInteger(delegation.content_count, delegation.contentCount, task.content_count, task.contentCount, input.content_count, input.contentCount);
+  const audience = firstText(delegation.audience, task.audience, input.audience);
+  const retryOf = firstText(delegation.retry_of, delegation.retryOf, task.retry_of, task.retryOf, input.retry_of, input.retryOf);
+  const retryReason = firstText(delegation.retry_reason, delegation.retryReason, task.retry_reason, task.retryReason, input.retry_reason, input.retryReason);
   const objective = text(delegation.objective ?? task.objective ?? input.objective ?? input.brief ?? query ?? searchQuery ?? topic, `Execute ${agent} delegation ${index + 1}`);
   const brief = text(input.brief, objective);
   const constraints = [...textList(delegation.constraints), ...textList(input.constraints)];
@@ -213,6 +240,11 @@ function normalizeDelegation(delegation: Record<string, unknown>, index: number)
     topic,
     topics,
     outputContract,
+    platform,
+    contentCount,
+    audience,
+    retryOf,
+    retryReason,
     objective,
     brief,
     constraints,
@@ -249,14 +281,16 @@ function echoBrief(input: ExecutorInput, delegation: NormalizedDelegation, previ
     target_agent: "echo",
     mode: "echo.default",
     workspace: cleanWorkspaceSlug(input.workspaceSlug),
-    task_type: "cmo_orchestrated_final_copy",
+    task_type: delegation.taskType,
     objective: delegation.objective,
-    platform: delegation.surface === "x" || /\b(x|twitter)\b/i.test(`${delegation.objective}\n${delegation.brief}\n${input.userMessage}`) ? "x" : undefined,
+    platform: delegation.platform ?? (delegation.surface === "x" || /\b(x|twitter)\b/i.test(`${delegation.objective}\n${delegation.brief}\n${input.userMessage}`) ? "x" : undefined),
+    content_count: delegation.contentCount,
+    audience: delegation.audience,
     brief: {
       angle: delegation.brief,
     },
     claim_boundaries: [delegation.brief, prior].filter(Boolean),
-    output_contract: "echo.response.v1",
+    output_contract: delegation.outputContract ?? "echo.response.v1",
     source_context: {
       raw_request: input.userMessage,
       origin: "cmo_engine_m1_hermes_cmo_orchestration",
@@ -284,11 +318,19 @@ function defaultSurfBrief(input: ExecutorInput, delegation: NormalizedDelegation
     workspace: cleanWorkspaceSlug(input.workspaceSlug),
     task_type: delegation.taskType,
     objective: delegation.objective,
+    input: isRecord(delegation.raw.input) ? delegation.raw.input : undefined,
     input_material: [delegation.brief].filter(Boolean),
     allow_web_research: true,
     search_scope: delegation.objective,
     max_sources: 5,
     max_search_queries: 3,
+    surface: delegation.surface,
+    entity: delegation.entity,
+    query: delegation.query,
+    search_query: delegation.searchQuery,
+    topic: delegation.topic,
+    topics: delegation.topics.length > 0 ? delegation.topics : undefined,
+    output_contract: delegation.outputContract,
     source_context: {
       raw_request: input.userMessage,
       origin: "cmo_engine_m1_hermes_cmo_orchestration",

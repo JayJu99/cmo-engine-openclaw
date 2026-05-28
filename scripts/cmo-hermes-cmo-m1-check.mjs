@@ -257,6 +257,8 @@ const startServer = async () => {
           const xSignalFixture = body.request_id === "req_m1_native_x_signal";
           const xPostsEchoOnlyFixture = body.request_id === "req_m1_x_posts_echo_only";
           const surfFailFixture = body.request_id === "req_m1_surf_fail";
+          const surfThenEchoFixture = body.request_id === "req_m1_surf_then_echo";
+          const maxRoundsFixture = body.request_id === "req_m1_max_rounds";
           const echoRetryFixture =
             body.request_id === "req_m1_echo_retry_good" ||
             body.request_id === "req_m1_echo_retry_fail" ||
@@ -292,6 +294,22 @@ const startServer = async () => {
                 surface: "x",
                 topics: signalTopics,
                 objective: "Scan X for World App and trading mini app signal.",
+                output_contract: {
+                  strategySynthesisAllowed: false,
+                },
+                constraints: ["Read-only X scan.", "Treat social signal as weak evidence."],
+              },
+            ];
+          } else if (surfThenEchoFixture || maxRoundsFixture) {
+            delegations = [
+              {
+                id: `del_${body.request_id}_surf_initial`,
+                targetAgent: "surf",
+                mode: "surf.x",
+                taskType: "x_signal_scan",
+                surface: "x",
+                topics: signalTopics,
+                objective: "Scan X for usable Holdstation and World App mini app signal.",
                 output_contract: {
                   strategySynthesisAllowed: false,
                 },
@@ -424,22 +442,29 @@ const startServer = async () => {
           body.request_id === "req_m1_echo_retry_good" ||
           body.request_id === "req_m1_echo_retry_fail" ||
           body.request_id === "req_m1_echo_retry_limit";
-        const echoRetryAllowedOnSynthesis =
-          cmoCallCount === 2 &&
-          (echoRetryRequest ||
-            body.request_id === "req_m1_cmo_001" ||
-            body.request_id === "req_m1_echo_fail" ||
-            body.request_id === "req_m1_x_posts_echo_only");
-        const expectedAllowedAgents = echoRetryAllowedOnSynthesis ? ["echo"] : [];
+        const failedExecutionSynthesis =
+          body.request_id === "req_m1_echo_fail" ||
+          body.request_id === "req_m1_surf_fail" ||
+          (body.request_id === "req_m1_max_rounds" && cmoCallCount === 4) ||
+          (body.request_id === "req_m1_echo_retry_fail" && cmoCallCount === 3);
+        const expectedAllowedAgents = failedExecutionSynthesis ? [] : ["echo", "surf"];
         if (JSON.stringify(body.constraints.allowed_agents) !== JSON.stringify(expectedAllowedAgents)) {
           throw new Error(`Unexpected allowed_agents for ${body.request_id} #${cmoCallCount}: ${JSON.stringify(body.constraints.allowed_agents)} expected ${JSON.stringify(expectedAllowedAgents)}`);
         }
-        assert.deepEqual(body.constraints.allowed_surf_modes, []);
-        assert.equal(body.constraints.delegations_mode, echoRetryAllowedOnSynthesis ? "echo_retry_bounded" : "proposals_only");
+        assert.deepEqual(body.constraints.allowed_surf_modes, failedExecutionSynthesis ? [] : ["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
+        assert.equal(body.constraints.delegations_mode, failedExecutionSynthesis ? "proposals_only" : "echo_surf_bounded");
         assert.equal(body.constraints.m1_clean_cmo_skill_kernel?.final_synthesis, true);
         assert.equal(body.context_pack.artifacts_in.at(-1)?.type, "cmo_engine_delegation_results");
+        assert.ok(
+          body.context_pack.artifacts_in.some((artifact) => artifact?.type === "specialist_result"),
+          "synthesis request did not include specialist_result artifacts",
+        );
         const expectedResultCount = echoRetryRequest && cmoCallCount === 3
           ? 2
+          : body.request_id === "req_m1_surf_then_echo" && cmoCallCount === 3
+            ? 2
+            : body.request_id === "req_m1_max_rounds"
+              ? cmoCallCount - 1
           : body.request_id === "req_m1_echo_fail"
             ? 2
             : body.request_id === "req_m1_cmo_001"
@@ -448,7 +473,7 @@ const startServer = async () => {
         assert.equal(body.context_pack.artifacts_in.at(-1)?.results.length, expectedResultCount);
 
         if (echoRetryRequest && cmoCallCount === 2) {
-          assert.equal(body.constraints.delegations_mode, "echo_retry_bounded");
+          assert.equal(body.constraints.delegations_mode, "echo_surf_bounded");
           assert.equal(body.constraints.allowEchoExecution, true);
           writeJson(
             response,
@@ -483,6 +508,92 @@ const startServer = async () => {
                     input: {
                       brief: "Retry without internal process language.",
                       constraints: ["Do not research.", "Do not decide strategy.", "No internal process language."],
+                    },
+                  },
+                ],
+              },
+            }),
+          );
+          return;
+        }
+
+        if (body.request_id === "req_m1_surf_then_echo" && cmoCallCount === 2) {
+          writeJson(
+            response,
+            200,
+            cmoResponse(body, {
+              response: {
+                status: "delegated",
+                answer: {
+                  format: "markdown",
+                  title: "Intermediate Echo Brief",
+                  summary: "Whitelisted specialist delegation for caller to run Echo.",
+                  decision: "WAIT",
+                  body: "Whitelisted specialist delegation for caller to run Echo. This must not render as final.",
+                },
+                delegations: [
+                  {
+                    id: "del_surf_then_echo_copy",
+                    targetAgent: "echo",
+                    mode: "echo.default",
+                    taskType: "cmo_orchestrated_final_copy",
+                    platform: "x",
+                    content_count: 2,
+                    objective: "Write 2 safe X test posts from the Surf signal.",
+                    input: {
+                      brief: "Use only the usable Surf signal and avoid unsupported claims.",
+                      constraints: ["Do not research.", "Do not decide strategy."],
+                    },
+                  },
+                ],
+              },
+            }),
+          );
+          return;
+        }
+
+        if (body.request_id === "req_m1_surf_then_echo" && cmoCallCount === 3) {
+          writeJson(
+            response,
+            200,
+            cmoResponse(body, {
+              response: {
+                answer: {
+                  format: "markdown",
+                  title: "Surf Then Echo Final",
+                  summary: "CMO accepted Surf signal and Echo copy.",
+                  decision: "TEST",
+                  body: "Final accepted answer after Surf and Echo execution.",
+                },
+              },
+            }),
+          );
+          return;
+        }
+
+        if (body.request_id === "req_m1_max_rounds") {
+          writeJson(
+            response,
+            200,
+            cmoResponse(body, {
+              response: {
+                status: "delegated",
+                answer: {
+                  format: "markdown",
+                  title: "Intermediate Loop Delegation",
+                  summary: "caller should run the next specialist.",
+                  decision: "WAIT",
+                  body: "caller should run the next specialist. This must not render when the loop budget is exhausted.",
+                },
+                delegations: [
+                  {
+                    id: `del_max_rounds_echo_${cmoCallCount}`,
+                    targetAgent: "echo",
+                    mode: "echo.default",
+                    objective: "Create one more test post.",
+                    input: {
+                      brief: "Loop fixture output.",
+                      constraints: ["Do not research.", "Do not decide strategy."],
                     },
                   },
                 ],
@@ -623,7 +734,11 @@ const startServer = async () => {
           assert.equal(body.output_contract?.strategySynthesisAllowed, false);
         }
 
-        if (body.handoff_id === "del_x_signal_scan") {
+        if (
+          body.handoff_id === "del_x_signal_scan" ||
+          String(body.handoff_id).startsWith("del_req_m1_surf_then_echo_surf_initial") ||
+          String(body.handoff_id).startsWith("del_req_m1_max_rounds_surf_initial")
+        ) {
           assert.equal(body.mode, "surf.x");
           assert.equal(body.task_type, "x_signal_scan");
           assert.equal(body.surface, "x");
@@ -689,15 +804,28 @@ const startServer = async () => {
         assert.equal(body.source_agent, "cmo");
         assert.equal(body.target_agent, "echo");
         assert.equal(body.task_type, "cmo_orchestrated_final_copy");
-        assert.equal(body.objective, "Create 3 short X posts from the safest angle.");
-        assert.equal(body.platform, "x");
+        assert.ok(
+          [
+            "Create 3 short X posts from the safest angle.",
+            "Write 2 safe X test posts from the Surf signal.",
+            "Create one more test post.",
+          ].includes(body.objective),
+          `unexpected Echo objective ${body.objective}`,
+        );
+        if (body.handoff_id !== "del_max_rounds_echo_2" && body.handoff_id !== "del_max_rounds_echo_3") {
+          assert.equal(body.platform, "x");
+        }
         const expectedEchoAngle = body.handoff_id === "del_echo_fail"
           ? "Use evidence boundaries and produce final copy only through Echo."
           : body.handoff_id === "del_x_posts_echo_only" || String(body.handoff_id).includes("_initial")
             ? "Write channel-native X posts from the CMO angle."
             : String(body.handoff_id).includes("_again")
               ? "Retry without internal process language."
-              : "Write final copy only after Surf evidence is available.";
+              : body.handoff_id === "del_surf_then_echo_copy"
+                ? "Use only the usable Surf signal and avoid unsupported claims."
+                : String(body.handoff_id).startsWith("del_max_rounds_echo_")
+                  ? "Loop fixture output."
+                  : "Write final copy only after Surf evidence is available.";
         assert.equal(
           body.brief?.angle,
           expectedEchoAngle,
@@ -889,6 +1017,8 @@ try {
   let echoRetryGoodResult;
   let echoRetryFailResult;
   let echoRetryLimitResult;
+  let surfThenEchoResult;
+  let maxRoundsResult;
 
   try {
     process.env.CMO_HERMES_EXECUTION_ENABLED = "true";
@@ -974,7 +1104,7 @@ try {
       turn_id: "turn_m1_native_latest_post_001",
       intent: {
         ...sampleRequest.intent,
-        user_message: "Check thử X xem bài mới nhất của Holdstation có gì? Gửi mình link nhé",
+        user_message: "Check thu X xem bai moi nhat cua Holdstation co gi? Gui minh link nhe",
       },
     });
 
@@ -1055,6 +1185,27 @@ try {
     assert.equal(server.calls.forbidden, 0);
     assert.equal(server.calls.unexpected, 0);
 
+    surfThenEchoResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_surf_then_echo",
+      session_id: "session_m1_surf_then_echo",
+      turn_id: "turn_m1_surf_then_echo_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Check X for usable signal, then write 2 safe test posts if usable.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling Surf-then-Echo fixture");
+    assert.equal(surfThenEchoResult.surfCalls, 1);
+    assert.equal(surfThenEchoResult.echoCalls, 1);
+    assert.deepEqual(surfThenEchoResult.agentsUsed, ["cmo", "surf", "echo"]);
+    assert.equal(surfThenEchoResult.delegationSummary.length, 2);
+    assert.equal(surfThenEchoResult.delegationSummary[0].mode, "surf.x");
+    assert.equal(surfThenEchoResult.delegationSummary[1].mode, "echo.default");
+    assert.match(surfThenEchoResult.response.answer?.body ?? "", /Final accepted answer after Surf and Echo execution/);
+    assert.doesNotMatch(surfThenEchoResult.response.answer?.body ?? "", /Whitelisted specialist delegation/);
+
     echoRetryGoodResult = await runHermesCmoRuntime({
       ...sampleRequest,
       request_id: "req_m1_echo_retry_good",
@@ -1119,9 +1270,38 @@ try {
     assert.match(echoRetryLimitResult.response.answer?.body ?? "", /Echo output unusable; retry required\./);
     assert.doesNotMatch(echoRetryLimitResult.response.answer?.body ?? "", /Post 1:/);
     assert.equal(echoRetryLimitResult.response.structured_output?.echo_retry_failed, true);
-    assert.equal(server.calls.cmo, 21);
-    assert.equal(server.calls.surfUnified, 6);
-    assert.equal(server.calls.echo, 9);
+    assert.equal(server.calls.cmo, 24);
+    assert.equal(server.calls.surfUnified, 7);
+    assert.equal(server.calls.echo, 10);
+    assert.equal(server.calls.legacySurfX, 0);
+    assert.equal(server.calls.legacySurfLast30Days, 0);
+    assert.equal(server.calls.forbidden, 0);
+    assert.equal(server.calls.unexpected, 0);
+
+    const echoCallsBeforeMaxRounds = server.calls.echo;
+    maxRoundsResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_max_rounds",
+      session_id: "session_m1_max_rounds",
+      turn_id: "turn_m1_max_rounds_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Keep delegating until the M1 max-round guard stops the loop.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling max-round fixture");
+    assert.equal(maxRoundsResult.surfCalls, 1);
+    assert.equal(maxRoundsResult.echoCalls, 2);
+    assert.equal(server.calls.echo, echoCallsBeforeMaxRounds + 2);
+    assert.equal(maxRoundsResult.delegationSummary.length, 3);
+    assert.equal(maxRoundsResult.response.answer?.decision, "WAIT");
+    assert.match(maxRoundsResult.response.answer?.body ?? "", /Specialist execution did not complete; retry required\./);
+    assert.doesNotMatch(maxRoundsResult.response.answer?.body ?? "", /caller should run the next specialist/);
+    assert.equal(maxRoundsResult.response.structured_output?.orchestration_failed, true);
+    assert.equal(server.calls.cmo, 28);
+    assert.equal(server.calls.surfUnified, 8);
+    assert.equal(server.calls.echo, 12);
     assert.equal(server.calls.legacySurfX, 0);
     assert.equal(server.calls.legacySurfLast30Days, 0);
     assert.equal(server.calls.forbidden, 0);
@@ -1146,6 +1326,8 @@ try {
         echoRetryGood: echoRetryGoodResult?.echoCalls === 2,
         echoRetryFailureGuarded: echoRetryFailResult?.response.structured_output?.echo_retry_failed === true,
         echoRetryLimited: echoRetryLimitResult?.echoCalls === 2,
+        surfThenEcho: surfThenEchoResult?.surfCalls === 1 && surfThenEchoResult?.echoCalls === 1,
+        maxRoundsGuarded: maxRoundsResult?.response.structured_output?.orchestration_failed === true,
         legacySurfXCalls: server.calls.legacySurfX,
         legacySurfLast30DaysCalls: server.calls.legacySurfLast30Days,
         forbiddenCounters: result.forbidden_counters,

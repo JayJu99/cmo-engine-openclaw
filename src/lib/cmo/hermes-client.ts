@@ -7,13 +7,14 @@ export interface HermesEchoBrief {
   task_type: string;
   objective: string;
   platform?: string;
+  content_count?: number;
   audience?: string;
   brief?: {
     angle?: string;
     [key: string]: unknown;
   };
   claim_boundaries?: string[];
-  output_contract?: "echo.response.v1";
+  output_contract?: unknown;
   source_context: {
     metrics_source?: string;
     allowed_metrics?: string[];
@@ -49,6 +50,7 @@ export interface HermesSurfBrief {
   search_query?: string;
   output_contract?: unknown;
   research_mode?: "x_search" | "last30days";
+  input?: Record<string, unknown>;
   input_material: string[];
   allow_web_research: boolean;
   search_scope?: string;
