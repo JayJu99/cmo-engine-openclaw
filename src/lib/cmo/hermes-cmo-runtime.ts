@@ -654,7 +654,7 @@ const isNonExecutedDelegationProposal = (delegation: Record<string, unknown>) =>
 const delegationTargetAgent = (delegation: Record<string, unknown>): unknown => {
   const target = isRecord(delegation.target) ? delegation.target : {};
 
-  return target.agent ?? delegation.target_agent ?? delegation.agent;
+  return target.agent ?? delegation.targetAgent ?? delegation.target_agent ?? delegation.agent;
 };
 
 const isEchoOrSurfDelegation = (delegation: Record<string, unknown>) => {
@@ -1017,44 +1017,54 @@ const responseWithActivitySummary = (
   },
 });
 
-const echoFailure = (delegationResult: HermesCmoDelegationExecutionResult): HermesCmoDelegationExecution | null =>
-  delegationResult.executions.find(
-    (execution) => execution.targetAgent === "echo" && execution.status !== "completed",
-  ) ?? null;
+const failedDelegation = (delegationResult: HermesCmoDelegationExecutionResult): HermesCmoDelegationExecution | null =>
+  delegationResult.executions.find((execution) => execution.status !== "completed") ?? null;
 
-const responseWithEchoFailureGuardrail = (
+const responseWithDelegationFailureGuardrail = (
   response: HermesCmoRuntimeResponse,
   delegationResult: HermesCmoDelegationExecutionResult,
 ): HermesCmoRuntimeResponse => {
-  const failedEcho = echoFailure(delegationResult);
+  const failure = failedDelegation(delegationResult);
 
-  if (!failedEcho || !response.answer) {
+  if (!failure || !response.answer) {
     return response;
   }
 
-  const reason = failedEcho.failureReason ?? failedEcho.summary;
+  const reason = failure.failureReason ?? failure.summary;
+  const label = failure.targetAgent === "echo" ? "Echo" : "Surf";
   const body = [
-    "Echo did not complete, so CMO Engine is not presenting final copy as Echo-produced.",
+    `${label} did not complete, so CMO Engine is not presenting delegated work as completed.`,
     "",
-    `Echo failure: ${reason}`,
+    `${label} failure: ${reason}`,
     "",
-    "Research and strategy can still be reviewed, but final content execution should be retried through Echo.",
+    "CMO can still review the strategy boundary, but the specialist execution should be retried before treating the result as done.",
   ].join("\n");
 
   return {
     ...response,
     answer: {
       ...response.answer,
-      title: "Echo Execution Failed",
-      summary: "CMO completed strategy/research synthesis, but Echo did not complete final copy execution.",
+      title: `${label} Execution Failed`,
+      summary: `CMO completed orchestration, but ${label} did not complete the delegated execution.`,
       decision: "WAIT",
       body,
     },
     structured_output: {
       ...(isRecord(response.structured_output) ? response.structured_output : {}),
-      echo_failed: true,
-      echo_failure_reason: reason,
-      content_execution_status: "echo_failed_no_final_copy",
+      delegation_failed: true,
+      delegation_failure_agent: failure.targetAgent,
+      delegation_failure_reason: reason,
+      ...(failure.targetAgent === "echo"
+        ? {
+            echo_failed: true,
+            echo_failure_reason: reason,
+            content_execution_status: "echo_failed_no_final_copy",
+          }
+        : {
+            surf_failed: true,
+            surf_failure_reason: reason,
+            research_execution_status: "surf_failed_no_completed_research",
+          }),
     },
   };
 };
@@ -1169,7 +1179,7 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
 
   activityEvents = resequenceActivityEvents(activityEvents, outboundRequest);
   response = responseWithActivitySummary(response, activityEvents);
-  response = responseWithEchoFailureGuardrail(response, delegationResult);
+  response = responseWithDelegationFailureGuardrail(response, delegationResult);
   const safetyCounters = makeSafetyCounters(delegationResult.surfCalls, delegationResult.echoCalls);
   const forbiddenCounters = delegationResult.forbiddenCounters;
 

@@ -42,6 +42,12 @@ export interface HermesSurfBrief {
   task_type: string;
   objective: string;
   topic?: string;
+  topics?: string[];
+  surface?: string;
+  entity?: string;
+  query?: string;
+  search_query?: string;
+  output_contract?: unknown;
   research_mode?: "x_search" | "last30days";
   input_material: string[];
   allow_web_research: boolean;

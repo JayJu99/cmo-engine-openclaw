@@ -59,6 +59,14 @@ interface NormalizedDelegation {
   delegationId: string;
   targetAgent: HermesCmoExecutableAgent;
   mode: HermesCmoExecutableMode;
+  taskType: string;
+  surface?: string;
+  entity?: string;
+  query?: string;
+  searchQuery?: string;
+  topic?: string;
+  topics: string[];
+  outputContract?: unknown;
   objective: string;
   brief: string;
   constraints: string[];
@@ -92,9 +100,19 @@ function textList(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim());
 }
 
+function firstText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return undefined;
+}
+
 function targetAgent(delegation: Record<string, unknown>): HermesCmoExecutableAgent | null {
   const target = isRecord(delegation.target) ? delegation.target : {};
-  const value = text(target.agent ?? delegation.target_agent ?? delegation.agent).toLowerCase();
+  const value = text(target.agent ?? delegation.targetAgent ?? delegation.target_agent ?? delegation.agent).toLowerCase();
 
   return value === "echo" || value === "surf" ? value : null;
 }
@@ -132,10 +150,13 @@ function explicitXResearch(value: string): boolean {
   return hasXResearchSignal;
 }
 
-function safeSurfMode(mode: HermesCmoExecutableMode, objective: string, brief: string): HermesCmoExecutableMode {
-  const textValue = `${objective}\n${brief}`;
+function safeSurfMode(mode: HermesCmoExecutableMode, delegation: Omit<NormalizedDelegation, "mode">): HermesCmoExecutableMode {
+  const textValue = `${delegation.taskType}\n${delegation.surface ?? ""}\n${delegation.objective}\n${delegation.brief}\n${delegation.query ?? ""}\n${delegation.searchQuery ?? ""}\n${delegation.topic ?? ""}\n${delegation.topics.join("\n")}`;
+  const structuredXIntent =
+    delegation.surface?.toLowerCase() === "x" ||
+    /^(latest_post_lookup|x_signal_scan|x_search|social_signal_scan)$/i.test(delegation.taskType);
 
-  if (mode === "surf.x" && !explicitXResearch(textValue)) {
+  if (mode === "surf.x" && !structuredXIntent && !explicitXResearch(textValue)) {
     return /pulse|snapshot|quick scan|quick pulse/i.test(textValue) ? "surf.pulse" : "surf.default";
   }
 
@@ -165,19 +186,42 @@ function normalizeDelegation(delegation: Record<string, unknown>, index: number)
 
   const input = delegationInput(delegation);
   const task = isRecord(delegation.task) ? delegation.task : {};
-  const objective = text(delegation.objective ?? task.objective ?? input.brief, `Execute ${agent} delegation ${index + 1}`);
+  const taskType = text(delegation.taskType ?? delegation.task_type ?? task.taskType ?? task.task_type ?? input.taskType ?? input.task_type, agent === "echo" ? "cmo_orchestrated_final_copy" : "cmo_orchestrated_research_pack");
+  const surface = firstText(delegation.surface, task.surface, input.surface);
+  const entity = firstText(delegation.entity, task.entity, input.entity);
+  const query = firstText(delegation.query, task.query, input.query);
+  const searchQuery = firstText(delegation.searchQuery, delegation.search_query, task.searchQuery, task.search_query, input.searchQuery, input.search_query);
+  const topic = firstText(delegation.topic, task.topic, input.topic);
+  const topics = [
+    ...textList(delegation.topics),
+    ...textList(task.topics),
+    ...textList(input.topics),
+  ];
+  const objective = text(delegation.objective ?? task.objective ?? input.objective ?? input.brief ?? query ?? searchQuery ?? topic, `Execute ${agent} delegation ${index + 1}`);
   const brief = text(input.brief, objective);
-  const constraints = textList(input.constraints);
-  const mode = agent === "surf" ? safeSurfMode(rawMode, objective, brief) : rawMode;
-
-  return {
+  const constraints = [...textList(delegation.constraints), ...textList(input.constraints)];
+  const outputContract = delegation.outputContract ?? delegation.output_contract ?? task.outputContract ?? task.output_contract ?? input.outputContract ?? input.output_contract;
+  const normalizedWithoutMode: Omit<NormalizedDelegation, "mode"> = {
     raw: delegation,
-    delegationId: text(delegation.delegation_id ?? delegation.id, `del_m1_${index + 1}`),
+    delegationId: text(delegation.delegation_id ?? delegation.delegationId ?? delegation.id, `del_m1_${index + 1}`),
     targetAgent: agent,
-    mode,
+    taskType,
+    surface,
+    entity,
+    query,
+    searchQuery,
+    topic,
+    topics,
+    outputContract,
     objective,
     brief,
     constraints,
+  };
+  const mode = agent === "surf" ? safeSurfMode(rawMode, normalizedWithoutMode) : rawMode;
+
+  return {
+    ...normalizedWithoutMode,
+    mode,
   };
 }
 
@@ -207,7 +251,7 @@ function echoBrief(input: ExecutorInput, delegation: NormalizedDelegation, previ
     workspace: cleanWorkspaceSlug(input.workspaceSlug),
     task_type: "cmo_orchestrated_final_copy",
     objective: delegation.objective,
-    platform: /\b(x|twitter)\b/i.test(`${delegation.objective}\n${delegation.brief}\n${input.userMessage}`) ? "x" : undefined,
+    platform: delegation.surface === "x" || /\b(x|twitter)\b/i.test(`${delegation.objective}\n${delegation.brief}\n${input.userMessage}`) ? "x" : undefined,
     brief: {
       angle: delegation.brief,
     },
@@ -238,7 +282,7 @@ function defaultSurfBrief(input: ExecutorInput, delegation: NormalizedDelegation
     target_agent: "surf",
     mode: delegation.mode === "echo.default" ? "surf.default" : delegation.mode,
     workspace: cleanWorkspaceSlug(input.workspaceSlug),
-    task_type: "cmo_orchestrated_research_pack",
+    task_type: delegation.taskType,
     objective: delegation.objective,
     input_material: [delegation.brief].filter(Boolean),
     allow_web_research: true,
@@ -264,8 +308,14 @@ function defaultSurfBrief(input: ExecutorInput, delegation: NormalizedDelegation
 function surfXBrief(input: ExecutorInput, delegation: NormalizedDelegation): HermesSurfBrief {
   return defaultSurfBrief(input, delegation, {
     mode: "surf.x",
-    task_type: "cmo_orchestrated_x_signal_pack",
-    topic: delegation.objective,
+    task_type: delegation.taskType,
+    surface: delegation.surface,
+    entity: delegation.entity,
+    query: delegation.query,
+    search_query: delegation.searchQuery,
+    topic: delegation.topic ?? delegation.query ?? delegation.searchQuery ?? delegation.objective,
+    topics: delegation.topics.length > 0 ? delegation.topics : undefined,
+    output_contract: delegation.outputContract,
     research_mode: "x_search",
     timeframe: "recent",
     max_results: 5,

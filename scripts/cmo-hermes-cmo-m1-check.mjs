@@ -19,6 +19,15 @@ const forbiddenCounters = {
   directSupabaseMutations: 0,
 };
 
+const signalTopics = [
+  "World App Mini App",
+  "World Mini Apps",
+  "trading mini app",
+  "mini app trading",
+  "World Chain trading",
+  "Holdstation",
+];
+
 const sampleRequest = {
   schema_version: "hermes.cmo.request.v1",
   request_id: "req_m1_cmo_001",
@@ -237,6 +246,130 @@ const startServer = async () => {
           assert.equal(body.constraints.execution_boundary?.openclaw_calls_allowed, false);
 
           const echoFailFixture = body.request_id === "req_m1_echo_fail";
+          const latestPostFixture = body.request_id === "req_m1_native_latest_post";
+          const xSignalFixture = body.request_id === "req_m1_native_x_signal";
+          const xPostsEchoOnlyFixture = body.request_id === "req_m1_x_posts_echo_only";
+          const surfFailFixture = body.request_id === "req_m1_surf_fail";
+
+          let delegations;
+
+          if (latestPostFixture) {
+            delegations = [
+              {
+                id: "del_latest_post",
+                targetAgent: "surf",
+                mode: "surf.x",
+                taskType: "latest_post_lookup",
+                surface: "x",
+                entity: "Holdstation",
+                query: "Holdstation latest post",
+                outputContract: {
+                  linkRequired: true,
+                  strategySynthesisAllowed: false,
+                },
+                objective: "Find the latest Holdstation post on X and return the link.",
+                constraints: ["Read-only lookup.", "Return a source link."],
+              },
+            ];
+          } else if (xSignalFixture) {
+            delegations = [
+              {
+                id: "del_x_signal_scan",
+                target_agent: "surf",
+                mode: "surf.x",
+                task_type: "x_signal_scan",
+                surface: "x",
+                topics: signalTopics,
+                objective: "Scan X for World App and trading mini app signal.",
+                output_contract: {
+                  strategySynthesisAllowed: false,
+                },
+                constraints: ["Read-only X scan.", "Treat social signal as weak evidence."],
+              },
+            ];
+          } else if (xPostsEchoOnlyFixture) {
+            delegations = [
+              {
+                id: "del_x_posts_echo_only",
+                targetAgent: "echo",
+                mode: "echo.default",
+                objective: "Create 3 short X posts from the safest angle.",
+                input: {
+                  brief: "Write channel-native X posts from the CMO angle.",
+                  constraints: ["Do not research.", "Do not decide strategy."],
+                },
+              },
+            ];
+          } else if (surfFailFixture) {
+            delegations = [
+              {
+                id: "del_surf_fail",
+                targetAgent: "surf",
+                mode: "surf.x",
+                taskType: "latest_post_lookup",
+                surface: "x",
+                entity: "Holdstation",
+                query: "Holdstation latest post",
+                outputContract: {
+                  linkRequired: true,
+                  strategySynthesisAllowed: false,
+                },
+                objective: "Find the latest Holdstation post on X and return the link.",
+                constraints: ["Read-only lookup.", "Return a source link."],
+              },
+            ];
+          } else if (echoFailFixture) {
+            delegations = [
+              {
+                id: "del_surf_fail_default",
+                target: { agent: "surf", mode: "surf.default" },
+                objective: "Research activation evidence gaps for Holdstation Mini App.",
+                input: {
+                  brief: "Find compact activation proof gaps before content execution.",
+                  constraints: ["M1 source caps only."],
+                },
+              },
+              {
+                id: "del_echo_fail",
+                target: { agent: "echo", mode: "echo.default" },
+                objective: "Create 3 short X posts from the safest angle.",
+                input: {
+                  brief: "Use evidence boundaries and produce final copy only through Echo.",
+                  constraints: ["Do not decide strategy."],
+                },
+              },
+            ];
+          } else {
+            delegations = [
+              {
+                id: "del_surf_gap_wrong",
+                target: { agent: "surf", mode: "surf.x" },
+                objective: "Research activation evidence gaps for Holdstation Mini App.",
+                input: {
+                  brief: "Find compact activation proof gaps before content execution.",
+                  constraints: ["M1 source caps only."],
+                },
+              },
+              {
+                id: "del_surf_x_explicit",
+                target: { agent: "surf", mode: "surf.x" },
+                objective: "Research X social signal evidence for activation objections.",
+                input: {
+                  brief: "Scan X signal only for activation objection language.",
+                  constraints: ["M1 source caps only."],
+                },
+              },
+              {
+                id: "del_echo_copy",
+                target: { agent: "echo", mode: "echo.default" },
+                objective: "Create 3 short X posts from the safest angle.",
+                input: {
+                  brief: "Write final copy only after Surf evidence is available.",
+                  constraints: ["Do not decide strategy."],
+                },
+              },
+            ];
+          }
 
           writeJson(
             response,
@@ -249,56 +382,14 @@ const startServer = async () => {
                   mainBottleneck: "activation proof gap",
                   decisionLabel: "TEST",
                 },
-                delegations: echoFailFixture
-                  ? [
-                      {
-                        id: "del_surf_fail_default",
-                        target: { agent: "surf", mode: "surf.default" },
-                        objective: "Research activation evidence gaps for Holdstation Mini App.",
-                        input: {
-                          brief: "Find compact activation proof gaps before content execution.",
-                          constraints: ["M1 source caps only."],
-                        },
-                      },
-                      {
-                        id: "del_echo_fail",
-                        target: { agent: "echo", mode: "echo.default" },
-                        objective: "Create 3 short X posts from the safest angle.",
-                        input: {
-                          brief: "Use evidence boundaries and produce final copy only through Echo.",
-                          constraints: ["Do not decide strategy."],
-                        },
-                      },
-                    ]
-                  : [
-                      {
-                        id: "del_surf_gap_wrong",
-                        target: { agent: "surf", mode: "surf.x" },
-                        objective: "Research activation evidence gaps for Holdstation Mini App.",
-                        input: {
-                          brief: "Find compact activation proof gaps before content execution.",
-                          constraints: ["M1 source caps only."],
-                        },
-                      },
-                      {
-                        id: "del_surf_x_explicit",
-                        target: { agent: "surf", mode: "surf.x" },
-                        objective: "Research X social signal evidence for activation objections.",
-                        input: {
-                          brief: "Scan X signal only for activation objection language.",
-                          constraints: ["M1 source caps only."],
-                        },
-                      },
-                      {
-                        id: "del_echo_copy",
-                        target: { agent: "echo", mode: "echo.default" },
-                        objective: "Create 3 short X posts from the safest angle.",
-                        input: {
-                          brief: "Write final copy only after Surf evidence is available.",
-                          constraints: ["Do not decide strategy."],
-                        },
-                      },
-                    ],
+                answer: {
+                  format: "markdown",
+                  title: "Delegated fixture answer",
+                  summary: "Initial CMO response requested specialist execution.",
+                  decision: "WAIT",
+                  body: "Delegating to specialist. This text must not be surfaced as the final answer when orchestration is enabled.",
+                },
+                delegations,
               },
             }),
           );
@@ -310,25 +401,50 @@ const startServer = async () => {
         assert.equal(body.constraints.delegations_mode, "proposals_only");
         assert.equal(body.constraints.m1_clean_cmo_skill_kernel?.final_synthesis, true);
         assert.equal(body.context_pack.artifacts_in.at(-1)?.type, "cmo_engine_delegation_results");
-        assert.equal(body.context_pack.artifacts_in.at(-1)?.results.length, body.request_id === "req_m1_echo_fail" ? 2 : 3);
+        const expectedResultCount = body.request_id === "req_m1_echo_fail" ? 2 : body.request_id === "req_m1_cmo_001" ? 3 : 1;
+        assert.equal(body.context_pack.artifacts_in.at(-1)?.results.length, expectedResultCount);
 
         writeJson(
           response,
           200,
           cmoResponse(
             body,
-            body.request_id === "req_m1_echo_fail"
+            body.request_id === "req_m1_echo_fail" || body.request_id === "req_m1_surf_fail"
               ? {
                   response: {
                     answer: {
                       format: "markdown",
                       title: "Unsafe fixture final copy",
-                      summary: "This fixture tries to present copy even though Echo failed.",
+                      summary: "This fixture tries to present success even though delegation failed.",
                       decision: "TEST",
-                      body: "Post 1: Pretend Echo wrote this.\nPost 2: Pretend Echo completed.\nPost 3: Pretend final copy is ready.",
+                      body: "Post 1: Pretend specialist execution succeeded.\nPost 2: Pretend completed.\nPost 3: Pretend final answer is ready.",
                     },
                   },
                 }
+              : body.request_id === "req_m1_native_latest_post"
+                ? {
+                    response: {
+                      answer: {
+                        format: "markdown",
+                        title: "Latest Holdstation X Post",
+                        summary: "Surf returned the latest Holdstation X link.",
+                        decision: "KEEP",
+                        body: "Latest Holdstation post found: https://x.com/HoldstationW/status/123",
+                      },
+                    },
+                  }
+                : body.request_id === "req_m1_native_x_signal"
+                  ? {
+                      response: {
+                        answer: {
+                          format: "markdown",
+                          title: "X Signal Scan",
+                          summary: "Surf returned a bounded X signal pack.",
+                          decision: "WAIT",
+                          body: "Surf found weak World App mini app signal. Treat as source-gathering, not strategy.",
+                        },
+                      },
+                    }
               : {},
           ),
         );
@@ -345,6 +461,47 @@ const startServer = async () => {
         assert.equal(body.source_agent, "cmo");
         assert.equal(body.target_agent, "surf");
         assert.ok(["surf.default", "surf.x"].includes(body.mode), `unexpected surf mode ${body.mode}`);
+
+        if (body.handoff_id === "del_latest_post" || body.handoff_id === "del_surf_fail") {
+          assert.equal(body.mode, "surf.x");
+          assert.equal(body.task_type, "latest_post_lookup");
+          assert.equal(body.surface, "x");
+          assert.equal(body.entity, "Holdstation");
+          assert.equal(body.query, "Holdstation latest post");
+          assert.equal(body.topic, "Holdstation latest post");
+          assert.equal(body.output_contract?.linkRequired, true);
+          assert.equal(body.output_contract?.strategySynthesisAllowed, false);
+        }
+
+        if (body.handoff_id === "del_x_signal_scan") {
+          assert.equal(body.mode, "surf.x");
+          assert.equal(body.task_type, "x_signal_scan");
+          assert.equal(body.surface, "x");
+          assert.deepEqual(body.topics, signalTopics);
+          assert.equal(body.output_contract?.strategySynthesisAllowed, false);
+        }
+
+        if (body.handoff_id === "del_surf_fail") {
+          writeJson(response, 200, {
+            schema_version: "surf.response.v1",
+            handoff_id: body.handoff_id,
+            agent: "surf",
+            mode: "surf.x",
+            status: "failed",
+            failure_reason: "Surf fixture unavailable",
+            safety: {
+              published: false,
+              vault_write: false,
+              supabase_mutation: false,
+              session_mutation: false,
+              raw_capture: false,
+              kanban: false,
+              openclaw_call: false,
+            },
+          });
+          return;
+        }
+
         writeJson(response, 200, {
           schema_version: "surf.response.v1",
           handoff_id: body.handoff_id,
@@ -384,7 +541,14 @@ const startServer = async () => {
         assert.equal(body.task_type, "cmo_orchestrated_final_copy");
         assert.equal(body.objective, "Create 3 short X posts from the safest angle.");
         assert.equal(body.platform, "x");
-        assert.equal(body.brief?.angle, body.handoff_id === "del_echo_fail" ? "Use evidence boundaries and produce final copy only through Echo." : "Write final copy only after Surf evidence is available.");
+        assert.equal(
+          body.brief?.angle,
+          body.handoff_id === "del_echo_fail"
+            ? "Use evidence boundaries and produce final copy only through Echo."
+            : body.handoff_id === "del_x_posts_echo_only"
+              ? "Write channel-native X posts from the CMO angle."
+              : "Write final copy only after Surf evidence is available.",
+        );
         assert.ok(Array.isArray(body.claim_boundaries));
         assert.equal(body.output_contract, "echo.response.v1");
         assert.ok(body.source_context);
@@ -540,6 +704,10 @@ try {
 
   let result;
   let echoFailResult;
+  let latestPostResult;
+  let xSignalResult;
+  let xPostsEchoOnlyResult;
+  let surfFailResult;
 
   try {
     process.env.CMO_HERMES_EXECUTION_ENABLED = "true";
@@ -617,6 +785,94 @@ try {
     assert.match(echoFailResult.response.answer?.body ?? "", /Echo fixture unavailable/);
     assert.doesNotMatch(echoFailResult.response.answer?.body ?? "", /Post 1:/);
     assert.equal(echoFailResult.response.structured_output?.echo_failed, true);
+
+    latestPostResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_native_latest_post",
+      session_id: "session_m1_native_latest_post",
+      turn_id: "turn_m1_native_latest_post_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Check thử X xem bài mới nhất của Holdstation có gì? Gửi mình link nhé",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling native latest-post fixture");
+    assert.equal(latestPostResult.surfCalls, 1);
+    assert.equal(latestPostResult.echoCalls, 0);
+    assert.deepEqual(latestPostResult.agentsUsed, ["cmo", "surf"]);
+    assert.equal(latestPostResult.delegationSummary.length, 1);
+    assert.equal(latestPostResult.delegationSummary[0].mode, "surf.x");
+    assert.equal(latestPostResult.delegationSummary[0].status, "completed");
+    assert.match(latestPostResult.response.answer?.body ?? "", /https:\/\/x\.com\/HoldstationW\/status\/123/);
+    assert.doesNotMatch(latestPostResult.response.answer?.body ?? "", /Delegating to specialist/);
+
+    xSignalResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_native_x_signal",
+      session_id: "session_m1_native_x_signal",
+      turn_id: "turn_m1_native_x_signal_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Scan X for World App Mini App and trading mini app signal.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling native X signal fixture");
+    assert.equal(xSignalResult.surfCalls, 1);
+    assert.equal(xSignalResult.echoCalls, 0);
+    assert.equal(xSignalResult.delegationSummary[0].mode, "surf.x");
+    assert.equal(xSignalResult.delegationSummary[0].status, "completed");
+
+    const surfCallsBeforeXPostsOnly = server.calls.surfUnified;
+    xPostsEchoOnlyResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_x_posts_echo_only",
+      session_id: "session_m1_x_posts_echo_only",
+      turn_id: "turn_m1_x_posts_echo_only_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Create 3 short X posts based on the safest angle.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling X-posts Echo-only fixture");
+    assert.equal(server.calls.surfUnified, surfCallsBeforeXPostsOnly);
+    assert.equal(xPostsEchoOnlyResult.surfCalls, 0);
+    assert.equal(xPostsEchoOnlyResult.echoCalls, 1);
+    assert.deepEqual(xPostsEchoOnlyResult.agentsUsed, ["cmo", "echo"]);
+    assert.equal(xPostsEchoOnlyResult.delegationSummary[0].mode, "echo.default");
+    assert.equal(xPostsEchoOnlyResult.delegationSummary[0].status, "completed");
+
+    surfFailResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_surf_fail",
+      session_id: "session_m1_surf_fail",
+      turn_id: "turn_m1_surf_fail_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Check X for the latest Holdstation post link.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling Surf failure fixture");
+    assert.equal(surfFailResult.surfCalls, 1);
+    assert.equal(surfFailResult.echoCalls, 0);
+    assert.equal(surfFailResult.delegationSummary[0].mode, "surf.x");
+    assert.equal(surfFailResult.delegationSummary[0].status, "failed");
+    assert.equal(surfFailResult.delegationSummary[0].failureReason, "Surf fixture unavailable");
+    assert.equal(surfFailResult.response.answer?.decision, "WAIT");
+    assert.match(surfFailResult.response.answer?.body ?? "", /Surf did not complete/);
+    assert.match(surfFailResult.response.answer?.body ?? "", /Surf fixture unavailable/);
+    assert.doesNotMatch(surfFailResult.response.answer?.body ?? "", /Post 1:/);
+    assert.equal(surfFailResult.response.structured_output?.surf_failed, true);
+    assert.equal(server.calls.cmo, 12);
+    assert.equal(server.calls.surfUnified, 6);
+    assert.equal(server.calls.echo, 3);
+    assert.equal(server.calls.legacySurfX, 0);
+    assert.equal(server.calls.legacySurfLast30Days, 0);
+    assert.equal(server.calls.forbidden, 0);
+    assert.equal(server.calls.unexpected, 0);
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
       restoreEnvValue(key, value);
@@ -633,6 +889,7 @@ try {
         surfCalls: result.surfCalls,
         echoCalls: result.echoCalls,
         echoFailureGuarded: echoFailResult?.response.structured_output?.echo_failed === true,
+        surfFailureGuarded: surfFailResult?.response.structured_output?.surf_failed === true,
         legacySurfXCalls: server.calls.legacySurfX,
         legacySurfLast30DaysCalls: server.calls.legacySurfLast30Days,
         forbiddenCounters: result.forbidden_counters,
