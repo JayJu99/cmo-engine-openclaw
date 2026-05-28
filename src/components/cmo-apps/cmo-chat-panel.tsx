@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
@@ -160,65 +162,75 @@ function isBackendContextHeading(value: string): boolean {
   return /^(context used|context|runtime note|graph hints|graph context|system context)$/i.test(value.trim());
 }
 
-function renderAssistantContent(content: string) {
-  const lines = content.split(/\r?\n/);
+function assistantDisplayMarkdown(content: string): string {
+  return content
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      const heading = trimmed.match(/^#{1,6}\s+(.+)$/);
 
+      if (heading && isBackendContextHeading(heading[1])) {
+        return false;
+      }
+
+      return !isBackendContextLine(trimmed);
+    })
+    .join("\n")
+    .trim();
+}
+
+function renderAssistantContent(content: string) {
+  const markdown = assistantDisplayMarkdown(content);
 
   return (
-    <div className="space-y-3">
-      {lines.map((line, index) => {
-        const trimmed = line.trim();
+    <div className="space-y-3 break-words">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ href, children, ...props }) => {
+            const isExternal = typeof href === "string" && /^https?:\/\//i.test(href);
 
-        if (!trimmed) {
-          return <div key={`space-${index}`} className="h-1" />;
-        }
-
-        const heading = trimmed.match(/^##\s+(.+)$/);
-
-        if (heading) {
-          if (isBackendContextHeading(heading[1])) {
-            return null;
-          }
-
-          return (
-            <h3 key={`heading-${index}`} className="pt-2 text-sm font-extrabold uppercase text-slate-950 first:pt-0">
-              {heading[1]}
-            </h3>
-          );
-        }
-
-        if (isBackendContextLine(trimmed)) {
-          return null;
-        }
-
-        const numbered = trimmed.match(/^(\d+)\.\s+(.+)$/);
-
-        if (numbered) {
-          return (
-            <div key={`numbered-${index}`} className="flex gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-              <span className="grid size-6 shrink-0 place-items-center rounded-full bg-indigo-600 text-xs font-bold text-white">{numbered[1]}</span>
-              <p className="font-semibold text-slate-950">{numbered[2]}</p>
-            </div>
-          );
-        }
-
-        const bullet = trimmed.match(/^[-*]\s+(.+)$/);
-
-        if (bullet) {
-          return (
-            <div key={`bullet-${index}`} className="flex gap-2 text-slate-700">
-              <span className="mt-2 size-1.5 shrink-0 rounded-full bg-slate-400" />
-              <p>{bullet[1]}</p>
-            </div>
-          );
-        }
-
-        return (
-          <p key={`paragraph-${index}`} className="text-slate-700">
-            {trimmed}
-          </p>
-        );
-      })}
+            return (
+              <a
+                {...props}
+                href={href}
+                target={isExternal ? "_blank" : undefined}
+                rel={isExternal ? "noopener noreferrer" : undefined}
+                className="font-semibold text-indigo-700 underline decoration-indigo-200 underline-offset-2 transition hover:text-indigo-900"
+              >
+                {children}
+              </a>
+            );
+          },
+          blockquote: ({ children }) => (
+            <blockquote className="border-l-4 border-indigo-200 bg-indigo-50/50 py-2 pl-4 pr-3 text-slate-700">
+              {children}
+            </blockquote>
+          ),
+          code: ({ children, className }) => (
+            <code className={cn("rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[0.92em] text-slate-900", className)}>
+              {children}
+            </code>
+          ),
+          h1: ({ children }) => <h2 className="pt-2 text-lg font-extrabold leading-7 text-slate-950 first:pt-0">{children}</h2>,
+          h2: ({ children }) => <h3 className="pt-2 text-base font-extrabold leading-7 text-slate-950 first:pt-0">{children}</h3>,
+          h3: ({ children }) => <h4 className="pt-2 text-sm font-extrabold uppercase leading-6 text-slate-950 first:pt-0">{children}</h4>,
+          h4: ({ children }) => <h5 className="pt-2 text-sm font-bold leading-6 text-slate-950 first:pt-0">{children}</h5>,
+          hr: () => <hr className="border-slate-200" />,
+          li: ({ children }) => <li className="pl-1 text-slate-700">{children}</li>,
+          ol: ({ children }) => <ol className="list-decimal space-y-1 pl-5">{children}</ol>,
+          p: ({ children }) => <p className="whitespace-pre-wrap text-slate-700">{children}</p>,
+          pre: ({ children }) => (
+            <pre className="overflow-auto rounded-xl bg-slate-950 p-3 text-xs leading-6 text-slate-50 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-slate-50">
+              {children}
+            </pre>
+          ),
+          strong: ({ children }) => <strong className="font-extrabold text-slate-950">{children}</strong>,
+          ul: ({ children }) => <ul className="list-disc space-y-1 pl-5">{children}</ul>,
+        }}
+      >
+        {markdown || content}
+      </ReactMarkdown>
     </div>
   );
 }
