@@ -121,26 +121,35 @@ const writeJson = (response, statusCode, payload) => {
 };
 
 const activity = (requestBody, seq, type, message) => ({
-  schema_version: "hermes.activity.event.v1",
-  event_id: `evt_m1_${requestBody.request_id}_${seq}`,
-  request_id: requestBody.request_id,
-  session_id: requestBody.session_id,
-  turn_id: requestBody.turn_id,
+  ...(seq % 2 === 0 ? { schema_version: "hermes.activity.event.v1" } : {}),
+  eventId: `evt_m1_${requestBody.request_id}_${seq}`,
+  requestId: requestBody.request_id,
+  sessionId: requestBody.session_id,
+  turnId: requestBody.turn_id,
   seq,
-  created_at: new Date(Date.parse(requestBody.created_at) + seq * 1000).toISOString(),
-  source: {
-    agent: "cmo",
-    mode: "cmo.default",
-  },
+  createdAt: new Date(Date.parse(requestBody.created_at) + seq * 1000).toISOString(),
+  sourceAgent: "cmo",
+  sourceMode: "cmo.default",
   type,
-  status: type === "run.completed" ? "completed" : "running",
-  user_visible: true,
+  status: type === "cmo.run.completed" ? "completed" : "running",
+  userVisible: true,
   message,
   data: {},
 });
 
+const cmoPolishActivityEvents = (requestBody) => [
+  activity(requestBody, 1, "run.started", "CMO run started."),
+  activity(requestBody, 2, "context.loaded", "CMO loaded context."),
+  activity(requestBody, 3, "cmo.mode.selected", "Mode selected: REVIEW."),
+  activity(requestBody, 4, "cmo.bottleneck.identified", "Main bottleneck identified: activation proof gap."),
+  activity(requestBody, 5, "cmo.decision.selected", "Decision selected: TEST."),
+  activity(requestBody, 6, "cmo.next_step.selected", "Next step selected: run a proof-led activation copy test."),
+  activity(requestBody, 7, "plan.created", "CMO created the plan."),
+  activity(requestBody, 8, "cmo.run.completed", "CMO run completed."),
+];
+
 const cmoResponse = (requestBody, overrides = {}) => {
-  const events = overrides.activity_events ?? [activity(requestBody, 1, "run.completed", "CMO run completed.")];
+  const events = overrides.activity_events ?? cmoPolishActivityEvents(requestBody);
 
   return {
     response: {
@@ -251,7 +260,6 @@ const startServer = async () => {
                   },
                 ],
               },
-              activity_events: [activity(body, 1, "stage.completed", "CMO diagnosed and emitted bounded delegations.")],
             }),
           );
           return;

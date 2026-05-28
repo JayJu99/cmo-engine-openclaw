@@ -31,6 +31,11 @@ export type HermesActivityType =
   | "stage.started"
   | "stage.completed"
   | "context.loaded"
+  | "cmo.mode.selected"
+  | "cmo.bottleneck.identified"
+  | "cmo.decision.selected"
+  | "cmo.next_step.selected"
+  | "cmo.run.completed"
   | "assumption.notice"
   | "clarification.required"
   | "clarification.asked"
@@ -257,6 +262,11 @@ const activityTypes = new Set<HermesActivityType>([
   "stage.started",
   "stage.completed",
   "context.loaded",
+  "cmo.mode.selected",
+  "cmo.bottleneck.identified",
+  "cmo.decision.selected",
+  "cmo.next_step.selected",
+  "cmo.run.completed",
   "assumption.notice",
   "clarification.required",
   "clarification.asked",
@@ -290,10 +300,12 @@ const executableDelegationEventTypes = new Set<HermesActivityType>([
   "delegation.completed",
 ]);
 const forbiddenDelegationEventTypes = new Set<HermesActivityType>([
+  "vault_agent.delegation.created",
   "vault_agent.delegation.started",
   "vault_agent.delegation.completed",
   "vault_agent.delegation.failed",
 ]);
+const forbiddenActivityTypePattern = /^(vault|vault_agent|kanban|openclaw|publish)(\.|$)/i;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -756,10 +768,17 @@ const validateHermesCmoRuntimeActivityEvent = (
     (sourceAgent === "echo" && sourceMode === "echo.default") ||
     (sourceAgent === "surf" && allowedSurfModes.has(sourceMode as HermesSurfMode));
 
-  if (
-    forbiddenDelegationEventTypes.has(eventType) ||
-    (!options.allowExecutableDelegationActivity && executableDelegationEventTypes.has(eventType))
-  ) {
+  if (forbiddenDelegationEventTypes.has(eventType) || forbiddenActivityTypePattern.test(String(eventType))) {
+    return false;
+  }
+
+  if (sourceAgent === "echo" || sourceAgent === "surf") {
+    if (!options.allowExecutableDelegationActivity || !executableDelegationEventTypes.has(eventType)) {
+      return false;
+    }
+  }
+
+  if (!options.allowExecutableDelegationActivity && executableDelegationEventTypes.has(eventType)) {
     return false;
   }
 
@@ -782,6 +801,58 @@ const validateHermesCmoRuntimeActivityEvent = (
   ) && !Number.isNaN(Date.parse(createdAt));
 };
 
+const eventString = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value.trim() : null);
+
+const normalizedActivityEvent = (
+  event: unknown,
+  request: HermesCmoRuntimeRequest,
+  fallbackSeq: number,
+): HermesCmoRuntimeActivityEvent | null => {
+  if (!isRecord(event)) {
+    return null;
+  }
+
+  const source = isRecord(event.source) ? event.source : {};
+  const eventId = eventString(event.event_id ?? event.eventId);
+  const eventType = eventString(event.type);
+  const status = eventString(event.status);
+  const message = eventString(event.message);
+  const createdAt = eventString(event.created_at ?? event.createdAt) ?? new Date().toISOString();
+  const userVisible = event.user_visible ?? event.userVisible;
+  const seq = typeof event.seq === "number" && Number.isInteger(event.seq) && event.seq >= 1 ? event.seq : fallbackSeq;
+  const sourceAgent = eventString(source.agent ?? event.sourceAgent);
+  const sourceMode = eventString(source.mode ?? event.sourceMode);
+
+  if (!eventId || !eventType || !status || !message || typeof userVisible !== "boolean") {
+    return null;
+  }
+
+  if (event.schema_version !== undefined && event.schema_version !== "hermes.activity.event.v1") {
+    return null;
+  }
+
+  const normalized: HermesCmoRuntimeActivityEvent = {
+    schema_version: "hermes.activity.event.v1",
+    event_id: eventId,
+    request_id: eventString(event.request_id ?? event.requestId) ?? request.request_id,
+    session_id: eventString(event.session_id ?? event.sessionId) ?? request.session_id,
+    turn_id: eventString(event.turn_id ?? event.turnId) ?? request.turn_id,
+    seq,
+    created_at: createdAt,
+    source: {
+      agent: sourceAgent as HermesCmoRuntimeActivityEvent["source"]["agent"],
+      mode: sourceMode as HermesCmoRuntimeActivityEvent["source"]["mode"],
+    },
+    type: eventType as HermesActivityType,
+    status: status as HermesActivityStatus,
+    user_visible: userVisible,
+    message,
+    data: isRecord(event.data) ? event.data : {},
+  };
+
+  return normalized;
+};
+
 const extractLiveResponsePayload = (
   payload: unknown,
   request: HermesCmoRuntimeRequest,
@@ -794,6 +865,9 @@ const extractLiveResponsePayload = (
 
   const responseCandidate = isRecord(payload.response) ? payload.response : payload;
   const activityEventsCandidate = Array.isArray(payload.activity_events) ? payload.activity_events : [];
+  const activityEvents = activityEventsCandidate
+    .map((event, index) => normalizedActivityEvent(event, request, index + 1))
+    .filter((event): event is HermesCmoRuntimeActivityEvent => Boolean(event));
 
   if (!validateHermesCmoRuntimeResponse(responseCandidate, request, responseValidation)) {
     throw new Error("Hermes CMO Agent response did not match hermes.cmo.response.v1 or violated M1 execution boundaries.");
@@ -803,13 +877,16 @@ const extractLiveResponsePayload = (
     throw new Error("Hermes CMO Agent activity_summary.events_count did not match returned activity_events length.");
   }
 
-  if (!activityEventsCandidate.every((event) => validateHermesCmoRuntimeActivityEvent(event, request, activityValidation))) {
+  if (
+    activityEvents.length !== activityEventsCandidate.length ||
+    !activityEvents.every((event) => validateHermesCmoRuntimeActivityEvent(event, request, activityValidation))
+  ) {
     throw new Error("Hermes CMO Agent activity_events did not match hermes.activity.event.v1 or included forbidden delegation events.");
   }
 
   return {
     response: responseCandidate,
-    activityEvents: activityEventsCandidate,
+    activityEvents,
   };
 };
 
