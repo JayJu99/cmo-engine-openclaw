@@ -249,6 +249,7 @@ const allowedAgents = new Set<HermesAllowedAgent>(["echo", "surf", "vault_agent"
 const allowedSurfModes = new Set<HermesSurfMode>(["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
 const MAX_M1_ORCHESTRATION_ROUNDS = 3;
 const MAX_M1_ECHO_RETRIES = 1;
+const MAX_M1_FINALIZATION_ATTEMPTS = 1;
 const responseStatuses = new Set<HermesCmoRuntimeResponse["status"]>([
   "completed",
   "partial",
@@ -620,6 +621,11 @@ const buildHermesCmoLiveRequest = (
           classification: "needs_echo_retry",
           retry_of: "echo",
           failure_message: "Echo output unusable; retry required.",
+        },
+        finalization_policy: {
+          max_attempts: MAX_M1_FINALIZATION_ATTEMPTS,
+          instruction:
+            "Use the completed specialist results already provided. Do not request the same delegation again. Produce final user-facing answer or state that result is insufficient.",
         },
         forbidden_targets: ["vault_agent", "openclaw", "supabase", "memory", "arbitrary_tools"],
         surf_mode_policy: {
@@ -1233,6 +1239,86 @@ const responseWithOrchestrationFailureGuardrail = (
   delegations: [],
 });
 
+const completedSpecialistExecutions = (delegationResult: HermesCmoDelegationExecutionResult): HermesCmoDelegationExecution[] =>
+  delegationResult.executions.filter((execution) => execution.status === "completed");
+
+const compactUnknown = (value: unknown): string | null => {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+
+  if (isRecord(value)) {
+    for (const key of ["url", "link", "href", "source", "title", "summary", "copy", "label"]) {
+      if (typeof value[key] === "string" && value[key].trim()) {
+        return value[key].trim();
+      }
+    }
+
+    return compactText(JSON.stringify(value), 220);
+  }
+
+  return null;
+};
+
+const executionFallbackLines = (execution: HermesCmoDelegationExecution): string[] => {
+  const response = isRecord(execution.response) ? execution.response : {};
+  const researchPack = isRecord(response.research_pack) ? response.research_pack : isRecord(response.researchPack) ? response.researchPack : {};
+  const outputs = Array.isArray(response.outputs) ? response.outputs.map(compactUnknown).filter((item): item is string => Boolean(item)) : [];
+  const sourceItems = response.sources_used ?? researchPack.sources_used;
+  const findingItems = response.key_findings ?? researchPack.key_findings;
+  const sources = Array.isArray(sourceItems) ? sourceItems.map(compactUnknown).filter((item): item is string => Boolean(item)) : [];
+  const findings = Array.isArray(findingItems) ? findingItems.map(compactUnknown).filter((item): item is string => Boolean(item)) : [];
+  const packSummary = typeof researchPack.summary === "string" && researchPack.summary.trim() ? researchPack.summary.trim() : null;
+  const lines = [
+    `- ${execution.targetAgent}/${execution.mode}: ${execution.summary}`,
+    packSummary ? `  Summary: ${packSummary}` : null,
+    outputs.length > 0 ? `  Outputs: ${outputs.slice(0, 3).join(" | ")}` : null,
+    findings.length > 0 ? `  Findings: ${findings.slice(0, 3).join(" | ")}` : null,
+    sources.length > 0 ? `  Sources: ${sources.slice(0, 5).join(" | ")}` : null,
+  ];
+
+  return lines.filter((line): line is string => Boolean(line));
+};
+
+const responseWithCompletedSpecialistFallback = (
+  response: HermesCmoRuntimeResponse,
+  delegationResult: HermesCmoDelegationExecutionResult,
+): HermesCmoRuntimeResponse => {
+  const completed = completedSpecialistExecutions(delegationResult);
+  const hasEcho = completed.some((execution) => execution.targetAgent === "echo");
+  const hasSurf = completed.some((execution) => execution.targetAgent === "surf");
+  const body = [
+    "Specialist completed; final CMO synthesis unresolved.",
+    "",
+    "Completed specialist result:",
+    ...completed.flatMap(executionFallbackLines),
+    "",
+    hasSurf
+      ? "CMO caveat: Surf completed evidence gathering, but final strategic synthesis did not fully resolve. Treat the result as completed specialist input, not a final strategy claim."
+      : null,
+    hasEcho
+      ? "CMO caveat: Echo completed content execution, but final CMO synthesis did not fully resolve. Treat the output as Echo-produced, not CMO replacement copy."
+      : null,
+  ].filter((line): line is string => Boolean(line)).join("\n");
+
+  return {
+    ...response,
+    answer: {
+      format: "markdown",
+      title: "Specialist Completed",
+      summary: "Specialist completed; final CMO synthesis unresolved.",
+      decision: "WAIT",
+      body,
+    },
+    structured_output: {
+      ...(isRecord(response.structured_output) ? response.structured_output : {}),
+      final_synthesis_unresolved: true,
+      completed_specialist_fallback: true,
+    },
+    delegations: [],
+  };
+};
+
 const mergeDelegationResults = (
   left: HermesCmoDelegationExecutionResult,
   right: HermesCmoDelegationExecutionResult,
@@ -1326,6 +1412,7 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
   let echoRetriesUsed = 0;
   let echoRetryFailureReason: string | null = null;
   let orchestrationFailureReason: string | null = null;
+  let finalizationAttempts = 0;
   const executedDelegationKeys = new Set<string>();
 
   const runSynthesis = async (allowNextDelegation: boolean): Promise<HermesCmoLivePayload> => {
@@ -1383,7 +1470,19 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
 
       if (executable.length === 0) {
         if (response.status === "delegated") {
-          orchestrationFailureReason = "Specialist execution already completed, but final synthesis did not resolve. Retry required.";
+          const hasCompletedSpecialist = completedSpecialistExecutions(delegationResult).length > 0;
+
+          if (hasCompletedSpecialist && finalizationAttempts < MAX_M1_FINALIZATION_ATTEMPTS) {
+            finalizationAttempts += 1;
+            const finalizationResult = await runSynthesis(false);
+            response = finalizationResult.response;
+            activityEvents = [...activityEvents, ...finalizationResult.activityEvents];
+            continue;
+          }
+
+          orchestrationFailureReason = hasCompletedSpecialist
+            ? "Specialist completed; final CMO synthesis unresolved."
+            : "Specialist execution did not complete; retry required.";
         }
         break;
       }
@@ -1437,6 +1536,17 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
   response = responseWithDelegationFailureGuardrail(response, delegationResult);
   if (echoRetryFailureReason || needsEchoRetry(response)) {
     response = responseWithEchoRetryFailureGuardrail(response, echoRetryFailureReason ?? echoRetryReason(response));
+  } else if (
+    orchestrationFailureReason === "Specialist completed; final CMO synthesis unresolved." ||
+    (orchestrationEnabled &&
+      completedSpecialistExecutions(delegationResult).length > 0 &&
+      (response.status === "delegated" ||
+        executableDelegations(
+          response.delegations.filter((delegation) => !executedDelegationKeys.has(stableDelegationKey(delegation))),
+          maxDelegations,
+        ).length > 0))
+  ) {
+    response = responseWithCompletedSpecialistFallback(response, delegationResult);
   } else if (
     orchestrationFailureReason ||
     (orchestrationEnabled &&

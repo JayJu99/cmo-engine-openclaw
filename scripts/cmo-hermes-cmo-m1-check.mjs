@@ -263,6 +263,7 @@ const startServer = async () => {
           const duplicateFingerprintFixture = body.request_id === "req_m1_duplicate_fingerprint";
           const duplicateDelegatedStopFixture = body.request_id === "req_m1_duplicate_delegated_stop";
           const worldAppSignalFixture = body.request_id === "req_m1_world_app_signal";
+          const echoCompletedUnresolvedFixture = body.request_id === "req_m1_echo_completed_unresolved";
           const echoRetryFixture =
             body.request_id === "req_m1_echo_retry_good" ||
             body.request_id === "req_m1_echo_retry_fail" ||
@@ -358,10 +359,10 @@ const startServer = async () => {
                 constraints: ["Read-only X scan.", "Treat social signal as weak evidence."],
               },
             ];
-          } else if (xPostsEchoOnlyFixture) {
+          } else if (xPostsEchoOnlyFixture || echoCompletedUnresolvedFixture) {
             delegations = [
               {
-                id: "del_x_posts_echo_only",
+                id: echoCompletedUnresolvedFixture ? "del_echo_completed_unresolved" : "del_x_posts_echo_only",
                 targetAgent: "echo",
                 mode: "echo.default",
                 objective: "Create 3 short X posts from the safest angle.",
@@ -487,6 +488,8 @@ const startServer = async () => {
         const failedExecutionSynthesis =
           body.request_id === "req_m1_echo_fail" ||
           body.request_id === "req_m1_surf_fail" ||
+          (body.request_id === "req_m1_duplicate_delegated_stop" && cmoCallCount === 3) ||
+          (body.request_id === "req_m1_echo_completed_unresolved" && cmoCallCount === 3) ||
           (body.request_id === "req_m1_max_rounds" && cmoCallCount === 4) ||
           (body.request_id === "req_m1_echo_retry_fail" && cmoCallCount === 3);
         const expectedAllowedAgents = failedExecutionSynthesis ? [] : ["echo", "surf"];
@@ -504,7 +507,8 @@ const startServer = async () => {
         if (
           body.request_id === "req_m1_duplicate_same_id" ||
           body.request_id === "req_m1_duplicate_fingerprint" ||
-          body.request_id === "req_m1_world_app_signal"
+          body.request_id === "req_m1_world_app_signal" ||
+          body.request_id === "req_m1_echo_completed_unresolved"
         ) {
           assert.equal(
             body.context_pack.artifacts_in.filter((artifact) => artifact?.type === "specialist_result").length,
@@ -600,6 +604,38 @@ const startServer = async () => {
                     surface: "x",
                     topics: signalTopics,
                     objective: "Scan X for World App and trading mini app signal.",
+                  },
+                ],
+              },
+            }),
+          );
+          return;
+        }
+
+        if (body.request_id === "req_m1_echo_completed_unresolved") {
+          writeJson(
+            response,
+            200,
+            cmoResponse(body, {
+              response: {
+                status: "delegated",
+                answer: {
+                  format: "markdown",
+                  title: "Echo Completed But Unresolved",
+                  summary: "caller should run Echo again.",
+                  decision: "WAIT",
+                  body: "caller should run Echo again. This duplicate Echo delegation text must not be final.",
+                },
+                delegations: [
+                  {
+                    id: "del_echo_completed_unresolved",
+                    targetAgent: "echo",
+                    mode: "echo.default",
+                    objective: "Create 3 short X posts from the safest angle.",
+                    input: {
+                      brief: "Write channel-native X posts from the CMO angle.",
+                      constraints: ["Do not research.", "Do not decide strategy."],
+                    },
                   },
                 ],
               },
@@ -953,7 +989,9 @@ const startServer = async () => {
         }
         const expectedEchoAngle = body.handoff_id === "del_echo_fail"
           ? "Use evidence boundaries and produce final copy only through Echo."
-          : body.handoff_id === "del_x_posts_echo_only" || String(body.handoff_id).includes("_initial")
+          : body.handoff_id === "del_x_posts_echo_only" ||
+              body.handoff_id === "del_echo_completed_unresolved" ||
+              String(body.handoff_id).includes("_initial")
             ? "Write channel-native X posts from the CMO angle."
             : String(body.handoff_id).includes("_again")
               ? "Retry without internal process language."
@@ -1159,6 +1197,7 @@ try {
   let duplicateFingerprintResult;
   let duplicateDelegatedStopResult;
   let worldAppSignalResult;
+  let echoCompletedUnresolvedResult;
 
   try {
     process.env.CMO_HERMES_EXECUTION_ENABLED = "true";
@@ -1377,8 +1416,33 @@ try {
     assert.equal(duplicateDelegatedStopResult.echoCalls, 0);
     assert.equal(duplicateDelegatedStopResult.delegationSummary.length, 1);
     assert.equal(duplicateDelegatedStopResult.response.answer?.decision, "WAIT");
-    assert.match(duplicateDelegatedStopResult.response.answer?.body ?? "", /Specialist execution did not complete; retry required\./);
+    assert.match(duplicateDelegatedStopResult.response.answer?.body ?? "", /Specialist completed; final CMO synthesis unresolved\./);
+    assert.doesNotMatch(duplicateDelegatedStopResult.response.answer?.body ?? "", /Specialist execution did not complete/);
     assert.doesNotMatch(duplicateDelegatedStopResult.response.answer?.body ?? "", /caller should run Surf again/);
+    assert.equal(duplicateDelegatedStopResult.response.structured_output?.completed_specialist_fallback, true);
+
+    echoCompletedUnresolvedResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_echo_completed_unresolved",
+      session_id: "session_m1_echo_completed_unresolved",
+      turn_id: "turn_m1_echo_completed_unresolved_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Write 3 safe X posts, then simulate unresolved CMO final synthesis.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling Echo completed unresolved fixture");
+    assert.equal(echoCompletedUnresolvedResult.surfCalls, 0);
+    assert.equal(echoCompletedUnresolvedResult.echoCalls, 1);
+    assert.equal(echoCompletedUnresolvedResult.delegationSummary.length, 1);
+    assert.equal(echoCompletedUnresolvedResult.delegationSummary[0].mode, "echo.default");
+    assert.equal(echoCompletedUnresolvedResult.delegationSummary[0].status, "completed");
+    assert.match(echoCompletedUnresolvedResult.response.answer?.body ?? "", /Specialist completed; final CMO synthesis unresolved\./);
+    assert.match(echoCompletedUnresolvedResult.response.answer?.body ?? "", /Outputs:/);
+    assert.doesNotMatch(echoCompletedUnresolvedResult.response.answer?.body ?? "", /Specialist execution did not complete/);
+    assert.doesNotMatch(echoCompletedUnresolvedResult.response.answer?.body ?? "", /caller should run Echo again/);
+    assert.equal(echoCompletedUnresolvedResult.response.structured_output?.completed_specialist_fallback, true);
 
     worldAppSignalResult = await runHermesCmoRuntime({
       ...sampleRequest,
@@ -1484,9 +1548,9 @@ try {
     assert.match(echoRetryLimitResult.response.answer?.body ?? "", /Echo output unusable; retry required\./);
     assert.doesNotMatch(echoRetryLimitResult.response.answer?.body ?? "", /Post 1:/);
     assert.equal(echoRetryLimitResult.response.structured_output?.echo_retry_failed, true);
-    assert.equal(server.calls.cmo, 32);
+    assert.equal(server.calls.cmo, 36);
     assert.equal(server.calls.surfUnified, 11);
-    assert.equal(server.calls.echo, 10);
+    assert.equal(server.calls.echo, 11);
     assert.equal(server.calls.legacySurfX, 0);
     assert.equal(server.calls.legacySurfLast30Days, 0);
     assert.equal(server.calls.forbidden, 0);
@@ -1510,12 +1574,13 @@ try {
     assert.equal(server.calls.echo, echoCallsBeforeMaxRounds + 2);
     assert.equal(maxRoundsResult.delegationSummary.length, 3);
     assert.equal(maxRoundsResult.response.answer?.decision, "WAIT");
-    assert.match(maxRoundsResult.response.answer?.body ?? "", /Specialist execution did not complete; retry required\./);
+    assert.match(maxRoundsResult.response.answer?.body ?? "", /Specialist completed; final CMO synthesis unresolved\./);
+    assert.doesNotMatch(maxRoundsResult.response.answer?.body ?? "", /Specialist execution did not complete/);
     assert.doesNotMatch(maxRoundsResult.response.answer?.body ?? "", /caller should run the next specialist/);
-    assert.equal(maxRoundsResult.response.structured_output?.orchestration_failed, true);
-    assert.equal(server.calls.cmo, 36);
+    assert.equal(maxRoundsResult.response.structured_output?.completed_specialist_fallback, true);
+    assert.equal(server.calls.cmo, 40);
     assert.equal(server.calls.surfUnified, 12);
-    assert.equal(server.calls.echo, 12);
+    assert.equal(server.calls.echo, 13);
     assert.equal(server.calls.legacySurfX, 0);
     assert.equal(server.calls.legacySurfLast30Days, 0);
     assert.equal(server.calls.forbidden, 0);
@@ -1548,14 +1613,18 @@ try {
           surfCalls: duplicateFingerprintResult?.surfCalls,
           delegationSummaryLength: duplicateFingerprintResult?.delegationSummary.length,
         },
-        duplicateDelegatedStopGuarded: duplicateDelegatedStopResult?.response.structured_output?.orchestration_failed === true,
+        duplicateDelegatedStopGuarded: duplicateDelegatedStopResult?.response.structured_output?.completed_specialist_fallback === true,
+        completedSpecialistFallback: {
+          surf: duplicateDelegatedStopResult?.response.structured_output?.completed_specialist_fallback === true,
+          echo: echoCompletedUnresolvedResult?.response.structured_output?.completed_specialist_fallback === true,
+        },
         worldAppSignal: {
           surfCalls: worldAppSignalResult?.surfCalls,
           echoCalls: worldAppSignalResult?.echoCalls,
           delegationSummaryLength: worldAppSignalResult?.delegationSummary.length,
         },
         surfThenEcho: surfThenEchoResult?.surfCalls === 1 && surfThenEchoResult?.echoCalls === 1,
-        maxRoundsGuarded: maxRoundsResult?.response.structured_output?.orchestration_failed === true,
+        maxRoundsGuarded: maxRoundsResult?.response.structured_output?.completed_specialist_fallback === true,
         legacySurfXCalls: server.calls.legacySurfX,
         legacySurfLast30DaysCalls: server.calls.legacySurfLast30Days,
         forbiddenCounters: result.forbidden_counters,
