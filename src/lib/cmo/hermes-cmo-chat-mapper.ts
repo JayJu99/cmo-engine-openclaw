@@ -115,6 +115,31 @@ function recentSessionSummary(history: CMOChatMessage[]): string | null {
   return recent ? compactText(recent, 1600) : null;
 }
 
+function recentChatContext(history: CMOChatMessage[]): Record<string, unknown>[] {
+  return history
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .slice(-6)
+    .map((message, index) => ({
+      id: `recent_chat_${index + 1}_${message.id}`,
+      kind: "recent_chat_message",
+      title: message.role === "assistant" ? "Prior CMO/Echo answer" : "Prior user message",
+      source: {
+        sourceId: "cmo-chat-history",
+        type: "session-reference",
+        label: message.role,
+      },
+      role: message.role,
+      messageId: message.id,
+      createdAt: message.createdAt,
+      exists: true,
+      content: message.content,
+      full_content: message.content,
+      truncated: false,
+      inclusionReason: "Recent chat turn for follow-up intent resolution.",
+      contextQuality: "confirmed",
+    }));
+}
+
 function userId(input: HermesCmoChatRequestInput): string {
   return (
     input.userIdentity?.userId?.trim() ||
@@ -161,7 +186,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     },
     context_pack: {
       current_priority: currentPriority,
-      selected_context: input.contextPackage.selectedContext.map(noteSnapshot),
+      selected_context: [...input.contextPackage.selectedContext.map(noteSnapshot), ...recentChatContext(input.history)],
       recent_session_summary: recentSessionSummary(input.history),
       indexed_context_supplement: indexedContextSupplement,
       artifacts_in: [],

@@ -71,6 +71,11 @@ interface NormalizedDelegation {
   platform?: string;
   contentCount?: number;
   audience?: string;
+  input?: unknown;
+  inputMaterial?: unknown;
+  sourceMaterial?: unknown;
+  context?: unknown;
+  claimBoundaries: string[];
   retryOf?: string;
   retryReason?: string;
   objective: string;
@@ -110,6 +115,16 @@ function firstText(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) {
       return value.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function firstDefined(...values: unknown[]): unknown {
+  for (const value of values) {
+    if (value !== undefined && value !== null) {
+      return value;
     }
   }
 
@@ -188,6 +203,14 @@ function safeSurfMode(mode: HermesCmoExecutableMode, delegation: Omit<Normalized
 
 function delegationInput(delegation: Record<string, unknown>): Record<string, unknown> {
   return isRecord(delegation.input) ? delegation.input : {};
+}
+
+function rawOutputContractSourceMaterial(outputContract: unknown): unknown {
+  if (!isRecord(outputContract)) {
+    return undefined;
+  }
+
+  return firstDefined(outputContract.translation_source_material, outputContract.translationSourceMaterial, outputContract.source_material, outputContract.sourceMaterial);
 }
 
 function stableJson(value: unknown): string {
@@ -270,9 +293,29 @@ function normalizeDelegation(delegation: Record<string, unknown>, index: number)
   const retryOf = firstText(delegation.retry_of, delegation.retryOf, task.retry_of, task.retryOf, input.retry_of, input.retryOf);
   const retryReason = firstText(delegation.retry_reason, delegation.retryReason, task.retry_reason, task.retryReason, input.retry_reason, input.retryReason);
   const objective = text(delegation.objective ?? task.objective ?? input.objective ?? input.brief ?? query ?? searchQuery ?? topic, `Execute ${agent} delegation ${index + 1}`);
-  const brief = text(input.brief, objective);
-  const constraints = [...textList(delegation.constraints), ...textList(input.constraints)];
+  const briefRecord = isRecord(input.brief) ? input.brief : {};
+  const brief = firstText(input.brief, briefRecord.angle) ?? objective;
+  const constraints = [...textList(delegation.constraints), ...textList(task.constraints), ...textList(input.constraints)];
   const outputContract = delegation.outputContract ?? delegation.output_contract ?? task.outputContract ?? task.output_contract ?? input.outputContract ?? input.output_contract;
+  const inputMaterial = firstDefined(delegation.input_material, delegation.inputMaterial, task.input_material, task.inputMaterial, input.input_material, input.inputMaterial);
+  const sourceMaterial = firstDefined(
+    delegation.source_material,
+    delegation.sourceMaterial,
+    task.source_material,
+    task.sourceMaterial,
+    input.source_material,
+    input.sourceMaterial,
+    rawOutputContractSourceMaterial(outputContract),
+  );
+  const context = firstDefined(delegation.context, task.context, input.context);
+  const claimBoundaries = [
+    ...textList(delegation.claim_boundaries),
+    ...textList(delegation.claimBoundaries),
+    ...textList(task.claim_boundaries),
+    ...textList(task.claimBoundaries),
+    ...textList(input.claim_boundaries),
+    ...textList(input.claimBoundaries),
+  ];
   const normalizedWithoutMode: Omit<NormalizedDelegation, "mode"> = {
     raw: delegation,
     delegationId: text(delegation.delegation_id ?? delegation.delegationId ?? delegation.handoff_id ?? delegation.handoffId ?? delegation.id, `del_m1_${index + 1}`),
@@ -288,6 +331,11 @@ function normalizeDelegation(delegation: Record<string, unknown>, index: number)
     platform,
     contentCount,
     audience,
+    input: delegation.input,
+    inputMaterial,
+    sourceMaterial,
+    context,
+    claimBoundaries,
     retryOf,
     retryReason,
     objective,
@@ -315,10 +363,15 @@ function baseConstraints(delegation: NormalizedDelegation): string[] {
   ];
 }
 
+function inputMaterialList(delegation: NormalizedDelegation): unknown {
+  return delegation.inputMaterial ?? [delegation.brief].filter(Boolean);
+}
+
 function echoBrief(input: ExecutorInput, delegation: NormalizedDelegation, previousResults: HermesCmoDelegationExecution[]): HermesEchoBrief {
   const prior = previousResults.length
     ? `Prior delegation results for claim boundaries:\n${JSON.stringify(previousResults, null, 2)}`
     : "";
+  const claimBoundaries = [...delegation.claimBoundaries, delegation.brief, prior].filter(Boolean);
 
   return {
     handoff_id: delegation.delegationId,
@@ -331,16 +384,25 @@ function echoBrief(input: ExecutorInput, delegation: NormalizedDelegation, previ
     platform: delegation.platform ?? (delegation.surface === "x" || /\b(x|twitter)\b/i.test(`${delegation.objective}\n${delegation.brief}\n${input.userMessage}`) ? "x" : undefined),
     content_count: delegation.contentCount,
     audience: delegation.audience,
+    input: delegation.input,
+    input_material: delegation.inputMaterial,
+    source_material: delegation.sourceMaterial,
+    context: delegation.context,
     brief: {
       angle: delegation.brief,
     },
-    claim_boundaries: [delegation.brief, prior].filter(Boolean),
+    claim_boundaries: claimBoundaries,
     output_contract: delegation.outputContract ?? "echo.response.v1",
     source_context: {
       raw_request: input.userMessage,
       origin: "cmo_engine_m1_hermes_cmo_orchestration",
-      claim_constraints: [delegation.brief, prior].filter(Boolean),
+      claim_constraints: claimBoundaries,
+      input_material: delegation.inputMaterial,
+      source_material: delegation.sourceMaterial,
+      delegation_context: delegation.context,
     },
+    delegation: delegation.raw,
+    raw_delegation: delegation.raw,
     tone: "short, sharp, operator-minded, strategic",
     constraints: [
       ...baseConstraints(delegation),
@@ -364,7 +426,9 @@ function defaultSurfBrief(input: ExecutorInput, delegation: NormalizedDelegation
     task_type: delegation.taskType,
     objective: delegation.objective,
     input: isRecord(delegation.raw.input) ? delegation.raw.input : undefined,
-    input_material: [delegation.brief].filter(Boolean),
+    input_material: inputMaterialList(delegation),
+    source_material: delegation.sourceMaterial,
+    context: delegation.context,
     allow_web_research: true,
     search_scope: delegation.objective,
     max_sources: 5,
@@ -379,7 +443,12 @@ function defaultSurfBrief(input: ExecutorInput, delegation: NormalizedDelegation
     source_context: {
       raw_request: input.userMessage,
       origin: "cmo_engine_m1_hermes_cmo_orchestration",
+      input_material: delegation.inputMaterial,
+      source_material: delegation.sourceMaterial,
+      delegation_context: delegation.context,
     },
+    delegation: delegation.raw,
+    raw_delegation: delegation.raw,
     constraints: [
       ...baseConstraints(delegation),
       "Surf owns evidence and signals only.",

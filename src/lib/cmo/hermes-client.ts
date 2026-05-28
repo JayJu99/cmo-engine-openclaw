@@ -9,6 +9,10 @@ export interface HermesEchoBrief {
   platform?: string;
   content_count?: number;
   audience?: string;
+  input?: unknown;
+  input_material?: unknown;
+  source_material?: unknown;
+  context?: unknown;
   brief?: {
     angle?: string;
     [key: string]: unknown;
@@ -21,7 +25,12 @@ export interface HermesEchoBrief {
     claim_constraints?: string[];
     raw_request: string;
     origin?: string;
+    input_material?: unknown;
+    source_material?: unknown;
+    delegation_context?: unknown;
   };
+  delegation?: Record<string, unknown>;
+  raw_delegation?: Record<string, unknown>;
   tone?: string;
   deliverable?: {
     format: string;
@@ -51,7 +60,9 @@ export interface HermesSurfBrief {
   output_contract?: unknown;
   research_mode?: "x_search" | "last30days";
   input?: Record<string, unknown>;
-  input_material: string[];
+  input_material: unknown;
+  source_material?: unknown;
+  context?: unknown;
   allow_web_research: boolean;
   search_scope?: string;
   timeframe?: string;
@@ -67,7 +78,12 @@ export interface HermesSurfBrief {
   source_context: {
     raw_request: string;
     origin: string;
+    input_material?: unknown;
+    source_material?: unknown;
+    delegation_context?: unknown;
   };
+  delegation?: Record<string, unknown>;
+  raw_delegation?: Record<string, unknown>;
   constraints: string[];
   return_to: "cmo_engine";
   max_turns: number;

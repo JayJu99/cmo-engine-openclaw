@@ -209,7 +209,15 @@ const sampleTurnInput = {
     {
       id: "msg_prev",
       role: "assistant",
-      content: "Previous CMO note.",
+      content: [
+        "Previous Echo output:",
+        "",
+        "POST 1: Build the first activation proof before you scale the campaign.",
+        "",
+        "POST 2: Show the Mini App action that creates value in one step.",
+        "",
+        "POST 3: Keep claims tight until the activation evidence is visible.",
+      ].join("\n"),
       createdAt: "2026-05-28T08:00:00.000Z",
     },
   ],
@@ -378,6 +386,13 @@ try {
     assert.equal(hermesRequest.schema_version, "hermes.cmo.request.v1");
     assert.equal(hermesRequest.workspace.app_id, "holdstation-mini-app");
     assert.equal(hermesRequest.context_pack.read_only_snapshot, true);
+    const priorAssistantContext = hermesRequest.context_pack.selected_context.find((item) => item?.kind === "recent_chat_message" && item?.role === "assistant");
+    assert.ok(priorAssistantContext, "follow-up context must include prior assistant message in selected_context");
+    assert.match(priorAssistantContext.content, /POST 1:/);
+    assert.match(priorAssistantContext.content, /POST 2:/);
+    assert.match(priorAssistantContext.content, /POST 3:/);
+    assert.equal(priorAssistantContext.full_content, priorAssistantContext.content);
+    assert.equal(priorAssistantContext.truncated, false);
     assert.equal(hermesRequest.constraints.allowSubAgentExecution, false);
     assert.equal(hermesRequest.constraints.allowSurfExecution, false);
     assert.equal(hermesRequest.constraints.allowEchoExecution, false);

@@ -27,6 +27,11 @@ const signalTopics = [
   "World Chain trading",
   "Holdstation",
 ];
+const translationSourceMaterial = [
+  "POST 1: Build the first activation proof before you scale the campaign.",
+  "POST 2: Show the Mini App action that creates value in one step.",
+  "POST 3: Keep claims tight until the activation evidence is visible.",
+];
 
 const sampleRequest = {
   schema_version: "hermes.cmo.request.v1",
@@ -264,6 +269,7 @@ const startServer = async () => {
           const duplicateDelegatedStopFixture = body.request_id === "req_m1_duplicate_delegated_stop";
           const worldAppSignalFixture = body.request_id === "req_m1_world_app_signal";
           const echoCompletedUnresolvedFixture = body.request_id === "req_m1_echo_completed_unresolved";
+          const translationFollowupFixture = body.request_id === "req_m1_translation_followup";
           const echoRetryFixture =
             body.request_id === "req_m1_echo_retry_good" ||
             body.request_id === "req_m1_echo_retry_fail" ||
@@ -369,6 +375,42 @@ const startServer = async () => {
                 input: {
                   brief: "Write channel-native X posts from the CMO angle.",
                   constraints: ["Do not research.", "Do not decide strategy."],
+                },
+              },
+            ];
+          } else if (translationFollowupFixture) {
+            const priorAssistantContext = body.context_pack.selected_context.find((item) => item?.kind === "recent_chat_message" && item?.role === "assistant");
+            assert.ok(priorAssistantContext, "translation follow-up must include prior assistant answer in selected_context");
+            assert.match(priorAssistantContext.content, /POST 1:/);
+            assert.match(priorAssistantContext.content, /POST 2:/);
+            assert.match(priorAssistantContext.content, /POST 3:/);
+
+            delegations = [
+              {
+                handoff_id: "del_translation_followup_initial",
+                target_agent: "echo",
+                mode: "echo.default",
+                task_type: "translation_followup",
+                objective: "Translate all 3 prior X posts into Vietnamese.",
+                platform: "x",
+                content_count: 3,
+                audience: "Vietnamese Holdstation Mini App users",
+                claim_boundaries: ["Translate only; preserve claim boundaries."],
+                input: {
+                  brief: "Translate all three source posts to Vietnamese.",
+                  input_material: translationSourceMaterial,
+                  source_material: translationSourceMaterial,
+                  context: {
+                    previous_answer: translationSourceMaterial.join("\n\n"),
+                  },
+                },
+                input_material: translationSourceMaterial,
+                source_material: translationSourceMaterial,
+                output_contract: {
+                  schema_version: "echo.response.v1",
+                  expected_count: 3,
+                  translation_source_material: translationSourceMaterial,
+                  source_material: translationSourceMaterial,
                 },
               },
             ];
@@ -484,7 +526,8 @@ const startServer = async () => {
         const echoRetryRequest =
           body.request_id === "req_m1_echo_retry_good" ||
           body.request_id === "req_m1_echo_retry_fail" ||
-          body.request_id === "req_m1_echo_retry_limit";
+          body.request_id === "req_m1_echo_retry_limit" ||
+          body.request_id === "req_m1_translation_followup";
         const failedExecutionSynthesis =
           body.request_id === "req_m1_echo_fail" ||
           body.request_id === "req_m1_surf_fail" ||
@@ -647,6 +690,62 @@ const startServer = async () => {
         if (echoRetryRequest && cmoCallCount === 2) {
           assert.equal(body.constraints.delegations_mode, "echo_surf_bounded");
           assert.equal(body.constraints.allowEchoExecution, true);
+          if (body.request_id === "req_m1_translation_followup") {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                response: {
+                  status: "delegated",
+                  classification: "needs_echo_retry",
+                  retry_of: "echo",
+                  retry_reason: "echo_translation_output_incomplete",
+                  structured_output: {
+                    strategyMode: "REVIEW",
+                    mainBottleneck: "Echo translated only part of the source material.",
+                    decisionLabel: "WAIT",
+                    classification: "needs_echo_retry",
+                    retry_of: "echo",
+                    retry_reason: "echo_translation_output_incomplete",
+                  },
+                  answer: {
+                    format: "markdown",
+                    title: "Incomplete Translation",
+                    summary: "Echo translated only 1 of 3 posts.",
+                    decision: "WAIT",
+                    body: "Echo translated only Post 1. Caller should retry Echo with all source material.",
+                  },
+                  delegations: [
+                    {
+                      handoff_id: "del_translation_followup_retry",
+                      target_agent: "echo",
+                      mode: "echo.default",
+                      task_type: "translation_followup",
+                      objective: "Retry Vietnamese translation for all 3 prior X posts.",
+                      platform: "x",
+                      content_count: 3,
+                      audience: "Vietnamese Holdstation Mini App users",
+                      retry_of: "echo",
+                      retry_reason: "echo_translation_output_incomplete",
+                      claim_boundaries: ["Translate only; preserve claim boundaries."],
+                      input: {
+                        brief: "Translate all three source posts to Vietnamese.",
+                      },
+                      input_material: translationSourceMaterial,
+                      source_material: translationSourceMaterial,
+                      output_contract: {
+                        schema_version: "echo.response.v1",
+                        expected_count: 3,
+                        translation_source_material: translationSourceMaterial,
+                        source_material: translationSourceMaterial,
+                      },
+                    },
+                  ],
+                },
+              }),
+            );
+            return;
+          }
           writeJson(
             response,
             200,
@@ -837,6 +936,31 @@ const startServer = async () => {
           return;
         }
 
+        if (body.request_id === "req_m1_translation_followup" && cmoCallCount === 3) {
+          writeJson(
+            response,
+            200,
+            cmoResponse(body, {
+              response: {
+                answer: {
+                  format: "markdown",
+                  title: "Vietnamese Translation Complete",
+                  summary: "CMO accepted Echo retry translation for all three posts.",
+                  decision: "KEEP",
+                  body: [
+                    "POST 1: Xay bang chung kich hoat dau tien truoc khi scale campaign.",
+                    "",
+                    "POST 2: Cho thay hanh dong Mini App tao gia tri chi trong mot buoc.",
+                    "",
+                    "POST 3: Giu claim gon va chac cho den khi evidence kich hoat ro rang.",
+                  ].join("\n"),
+                },
+              },
+            }),
+          );
+          return;
+        }
+
         writeJson(
           response,
           200,
@@ -975,12 +1099,14 @@ const startServer = async () => {
         calls.echoRequests.push(body);
         assert.equal(body.source_agent, "cmo");
         assert.equal(body.target_agent, "echo");
-        assert.equal(body.task_type, "cmo_orchestrated_final_copy");
+        assert.ok(["cmo_orchestrated_final_copy", "translation_followup"].includes(body.task_type));
         assert.ok(
           [
             "Create 3 short X posts from the safest angle.",
             "Write 2 safe X test posts from the Surf signal.",
             "Create one more test post.",
+            "Translate all 3 prior X posts into Vietnamese.",
+            "Retry Vietnamese translation for all 3 prior X posts.",
           ].includes(body.objective),
           `unexpected Echo objective ${body.objective}`,
         );
@@ -989,12 +1115,14 @@ const startServer = async () => {
         }
         const expectedEchoAngle = body.handoff_id === "del_echo_fail"
           ? "Use evidence boundaries and produce final copy only through Echo."
+          : String(body.handoff_id).includes("translation_followup")
+            ? "Translate all three source posts to Vietnamese."
           : body.handoff_id === "del_x_posts_echo_only" ||
               body.handoff_id === "del_echo_completed_unresolved" ||
               String(body.handoff_id).includes("_initial")
             ? "Write channel-native X posts from the CMO angle."
-            : String(body.handoff_id).includes("_again")
-              ? "Retry without internal process language."
+          : String(body.handoff_id).includes("_again")
+            ? "Retry without internal process language."
               : body.handoff_id === "del_surf_then_echo_copy"
                 ? "Use only the usable Surf signal and avoid unsupported claims."
                 : String(body.handoff_id).startsWith("del_max_rounds_echo_")
@@ -1005,7 +1133,16 @@ const startServer = async () => {
           expectedEchoAngle,
         );
         assert.ok(Array.isArray(body.claim_boundaries));
-        assert.equal(body.output_contract, "echo.response.v1");
+        if (body.task_type === "translation_followup") {
+          assert.deepEqual(body.input_material, translationSourceMaterial);
+          assert.deepEqual(body.source_material, translationSourceMaterial);
+          assert.deepEqual(body.output_contract?.translation_source_material, translationSourceMaterial);
+          assert.deepEqual(body.output_contract?.source_material, translationSourceMaterial);
+          assert.deepEqual(body.raw_delegation?.source_material, translationSourceMaterial);
+          assert.deepEqual(body.delegation?.source_material, translationSourceMaterial);
+        } else {
+          assert.equal(body.output_contract, "echo.response.v1");
+        }
         assert.ok(body.source_context);
         assert.ok(Array.isArray(body.constraints));
 
@@ -1040,6 +1177,54 @@ const startServer = async () => {
             status: "failed",
             failure_reason: "Echo retry fixture unavailable",
             outputs: [],
+            safety: {
+              published: false,
+              vault_write: false,
+              supabase_mutation: false,
+              session_mutation: false,
+              raw_capture: false,
+              kanban: false,
+              openclaw_call: false,
+            },
+          });
+          return;
+        }
+
+        if (body.handoff_id === "del_translation_followup_initial") {
+          writeJson(response, 200, {
+            schema_version: "echo.response.v1",
+            handoff_id: body.handoff_id,
+            agent: "echo",
+            mode: "echo.default",
+            status: "completed",
+            outputs: [{ label: "post_1", copy: "POST 1: Xay bang chung kich hoat dau tien truoc khi scale campaign." }],
+            notes: ["Fixture intentionally translated only one post."],
+            safety: {
+              published: false,
+              vault_write: false,
+              supabase_mutation: false,
+              session_mutation: false,
+              raw_capture: false,
+              kanban: false,
+              openclaw_call: false,
+            },
+          });
+          return;
+        }
+
+        if (String(body.handoff_id).includes("del_translation_followup_retry")) {
+          writeJson(response, 200, {
+            schema_version: "echo.response.v1",
+            handoff_id: body.handoff_id,
+            agent: "echo",
+            mode: "echo.default",
+            status: "completed",
+            outputs: [
+              { label: "post_1", copy: "POST 1: Xay bang chung kich hoat dau tien truoc khi scale campaign." },
+              { label: "post_2", copy: "POST 2: Cho thay hanh dong Mini App tao gia tri chi trong mot buoc." },
+              { label: "post_3", copy: "POST 3: Giu claim gon va chac cho den khi evidence kich hoat ro rang." },
+            ],
+            notes: ["Translated all three source posts."],
             safety: {
               published: false,
               vault_write: false,
@@ -1198,6 +1383,7 @@ try {
   let duplicateDelegatedStopResult;
   let worldAppSignalResult;
   let echoCompletedUnresolvedResult;
+  let translationFollowupResult;
 
   try {
     process.env.CMO_HERMES_EXECUTION_ENABLED = "true";
@@ -1585,6 +1771,41 @@ try {
     assert.equal(server.calls.legacySurfLast30Days, 0);
     assert.equal(server.calls.forbidden, 0);
     assert.equal(server.calls.unexpected, 0);
+
+    translationFollowupResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_translation_followup",
+      session_id: "session_m1_translation_followup",
+      turn_id: "turn_m1_translation_followup_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "3 bai post do doi thanh tieng Viet giup minh nhe",
+      },
+      context_pack: {
+        ...sampleRequest.context_pack,
+        selected_context: [
+          {
+            kind: "recent_chat_message",
+            role: "assistant",
+            content: translationSourceMaterial.join("\n\n"),
+            full_content: translationSourceMaterial.join("\n\n"),
+            truncated: false,
+          },
+        ],
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling translation follow-up fixture");
+    assert.equal(translationFollowupResult.surfCalls, 0);
+    assert.equal(translationFollowupResult.echoCalls, 2);
+    assert.deepEqual(translationFollowupResult.agentsUsed, ["cmo", "echo"]);
+    assert.equal(translationFollowupResult.delegationSummary.length, 2);
+    assert.equal(translationFollowupResult.delegationSummary[0].status, "completed");
+    assert.equal(translationFollowupResult.delegationSummary[1].status, "completed");
+    assert.match(translationFollowupResult.response.answer?.body ?? "", /POST 1:/);
+    assert.match(translationFollowupResult.response.answer?.body ?? "", /POST 2:/);
+    assert.match(translationFollowupResult.response.answer?.body ?? "", /POST 3:/);
+    assert.doesNotMatch(translationFollowupResult.response.answer?.body ?? "", /Caller should retry Echo/);
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
       restoreEnvValue(key, value);
@@ -1617,6 +1838,11 @@ try {
         completedSpecialistFallback: {
           surf: duplicateDelegatedStopResult?.response.structured_output?.completed_specialist_fallback === true,
           echo: echoCompletedUnresolvedResult?.response.structured_output?.completed_specialist_fallback === true,
+        },
+        translationFollowup: {
+          echoCalls: translationFollowupResult?.echoCalls,
+          finalPostCount:
+            (translationFollowupResult?.response.answer?.body.match(/POST [123]:/g) ?? []).length,
         },
         worldAppSignal: {
           surfCalls: worldAppSignalResult?.surfCalls,
