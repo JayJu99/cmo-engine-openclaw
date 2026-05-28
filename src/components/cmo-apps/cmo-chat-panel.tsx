@@ -101,7 +101,7 @@ function runtimeStatusVariant(status: CMORuntimeStatus | null): "green" | "orang
 
 function runtimeExplanation(status: CMORuntimeStatus | null, reason: CmoRuntimeErrorReason | null): string | null {
   if (status === "live") {
-    return "CMO response received from live OpenClaw app-turn.";
+    return "CMO response received from the live CMO runtime.";
   }
 
   if (status === "configured_but_unreachable") {
@@ -436,6 +436,8 @@ export function CMOChatPanel({
       setSendStatus(
         response.runtimeProvider === "dashboard" && response.runtimeAgent === "decision-review"
           ? "Decision review updated from chat."
+          : response.runtimeProvider === "hermes" && response.runtimeAgent === "cmo"
+            ? "CMO response received from live Hermes CMO."
           : response.isRuntimeFallback || response.runtimeStatus === "live_failed_then_fallback"
           ? response.runtimeErrorReason === "timeout"
             ? "Live app-turn timed out; fallback answer generated from workspace context."

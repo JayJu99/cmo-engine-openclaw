@@ -599,6 +599,37 @@ export type CmoRuntimeErrorReason =
   | "invalid_response"
   | "empty_answer"
   | "execution_error";
+export type HermesCmoChatStatus = "live" | "failed_then_existing_fallback" | "guardrail_violation_then_existing_fallback";
+export type HermesCmoDelegationsMode = "proposals_only";
+
+export interface HermesCmoSafetyCounters {
+  surfCalls: number;
+  echoCalls: number;
+  vaultAgentCalls: number;
+  vaultWrites: number;
+  supabaseWrites: number;
+  sessionJsonWrites: number;
+  rawCaptureWrites: number;
+  openclawCalls: number;
+}
+
+export interface HermesCmoChatMetadata {
+  runtimeMode: "hermes_cmo";
+  runtimeStatus: "live";
+  calledHermesCmo: true;
+  delegationsMode: HermesCmoDelegationsMode;
+  counters: HermesCmoSafetyCounters;
+  requestId: string;
+  responseStatus: string;
+  activityEventsCount: number;
+  activityEvents?: Array<{
+    eventId: string;
+    type: string;
+    status: string;
+    message: string;
+    userVisible: boolean;
+  }>;
+}
 
 export interface ContextItem {
   id: string;
@@ -752,6 +783,12 @@ export interface CMOChatMessage {
   runtimeProvider?: string;
   runtimeAgent?: string;
   runtimeErrorReason?: CmoRuntimeErrorReason;
+  calledHermesCmo?: boolean;
+  hermesCmoStatus?: HermesCmoChatStatus;
+  hermesCmoErrorReason?: string;
+  hermesCmoCounters?: HermesCmoSafetyCounters;
+  hermesCmoMetadata?: HermesCmoChatMetadata;
+  delegationsMode?: HermesCmoDelegationsMode;
   contextUsedCount?: number;
   graphHintCount?: number;
   indexedContextStatus?: CmoIndexedContextStatus;
@@ -798,6 +835,12 @@ export interface CMOChatSession {
   runtimeErrorReason?: CmoRuntimeErrorReason;
   runtimeProvider?: string;
   runtimeAgent?: string;
+  calledHermesCmo?: boolean;
+  hermesCmoStatus?: HermesCmoChatStatus;
+  hermesCmoErrorReason?: string;
+  hermesCmoCounters?: HermesCmoSafetyCounters;
+  hermesCmoMetadata?: HermesCmoChatMetadata;
+  delegationsMode?: HermesCmoDelegationsMode;
   missingContext?: VaultNoteRef[];
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
@@ -869,6 +912,12 @@ export interface CMOAppChatResponse {
   runtimeErrorReason?: CmoRuntimeErrorReason;
   runtimeProvider?: string;
   runtimeAgent?: string;
+  calledHermesCmo?: boolean;
+  hermesCmoStatus?: HermesCmoChatStatus;
+  hermesCmoErrorReason?: string;
+  hermesCmoCounters?: HermesCmoSafetyCounters;
+  hermesCmoMetadata?: HermesCmoChatMetadata;
+  delegationsMode?: HermesCmoDelegationsMode;
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
   graphHints?: ContextGraphHint[];

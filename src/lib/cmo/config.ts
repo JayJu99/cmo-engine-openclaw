@@ -49,3 +49,33 @@ export function getCmoFallbackFastAfterMs(): number {
 export function getCmoAppTurnRequestTimeoutMs(): number {
   return positiveIntEnv("CMO_APP_TURN_REQUEST_TIMEOUT_MS", getCmoLiveAppTurnTimeoutMs());
 }
+
+function booleanEnv(name: string, fallback = false): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+
+  if (value === "1" || value === "true" || value === "yes") {
+    return true;
+  }
+
+  if (value === "0" || value === "false" || value === "no") {
+    return false;
+  }
+
+  return fallback;
+}
+
+function commaSeparatedEnv(name: string): string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .filter((value, index, values) => values.indexOf(value) === index);
+}
+
+export function isCmoHermesCmoChatEnabled(): boolean {
+  return booleanEnv("CMO_HERMES_CMO_CHAT_ENABLED", false);
+}
+
+export function getCmoHermesCmoCanaryApps(): string[] {
+  return commaSeparatedEnv("CMO_HERMES_CMO_CANARY_APPS");
+}

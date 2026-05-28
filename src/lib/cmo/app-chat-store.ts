@@ -18,6 +18,10 @@ import type {
   CmoDecisionLayer,
   CmoDecisionReviewStatus,
   CmoIndexedContextStatus,
+  HermesCmoChatMetadata,
+  HermesCmoChatStatus,
+  HermesCmoDelegationsMode,
+  HermesCmoSafetyCounters,
   CmoMemoryCandidateReviewStatus,
   CmoSuggestedActionReviewStatus,
   CmoTaskCandidateReviewStatus,
@@ -35,6 +39,14 @@ import { CmoAdapterError } from "@/lib/cmo/errors";
 import { routeIntentForMessage } from "@/lib/cmo/app-routing-intent";
 import { executeMixedCmoEcho, isMixedCmoEchoRequest, mixedEchoNeedsClarification, buildMixedCmoEchoRuntimeMessage, maybeHandleEchoBridge } from "@/lib/cmo/echo-bridge";
 import { buildCmoEvidenceRuntimeMessage, executeCmoSurfEvidence } from "@/lib/cmo/cmo-surf-orchestrator";
+import {
+  HERMES_CMO_PROPOSALS_ONLY,
+  mapCmoChatToHermesCmoRequest,
+  mapHermesCmoResponseToChatResult,
+  validateHermesCmoChatCounters,
+} from "@/lib/cmo/hermes-cmo-chat-mapper";
+import { shouldUseHermesCmoChat } from "@/lib/cmo/hermes-cmo-chat-router";
+import { runHermesCmoRuntime } from "@/lib/cmo/hermes-cmo-runtime";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
 import { indexChatMessages, indexChatSession } from "@/lib/cmo/supabase-indexing";
@@ -574,6 +586,74 @@ function normalizeIndexedContextStatus(value: unknown): CmoIndexedContextStatus 
   return value === "off" || value === "skipped" || value === "used" ? value : undefined;
 }
 
+function normalizeHermesCmoChatStatus(value: unknown): HermesCmoChatStatus | undefined {
+  return value === "live" || value === "failed_then_existing_fallback" || value === "guardrail_violation_then_existing_fallback"
+    ? value
+    : undefined;
+}
+
+function normalizeHermesCmoDelegationsMode(value: unknown): HermesCmoDelegationsMode | undefined {
+  return value === HERMES_CMO_PROPOSALS_ONLY ? value : undefined;
+}
+
+function normalizeHermesCmoCounters(value: unknown): HermesCmoSafetyCounters | undefined {
+  const validation = validateHermesCmoChatCounters({ safety_counters: value });
+
+  return validation.ok ? validation.counters : undefined;
+}
+
+function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | undefined {
+  if (!isRecord(value) || value.runtimeMode !== "hermes_cmo" || value.runtimeStatus !== "live" || value.calledHermesCmo !== true) {
+    return undefined;
+  }
+
+  const counters = normalizeHermesCmoCounters(value.counters);
+  const requestId = stringValue(value.requestId);
+  const responseStatus = stringValue(value.responseStatus);
+  const activityEventsCount = normalizeOptionalNonNegativeNumber(value.activityEventsCount);
+
+  if (!counters || !requestId || !responseStatus || typeof activityEventsCount !== "number") {
+    return undefined;
+  }
+
+  const activityEvents = Array.isArray(value.activityEvents)
+    ? value.activityEvents
+        .map((event) => {
+          if (!isRecord(event)) {
+            return null;
+          }
+
+          const eventId = stringValue(event.eventId);
+          const type = stringValue(event.type);
+          const status = stringValue(event.status);
+          const message = stringValue(event.message);
+
+          return eventId && type && status && message
+            ? {
+                eventId,
+                type,
+                status,
+                message,
+                userVisible: event.userVisible === true,
+              }
+            : null;
+        })
+        .filter((event): event is NonNullable<HermesCmoChatMetadata["activityEvents"]>[number] => Boolean(event))
+    : undefined;
+
+  return {
+    runtimeMode: "hermes_cmo",
+    runtimeStatus: "live",
+    calledHermesCmo: true,
+    delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+    counters,
+    requestId,
+    responseStatus,
+    activityEventsCount,
+    ...(activityEvents ? { activityEvents } : {}),
+  };
+}
+
 function messageUserMetadata(identity: CmoServerUserIdentity): Pick<CMOChatMessage, "authMode" | "userId" | "userEmail"> {
   return {
     authMode: identity.authMode,
@@ -643,6 +723,12 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             runtimeProvider: normalizeRuntimeProvider(message.runtimeProvider),
             runtimeAgent: normalizeRuntimeProvider(message.runtimeAgent),
             runtimeErrorReason: normalizeRuntimeErrorReason(message.runtimeErrorReason),
+            calledHermesCmo: message.calledHermesCmo === true ? true : undefined,
+            hermesCmoStatus: normalizeHermesCmoChatStatus(message.hermesCmoStatus),
+            hermesCmoErrorReason: normalizeOptionalString(message.hermesCmoErrorReason),
+            hermesCmoCounters: normalizeHermesCmoCounters(message.hermesCmoCounters),
+            hermesCmoMetadata: normalizeHermesCmoMetadata(message.hermesCmoMetadata),
+            delegationsMode: normalizeHermesCmoDelegationsMode(message.delegationsMode),
             contextUsedCount: typeof message.contextUsedCount === "number" && Number.isFinite(message.contextUsedCount) ? Math.max(0, Math.floor(message.contextUsedCount)) : undefined,
             graphHintCount: typeof message.graphHintCount === "number" && Number.isFinite(message.graphHintCount) ? Math.max(0, Math.floor(message.graphHintCount)) : undefined,
             indexedContextStatus: normalizeIndexedContextStatus(message.indexedContextStatus),
@@ -698,6 +784,12 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     runtimeErrorReason: normalizeRuntimeErrorReason(value.runtimeErrorReason),
     runtimeProvider: normalizeRuntimeProvider(value.runtimeProvider),
     runtimeAgent: normalizeRuntimeProvider(value.runtimeAgent),
+    calledHermesCmo: value.calledHermesCmo === true ? true : undefined,
+    hermesCmoStatus: normalizeHermesCmoChatStatus(value.hermesCmoStatus),
+    hermesCmoErrorReason: normalizeOptionalString(value.hermesCmoErrorReason),
+    hermesCmoCounters: normalizeHermesCmoCounters(value.hermesCmoCounters),
+    hermesCmoMetadata: normalizeHermesCmoMetadata(value.hermesCmoMetadata),
+    delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode),
     missingContext,
     contextDiagnostics,
     contextQualitySummary: normalizeContextQualitySummary(value.contextQualitySummary ?? contextDiagnostics, [...contextUsed, ...missingContext]),
@@ -815,15 +907,6 @@ export async function createAppChatSession(
   const graphHintCount = contextPackage.graphHintCount ?? graphHints.length;
   const graphStatus = contextPackage.graphStatus ?? "empty";
   const sessionId = continuedSession?.id ?? `session_${now.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
-  const routeIntent = routeIntentForMessage(request.message);
-  const allowDirectSurfBridge = routeIntent === "surf_x" || routeIntent === "surf_trend" || routeIntent === "surf_research";
-  const allowDirectEchoBridge = routeIntent === "echo_execution";
-  const surfBridge = allowDirectSurfBridge ? await maybeHandleSurfBridge(request) : { handled: false };
-  const echoBridge = !surfBridge.handled && allowDirectEchoBridge ? await maybeHandleEchoBridge(request) : { handled: false };
-  const mixedCmoEchoRequest = !surfBridge.handled && !echoBridge.handled && routeIntent !== "cmo_review" && isMixedCmoEchoRequest(request.message);
-  const mixedCmoEchoClarification = mixedCmoEchoRequest && mixedEchoNeedsClarification(request.message);
-  const cmoSurfEvidence = !surfBridge.handled && !echoBridge.handled && !mixedCmoEchoRequest && routeIntent !== "cmo_review" ? await executeCmoSurfEvidence(request) : undefined;
-  const cmoSurfClarification = cmoSurfEvidence?.plan.action === "need_clarification";
   let answer = "";
   let status: CMOChatSession["status"] = "completed";
   let assumptions: string[] = [];
@@ -842,6 +925,93 @@ export async function createAppChatSession(
   let liveAttemptDurationMs: number | undefined;
   let fallbackDurationMs: number | undefined;
   let timeoutMs: number | undefined;
+  let calledHermesCmo = false;
+  let hermesCmoStatus: HermesCmoChatStatus | undefined;
+  let hermesCmoErrorReason: string | undefined;
+  let hermesCmoCounters: HermesCmoSafetyCounters | undefined;
+  let hermesCmoMetadata: HermesCmoChatMetadata | undefined;
+  let delegationsMode: HermesCmoDelegationsMode | undefined;
+  let usedHermesCmoChat = false;
+
+  if (!request.forceFallback && shouldUseHermesCmoChat(request.appId)) {
+    const hermesStartedAt = new Date().toISOString();
+    const hermesStartedMs = Date.now();
+
+    try {
+      const hermesRequest = mapCmoChatToHermesCmoRequest({
+        contextPack: contextPackage.contextPack,
+        contextPackage,
+        message: request.message,
+        history: continuedSession?.messages ?? [],
+        request,
+        contextUsed,
+        missingContext,
+        sessionId,
+        userMessageId: messageId,
+        createdAt: now,
+        userIdentity,
+      });
+      const hermesResult = await runHermesCmoRuntime(hermesRequest);
+      const counterValidation = validateHermesCmoChatCounters(hermesResult);
+
+      if (!counterValidation.ok) {
+        throw new Error(counterValidation.errorReason ?? "invalid_counters_schema");
+      }
+
+      const mappedHermesResult = mapHermesCmoResponseToChatResult(hermesResult);
+
+      answer = mappedHermesResult.answer;
+      status = "completed";
+      assumptions = mappedHermesResult.assumptions;
+      suggestedActions = mappedHermesResult.suggestedActions;
+      isDevelopmentFallback = mappedHermesResult.isDevelopmentFallback;
+      isRuntimeFallback = mappedHermesResult.isRuntimeFallback;
+      runtimeStatus = mappedHermesResult.runtimeStatus;
+      runtimeMode = mappedHermesResult.runtimeMode;
+      attemptedRuntimeMode = "live";
+      runtimeLabel = mappedHermesResult.runtimeLabel;
+      runtimeError = "";
+      runtimeErrorReason = undefined;
+      runtimeProvider = mappedHermesResult.runtimeProvider;
+      runtimeAgent = mappedHermesResult.runtimeAgent;
+      liveAttemptStartedAt = hermesStartedAt;
+      liveAttemptDurationMs = Date.now() - hermesStartedMs;
+      fallbackDurationMs = undefined;
+      timeoutMs = undefined;
+      calledHermesCmo = true;
+      hermesCmoStatus = mappedHermesResult.hermesCmoStatus;
+      hermesCmoCounters = mappedHermesResult.hermesCmoCounters;
+      hermesCmoMetadata = mappedHermesResult.hermesCmoMetadata;
+      delegationsMode = mappedHermesResult.delegationsMode;
+      usedHermesCmoChat = true;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Hermes CMO chat runtime failed.";
+
+      console.warn("[cmo-app-chat] Hermes CMO chat failed; using existing CMO chat path.", {
+        appId: request.appId,
+        sessionId,
+        reason,
+      });
+
+      calledHermesCmo = true;
+      hermesCmoStatus = reason.startsWith("forbidden_counter_non_zero:") || reason.startsWith("invalid_counters_schema:")
+        ? "guardrail_violation_then_existing_fallback"
+        : "failed_then_existing_fallback";
+      hermesCmoErrorReason = reason;
+      delegationsMode = HERMES_CMO_PROPOSALS_ONLY;
+    }
+  }
+
+  if (!usedHermesCmoChat) {
+  const routeIntent = routeIntentForMessage(request.message);
+  const allowDirectSurfBridge = routeIntent === "surf_x" || routeIntent === "surf_trend" || routeIntent === "surf_research";
+  const allowDirectEchoBridge = routeIntent === "echo_execution";
+  const surfBridge = allowDirectSurfBridge ? await maybeHandleSurfBridge(request) : { handled: false };
+  const echoBridge = !surfBridge.handled && allowDirectEchoBridge ? await maybeHandleEchoBridge(request) : { handled: false };
+  const mixedCmoEchoRequest = !surfBridge.handled && !echoBridge.handled && routeIntent !== "cmo_review" && isMixedCmoEchoRequest(request.message);
+  const mixedCmoEchoClarification = mixedCmoEchoRequest && mixedEchoNeedsClarification(request.message);
+  const cmoSurfEvidence = !surfBridge.handled && !echoBridge.handled && !mixedCmoEchoRequest && routeIntent !== "cmo_review" ? await executeCmoSurfEvidence(request) : undefined;
+  const cmoSurfClarification = cmoSurfEvidence?.plan.action === "need_clarification";
 
   try {
     if ((surfBridge.handled && surfBridge.response) || (echoBridge.handled && echoBridge.response)) {
@@ -970,6 +1140,7 @@ export async function createAppChatSession(
       "No live runtime was assumed.",
     ].join("\n");
   }
+  }
 
   const decisionLayer = buildDecisionLayer({
     workspaceId: request.workspaceId,
@@ -1026,6 +1197,12 @@ export async function createAppChatSession(
     ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
     ...(runtimeProvider ? { runtimeProvider } : {}),
     ...(runtimeAgent ? { runtimeAgent } : {}),
+    ...(calledHermesCmo ? { calledHermesCmo } : {}),
+    ...(hermesCmoStatus ? { hermesCmoStatus } : {}),
+    ...(hermesCmoErrorReason ? { hermesCmoErrorReason } : {}),
+    ...(hermesCmoCounters ? { hermesCmoCounters } : {}),
+    ...(hermesCmoMetadata ? { hermesCmoMetadata } : {}),
+    ...(delegationsMode ? { delegationsMode } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,
@@ -1056,6 +1233,12 @@ export async function createAppChatSession(
         ...(runtimeProvider ? { runtimeProvider } : {}),
         ...(runtimeAgent ? { runtimeAgent } : {}),
         ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
+        ...(calledHermesCmo ? { calledHermesCmo } : {}),
+        ...(hermesCmoStatus ? { hermesCmoStatus } : {}),
+        ...(hermesCmoErrorReason ? { hermesCmoErrorReason } : {}),
+        ...(hermesCmoCounters ? { hermesCmoCounters } : {}),
+        ...(hermesCmoMetadata ? { hermesCmoMetadata } : {}),
+        ...(delegationsMode ? { delegationsMode } : {}),
         contextUsedCount: contextUsed.length,
         graphHintCount,
         indexedContextStatus,
@@ -1126,6 +1309,12 @@ export async function createAppChatSession(
     ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
     ...(runtimeProvider ? { runtimeProvider } : {}),
     ...(runtimeAgent ? { runtimeAgent } : {}),
+    ...(calledHermesCmo ? { calledHermesCmo } : {}),
+    ...(hermesCmoStatus ? { hermesCmoStatus } : {}),
+    ...(hermesCmoErrorReason ? { hermesCmoErrorReason } : {}),
+    ...(hermesCmoCounters ? { hermesCmoCounters } : {}),
+    ...(hermesCmoMetadata ? { hermesCmoMetadata } : {}),
+    ...(delegationsMode ? { delegationsMode } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,
