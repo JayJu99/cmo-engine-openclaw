@@ -229,11 +229,14 @@ interface HermesCmoRuntimeRequestOptions {
   orchestrationEnabled: boolean;
   finalSynthesis?: boolean;
   delegationResults?: HermesCmoDelegationExecution[];
+  allowEchoRetry?: boolean;
+  echoRetriesUsed?: number;
 }
 
 interface HermesCmoResponseValidationOptions {
   allowExecutableDelegations: boolean;
   maxDelegations: number;
+  allowEchoRetryDelegation?: boolean;
 }
 
 interface HermesCmoActivityValidationOptions {
@@ -242,6 +245,7 @@ interface HermesCmoActivityValidationOptions {
 
 const allowedAgents = new Set<HermesAllowedAgent>(["echo", "surf", "vault_agent"]);
 const allowedSurfModes = new Set<HermesSurfMode>(["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
+const MAX_M1_ECHO_RETRIES = 1;
 const responseStatuses = new Set<HermesCmoRuntimeResponse["status"]>([
   "completed",
   "partial",
@@ -524,6 +528,9 @@ const buildHermesCmoLiveRequest = (
   options: HermesCmoRuntimeRequestOptions,
 ): HermesCmoRuntimeRequest => {
   const subAgentExecutionAllowed = options.orchestrationEnabled && options.finalSynthesis !== true;
+  const echoRetryAllowed =
+    options.allowEchoRetry === true && options.finalSynthesis === true && (options.echoRetriesUsed ?? 0) < MAX_M1_ECHO_RETRIES;
+  const echoExecutionAllowed = subAgentExecutionAllowed || echoRetryAllowed;
   const delegationResultsArtifact = options.delegationResults?.length
     ? {
         type: "cmo_engine_delegation_results",
@@ -547,12 +554,12 @@ const buildHermesCmoLiveRequest = (
       no_direct_memory_mutation: true,
       vault_agent_delegation_allowed: false,
       kanban_enabled: false,
-      allowed_agents: subAgentExecutionAllowed ? ["echo", "surf"] : [],
+      allowed_agents: subAgentExecutionAllowed ? ["echo", "surf"] : echoRetryAllowed ? ["echo"] : [],
       allowed_surf_modes: subAgentExecutionAllowed ? ["surf.default", "surf.x", "surf.trend", "surf.pulse"] : [],
-      delegations_mode: subAgentExecutionAllowed ? "echo_surf_bounded" : "proposals_only",
-      allowSubAgentExecution: subAgentExecutionAllowed,
+      delegations_mode: subAgentExecutionAllowed ? "echo_surf_bounded" : echoRetryAllowed ? "echo_retry_bounded" : "proposals_only",
+      allowSubAgentExecution: subAgentExecutionAllowed || echoRetryAllowed,
       allowSurfExecution: subAgentExecutionAllowed,
-      allowEchoExecution: subAgentExecutionAllowed,
+      allowEchoExecution: echoExecutionAllowed,
       allowVaultAgentExecution: false,
       allowVaultWrites: false,
       allowDirectSupabaseMutations: false,
@@ -567,6 +574,14 @@ const buildHermesCmoLiveRequest = (
         executor_role: "mechanical_whitelisted_delegation_executor",
         max_delegations: getCmoHermesCmoMaxDelegations(),
         final_synthesis: options.finalSynthesis === true,
+        echo_retry_policy: {
+          enabled: true,
+          max_retries: MAX_M1_ECHO_RETRIES,
+          retries_used: options.echoRetriesUsed ?? 0,
+          classification: "needs_echo_retry",
+          retry_of: "echo",
+          failure_message: "Echo output unusable; retry required.",
+        },
         forbidden_targets: ["vault_agent", "openclaw", "supabase", "memory", "arbitrary_tools"],
         surf_mode_policy: {
           "surf.default": "Evidence gathering, evidence gaps, source checks, and general research.",
@@ -582,9 +597,9 @@ const buildHermesCmoLiveRequest = (
       h5_live_adapter: {
         live_only: true,
         call_only: "hermes_cmo_agent",
-        sub_agent_execution_allowed: subAgentExecutionAllowed,
-        delegation_policy: subAgentExecutionAllowed ? "echo_surf_only_bounded" : "disabled",
-        allowed_agents: subAgentExecutionAllowed ? ["echo", "surf"] : [],
+        sub_agent_execution_allowed: subAgentExecutionAllowed || echoRetryAllowed,
+        delegation_policy: subAgentExecutionAllowed ? "echo_surf_only_bounded" : echoRetryAllowed ? "echo_retry_bounded" : "disabled",
+        allowed_agents: subAgentExecutionAllowed ? ["echo", "surf"] : echoRetryAllowed ? ["echo"] : [],
         allowed_surf_modes: subAgentExecutionAllowed ? ["surf.default", "surf.x", "surf.trend", "surf.pulse"] : [],
         vault_writes_allowed: false,
         direct_supabase_mutations_allowed: false,
@@ -592,9 +607,9 @@ const buildHermesCmoLiveRequest = (
         platform_persistence_owner: "cmo_engine_app_chat_store",
       },
       execution_boundary: {
-        sub_agent_execution_allowed: subAgentExecutionAllowed,
+        sub_agent_execution_allowed: subAgentExecutionAllowed || echoRetryAllowed,
         surf_execution_allowed: subAgentExecutionAllowed,
-        echo_execution_allowed: subAgentExecutionAllowed,
+        echo_execution_allowed: echoExecutionAllowed,
         vault_agent_execution_allowed: false,
         vault_writes_allowed: false,
         direct_supabase_mutations_allowed: false,
@@ -663,6 +678,12 @@ const isEchoOrSurfDelegation = (delegation: Record<string, unknown>) => {
   return agent === "echo" || agent === "surf";
 };
 
+const isEchoRetryDelegation = (delegation: Record<string, unknown>) => {
+  const normalized = executableDelegations([delegation], 1);
+
+  return normalized.length === 1 && normalized[0]?.targetAgent === "echo" && normalized[0]?.mode === "echo.default";
+};
+
 const validateDelegations = (
   delegations: unknown,
   options: HermesCmoResponseValidationOptions,
@@ -684,6 +705,10 @@ const validateDelegations = (
   }
 
   if (!options.allowExecutableDelegations) {
+    if (options.allowEchoRetryDelegation && delegations.length <= 1 && delegations.every(isEchoRetryDelegation)) {
+      return true;
+    }
+
     return delegations.every(isNonExecutedDelegationProposal);
   }
 
@@ -1069,6 +1094,57 @@ const responseWithDelegationFailureGuardrail = (
   };
 };
 
+const responseField = (response: HermesCmoRuntimeResponse, key: string): unknown => {
+  const structured = isRecord(response.structured_output) ? response.structured_output : {};
+
+  return response[key] ?? structured[key];
+};
+
+const needsEchoRetry = (response: HermesCmoRuntimeResponse): boolean =>
+  responseField(response, "classification") === "needs_echo_retry" &&
+  responseField(response, "retry_of") === "echo" &&
+  executableDelegations(response.delegations, 1).some(
+    (delegation) => delegation.targetAgent === "echo" && delegation.mode === "echo.default",
+  );
+
+const echoRetryReason = (response: HermesCmoRuntimeResponse): string =>
+  typeof responseField(response, "retry_reason") === "string"
+    ? (responseField(response, "retry_reason") as string)
+    : "Echo output unusable; retry required.";
+
+const responseWithEchoRetryFailureGuardrail = (
+  response: HermesCmoRuntimeResponse,
+  reason: string,
+): HermesCmoRuntimeResponse => ({
+  ...response,
+  answer: {
+    format: "markdown",
+    title: "Echo Retry Required",
+    summary: "Echo output unusable; retry required.",
+    decision: "WAIT",
+    body: ["Echo output unusable; retry required.", "", `Reason: ${reason}`].join("\n"),
+  },
+  structured_output: {
+    ...(isRecord(response.structured_output) ? response.structured_output : {}),
+    echo_retry_failed: true,
+    echo_retry_reason: reason,
+    content_execution_status: "echo_retry_required_no_final_copy",
+  },
+  delegations: [],
+});
+
+const mergeDelegationResults = (
+  left: HermesCmoDelegationExecutionResult,
+  right: HermesCmoDelegationExecutionResult,
+): HermesCmoDelegationExecutionResult => ({
+  executions: [...left.executions, ...right.executions],
+  activityEvents: [...left.activityEvents, ...right.activityEvents],
+  surfCalls: left.surfCalls + right.surfCalls,
+  echoCalls: left.echoCalls + right.echoCalls,
+  agentsUsed: Array.from(new Set([...left.agentsUsed, ...right.agentsUsed])),
+  forbiddenCounters: makeForbiddenCounters(),
+});
+
 const agentsUsedFrom = (delegationResult: HermesCmoDelegationExecutionResult): Array<"cmo" | "echo" | "surf"> =>
   Array.from(new Set<"cmo" | "echo" | "surf">(["cmo", ...delegationResult.agentsUsed]));
 
@@ -1137,6 +1213,8 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
   let response = firstResult.response;
   let activityEvents: HermesCmoRuntimeActivityEvent[] = firstResult.activityEvents;
   let delegationResult = makeEmptyDelegationResult();
+  let echoRetriesUsed = 0;
+  let echoRetryFailureReason: string | null = null;
 
   if (orchestrationEnabled && response.delegations.length > 0 && response.status !== "needs_user_input") {
     delegationResult = await executeHermesCmoDelegations({
@@ -1150,36 +1228,86 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
     });
 
     if (delegationResult.executions.length > 0) {
-      const synthesisRequest = buildHermesCmoLiveRequest(outboundRequest, {
-        orchestrationEnabled: false,
-        finalSynthesis: true,
-        delegationResults: delegationResult.executions,
-      });
+      const runSynthesis = async (allowEchoRetry: boolean): Promise<HermesCmoLivePayload> => {
+        const synthesisRequest = buildHermesCmoLiveRequest(outboundRequest, {
+          orchestrationEnabled: false,
+          finalSynthesis: true,
+          allowEchoRetry,
+          echoRetriesUsed,
+          delegationResults: delegationResult.executions,
+        });
 
-      if (!validateHermesCmoRuntimeRequest(synthesisRequest)) {
-        throw new Error("M1 Hermes CMO runtime produced an invalid synthesis hermes.cmo.request.v1 envelope.");
-      }
+        if (!validateHermesCmoRuntimeRequest(synthesisRequest)) {
+          throw new Error("M1 Hermes CMO runtime produced an invalid synthesis hermes.cmo.request.v1 envelope.");
+        }
 
-      const synthesisPayload = await callHermesCmoAgent(synthesisRequest);
-      const synthesisResult = extractLiveResponsePayload(
-        synthesisPayload,
-        synthesisRequest,
-        {
-          allowExecutableDelegations: false,
-          maxDelegations: 0,
-        },
-        {
-          allowExecutableDelegationActivity: false,
-        },
-      );
+        const synthesisPayload = await callHermesCmoAgent(synthesisRequest);
+        return extractLiveResponsePayload(
+          synthesisPayload,
+          synthesisRequest,
+          {
+            allowExecutableDelegations: false,
+            allowEchoRetryDelegation: true,
+            maxDelegations: 0,
+          },
+          {
+            allowExecutableDelegationActivity: false,
+          },
+        );
+      };
+
+      const echoRetryAvailable = delegationResult.executions.some((execution) => execution.targetAgent === "echo");
+      const synthesisResult = await runSynthesis(echoRetryAvailable);
       response = synthesisResult.response;
       activityEvents = [...activityEvents, ...delegationResult.activityEvents, ...synthesisResult.activityEvents];
+
+      if (needsEchoRetry(response)) {
+        const reason = echoRetryReason(response);
+
+        if (echoRetriesUsed < MAX_M1_ECHO_RETRIES) {
+          const echoRetryDelegations = response.delegations.filter((delegation) =>
+            executableDelegations([delegation], 1).some(
+              (normalized) => normalized.targetAgent === "echo" && normalized.mode === "echo.default",
+            ),
+          );
+          const retryResult = await executeHermesCmoDelegations({
+            parentRequestId: outboundRequest.request_id,
+            sessionId: outboundRequest.session_id,
+            turnId: outboundRequest.turn_id,
+            workspaceSlug: outboundRequest.workspace.app_id,
+            userMessage: outboundRequest.intent.user_message,
+            delegations: echoRetryDelegations,
+            maxDelegations: 1,
+          });
+          echoRetriesUsed += 1;
+          delegationResult = mergeDelegationResults(delegationResult, retryResult);
+          activityEvents = [...activityEvents, ...retryResult.activityEvents];
+
+          const retryExecution = retryResult.executions[0];
+          if (!retryExecution || retryExecution.status !== "completed") {
+            echoRetryFailureReason = retryExecution?.failureReason ?? retryExecution?.summary ?? reason;
+          }
+
+          const retrySynthesisResult = await runSynthesis(false);
+          response = retrySynthesisResult.response;
+          activityEvents = [...activityEvents, ...retrySynthesisResult.activityEvents];
+
+          if (needsEchoRetry(response)) {
+            echoRetryFailureReason = echoRetryReason(response);
+          }
+        } else {
+          echoRetryFailureReason = reason;
+        }
+      }
     }
   }
 
   activityEvents = resequenceActivityEvents(activityEvents, outboundRequest);
   response = responseWithActivitySummary(response, activityEvents);
   response = responseWithDelegationFailureGuardrail(response, delegationResult);
+  if (echoRetryFailureReason || needsEchoRetry(response)) {
+    response = responseWithEchoRetryFailureGuardrail(response, echoRetryFailureReason ?? echoRetryReason(response));
+  }
   const safetyCounters = makeSafetyCounters(delegationResult.surfCalls, delegationResult.echoCalls);
   const forbiddenCounters = delegationResult.forbiddenCounters;
 

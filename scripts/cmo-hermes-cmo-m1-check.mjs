@@ -218,6 +218,7 @@ const startServer = async () => {
     unexpected: 0,
     surfRequests: [],
     echoRequests: [],
+    cmoRequests: [],
   };
   let serverFailure = null;
   const cmoCallsByRequestId = new Map();
@@ -234,6 +235,12 @@ const startServer = async () => {
         calls.cmo += 1;
         const cmoCallCount = (cmoCallsByRequestId.get(body.request_id) ?? 0) + 1;
         cmoCallsByRequestId.set(body.request_id, cmoCallCount);
+        calls.cmoRequests.push({
+          requestId: body.request_id,
+          count: cmoCallCount,
+          allowedAgents: body.constraints?.allowed_agents,
+          delegationsMode: body.constraints?.delegations_mode,
+        });
 
         if (cmoCallCount === 1) {
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
@@ -250,6 +257,10 @@ const startServer = async () => {
           const xSignalFixture = body.request_id === "req_m1_native_x_signal";
           const xPostsEchoOnlyFixture = body.request_id === "req_m1_x_posts_echo_only";
           const surfFailFixture = body.request_id === "req_m1_surf_fail";
+          const echoRetryFixture =
+            body.request_id === "req_m1_echo_retry_good" ||
+            body.request_id === "req_m1_echo_retry_fail" ||
+            body.request_id === "req_m1_echo_retry_limit";
 
           let delegations;
 
@@ -316,6 +327,19 @@ const startServer = async () => {
                 },
                 objective: "Find the latest Holdstation post on X and return the link.",
                 constraints: ["Read-only lookup.", "Return a source link."],
+              },
+            ];
+          } else if (echoRetryFixture) {
+            delegations = [
+              {
+                id: `del_${body.request_id}_initial`,
+                targetAgent: "echo",
+                mode: "echo.default",
+                objective: "Create 3 short X posts from the safest angle.",
+                input: {
+                  brief: "Write channel-native X posts from the CMO angle.",
+                  constraints: ["Do not research.", "Do not decide strategy."],
+                },
               },
             ];
           } else if (echoFailFixture) {
@@ -396,20 +420,146 @@ const startServer = async () => {
           return;
         }
 
-        assert.deepEqual(body.constraints.allowed_agents, []);
+        const echoRetryRequest =
+          body.request_id === "req_m1_echo_retry_good" ||
+          body.request_id === "req_m1_echo_retry_fail" ||
+          body.request_id === "req_m1_echo_retry_limit";
+        const echoRetryAllowedOnSynthesis =
+          cmoCallCount === 2 &&
+          (echoRetryRequest ||
+            body.request_id === "req_m1_cmo_001" ||
+            body.request_id === "req_m1_echo_fail" ||
+            body.request_id === "req_m1_x_posts_echo_only");
+        const expectedAllowedAgents = echoRetryAllowedOnSynthesis ? ["echo"] : [];
+        if (JSON.stringify(body.constraints.allowed_agents) !== JSON.stringify(expectedAllowedAgents)) {
+          throw new Error(`Unexpected allowed_agents for ${body.request_id} #${cmoCallCount}: ${JSON.stringify(body.constraints.allowed_agents)} expected ${JSON.stringify(expectedAllowedAgents)}`);
+        }
         assert.deepEqual(body.constraints.allowed_surf_modes, []);
-        assert.equal(body.constraints.delegations_mode, "proposals_only");
+        assert.equal(body.constraints.delegations_mode, echoRetryAllowedOnSynthesis ? "echo_retry_bounded" : "proposals_only");
         assert.equal(body.constraints.m1_clean_cmo_skill_kernel?.final_synthesis, true);
         assert.equal(body.context_pack.artifacts_in.at(-1)?.type, "cmo_engine_delegation_results");
-        const expectedResultCount = body.request_id === "req_m1_echo_fail" ? 2 : body.request_id === "req_m1_cmo_001" ? 3 : 1;
+        const expectedResultCount = echoRetryRequest && cmoCallCount === 3
+          ? 2
+          : body.request_id === "req_m1_echo_fail"
+            ? 2
+            : body.request_id === "req_m1_cmo_001"
+              ? 3
+              : 1;
         assert.equal(body.context_pack.artifacts_in.at(-1)?.results.length, expectedResultCount);
+
+        if (echoRetryRequest && cmoCallCount === 2) {
+          assert.equal(body.constraints.delegations_mode, "echo_retry_bounded");
+          assert.equal(body.constraints.allowEchoExecution, true);
+          writeJson(
+            response,
+            200,
+            cmoResponse(body, {
+              response: {
+                status: "delegated",
+                classification: "needs_echo_retry",
+                retry_of: "echo",
+                retry_reason: "echo_output_unusable_internal_process_language",
+                structured_output: {
+                  strategyMode: "REVIEW",
+                  mainBottleneck: "Echo output used internal process language.",
+                  decisionLabel: "WAIT",
+                  classification: "needs_echo_retry",
+                  retry_of: "echo",
+                  retry_reason: "echo_output_unusable_internal_process_language",
+                },
+                answer: {
+                  format: "markdown",
+                  title: "Unsafe CMO Replacement Copy",
+                  summary: "This fixture tries to replace Echo output.",
+                  decision: "TEST",
+                  body: "Post 1: CMO-written replacement copy must not be final.",
+                },
+                delegations: [
+                  {
+                    id: body.request_id === "req_m1_echo_retry_fail" ? "del_echo_retry_fail_again" : `del_${body.request_id}_again`,
+                    target_agent: "echo",
+                    mode: "echo.default",
+                    objective: "Create 3 short X posts from the safest angle.",
+                    input: {
+                      brief: "Retry without internal process language.",
+                      constraints: ["Do not research.", "Do not decide strategy.", "No internal process language."],
+                    },
+                  },
+                ],
+              },
+            }),
+          );
+          return;
+        }
+
+        if (body.request_id === "req_m1_echo_retry_good" && cmoCallCount === 3) {
+          writeJson(
+            response,
+            200,
+            cmoResponse(body, {
+              response: {
+                answer: {
+                  format: "markdown",
+                  title: "Echo Retry Accepted",
+                  summary: "CMO accepted the retried Echo output.",
+                  decision: "KEEP",
+                  body: "Echo retry accepted. Final copy is ready from Echo.",
+                },
+              },
+            }),
+          );
+          return;
+        }
+
+        if (body.request_id === "req_m1_echo_retry_limit" && cmoCallCount === 3) {
+          writeJson(
+            response,
+            200,
+            cmoResponse(body, {
+              response: {
+                status: "delegated",
+                classification: "needs_echo_retry",
+                retry_of: "echo",
+                retry_reason: "echo_output_unusable_internal_process_language",
+                structured_output: {
+                  strategyMode: "REVIEW",
+                  mainBottleneck: "Echo output still unusable.",
+                  decisionLabel: "WAIT",
+                  classification: "needs_echo_retry",
+                  retry_of: "echo",
+                  retry_reason: "echo_output_unusable_internal_process_language",
+                },
+                answer: {
+                  format: "markdown",
+                  title: "Unsafe Second Retry Replacement",
+                  summary: "This fixture asks for another retry after budget is spent.",
+                  decision: "TEST",
+                  body: "Post 1: This should not render because a second retry would be required.",
+                },
+                delegations: [
+                  {
+                    id: "del_echo_retry_limit_third_attempt",
+                    target_agent: "echo",
+                    mode: "echo.default",
+                    objective: "Create 3 short X posts from the safest angle.",
+                    input: {
+                      brief: "Try a third Echo attempt, which M1 must not execute.",
+                      constraints: ["No internal process language."],
+                    },
+                  },
+                ],
+              },
+            }),
+          );
+          return;
+        }
 
         writeJson(
           response,
           200,
           cmoResponse(
             body,
-            body.request_id === "req_m1_echo_fail" || body.request_id === "req_m1_surf_fail"
+            body.request_id === "req_m1_echo_fail" || body.request_id === "req_m1_surf_fail" || body.request_id === "req_m1_echo_retry_fail"
               ? {
                   response: {
                     answer: {
@@ -541,13 +691,16 @@ const startServer = async () => {
         assert.equal(body.task_type, "cmo_orchestrated_final_copy");
         assert.equal(body.objective, "Create 3 short X posts from the safest angle.");
         assert.equal(body.platform, "x");
+        const expectedEchoAngle = body.handoff_id === "del_echo_fail"
+          ? "Use evidence boundaries and produce final copy only through Echo."
+          : body.handoff_id === "del_x_posts_echo_only" || String(body.handoff_id).includes("_initial")
+            ? "Write channel-native X posts from the CMO angle."
+            : String(body.handoff_id).includes("_again")
+              ? "Retry without internal process language."
+              : "Write final copy only after Surf evidence is available.";
         assert.equal(
           body.brief?.angle,
-          body.handoff_id === "del_echo_fail"
-            ? "Use evidence boundaries and produce final copy only through Echo."
-            : body.handoff_id === "del_x_posts_echo_only"
-              ? "Write channel-native X posts from the CMO angle."
-              : "Write final copy only after Surf evidence is available.",
+          expectedEchoAngle,
         );
         assert.ok(Array.isArray(body.claim_boundaries));
         assert.equal(body.output_contract, "echo.response.v1");
@@ -562,6 +715,28 @@ const startServer = async () => {
             mode: "echo.default",
             status: "failed",
             failure_reason: "Echo fixture unavailable",
+            outputs: [],
+            safety: {
+              published: false,
+              vault_write: false,
+              supabase_mutation: false,
+              session_mutation: false,
+              raw_capture: false,
+              kanban: false,
+              openclaw_call: false,
+            },
+          });
+          return;
+        }
+
+        if (body.handoff_id === "del_echo_retry_fail_again") {
+          writeJson(response, 200, {
+            schema_version: "echo.response.v1",
+            handoff_id: body.handoff_id,
+            agent: "echo",
+            mode: "echo.default",
+            status: "failed",
+            failure_reason: "Echo retry fixture unavailable",
             outputs: [],
             safety: {
               published: false,
@@ -606,7 +781,10 @@ const startServer = async () => {
       writeJson(response, 404, { error: `Unexpected endpoint ${url.pathname}` });
     } catch (error) {
       serverFailure = error;
-      writeJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+      writeJson(response, 500, {
+        error: error instanceof Error ? error.message : String(error),
+        cmoRequests: calls.cmoRequests,
+      });
     }
   });
 
@@ -708,6 +886,9 @@ try {
   let xSignalResult;
   let xPostsEchoOnlyResult;
   let surfFailResult;
+  let echoRetryGoodResult;
+  let echoRetryFailResult;
+  let echoRetryLimitResult;
 
   try {
     process.env.CMO_HERMES_EXECUTION_ENABLED = "true";
@@ -873,6 +1054,78 @@ try {
     assert.equal(server.calls.legacySurfLast30Days, 0);
     assert.equal(server.calls.forbidden, 0);
     assert.equal(server.calls.unexpected, 0);
+
+    echoRetryGoodResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_echo_retry_good",
+      session_id: "session_m1_echo_retry_good",
+      turn_id: "turn_m1_echo_retry_good_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Create 3 short X posts from the safest angle.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling Echo retry success fixture");
+    assert.equal(echoRetryGoodResult.surfCalls, 0);
+    assert.equal(echoRetryGoodResult.echoCalls, 2);
+    assert.equal(echoRetryGoodResult.delegationSummary.length, 2);
+    assert.equal(echoRetryGoodResult.delegationSummary[0].status, "completed");
+    assert.equal(echoRetryGoodResult.delegationSummary[1].status, "completed");
+    assert.match(echoRetryGoodResult.response.answer?.body ?? "", /Echo retry accepted/);
+    assert.doesNotMatch(echoRetryGoodResult.response.answer?.body ?? "", /CMO-written replacement copy/);
+
+    echoRetryFailResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_echo_retry_fail",
+      session_id: "session_m1_echo_retry_fail",
+      turn_id: "turn_m1_echo_retry_fail_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Create 3 short X posts from the safest angle.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling Echo retry failure fixture");
+    assert.equal(echoRetryFailResult.surfCalls, 0);
+    assert.equal(echoRetryFailResult.echoCalls, 2);
+    assert.equal(echoRetryFailResult.delegationSummary.length, 2);
+    assert.equal(echoRetryFailResult.delegationSummary[1].status, "failed");
+    assert.equal(echoRetryFailResult.delegationSummary[1].failureReason, "Echo retry fixture unavailable");
+    assert.equal(echoRetryFailResult.response.answer?.decision, "WAIT");
+    assert.match(echoRetryFailResult.response.answer?.body ?? "", /Echo output unusable; retry required\./);
+    assert.doesNotMatch(echoRetryFailResult.response.answer?.body ?? "", /Post 1:/);
+    assert.equal(echoRetryFailResult.response.structured_output?.echo_retry_failed, true);
+
+    const echoCallsBeforeRetryLimit = server.calls.echo;
+    echoRetryLimitResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_echo_retry_limit",
+      session_id: "session_m1_echo_retry_limit",
+      turn_id: "turn_m1_echo_retry_limit_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Create 3 short X posts from the safest angle.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling Echo retry limit fixture");
+    assert.equal(echoRetryLimitResult.surfCalls, 0);
+    assert.equal(echoRetryLimitResult.echoCalls, 2);
+    assert.equal(server.calls.echo, echoCallsBeforeRetryLimit + 2);
+    assert.equal(echoRetryLimitResult.delegationSummary.length, 2);
+    assert.equal(echoRetryLimitResult.delegationSummary[1].status, "completed");
+    assert.equal(echoRetryLimitResult.response.answer?.decision, "WAIT");
+    assert.match(echoRetryLimitResult.response.answer?.body ?? "", /Echo output unusable; retry required\./);
+    assert.doesNotMatch(echoRetryLimitResult.response.answer?.body ?? "", /Post 1:/);
+    assert.equal(echoRetryLimitResult.response.structured_output?.echo_retry_failed, true);
+    assert.equal(server.calls.cmo, 21);
+    assert.equal(server.calls.surfUnified, 6);
+    assert.equal(server.calls.echo, 9);
+    assert.equal(server.calls.legacySurfX, 0);
+    assert.equal(server.calls.legacySurfLast30Days, 0);
+    assert.equal(server.calls.forbidden, 0);
+    assert.equal(server.calls.unexpected, 0);
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
       restoreEnvValue(key, value);
@@ -890,6 +1143,9 @@ try {
         echoCalls: result.echoCalls,
         echoFailureGuarded: echoFailResult?.response.structured_output?.echo_failed === true,
         surfFailureGuarded: surfFailResult?.response.structured_output?.surf_failed === true,
+        echoRetryGood: echoRetryGoodResult?.echoCalls === 2,
+        echoRetryFailureGuarded: echoRetryFailResult?.response.structured_output?.echo_retry_failed === true,
+        echoRetryLimited: echoRetryLimitResult?.echoCalls === 2,
         legacySurfXCalls: server.calls.legacySurfX,
         legacySurfLast30DaysCalls: server.calls.legacySurfLast30Days,
         forbiddenCounters: result.forbidden_counters,
