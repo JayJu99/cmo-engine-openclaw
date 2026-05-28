@@ -1,0 +1,54 @@
+{
+  "schema_version": "hermes.cmo.request.v1",
+  "request_id": "req_h3_mixed_workflow_001",
+  "session_id": "session_h3_dry_run",
+  "turn_id": "turn_h3_mixed_workflow_001",
+  "created_at": "2026-05-28T10:35:00+07:00",
+  "workspace": {
+    "workspace_id": "world-app-holdstation-mini-app",
+    "app_id": "holdstation-mini-app",
+    "app_name": "Holdstation Mini App"
+  },
+  "user": {
+    "user_id": "server_derived_user_id",
+    "display_name": "Jay"
+  },
+  "intent": {
+    "mode": "cmo.default",
+    "user_message": "Review the positioning, check recent X signals, decide the safest angle, draft 3 X posts, and save the final decision to Vault.",
+    "explicit_command": "save"
+  },
+  "context_pack": {
+    "current_priority": [
+      {
+        "type": "priority",
+        "title": "Evidence-backed content",
+        "content": "Use public signal as weak evidence and keep Echo inside CMO-approved claim boundaries."
+      }
+    ],
+    "selected_context": [
+      {
+        "type": "brief",
+        "title": "Activation content objective",
+        "content": "Explain activation as the next growth lever without making unsupported metric claims."
+      }
+    ],
+    "recent_session_summary": "CMO is exploring a demo-safe content loop.",
+    "indexed_context_supplement": [],
+    "artifacts_in": []
+  },
+  "constraints": {
+    "no_direct_vault_write": true,
+    "no_direct_memory_mutation": true,
+    "vault_agent_delegation_allowed": true,
+    "vault_agent_requires_save_intent": true,
+    "kanban_enabled": false,
+    "demo_mode": true,
+    "allowed_agents": ["echo", "surf", "vault_agent"],
+    "allowed_surf_modes": ["surf.default", "surf.x", "surf.trend", "surf.pulse"]
+  },
+  "ui": {
+    "activity_stream_required": true,
+    "heartbeat_required": true
+  }
+}
