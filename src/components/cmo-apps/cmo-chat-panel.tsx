@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { CmoAgentActivityPanel } from "@/components/cmo-apps/cmo-agent-activity-panel";
 import { icons } from "@/components/dashboard/icons";
 import type {
   AppWorkspace,
@@ -272,6 +273,9 @@ export function CMOChatPanel({
   const [runtimeStatus, setRuntimeStatus] = useState<CMORuntimeStatus | null>(initialRuntimeStatus);
   const [runtimeErrorReason, setRuntimeErrorReason] = useState<CmoRuntimeErrorReason | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [pendingAssistantMessageId, setPendingAssistantMessageId] = useState<string | null>(null);
+  const [pendingStartedAt, setPendingStartedAt] = useState<number | null>(null);
+  const [pendingElapsedMs, setPendingElapsedMs] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [sendStatus, setSendStatus] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -338,6 +342,9 @@ export function CMOChatPanel({
       setRuntimeErrorReason(null);
       setError(null);
       setSendStatus(null);
+      setPendingAssistantMessageId(null);
+      setPendingStartedAt(null);
+      setPendingElapsedMs(0);
       inputRef.current?.scrollIntoView({ block: "center" });
       inputRef.current?.focus();
     }, 0);
@@ -356,6 +363,9 @@ export function CMOChatPanel({
         setIsRuntimeFallback(false);
         setRuntimeStatus(initialRuntimeStatus);
         setRuntimeErrorReason(null);
+        setPendingAssistantMessageId(null);
+        setPendingStartedAt(null);
+        setPendingElapsedMs(0);
       }, 0);
 
       return () => window.clearTimeout(timeout);
@@ -370,10 +380,25 @@ export function CMOChatPanel({
       setIsRuntimeFallback(selectedSession.isRuntimeFallback === true);
       setRuntimeStatus(selectedSession.runtimeStatus ?? initialRuntimeStatus);
       setRuntimeErrorReason(selectedSession.runtimeErrorReason ?? null);
+      setPendingAssistantMessageId(null);
+      setPendingStartedAt(null);
+      setPendingElapsedMs(0);
     }, 0);
 
     return () => window.clearTimeout(timeout);
   }, [initialRuntimeStatus, selectedSession]);
+
+  useEffect(() => {
+    if (!pendingStartedAt) {
+      return;
+    }
+
+    const updateElapsed = () => setPendingElapsedMs(Math.max(0, Date.now() - pendingStartedAt));
+    updateElapsed();
+    const interval = window.setInterval(updateElapsed, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [pendingStartedAt]);
 
   async function sendMessage() {
     const question = input.trim();
@@ -392,6 +417,7 @@ export function CMOChatPanel({
       createdAt: nowIso(),
     };
     const pendingAssistantId = messageId("assistant");
+    const pendingStartedMs = Date.now();
 
     setMessages((current) => [
       ...current,
@@ -405,6 +431,9 @@ export function CMOChatPanel({
     ]);
     setInput("");
     setIsSending(true);
+    setPendingAssistantMessageId(pendingAssistantId);
+    setPendingStartedAt(pendingStartedMs);
+    setPendingElapsedMs(0);
     setError(null);
     setSendStatus("Sending...");
     if (!activeSessionId) {
@@ -474,8 +503,38 @@ export function CMOChatPanel({
                 runtimeProvider: response.runtimeProvider,
                 runtimeAgent: response.runtimeAgent,
                 runtimeErrorReason: response.runtimeErrorReason,
+                calledHermesCmo: response.calledHermesCmo,
+                hermesCmoStatus: response.hermesCmoStatus,
+                hermesCmoErrorReason: response.hermesCmoErrorReason,
+                hermesCmoCounters: response.hermesCmoCounters,
+                hermesCmoMetadata: response.hermesCmoMetadata,
+                strategyMode: response.strategyMode,
+                mainBottleneck: response.mainBottleneck,
+                decisionLabel: response.decisionLabel,
+                currentStep: response.currentStep,
+                activityEvents: response.activityEvents,
+                delegationSummary: response.delegationSummary,
+                agentsUsed: response.agentsUsed,
+                surfCalls: response.surfCalls,
+                echoCalls: response.echoCalls,
+                forbiddenCounters: response.forbiddenCounters,
+                platformPersistenceSummary: response.platformPersistenceSummary,
+                delegationsMode: response.delegationsMode,
                 contextUsedCount: response.contextUsed.length,
                 graphHintCount: response.graphHintCount ?? response.graphHints?.length ?? 0,
+                requestReceivedAt: response.requestReceivedAt,
+                liveAttemptStartedAt: response.liveAttemptStartedAt,
+                liveAttemptDurationMs: response.liveAttemptDurationMs,
+                fallbackDurationMs: response.fallbackDurationMs,
+                totalDurationMs: response.totalDurationMs,
+                timeoutMs: response.timeoutMs,
+                contextSourceCount: response.contextSourceCount,
+                contextCharLength: response.contextCharLength,
+                indexedSupplementCharLength: response.indexedSupplementCharLength,
+                authDurationMs: response.authDurationMs,
+                sessionResolutionDurationMs: response.sessionResolutionDurationMs,
+                contextPackBuildDurationMs: response.contextPackBuildDurationMs,
+                indexedContextBuildDurationMs: response.indexedContextBuildDurationMs,
               }
             : message,
         ),
@@ -497,6 +556,8 @@ export function CMOChatPanel({
       );
     } finally {
       setIsSending(false);
+      setPendingAssistantMessageId(null);
+      setPendingStartedAt(null);
     }
   }
 
@@ -621,6 +682,13 @@ export function CMOChatPanel({
                     </div>
                   ) : null}
                   {message.role === "assistant" ? renderAssistantContent(message.content) : <div className="whitespace-pre-wrap">{message.content}</div>}
+                  {message.role === "assistant" ? (
+                    <CmoAgentActivityPanel
+                      message={message}
+                      running={pendingAssistantMessageId === message.id}
+                      elapsedMs={pendingAssistantMessageId === message.id ? pendingElapsedMs : null}
+                    />
+                  ) : null}
                   {message.role === "assistant" && assistantProvenance(message, activeSavedToVault, activeRawCaptured) ? (
                     <div className={cn("mt-4 border-t pt-3 text-xs font-semibold", activeRawCaptureStatus === "failed" ? "border-rose-100 text-rose-600" : "border-emerald-100 text-emerald-700")}>
                       {assistantProvenance(message, activeSavedToVault, activeRawCaptured)}
