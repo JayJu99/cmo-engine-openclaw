@@ -1,12 +1,8 @@
 import {
   executeHermesEcho,
   executeHermesSurf,
-  executeHermesSurfLast30Days,
-  executeHermesSurfX,
   type HermesEchoBrief,
   type HermesSurfBrief,
-  type HermesSurfLast30DaysBrief,
-  type HermesSurfXBrief,
 } from "./hermes-client";
 
 export type HermesCmoExecutableAgent = "echo" | "surf";
@@ -186,6 +182,7 @@ function echoBrief(input: ExecutorInput, delegation: NormalizedDelegation, previ
     handoff_id: delegation.delegationId,
     source_agent: "cmo",
     target_agent: "echo",
+    mode: "echo.default",
     workspace: cleanWorkspaceSlug(input.workspaceSlug),
     task_type: "cmo_orchestrated_final_copy",
     objective: delegation.objective,
@@ -212,6 +209,7 @@ function defaultSurfBrief(input: ExecutorInput, delegation: NormalizedDelegation
     handoff_id: delegation.delegationId,
     source_agent: "cmo",
     target_agent: "surf",
+    mode: delegation.mode === "echo.default" ? "surf.default" : delegation.mode,
     workspace: cleanWorkspaceSlug(input.workspaceSlug),
     task_type: "cmo_orchestrated_research_pack",
     objective: delegation.objective,
@@ -236,16 +234,12 @@ function defaultSurfBrief(input: ExecutorInput, delegation: NormalizedDelegation
   };
 }
 
-function surfXBrief(input: ExecutorInput, delegation: NormalizedDelegation): HermesSurfXBrief {
-  return {
-    handoff_id: delegation.delegationId,
-    source_agent: "cmo",
-    target_agent: "surf",
-    research_mode: "x_search",
-    mode: "cmo_orchestrated",
-    workspace: cleanWorkspaceSlug(input.workspaceSlug),
+function surfXBrief(input: ExecutorInput, delegation: NormalizedDelegation): HermesSurfBrief {
+  return defaultSurfBrief(input, delegation, {
+    mode: "surf.x",
+    task_type: "cmo_orchestrated_x_signal_pack",
     topic: delegation.objective,
-    objective: delegation.objective,
+    research_mode: "x_search",
     timeframe: "recent",
     max_results: 5,
     constraints: [
@@ -254,42 +248,25 @@ function surfXBrief(input: ExecutorInput, delegation: NormalizedDelegation): Her
       "Treat X posts as weak social signal, not verified fact.",
       "Do not make the final strategic decision.",
     ],
-    source_context: {
-      raw_request: input.userMessage,
-      origin: "cmo_engine_m1_hermes_cmo_orchestration",
-    },
-    return_to: "cmo_engine",
-    max_turns: 1,
-  };
+  });
 }
 
-function trendBrief(input: ExecutorInput, delegation: NormalizedDelegation): HermesSurfLast30DaysBrief {
-  return {
-    handoff_id: delegation.delegationId,
-    source_agent: "cmo",
-    target_agent: "surf",
-    research_mode: "last30days",
-    mode: "cmo_orchestrated",
-    workspace: cleanWorkspaceSlug(input.workspaceSlug),
+function trendBrief(input: ExecutorInput, delegation: NormalizedDelegation): HermesSurfBrief {
+  return defaultSurfBrief(input, delegation, {
+    mode: "surf.trend",
+    task_type: "cmo_orchestrated_trend_signal_pack",
     topic: delegation.objective,
-    objective: delegation.objective,
+    research_mode: "last30days",
     timeframe: "last 30 days",
     max_results: 5,
     allowed_sources: ["reddit", "hackernews", "polymarket"],
     constraints: [
       ...baseConstraints(delegation),
       "Use only bounded last-30-days safe-mode sources.",
-      "Do not use X.",
       "Treat trend outputs as weak signals until verified.",
       "Do not make the final strategic decision.",
     ],
-    source_context: {
-      raw_request: input.userMessage,
-      origin: "cmo_engine_m1_hermes_cmo_orchestration",
-    },
-    return_to: "cmo_engine",
-    max_turns: 1,
-  };
+  });
 }
 
 function pulseBrief(input: ExecutorInput, delegation: NormalizedDelegation): HermesSurfBrief {
@@ -375,9 +352,9 @@ async function executeOne(
 
   const result =
     delegation.mode === "surf.x"
-      ? await executeHermesSurfX(surfXBrief(input, delegation))
+      ? await executeHermesSurf(surfXBrief(input, delegation))
       : delegation.mode === "surf.trend"
-        ? await executeHermesSurfLast30Days(trendBrief(input, delegation))
+        ? await executeHermesSurf(trendBrief(input, delegation))
         : delegation.mode === "surf.pulse"
           ? await executeHermesSurf(pulseBrief(input, delegation))
           : await executeHermesSurf(defaultSurfBrief(input, delegation));

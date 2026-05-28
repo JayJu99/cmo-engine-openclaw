@@ -200,7 +200,9 @@ const cmoResponse = (requestBody, overrides = {}) => {
 const startServer = async () => {
   const calls = {
     cmo: 0,
-    surfTrend: 0,
+    surfUnified: 0,
+    legacySurfX: 0,
+    legacySurfLast30Days: 0,
     echo: 0,
     forbidden: 0,
     unexpected: 0,
@@ -241,11 +243,20 @@ const startServer = async () => {
                 },
                 delegations: [
                   {
-                    id: "del_surf_trend",
-                    target: { agent: "surf", mode: "surf.trend" },
-                    objective: "Gather bounded last-30-days activation signals.",
+                    id: "del_surf_default",
+                    target: { agent: "surf", mode: "surf.default" },
+                    objective: "Gather bounded activation proof sources.",
                     input: {
-                      brief: "Find compact activation proof signals for the angle.",
+                      brief: "Find compact activation proof sources for the angle.",
+                      constraints: ["M1 source caps only."],
+                    },
+                  },
+                  {
+                    id: "del_surf_x",
+                    target: { agent: "surf", mode: "surf.x" },
+                    objective: "Gather bounded X activation signal.",
+                    input: {
+                      brief: "Find compact X signal for the activation angle.",
                       constraints: ["M1 source caps only."],
                     },
                   },
@@ -270,28 +281,46 @@ const startServer = async () => {
         assert.equal(body.constraints.delegations_mode, "proposals_only");
         assert.equal(body.constraints.m1_clean_cmo_skill_kernel?.final_synthesis, true);
         assert.equal(body.context_pack.artifacts_in.at(-1)?.type, "cmo_engine_delegation_results");
-        assert.equal(body.context_pack.artifacts_in.at(-1)?.results.length, 2);
+        assert.equal(body.context_pack.artifacts_in.at(-1)?.results.length, 3);
 
         writeJson(response, 200, cmoResponse(body));
         return;
       }
 
-      if (url.pathname === "/agents/surf-last30days/execute") {
-        calls.surfTrend += 1;
+      if (url.pathname === "/agents/surf/execute") {
+        calls.surfUnified += 1;
         assert.equal(body.source_agent, "cmo");
         assert.equal(body.target_agent, "surf");
-        assert.equal(body.research_mode, "last30days");
-        assert.equal(body.mode, "cmo_orchestrated");
-        assert.deepEqual(body.allowed_sources, ["reddit", "hackernews", "polymarket"]);
+        assert.ok(["surf.default", "surf.x"].includes(body.mode), `unexpected surf mode ${body.mode}`);
         writeJson(response, 200, {
+          schema_version: "surf.response.v1",
           handoff_id: body.handoff_id,
           agent: "surf",
+          mode: body.mode,
           status: "completed",
-          summary: "Recent activation signal: proof-led onboarding copy is the highest-leverage test.",
-          sources_used: ["reddit", "hackernews"],
-          key_findings: ["Users respond to concrete proof before feature depth."],
+          summary: `${body.mode} returned activation evidence.`,
+          research_pack: {
+            summary: `${body.mode} returned activation evidence.`,
+            sources_used: [body.mode === "surf.x" ? "x" : "web"],
+            key_findings: [`${body.mode} says users respond to concrete proof before feature depth.`],
+          },
+          safety: {
+            published: false,
+            vault_write: false,
+            supabase_mutation: false,
+            session_mutation: false,
+            raw_capture: false,
+            kanban: false,
+            openclaw_call: false,
+          },
         });
         return;
+      }
+
+      if (url.pathname === "/agents/surf-x/execute") {
+        calls.legacySurfX += 1;
+      } else if (url.pathname === "/agents/surf-last30days/execute") {
+        calls.legacySurfLast30Days += 1;
       }
 
       if (url.pathname === "/agents/echo/execute") {
@@ -300,11 +329,22 @@ const startServer = async () => {
         assert.equal(body.target_agent, "echo");
         assert.equal(body.task_type, "cmo_orchestrated_final_copy");
         writeJson(response, 200, {
+          schema_version: "echo.response.v1",
           handoff_id: body.handoff_id,
           agent: "echo",
+          mode: "echo.default",
           status: "completed",
           outputs: [{ label: "final_copy", copy: "Prove the win in one action. Then scale." }],
           notes: ["Stayed inside CMO constraints."],
+          safety: {
+            published: false,
+            vault_write: false,
+            supabase_mutation: false,
+            session_mutation: false,
+            raw_capture: false,
+            kanban: false,
+            openclaw_call: false,
+          },
         });
         return;
       }
@@ -423,19 +463,21 @@ try {
     process.env.CMO_HERMES_TIMEOUT_MS = "5000";
     process.env.CMO_HERMES_LAST30DAYS_TIMEOUT_MS = "5000";
     process.env.CMO_HERMES_CMO_ORCHESTRATION_ENABLED = "true";
-    process.env.CMO_HERMES_CMO_MAX_DELEGATIONS = "2";
+    process.env.CMO_HERMES_CMO_MAX_DELEGATIONS = "3";
 
     result = await runHermesCmoRuntime(sampleRequest);
 
     assert.equal(server.serverFailure, null, "M1 contract server failed while handling a request");
     assert.equal(server.calls.cmo, 2);
-    assert.equal(server.calls.surfTrend, 1);
+    assert.equal(server.calls.surfUnified, 2);
+    assert.equal(server.calls.legacySurfX, 0);
+    assert.equal(server.calls.legacySurfLast30Days, 0);
     assert.equal(server.calls.echo, 1);
     assert.equal(server.calls.forbidden, 0);
     assert.equal(server.calls.unexpected, 0);
     assert.deepEqual(result.forbidden_counters, forbiddenCounters);
     assert.deepEqual(result.safety_counters, {
-      surfCalls: 1,
+      surfCalls: 2,
       echoCalls: 1,
       vaultAgentCalls: 0,
       vaultWrites: 0,
@@ -447,9 +489,10 @@ try {
     assert.equal(result.decisionLabel, "TEST");
     assert.equal(result.currentStep, "Run a proof-led activation copy test.");
     assert.deepEqual(result.agentsUsed, ["cmo", "surf", "echo"]);
-    assert.equal(result.delegationSummary.length, 2);
-    assert.equal(result.delegationSummary[0].mode, "surf.trend");
-    assert.equal(result.delegationSummary[1].mode, "echo.default");
+    assert.equal(result.delegationSummary.length, 3);
+    assert.equal(result.delegationSummary[0].mode, "surf.default");
+    assert.equal(result.delegationSummary[1].mode, "surf.x");
+    assert.equal(result.delegationSummary[2].mode, "echo.default");
     assert.equal(result.response.activity_summary.events_count, result.activity_events.length);
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
@@ -466,6 +509,8 @@ try {
         cmoCalls: server.calls.cmo,
         surfCalls: result.surfCalls,
         echoCalls: result.echoCalls,
+        legacySurfXCalls: server.calls.legacySurfX,
+        legacySurfLast30DaysCalls: server.calls.legacySurfLast30Days,
         forbiddenCounters: result.forbidden_counters,
         agentsUsed: result.agentsUsed,
         delegationSummary: result.delegationSummary.map((delegation) => ({

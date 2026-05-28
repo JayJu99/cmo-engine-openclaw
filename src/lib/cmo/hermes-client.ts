@@ -2,7 +2,7 @@ export interface HermesEchoBrief {
   handoff_id: string;
   source_agent: "cmo" | "jay";
   target_agent: "echo";
-  mode?: "direct_jay";
+  mode?: "direct_jay" | "echo.default";
   workspace: string;
   task_type: string;
   objective: string;
@@ -31,10 +31,12 @@ export interface HermesSurfBrief {
   handoff_id: string;
   source_agent: "jay" | "cmo";
   target_agent: "surf";
-  mode?: "direct_jay";
+  mode?: "direct_jay" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
   workspace: string;
   task_type: string;
   objective: string;
+  topic?: string;
+  research_mode?: "x_search" | "last30days";
   input_material: string[];
   allow_web_research: boolean;
   search_scope?: string;
@@ -44,6 +46,8 @@ export interface HermesSurfBrief {
   geography?: string;
   max_sources?: number;
   max_search_queries?: number;
+  max_results?: number;
+  allowed_sources?: Array<"reddit" | "hackernews" | "polymarket">;
   source_targets?: string[];
   competitors?: string[];
   source_context: {
@@ -97,8 +101,10 @@ export interface HermesSurfLast30DaysBrief {
 }
 
 export interface HermesSurfResponse {
+  schema_version?: "surf.response.v1";
   handoff_id: string;
   agent: "surf";
+  mode?: "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
   status: "completed" | "failed" | "blocked";
   summary?: string;
   sources_used?: Array<Record<string, unknown> | string>;
@@ -109,6 +115,7 @@ export interface HermesSurfResponse {
   blocker?: string;
   research_pack?: Record<string, unknown>;
   researchPack?: Record<string, unknown>;
+  safety?: HermesSpecialistSafety;
 }
 
 export interface HermesSurfExecutionResult {
@@ -123,17 +130,30 @@ export interface HermesEchoOutput {
 }
 
 export interface HermesEchoResponse {
+  schema_version?: "echo.response.v1";
   handoff_id: string;
   agent: "echo";
+  mode?: "echo.default";
   status: "completed";
   outputs: HermesEchoOutput[];
   notes: string[];
+  safety?: HermesSpecialistSafety;
 }
 
 export interface HermesEchoExecutionResult {
   ok: boolean;
   response?: HermesEchoResponse;
   failureReason?: string;
+}
+
+interface HermesSpecialistSafety {
+  published: false;
+  vault_write: false;
+  supabase_mutation: false;
+  session_mutation: false;
+  raw_capture: false;
+  kanban: false;
+  openclaw_call: false;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -163,35 +183,103 @@ function hermesLast30DaysTimeoutMs(): number {
   return Number.isFinite(value) && value > 0 ? value : 180000;
 }
 
+function validateSpecialistSafety(value: unknown): value is HermesSpecialistSafety {
+  return (
+    isRecord(value) &&
+    value.published === false &&
+    value.vault_write === false &&
+    value.supabase_mutation === false &&
+    value.session_mutation === false &&
+    value.raw_capture === false &&
+    value.kanban === false &&
+    value.openclaw_call === false
+  );
+}
+
+function specialistFailureReason(value: unknown, agentLabel: string): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const status = typeof value.status === "string" ? value.status : "";
+
+  if (status !== "failed" && status !== "blocked") {
+    return null;
+  }
+
+  return structuredErrorMessage(value) ?? `${agentLabel} returned status ${status}.`;
+}
+
+function normalizeEchoOutput(output: unknown, index: number): HermesEchoOutput | null {
+  if (typeof output === "string") {
+    return { label: `output_${index + 1}`, copy: output };
+  }
+
+  if (!isRecord(output)) {
+    return null;
+  }
+
+  const label =
+    typeof output.label === "string"
+      ? output.label
+      : typeof output.title === "string"
+        ? output.title
+        : typeof output.type === "string"
+          ? output.type
+          : `output_${index + 1}`;
+  const copy =
+    typeof output.copy === "string"
+      ? output.copy
+      : typeof output.content === "string"
+        ? output.content
+        : typeof output.text === "string"
+          ? output.text
+          : typeof output.markdown === "string"
+            ? output.markdown
+            : compactText(JSON.stringify(output), 2000);
+
+  return copy ? { label, copy } : null;
+}
+
 function validateHermesEchoResponse(value: unknown): HermesEchoResponse | null {
   if (!isRecord(value) || value.agent !== "echo" || value.status !== "completed") {
     return null;
   }
 
+  if (value.schema_version !== undefined && value.schema_version !== "echo.response.v1") {
+    return null;
+  }
+
+  if (value.mode !== undefined && value.mode !== "echo.default") {
+    return null;
+  }
+
+  if (
+    (value.schema_version === "echo.response.v1" && !validateSpecialistSafety(value.safety)) ||
+    (value.safety !== undefined && !validateSpecialistSafety(value.safety))
+  ) {
+    return null;
+  }
+
   const handoffId = typeof value.handoff_id === "string" ? value.handoff_id : "";
   const outputs = Array.isArray(value.outputs)
-    ? value.outputs
-        .map((output): HermesEchoOutput | null => {
-          if (!isRecord(output) || typeof output.label !== "string" || typeof output.copy !== "string") {
-            return null;
-          }
-
-          return { label: output.label, copy: output.copy };
-        })
-        .filter((output): output is HermesEchoOutput => Boolean(output))
+    ? value.outputs.map(normalizeEchoOutput).filter((output): output is HermesEchoOutput => Boolean(output))
     : [];
   const notes = Array.isArray(value.notes) ? value.notes.filter((note): note is string => typeof note === "string") : [];
 
-  if (!handoffId || outputs.length === 0) {
+  if (!handoffId || !Array.isArray(value.outputs) || (value.schema_version !== "echo.response.v1" && outputs.length === 0)) {
     return null;
   }
 
   return {
+    ...(value.schema_version === "echo.response.v1" ? { schema_version: "echo.response.v1" } : {}),
     handoff_id: handoffId,
     agent: "echo",
+    ...(value.mode === "echo.default" ? { mode: "echo.default" } : {}),
     status: "completed",
     outputs,
     notes,
+    ...(validateSpecialistSafety(value.safety) ? { safety: value.safety } : {}),
   };
 }
 
@@ -285,6 +373,11 @@ export async function executeHermesEcho(brief: HermesEchoBrief): Promise<HermesE
       return { ok: false, failureReason: "Hermes Echo returned invalid JSON." };
     }
 
+    const failureReason = specialistFailureReason(data, "Hermes Echo");
+    if (failureReason) {
+      return { ok: false, failureReason };
+    }
+
     const validated = validateHermesEchoResponse(data);
 
     if (!validated) {
@@ -303,7 +396,25 @@ export async function executeHermesEcho(brief: HermesEchoBrief): Promise<HermesE
   }
 }
 function validateHermesSurfResponse(value: unknown): HermesSurfResponse | null {
-  if (!isRecord(value) || value.agent !== "surf" || (value.status !== "completed" && value.status !== "failed" && value.status !== "blocked")) {
+  if (!isRecord(value) || value.agent !== "surf" || value.status !== "completed") {
+    return null;
+  }
+
+  const mode = value.mode;
+  const validMode = mode === "surf.default" || mode === "surf.x" || mode === "surf.trend" || mode === "surf.pulse";
+
+  if (value.schema_version !== undefined && value.schema_version !== "surf.response.v1") {
+    return null;
+  }
+
+  if (mode !== undefined && !validMode) {
+    return null;
+  }
+
+  if (
+    (value.schema_version === "surf.response.v1" && !validateSpecialistSafety(value.safety)) ||
+    (value.safety !== undefined && !validateSpecialistSafety(value.safety))
+  ) {
     return null;
   }
 
@@ -314,12 +425,19 @@ function validateHermesSurfResponse(value: unknown): HermesSurfResponse | null {
   }
 
   const researchPack = isRecord(value.research_pack) ? value.research_pack : isRecord(value.researchPack) ? value.researchPack : undefined;
+
+  if (value.schema_version === "surf.response.v1" && !researchPack) {
+    return null;
+  }
+
   const list = (input: unknown): Array<Record<string, unknown> | string> => Array.isArray(input) ? input.filter((item): item is Record<string, unknown> | string => typeof item === "string" || isRecord(item)) : [];
 
   return {
+    ...(value.schema_version === "surf.response.v1" ? { schema_version: "surf.response.v1" } : {}),
     handoff_id: handoffId,
     agent: "surf",
-    status: value.status,
+    ...(validMode ? { mode } : {}),
+    status: "completed",
     summary: typeof value.summary === "string" ? value.summary : typeof researchPack?.summary === "string" ? researchPack.summary : undefined,
     sources_used: list(value.sources_used ?? researchPack?.sources_used),
     key_findings: list(value.key_findings ?? researchPack?.key_findings),
@@ -328,6 +446,7 @@ function validateHermesSurfResponse(value: unknown): HermesSurfResponse | null {
     notes: list(value.notes),
     blocker: typeof value.blocker === "string" ? value.blocker : typeof researchPack?.blocker === "string" ? researchPack.blocker : undefined,
     ...(researchPack ? { research_pack: researchPack } : {}),
+    ...(validateSpecialistSafety(value.safety) ? { safety: value.safety } : {}),
   };
 }
 
@@ -370,6 +489,11 @@ export async function executeHermesSurf(brief: HermesSurfBrief): Promise<HermesS
       data = await response.json();
     } catch {
       return { ok: false, failureReason: "Hermes Surf returned invalid JSON." };
+    }
+
+    const failureReason = specialistFailureReason(data, "Hermes Surf");
+    if (failureReason) {
+      return { ok: false, failureReason };
     }
 
     const validated = validateHermesSurfResponse(data);
@@ -430,6 +554,11 @@ export async function executeHermesSurfLast30Days(brief: HermesSurfLast30DaysBri
       return { ok: false, failureReason: "Hermes Surf Last30Days returned invalid JSON." };
     }
 
+    const failureReason = specialistFailureReason(data, "Hermes Surf Last30Days");
+    if (failureReason) {
+      return { ok: false, failureReason };
+    }
+
     const validated = validateHermesSurfResponse(data);
 
     if (!validated) {
@@ -487,6 +616,11 @@ export async function executeHermesSurfX(brief: HermesSurfXBrief): Promise<Herme
       data = await response.json();
     } catch {
       return { ok: false, failureReason: "Hermes Surf X returned invalid JSON." };
+    }
+
+    const failureReason = specialistFailureReason(data, "Hermes Surf X");
+    if (failureReason) {
+      return { ok: false, failureReason };
     }
 
     const validated = validateHermesSurfResponse(data);
