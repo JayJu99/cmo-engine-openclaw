@@ -13,9 +13,10 @@ export type HermesCmoExecutableAgent = "echo" | "surf";
 export type HermesCmoExecutableMode = "echo.default" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
 
 export interface HermesCmoForbiddenCounters {
-  vaultWrites: 0;
-  openclawCalls: 0;
-  directSupabaseMutations: 0;
+  vaultAgentCalls: number;
+  vaultWrites: number;
+  openclawCalls: number;
+  directSupabaseMutations: number;
 }
 
 export interface HermesCmoDelegationExecution {
@@ -438,6 +439,7 @@ export async function executeHermesCmoDelegations(input: ExecutorInput): Promise
     echoCalls,
     agentsUsed: Array.from(new Set(executions.map((execution) => execution.targetAgent))),
     forbiddenCounters: {
+      vaultAgentCalls: 0,
       vaultWrites: 0,
       openclawCalls: 0,
       directSupabaseMutations: 0,
