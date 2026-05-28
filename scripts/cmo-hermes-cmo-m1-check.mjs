@@ -259,6 +259,10 @@ const startServer = async () => {
           const surfFailFixture = body.request_id === "req_m1_surf_fail";
           const surfThenEchoFixture = body.request_id === "req_m1_surf_then_echo";
           const maxRoundsFixture = body.request_id === "req_m1_max_rounds";
+          const duplicateSameIdFixture = body.request_id === "req_m1_duplicate_same_id";
+          const duplicateFingerprintFixture = body.request_id === "req_m1_duplicate_fingerprint";
+          const duplicateDelegatedStopFixture = body.request_id === "req_m1_duplicate_delegated_stop";
+          const worldAppSignalFixture = body.request_id === "req_m1_world_app_signal";
           const echoRetryFixture =
             body.request_id === "req_m1_echo_retry_good" ||
             body.request_id === "req_m1_echo_retry_fail" ||
@@ -284,10 +288,15 @@ const startServer = async () => {
                 constraints: ["Read-only lookup.", "Return a source link."],
               },
             ];
-          } else if (xSignalFixture) {
+          } else if (xSignalFixture || duplicateSameIdFixture || duplicateDelegatedStopFixture || worldAppSignalFixture) {
             delegations = [
               {
-                id: "del_x_signal_scan",
+                id:
+                  duplicateSameIdFixture || duplicateDelegatedStopFixture
+                    ? "dlg_req_h6_msg_c7e41e48-0cc_surf_001"
+                    : worldAppSignalFixture
+                      ? "del_world_app_signal"
+                      : "del_x_signal_scan",
                 target_agent: "surf",
                 mode: "surf.x",
                 task_type: "x_signal_scan",
@@ -296,6 +305,39 @@ const startServer = async () => {
                 objective: "Scan X for World App and trading mini app signal.",
                 output_contract: {
                   strategySynthesisAllowed: false,
+                },
+                constraints: ["Read-only X scan.", "Treat social signal as weak evidence."],
+              },
+            ];
+          } else if (duplicateFingerprintFixture) {
+            delegations = [
+              {
+                target_agent: "surf",
+                mode: "surf.x",
+                task_type: "x_signal_scan",
+                surface: "x",
+                topics: signalTopics,
+                objective: "Scan X for World App and trading mini app signal.",
+                output_contract: {
+                  strategySynthesisAllowed: false,
+                },
+                input: {
+                  brief: "No-id duplicate fingerprint fixture.",
+                },
+                constraints: ["Read-only X scan.", "Treat social signal as weak evidence."],
+              },
+              {
+                target_agent: "surf",
+                mode: "surf.x",
+                task_type: "x_signal_scan",
+                surface: "x",
+                topics: signalTopics,
+                objective: "Scan X for World App and trading mini app signal.",
+                output_contract: {
+                  strategySynthesisAllowed: false,
+                },
+                input: {
+                  brief: "No-id duplicate fingerprint fixture.",
                 },
                 constraints: ["Read-only X scan.", "Treat social signal as weak evidence."],
               },
@@ -459,18 +501,112 @@ const startServer = async () => {
           body.context_pack.artifacts_in.some((artifact) => artifact?.type === "specialist_result"),
           "synthesis request did not include specialist_result artifacts",
         );
+        if (
+          body.request_id === "req_m1_duplicate_same_id" ||
+          body.request_id === "req_m1_duplicate_fingerprint" ||
+          body.request_id === "req_m1_world_app_signal"
+        ) {
+          assert.equal(
+            body.context_pack.artifacts_in.filter((artifact) => artifact?.type === "specialist_result").length,
+            1,
+          );
+        }
         const expectedResultCount = echoRetryRequest && cmoCallCount === 3
-          ? 2
-          : body.request_id === "req_m1_surf_then_echo" && cmoCallCount === 3
             ? 2
-            : body.request_id === "req_m1_max_rounds"
-              ? cmoCallCount - 1
-          : body.request_id === "req_m1_echo_fail"
-            ? 2
-            : body.request_id === "req_m1_cmo_001"
-              ? 3
-              : 1;
+            : body.request_id === "req_m1_surf_then_echo" && cmoCallCount === 3
+              ? 2
+              : body.request_id === "req_m1_max_rounds"
+                ? cmoCallCount - 1
+                : body.request_id === "req_m1_echo_fail"
+                  ? 2
+                  : body.request_id === "req_m1_cmo_001"
+                    ? 3
+                    : 1;
         assert.equal(body.context_pack.artifacts_in.at(-1)?.results.length, expectedResultCount);
+
+        if (
+          body.request_id === "req_m1_duplicate_same_id" ||
+          body.request_id === "req_m1_duplicate_fingerprint" ||
+          body.request_id === "req_m1_world_app_signal"
+        ) {
+          writeJson(
+            response,
+            200,
+            cmoResponse(body, {
+              response: {
+                status: "completed",
+                answer: {
+                  format: "markdown",
+                  title: "Deduped Surf Final",
+                  summary: "CMO used one Surf result and did not need another specialist call.",
+                  decision: "WAIT",
+                  body: "One Surf result was enough for the final CMO judgement.",
+                },
+                delegations:
+                  body.request_id === "req_m1_duplicate_fingerprint"
+                    ? [
+                        {
+                          target_agent: "surf",
+                          mode: "surf.x",
+                          task_type: "x_signal_scan",
+                          surface: "x",
+                          topics: signalTopics,
+                          objective: "Scan X for World App and trading mini app signal.",
+                          input: {
+                            brief: "No-id duplicate fingerprint fixture.",
+                          },
+                        },
+                      ]
+                    : [
+                        {
+                          id:
+                            body.request_id === "req_m1_world_app_signal"
+                              ? "del_world_app_signal"
+                              : "dlg_req_h6_msg_c7e41e48-0cc_surf_001",
+                          target_agent: "surf",
+                          mode: "surf.x",
+                          task_type: "x_signal_scan",
+                          surface: "x",
+                          topics: signalTopics,
+                          objective: "Scan X for World App and trading mini app signal.",
+                        },
+                      ],
+              },
+            }),
+          );
+          return;
+        }
+
+        if (body.request_id === "req_m1_duplicate_delegated_stop") {
+          writeJson(
+            response,
+            200,
+            cmoResponse(body, {
+              response: {
+                status: "delegated",
+                answer: {
+                  format: "markdown",
+                  title: "Duplicate Delegated Intermediate",
+                  summary: "caller should run Surf again.",
+                  decision: "WAIT",
+                  body: "caller should run Surf again. This duplicate delegation text must not be final.",
+                },
+                delegations: [
+                  {
+                    id: "dlg_req_h6_msg_c7e41e48-0cc_surf_001",
+                    target_agent: "surf",
+                    mode: "surf.x",
+                    task_type: "x_signal_scan",
+                    surface: "x",
+                    topics: signalTopics,
+                    objective: "Scan X for World App and trading mini app signal.",
+                  },
+                ],
+              },
+            }),
+          );
+          return;
+        }
 
         if (echoRetryRequest && cmoCallCount === 2) {
           assert.equal(body.constraints.delegations_mode, "echo_surf_bounded");
@@ -857,7 +993,7 @@ const startServer = async () => {
           return;
         }
 
-        if (body.handoff_id === "del_echo_retry_fail_again") {
+        if (String(body.handoff_id).includes("del_echo_retry_fail_again")) {
           writeJson(response, 200, {
             schema_version: "echo.response.v1",
             handoff_id: body.handoff_id,
@@ -1019,6 +1155,10 @@ try {
   let echoRetryLimitResult;
   let surfThenEchoResult;
   let maxRoundsResult;
+  let duplicateSameIdResult;
+  let duplicateFingerprintResult;
+  let duplicateDelegatedStopResult;
+  let worldAppSignalResult;
 
   try {
     process.env.CMO_HERMES_EXECUTION_ENABLED = "true";
@@ -1185,6 +1325,80 @@ try {
     assert.equal(server.calls.forbidden, 0);
     assert.equal(server.calls.unexpected, 0);
 
+    duplicateSameIdResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_duplicate_same_id",
+      session_id: "session_m1_duplicate_same_id",
+      turn_id: "turn_m1_duplicate_same_id_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Check X signal for World App mini app and judge if CMO should use it this week.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling duplicate-id fixture");
+    assert.equal(duplicateSameIdResult.surfCalls, 1);
+    assert.equal(duplicateSameIdResult.echoCalls, 0);
+    assert.equal(duplicateSameIdResult.delegationSummary.length, 1);
+    assert.equal(duplicateSameIdResult.delegationSummary[0].delegationId, "dlg_req_h6_msg_c7e41e48-0cc_surf_001");
+    assert.equal(duplicateSameIdResult.delegationSummary[0].status, "completed");
+    assert.match(duplicateSameIdResult.response.answer?.body ?? "", /One Surf result was enough/);
+
+    duplicateFingerprintResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_duplicate_fingerprint",
+      session_id: "session_m1_duplicate_fingerprint",
+      turn_id: "turn_m1_duplicate_fingerprint_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Check X signal for World App mini app with no handoff id.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling duplicate-fingerprint fixture");
+    assert.equal(duplicateFingerprintResult.surfCalls, 1);
+    assert.equal(duplicateFingerprintResult.echoCalls, 0);
+    assert.equal(duplicateFingerprintResult.delegationSummary.length, 1);
+    assert.equal(duplicateFingerprintResult.delegationSummary[0].status, "completed");
+
+    duplicateDelegatedStopResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_duplicate_delegated_stop",
+      session_id: "session_m1_duplicate_delegated_stop",
+      turn_id: "turn_m1_duplicate_delegated_stop_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Repeat the same Surf delegation after it already completed.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling duplicate delegated stop fixture");
+    assert.equal(duplicateDelegatedStopResult.surfCalls, 1);
+    assert.equal(duplicateDelegatedStopResult.echoCalls, 0);
+    assert.equal(duplicateDelegatedStopResult.delegationSummary.length, 1);
+    assert.equal(duplicateDelegatedStopResult.response.answer?.decision, "WAIT");
+    assert.match(duplicateDelegatedStopResult.response.answer?.body ?? "", /Specialist execution did not complete; retry required\./);
+    assert.doesNotMatch(duplicateDelegatedStopResult.response.answer?.body ?? "", /caller should run Surf again/);
+
+    worldAppSignalResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m1_world_app_signal",
+      session_id: "session_m1_world_app_signal",
+      turn_id: "turn_m1_world_app_signal_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Check X xem co signal gi ve World App mini app khong, roi noi CMO co nen dung lam angle tuan nay khong.",
+      },
+    });
+
+    assert.equal(server.serverFailure, null, "M1 contract server failed while handling World App signal fixture");
+    assert.equal(worldAppSignalResult.surfCalls, 1);
+    assert.equal(worldAppSignalResult.echoCalls, 0);
+    assert.equal(worldAppSignalResult.delegationSummary.length, 1);
+    assert.equal(worldAppSignalResult.delegationSummary[0].mode, "surf.x");
+    assert.equal(worldAppSignalResult.delegationSummary[0].status, "completed");
+    assert.match(worldAppSignalResult.response.answer?.body ?? "", /One Surf result was enough/);
+
     surfThenEchoResult = await runHermesCmoRuntime({
       ...sampleRequest,
       request_id: "req_m1_surf_then_echo",
@@ -1270,8 +1484,8 @@ try {
     assert.match(echoRetryLimitResult.response.answer?.body ?? "", /Echo output unusable; retry required\./);
     assert.doesNotMatch(echoRetryLimitResult.response.answer?.body ?? "", /Post 1:/);
     assert.equal(echoRetryLimitResult.response.structured_output?.echo_retry_failed, true);
-    assert.equal(server.calls.cmo, 24);
-    assert.equal(server.calls.surfUnified, 7);
+    assert.equal(server.calls.cmo, 32);
+    assert.equal(server.calls.surfUnified, 11);
     assert.equal(server.calls.echo, 10);
     assert.equal(server.calls.legacySurfX, 0);
     assert.equal(server.calls.legacySurfLast30Days, 0);
@@ -1299,8 +1513,8 @@ try {
     assert.match(maxRoundsResult.response.answer?.body ?? "", /Specialist execution did not complete; retry required\./);
     assert.doesNotMatch(maxRoundsResult.response.answer?.body ?? "", /caller should run the next specialist/);
     assert.equal(maxRoundsResult.response.structured_output?.orchestration_failed, true);
-    assert.equal(server.calls.cmo, 28);
-    assert.equal(server.calls.surfUnified, 8);
+    assert.equal(server.calls.cmo, 36);
+    assert.equal(server.calls.surfUnified, 12);
     assert.equal(server.calls.echo, 12);
     assert.equal(server.calls.legacySurfX, 0);
     assert.equal(server.calls.legacySurfLast30Days, 0);
@@ -1326,6 +1540,20 @@ try {
         echoRetryGood: echoRetryGoodResult?.echoCalls === 2,
         echoRetryFailureGuarded: echoRetryFailResult?.response.structured_output?.echo_retry_failed === true,
         echoRetryLimited: echoRetryLimitResult?.echoCalls === 2,
+        duplicateSameId: {
+          surfCalls: duplicateSameIdResult?.surfCalls,
+          delegationSummaryLength: duplicateSameIdResult?.delegationSummary.length,
+        },
+        duplicateFingerprint: {
+          surfCalls: duplicateFingerprintResult?.surfCalls,
+          delegationSummaryLength: duplicateFingerprintResult?.delegationSummary.length,
+        },
+        duplicateDelegatedStopGuarded: duplicateDelegatedStopResult?.response.structured_output?.orchestration_failed === true,
+        worldAppSignal: {
+          surfCalls: worldAppSignalResult?.surfCalls,
+          echoCalls: worldAppSignalResult?.echoCalls,
+          delegationSummaryLength: worldAppSignalResult?.delegationSummary.length,
+        },
         surfThenEcho: surfThenEchoResult?.surfCalls === 1 && surfThenEchoResult?.echoCalls === 1,
         maxRoundsGuarded: maxRoundsResult?.response.structured_output?.orchestration_failed === true,
         legacySurfXCalls: server.calls.legacySurfX,

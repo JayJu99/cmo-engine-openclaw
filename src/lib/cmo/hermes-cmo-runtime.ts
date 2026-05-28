@@ -2,6 +2,7 @@ import { getCmoHermesCmoMaxDelegations, isCmoHermesCmoOrchestrationEnabled } fro
 import {
   executeHermesCmoDelegations,
   executableDelegations,
+  stableDelegationKey,
   type HermesCmoDelegationExecution,
   type HermesCmoDelegationExecutionResult,
   type HermesCmoForbiddenCounters,
@@ -378,6 +379,7 @@ const specialistResultArtifact = (execution: HermesCmoDelegationExecution): Reco
     schema_version: schemaVersion,
     status: execution.status,
     handoff_id: execution.delegationId,
+    delegation_key: execution.delegationKey,
     result: execution.response ?? null,
     summary: execution.summary,
     ...(Array.isArray(response.outputs) ? { outputs: response.outputs } : {}),
@@ -571,7 +573,9 @@ const buildHermesCmoLiveRequest = (
         results: options.delegationResults,
       }
     : null;
-  const specialistResultArtifacts = options.delegationResults?.map((result) => specialistResultArtifact(result)) ?? [];
+  const specialistResultArtifacts = Array.from(
+    new Map((options.delegationResults?.map((result) => [result.delegationKey, specialistResultArtifact(result)] as const) ?? [])).values(),
+  );
   const artifactsIn = delegationResultsArtifact
     ? [...request.context_pack.artifacts_in, ...specialistResultArtifacts, delegationResultsArtifact]
     : request.context_pack.artifacts_in;
@@ -1135,17 +1139,58 @@ const responseField = (response: HermesCmoRuntimeResponse, key: string): unknown
   return response[key] ?? structured[key];
 };
 
+const responseFieldAny = (response: HermesCmoRuntimeResponse, keys: string[]): unknown => {
+  for (const key of keys) {
+    const value = responseField(response, key);
+
+    if (value !== undefined) {
+      return value;
+    }
+  }
+
+  return undefined;
+};
+
 const needsEchoRetry = (response: HermesCmoRuntimeResponse): boolean =>
-  responseField(response, "classification") === "needs_echo_retry" &&
-  responseField(response, "retry_of") === "echo" &&
+  responseFieldAny(response, ["classification"]) === "needs_echo_retry" &&
+  responseFieldAny(response, ["retry_of", "retryOf"]) === "echo" &&
+  typeof responseFieldAny(response, ["retry_reason", "retryReason"]) === "string" &&
   executableDelegations(response.delegations, 1).some(
     (delegation) => delegation.targetAgent === "echo" && delegation.mode === "echo.default",
   );
 
 const echoRetryReason = (response: HermesCmoRuntimeResponse): string =>
-  typeof responseField(response, "retry_reason") === "string"
-    ? (responseField(response, "retry_reason") as string)
+  typeof responseFieldAny(response, ["retry_reason", "retryReason"]) === "string"
+    ? (responseFieldAny(response, ["retry_reason", "retryReason"]) as string)
     : "Echo output unusable; retry required.";
+
+const retryDelegationWithKey = (
+  delegation: Record<string, unknown>,
+  retryIndex: number,
+  retryReason: string,
+): Record<string, unknown> => ({
+  ...delegation,
+  id: `echo:${stableDelegationKey(delegation)}:retry:${retryIndex}`,
+  delegation_id: `echo:${stableDelegationKey(delegation)}:retry:${retryIndex}`,
+  retry_of: "echo",
+  retry_reason: retryReason,
+});
+
+const uniqueDelegationsByKey = (delegations: Record<string, unknown>[]): Record<string, unknown>[] => {
+  const seen = new Set<string>();
+  const unique: Record<string, unknown>[] = [];
+
+  for (const delegation of delegations) {
+    const key = stableDelegationKey(delegation);
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(delegation);
+    }
+  }
+
+  return unique;
+};
 
 const responseWithEchoRetryFailureGuardrail = (
   response: HermesCmoRuntimeResponse,
@@ -1191,14 +1236,24 @@ const responseWithOrchestrationFailureGuardrail = (
 const mergeDelegationResults = (
   left: HermesCmoDelegationExecutionResult,
   right: HermesCmoDelegationExecutionResult,
-): HermesCmoDelegationExecutionResult => ({
-  executions: [...left.executions, ...right.executions],
-  activityEvents: [...left.activityEvents, ...right.activityEvents],
-  surfCalls: left.surfCalls + right.surfCalls,
-  echoCalls: left.echoCalls + right.echoCalls,
-  agentsUsed: Array.from(new Set([...left.agentsUsed, ...right.agentsUsed])),
-  forbiddenCounters: makeForbiddenCounters(),
-});
+): HermesCmoDelegationExecutionResult => {
+  const executionsByKey = new Map<string, HermesCmoDelegationExecution>();
+
+  for (const execution of [...left.executions, ...right.executions]) {
+    executionsByKey.set(execution.delegationKey, execution);
+  }
+
+  const executions = Array.from(executionsByKey.values());
+
+  return {
+    executions,
+    activityEvents: [...left.activityEvents, ...right.activityEvents],
+    surfCalls: executions.filter((execution) => execution.targetAgent === "surf").length,
+    echoCalls: executions.filter((execution) => execution.targetAgent === "echo").length,
+    agentsUsed: Array.from(new Set(executions.map((execution) => execution.targetAgent))),
+    forbiddenCounters: makeForbiddenCounters(),
+  };
+};
 
 const agentsUsedFrom = (delegationResult: HermesCmoDelegationExecutionResult): Array<"cmo" | "echo" | "surf"> =>
   Array.from(new Set<"cmo" | "echo" | "surf">(["cmo", ...delegationResult.agentsUsed]));
@@ -1271,6 +1326,7 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
   let echoRetriesUsed = 0;
   let echoRetryFailureReason: string | null = null;
   let orchestrationFailureReason: string | null = null;
+  const executedDelegationKeys = new Set<string>();
 
   const runSynthesis = async (allowNextDelegation: boolean): Promise<HermesCmoLivePayload> => {
     const echoRetryAvailable =
@@ -1308,7 +1364,17 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
 
     while (response.status !== "needs_user_input") {
       const retryPending = needsEchoRetry(response);
-      const executable = executableDelegations(response.delegations, maxDelegations);
+      const retryReason = retryPending ? echoRetryReason(response) : "";
+      const candidateDelegations = uniqueDelegationsByKey(retryPending
+        ? response.delegations
+            .filter((delegation) =>
+              executableDelegations([delegation], 1).some(
+                (normalized) => normalized.targetAgent === "echo" && normalized.mode === "echo.default",
+              ),
+            )
+            .map((delegation) => retryDelegationWithKey(delegation, echoRetriesUsed + 1, retryReason))
+        : response.delegations.filter((delegation) => !executedDelegationKeys.has(stableDelegationKey(delegation))));
+      const executable = executableDelegations(candidateDelegations, retryPending ? 1 : maxDelegations);
 
       if (retryPending && echoRetriesUsed >= MAX_M1_ECHO_RETRIES) {
         echoRetryFailureReason = echoRetryReason(response);
@@ -1317,7 +1383,7 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
 
       if (executable.length === 0) {
         if (response.status === "delegated") {
-          orchestrationFailureReason = "Specialist execution did not complete; retry required.";
+          orchestrationFailureReason = "Specialist execution already completed, but final synthesis did not resolve. Retry required.";
         }
         break;
       }
@@ -1327,20 +1393,13 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
         break;
       }
 
-      const delegationsToExecute = retryPending
-        ? response.delegations.filter((delegation) =>
-            executableDelegations([delegation], 1).some(
-              (normalized) => normalized.targetAgent === "echo" && normalized.mode === "echo.default",
-            ),
-          )
-        : response.delegations;
       const roundResult = await executeHermesCmoDelegations({
         parentRequestId: outboundRequest.request_id,
         sessionId: outboundRequest.session_id,
         turnId: outboundRequest.turn_id,
         workspaceSlug: outboundRequest.workspace.app_id,
         userMessage: outboundRequest.intent.user_message,
-        delegations: delegationsToExecute,
+        delegations: candidateDelegations,
         maxDelegations: retryPending ? 1 : maxDelegations,
       });
       orchestrationRounds += 1;
@@ -1350,6 +1409,11 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
       }
 
       delegationResult = mergeDelegationResults(delegationResult, roundResult);
+      for (const execution of roundResult.executions) {
+        if (execution.status === "completed") {
+          executedDelegationKeys.add(execution.delegationKey);
+        }
+      }
       activityEvents = [...activityEvents, ...roundResult.activityEvents];
 
       const failedExecution = roundResult.executions.find((execution) => execution.status !== "completed");
@@ -1373,7 +1437,15 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
   response = responseWithDelegationFailureGuardrail(response, delegationResult);
   if (echoRetryFailureReason || needsEchoRetry(response)) {
     response = responseWithEchoRetryFailureGuardrail(response, echoRetryFailureReason ?? echoRetryReason(response));
-  } else if (orchestrationFailureReason || (orchestrationEnabled && (response.status === "delegated" || executableDelegations(response.delegations, maxDelegations).length > 0))) {
+  } else if (
+    orchestrationFailureReason ||
+    (orchestrationEnabled &&
+      (response.status === "delegated" ||
+        executableDelegations(
+          response.delegations.filter((delegation) => !executedDelegationKeys.has(stableDelegationKey(delegation))),
+          maxDelegations,
+        ).length > 0))
+  ) {
     response = responseWithOrchestrationFailureGuardrail(
       response,
       orchestrationFailureReason ?? "Specialist execution did not complete; retry required.",

@@ -16,6 +16,7 @@ export interface HermesCmoForbiddenCounters {
 }
 
 export interface HermesCmoDelegationExecution {
+  delegationKey: string;
   delegationId: string;
   targetAgent: HermesCmoExecutableAgent;
   mode: HermesCmoExecutableMode;
@@ -189,6 +190,50 @@ function delegationInput(delegation: Record<string, unknown>): Record<string, un
   return isRecord(delegation.input) ? delegation.input : {};
 }
 
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function explicitDelegationId(delegation: Record<string, unknown>): string | undefined {
+  return firstText(delegation.delegation_id, delegation.delegationId, delegation.handoff_id, delegation.handoffId, delegation.id);
+}
+
+export function stableDelegationKey(delegation: Record<string, unknown>): string {
+  const target = isRecord(delegation.target) ? delegation.target : {};
+  const task = isRecord(delegation.task) ? delegation.task : {};
+  const input = delegationInput(delegation);
+  const agent = text(target.agent ?? delegation.targetAgent ?? delegation.target_agent ?? delegation.agent).toLowerCase();
+  const mode = text(target.mode ?? delegation.mode).toLowerCase();
+  const id = explicitDelegationId(delegation);
+
+  if (id) {
+    return `${agent || "agent"}:${mode || "mode"}:${id}`;
+  }
+
+  return stableJson({
+    targetAgent: agent,
+    mode,
+    taskType: delegation.taskType ?? delegation.task_type ?? task.taskType ?? task.task_type ?? input.taskType ?? input.task_type,
+    objective: delegation.objective ?? task.objective ?? input.objective,
+    query: delegation.query ?? task.query ?? input.query,
+    searchQuery: delegation.searchQuery ?? delegation.search_query ?? task.searchQuery ?? task.search_query ?? input.searchQuery ?? input.search_query,
+    topic: delegation.topic ?? task.topic ?? input.topic,
+    topics: delegation.topics ?? task.topics ?? input.topics,
+    input,
+  });
+}
+
 function normalizeDelegation(delegation: Record<string, unknown>, index: number): NormalizedDelegation | null {
   if (Array.isArray(delegation.delegations) && delegation.delegations.length > 0) {
     return null;
@@ -230,7 +275,7 @@ function normalizeDelegation(delegation: Record<string, unknown>, index: number)
   const outputContract = delegation.outputContract ?? delegation.output_contract ?? task.outputContract ?? task.output_contract ?? input.outputContract ?? input.output_contract;
   const normalizedWithoutMode: Omit<NormalizedDelegation, "mode"> = {
     raw: delegation,
-    delegationId: text(delegation.delegation_id ?? delegation.delegationId ?? delegation.id, `del_m1_${index + 1}`),
+    delegationId: text(delegation.delegation_id ?? delegation.delegationId ?? delegation.handoff_id ?? delegation.handoffId ?? delegation.id, `del_m1_${index + 1}`),
     targetAgent: agent,
     taskType,
     surface,
@@ -448,6 +493,7 @@ async function executeOne(
   if (delegation.targetAgent === "echo") {
     const result = await executeHermesEcho(echoBrief(input, delegation, previousResults));
     const execution: HermesCmoDelegationExecution = {
+      delegationKey: stableDelegationKey(delegation.raw),
       delegationId: delegation.delegationId,
       targetAgent: "echo",
       mode: "echo.default",
@@ -478,6 +524,7 @@ async function executeOne(
           ? await executeHermesSurf(pulseBrief(input, delegation))
           : await executeHermesSurf(defaultSurfBrief(input, delegation));
   const execution: HermesCmoDelegationExecution = {
+    delegationKey: stableDelegationKey(delegation.raw),
     delegationId: delegation.delegationId,
     targetAgent: "surf",
     mode: delegation.mode,
