@@ -17,6 +17,7 @@ const expectedCounters = {
   openclawCalls: 0,
 };
 const forbiddenZeroCounters = {
+  vaultAgentCalls: 0,
   vaultWrites: 0,
   directSupabaseMutations: 0,
   openclawCalls: 0,
@@ -264,6 +265,7 @@ const makeRuntimeResult = (overrides = {}) => {
     },
     structured_output: {
       next_steps: ["Review the canary response in CMO chat."],
+      currentStep: "Review the canary response in CMO chat.",
     },
     delegations: [
       {
@@ -316,7 +318,7 @@ const makeRuntimeResult = (overrides = {}) => {
     strategyMode: "DIAGNOSE",
     mainBottleneck: "Activation loop clarity",
     decisionLabel: "TEST",
-    currentStep: "Hermes CMO completed.",
+    currentStep: "Review the canary response in CMO chat.",
     delegationSummary: [],
     agentsUsed: ["cmo"],
     surfCalls: 0,

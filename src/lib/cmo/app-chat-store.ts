@@ -616,13 +616,17 @@ function normalizeHermesCmoForbiddenCounters(value: unknown): HermesCmoForbidden
 
   const directSupabaseMutations =
     normalizeOptionalNonNegativeNumber(value.directSupabaseMutations ?? value.supabaseWrites) ?? undefined;
+  const vaultAgentCalls =
+    value.vaultAgentCalls === undefined ? 0 : normalizeOptionalNonNegativeNumber(value.vaultAgentCalls);
   const vaultWrites = normalizeOptionalNonNegativeNumber(value.vaultWrites) ?? undefined;
   const openclawCalls = normalizeOptionalNonNegativeNumber(value.openclawCalls) ?? undefined;
 
-  return typeof vaultWrites === "number" &&
+  return typeof vaultAgentCalls === "number" &&
+    typeof vaultWrites === "number" &&
     typeof openclawCalls === "number" &&
     typeof directSupabaseMutations === "number"
     ? {
+        vaultAgentCalls,
         vaultWrites,
         openclawCalls,
         directSupabaseMutations,

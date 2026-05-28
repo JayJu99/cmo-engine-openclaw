@@ -21,6 +21,7 @@ export const HERMES_CMO_PROPOSALS_ONLY = "proposals_only" as const;
 export const HERMES_CMO_BOUNDED_DELEGATIONS = "echo_surf_bounded" as const;
 
 export const HERMES_CMO_FORBIDDEN_ZERO_COUNTERS = [
+  "vaultAgentCalls",
   "vaultWrites",
   "openclawCalls",
   "directSupabaseMutations",
@@ -254,14 +255,16 @@ function extractForbiddenCounters(result: unknown): HermesCmoForbiddenCounters |
   }
 
   const directSupabaseMutations = counterNumber(rawCounters.directSupabaseMutations ?? rawCounters.supabaseWrites);
+  const vaultAgentCalls = rawCounters.vaultAgentCalls === undefined ? 0 : counterNumber(rawCounters.vaultAgentCalls);
   const vaultWrites = counterNumber(rawCounters.vaultWrites);
   const openclawCalls = counterNumber(rawCounters.openclawCalls);
 
-  if (vaultWrites === null || openclawCalls === null || directSupabaseMutations === null) {
+  if (vaultAgentCalls === null || vaultWrites === null || openclawCalls === null || directSupabaseMutations === null) {
     return null;
   }
 
   return {
+    vaultAgentCalls,
     vaultWrites,
     openclawCalls,
     directSupabaseMutations,

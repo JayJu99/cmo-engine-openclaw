@@ -616,6 +616,7 @@ export interface HermesCmoSafetyCounters {
 }
 
 export interface HermesCmoForbiddenCounters {
+  vaultAgentCalls: number;
   vaultWrites: number;
   openclawCalls: number;
   directSupabaseMutations: number;

@@ -20,6 +20,7 @@ const expectedCounters = {
   openclawCalls: 0,
 };
 const forbiddenZeroCounters = {
+  vaultAgentCalls: 0,
   vaultWrites: 0,
   directSupabaseMutations: 0,
   openclawCalls: 0,

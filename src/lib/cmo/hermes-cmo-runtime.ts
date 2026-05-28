@@ -320,6 +320,7 @@ const makeSafetyCounters = (surfCalls = 0, echoCalls = 0): HermesCmoRuntimeSafet
 });
 
 const makeForbiddenCounters = (): HermesCmoForbiddenCounters => ({
+  vaultAgentCalls: 0,
   vaultWrites: 0,
   openclawCalls: 0,
   directSupabaseMutations: 0,
@@ -864,6 +865,20 @@ const extractDecisionLabel = (response: HermesCmoRuntimeResponse): CmoDecisionLa
   );
 };
 
+const extractCurrentStep = (response: HermesCmoRuntimeResponse): string | undefined => {
+  const structured = isRecord(response.structured_output) ? response.structured_output : {};
+  const answer: Record<string, unknown> = isRecord(response.answer) ? response.answer : {};
+
+  return firstString([
+    structured.currentStep,
+    structured.current_step,
+    response.currentStep,
+    response.current_step,
+    answer.currentStep,
+    answer.current_step,
+  ]);
+};
+
 const resequenceActivityEvents = (
   events: HermesCmoRuntimeActivityEvent[],
   request: HermesCmoRuntimeRequest,
@@ -881,13 +896,19 @@ const currentStepFrom = (
   events: HermesCmoRuntimeActivityEvent[],
   delegations: HermesCmoDelegationExecution[],
 ): string => {
+  const strategicCurrentStep = extractCurrentStep(response);
+
+  if (strategicCurrentStep) {
+    return strategicCurrentStep;
+  }
+
   if (response.status === "needs_user_input") {
     return response.clarifying_question.question ?? "Waiting for critical context.";
   }
 
   const lastVisibleEvent = [...events].reverse().find((event) => event.user_visible && event.message.trim());
 
-  if (lastVisibleEvent) {
+  if (lastVisibleEvent && !/^(cmo|hermes cmo).*(run )?completed\.?$/i.test(lastVisibleEvent.message.trim())) {
     return lastVisibleEvent.message;
   }
 

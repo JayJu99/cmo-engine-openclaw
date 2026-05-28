@@ -13,6 +13,7 @@ const executorSourcePath = path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-d
 const kernelSourcePath = path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-skill-kernel.ts");
 
 const forbiddenCounters = {
+  vaultAgentCalls: 0,
   vaultWrites: 0,
   openclawCalls: 0,
   directSupabaseMutations: 0,
@@ -139,7 +140,7 @@ const activity = (requestBody, seq, type, message) => ({
 });
 
 const cmoResponse = (requestBody, overrides = {}) => {
-  const events = overrides.activity_events ?? [activity(requestBody, 1, "run.completed", "Hermes CMO completed.")];
+  const events = overrides.activity_events ?? [activity(requestBody, 1, "run.completed", "CMO run completed.")];
 
   return {
     response: {
@@ -172,6 +173,7 @@ const cmoResponse = (requestBody, overrides = {}) => {
         strategyMode: "REVIEW",
         mainBottleneck: "activation proof gap",
         decisionLabel: "TEST",
+        currentStep: "Run a proof-led activation copy test.",
       },
       delegations: [],
       artifacts: [],
@@ -435,6 +437,7 @@ try {
     assert.equal(result.strategyMode, "REVIEW");
     assert.equal(result.mainBottleneck, "activation proof gap");
     assert.equal(result.decisionLabel, "TEST");
+    assert.equal(result.currentStep, "Run a proof-led activation copy test.");
     assert.deepEqual(result.agentsUsed, ["cmo", "surf", "echo"]);
     assert.equal(result.delegationSummary.length, 2);
     assert.equal(result.delegationSummary[0].mode, "surf.trend");
