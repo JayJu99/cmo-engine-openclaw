@@ -1564,7 +1564,9 @@ export async function createAppChatSession(
     surfCalls,
     echoCalls,
   }) : undefined;
-  const vaultAgentDryRunMetadata = vaultAgentHandoff?.mode === "dry_run" ? vaultAgentHandoff.metadata : undefined;
+  const vaultAgentDryRunMetadata = vaultAgentHandoff?.mode === "dry_run" || vaultAgentHandoff?.mode === "dry_run_remote"
+    ? vaultAgentHandoff.metadata
+    : undefined;
   if (status === "completed") {
     const finalTotalDurationMs = Date.now() - requestStartedMs;
     persistedSession = {

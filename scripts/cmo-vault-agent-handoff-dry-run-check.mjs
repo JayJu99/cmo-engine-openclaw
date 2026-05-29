@@ -267,6 +267,12 @@ try {
   const responseBlock = responseTypes.match(/export interface CMOAppChatResponse \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.doesNotMatch(responseBlock, /vaultAgentDryRun|vault_handoff|dry_run_record_id/);
 
+  const appChatStoreSource = readFileSync("src/lib/cmo/app-chat-store.ts", "utf8");
+  assert.match(
+    appChatStoreSource,
+    /vaultAgentHandoff\?\.mode === "dry_run" \|\| vaultAgentHandoff\?\.mode === "dry_run_remote"/,
+  );
+
   const bannedFilesystemCalls = /\b(writeFile|appendFile|mkdir|rm|createWriteStream|saveCaptureToCmoEngineVault)\b/;
   const bannedGBrainCalls = /\b(importGBrain|syncGBrain|embedGBrain|dreamGBrain|extractGBrain)\b/;
   for (const file of [
