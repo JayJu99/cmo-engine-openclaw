@@ -872,27 +872,6 @@ function normalizeVaultAgentDryRunMetadata(value: unknown): VaultAgentDryRunMeta
   };
 }
 
-function logVaultAgentHandoffPersistence(input: {
-  handoff: Awaited<ReturnType<typeof runVaultAgentDryRunHandoff>> | undefined;
-  persisted: VaultAgentDryRunMetadata | undefined;
-}) {
-  if (!input.handoff) {
-    return;
-  }
-
-  console.info("[cmo-vault-handoff-persistence]", {
-    handoff_mode: input.handoff.mode,
-    handoff_status: input.handoff.status,
-    handoff_status_hint: input.handoff.handoffStatus,
-    receipt_status: input.handoff.receipt?.status,
-    receipt_record_id_exists: Boolean(input.handoff.receipt?.record_id),
-    receipt_target_path_exists: Boolean(input.handoff.receipt?.target_path_preview),
-    metadata_vault_handoff_status: input.handoff.metadata?.vault_handoff_status,
-    persisted_vault_handoff_status: input.persisted?.vault_handoff_status,
-    persisted_errors_length: input.persisted?.vault_handoff_errors?.length ?? 0,
-  });
-}
-
 function messageUserMetadata(identity: CmoServerUserIdentity): Pick<CMOChatMessage, "authMode" | "userId" | "userEmail"> {
   return {
     authMode: identity.authMode,
@@ -1588,10 +1567,6 @@ export async function createAppChatSession(
     echoCalls,
   }) : undefined;
   const vaultAgentDryRunMetadata = vaultAgentDryRunMetadataForPersistence(vaultAgentHandoff);
-  logVaultAgentHandoffPersistence({
-    handoff: vaultAgentHandoff,
-    persisted: vaultAgentDryRunMetadata,
-  });
   if (status === "completed") {
     const finalTotalDurationMs = Date.now() - requestStartedMs;
     persistedSession = {
