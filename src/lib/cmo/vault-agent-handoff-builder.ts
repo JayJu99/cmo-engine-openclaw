@@ -46,6 +46,7 @@ export interface CompletedTurnHandoffInput {
 export interface VaultAgentDryRunHandoffResult {
   mode: CmoVaultAgentHandoffMode;
   status: VaultAgentHandoffStatus;
+  handoffStatus?: Extract<VaultAgentHandoffStatus, "completed" | "dry_run_invalid">;
   package?: TurnCompletedPackage;
   receipt?: VaultAgentWriteReceipt;
   metadata: VaultAgentDryRunHandoffMetadata;
@@ -198,6 +199,7 @@ export async function runVaultAgentDryRunHandoff(input: CompletedTurnHandoffInpu
       return {
         mode,
         status,
+        handoffStatus: remote.handoffStatus,
         package: pkg,
         receipt: remote.receipt,
         metadata: metadataFromReceipt(mode, status, remote.receipt, pkg, remote.warnings, remote.indexability),
