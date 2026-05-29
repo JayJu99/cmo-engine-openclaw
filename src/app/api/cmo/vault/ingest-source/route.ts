@@ -1,15 +1,34 @@
 import { getServerUserIdentity } from "@/lib/cmo/auth";
+import { legacyUserIdentity } from "@/lib/cmo/user-metadata";
 import { callHermesVaultAgentIngestSource } from "@/lib/cmo/vault-agent-remote-client";
+import { vaultIngestInternalAuthStatus } from "@/lib/cmo/vault-agent-source-ingestion-auth";
 import { buildSourceIngestionPackage, type CmoSourceIngestionRequest } from "@/lib/cmo/vault-agent-source-ingestion";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 function statusCodeFor(status: string | undefined): number {
   return status === "rejected" ? 400 : 200;
 }
 
+async function sourceIngestionIdentity(request: Request) {
+  const internalAuth = vaultIngestInternalAuthStatus(request);
+
+  if (internalAuth.status === "authorized") {
+    return legacyUserIdentity();
+  }
+
+  if (internalAuth.status === "unauthorized" || internalAuth.status === "not_configured") {
+    throw new Error("Unauthorized source ingestion request.");
+  }
+
+  return getServerUserIdentity();
+}
+
 export async function POST(request: Request) {
   try {
     const input = (await request.json()) as CmoSourceIngestionRequest;
-    const pkg = buildSourceIngestionPackage(input, await getServerUserIdentity());
+    const pkg = buildSourceIngestionPackage(input, await sourceIngestionIdentity(request));
     const result = await callHermesVaultAgentIngestSource(pkg);
 
     if (!result.ok || !result.receipt) {
@@ -50,6 +69,9 @@ export async function POST(request: Request) {
       promotion_performed: false,
     }, { status: statusCodeFor(result.receipt.status) });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to ingest source.";
+    const unauthorized = /Authentication required|Unauthorized source ingestion request/i.test(message);
+
     return Response.json({
       ok: false,
       status: "failed",
@@ -62,10 +84,10 @@ export async function POST(request: Request) {
       source_write_performed: false,
       warnings: [],
       source_warnings: [],
-      errors: [error instanceof Error ? error.message : "Failed to ingest source."],
-      source_errors: [error instanceof Error ? error.message : "Failed to ingest source."],
+      errors: [unauthorized ? "Authentication required." : message],
+      source_errors: [unauthorized ? "Authentication required." : message],
       gbrain_called: false,
       promotion_performed: false,
-    }, { status: 400 });
+    }, { status: unauthorized ? 401 : 400 });
   }
 }

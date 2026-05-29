@@ -54,6 +54,7 @@ try {
     "workspace-registry.ts",
     "vault-agent-contracts.ts",
     "vault-agent-remote-client.ts",
+    "vault-agent-source-ingestion-auth.ts",
     "vault-agent-source-ingestion.ts",
   ]) {
     cpSync(`src/lib/cmo/${file}`, join(temp, file));
@@ -77,6 +78,7 @@ try {
     join(temp, "workspace-registry.ts"),
     join(temp, "vault-agent-contracts.ts"),
     join(temp, "vault-agent-remote-client.ts"),
+    join(temp, "vault-agent-source-ingestion-auth.ts"),
     join(temp, "vault-agent-source-ingestion.ts"),
   ], { stdio: "inherit" });
 
@@ -86,6 +88,37 @@ try {
   const {
     callHermesVaultAgentIngestSource,
   } = requireFromScript(join(dist, "vault-agent-remote-client.js"));
+  const {
+    vaultIngestInternalAuthStatus,
+  } = requireFromScript(join(dist, "vault-agent-source-ingestion-auth.js"));
+
+  const previousIngestKey = process.env.CMO_VAULT_INGEST_API_KEY;
+  delete process.env.CMO_VAULT_INGEST_API_KEY;
+  assert.equal(vaultIngestInternalAuthStatus(new Request("https://cmo.test/api/cmo/vault/ingest-source")).status, "absent");
+  assert.equal(
+    vaultIngestInternalAuthStatus(new Request("https://cmo.test/api/cmo/vault/ingest-source", {
+      headers: { Authorization: "Bearer wrong-key" },
+    })).status,
+    "not_configured",
+  );
+  process.env.CMO_VAULT_INGEST_API_KEY = "internal-test-key";
+  assert.equal(
+    vaultIngestInternalAuthStatus(new Request("https://cmo.test/api/cmo/vault/ingest-source", {
+      headers: { Authorization: "Bearer wrong-key" },
+    })).status,
+    "unauthorized",
+  );
+  assert.equal(
+    vaultIngestInternalAuthStatus(new Request("https://cmo.test/api/cmo/vault/ingest-source", {
+      headers: { Authorization: "Bearer internal-test-key" },
+    })).status,
+    "authorized",
+  );
+  if (previousIngestKey === undefined) {
+    delete process.env.CMO_VAULT_INGEST_API_KEY;
+  } else {
+    process.env.CMO_VAULT_INGEST_API_KEY = previousIngestKey;
+  }
 
   const pkg = buildSourceIngestionPackage(baseSourceInput(), {
     authMode: "supabase",
@@ -170,7 +203,10 @@ try {
   }
 
   const routeSource = readFileSync("src/app/api/cmo/vault/ingest-source/route.ts", "utf8");
+  assert.match(routeSource, /vaultIngestInternalAuthStatus/);
+  assert.match(routeSource, /legacyUserIdentity/);
   assert.match(routeSource, /getServerUserIdentity/);
+  assert.match(routeSource, /status: unauthorized \? 401 : 400/);
   assert.match(routeSource, /buildSourceIngestionPackage/);
   assert.match(routeSource, /callHermesVaultAgentIngestSource/);
   assert.match(routeSource, /source_ingestion_status/);
@@ -187,6 +223,7 @@ try {
   const bannedCmoOrchestrationChanges = /\bexecuteHermesCmoDelegations|executeHermesSurf|executeHermesEcho\b/;
   for (const file of [
     "src/lib/cmo/vault-agent-remote-client.ts",
+    "src/lib/cmo/vault-agent-source-ingestion-auth.ts",
     "src/lib/cmo/vault-agent-source-ingestion.ts",
     "src/app/api/cmo/vault/ingest-source/route.ts",
   ]) {
