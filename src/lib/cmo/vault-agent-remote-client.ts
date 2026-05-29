@@ -26,6 +26,8 @@ export interface HermesVaultAgentWriteReceipt {
   deduped: boolean;
   record_id?: string;
   target_path?: string;
+  target_relative_path?: string;
+  target_absolute_path?: string;
   content_hash?: string;
   path_safety?: unknown;
   warnings: string[];
@@ -192,7 +194,8 @@ function normalizeHermesWriteReceipt(payload: Record<string, unknown>): {
   const writePerformed = booleanValue(source.write_performed);
   const deduped = booleanValue(source.deduped) ?? false;
   const recordId = stringValue(source.record_id);
-  const targetPath = stringValue(source.target_path) ?? stringValue(source.target_path_preview);
+  const targetRelativePath = stringValue(source.target_relative_path) ?? stringValue(source.target_path) ?? stringValue(source.target_path_preview);
+  const targetAbsolutePath = stringValue(source.target_absolute_path);
   const contentHash = stringValue(source.content_hash);
   const gbrainCalled = booleanValue(source.gbrain_called) ?? (safety ? booleanValue(safety.gbrain_called) : undefined);
   const memoryMutation = booleanValue(source.memory_mutation) ?? (safety ? booleanValue(safety.memory_mutation) : undefined);
@@ -220,8 +223,8 @@ function normalizeHermesWriteReceipt(payload: Record<string, unknown>): {
     contractErrors.push("Hermes Vault Agent write receipt is missing record_id.");
   }
 
-  if (!targetPath) {
-    contractErrors.push("Hermes Vault Agent write receipt is missing target_path.");
+  if (!targetRelativePath) {
+    contractErrors.push("Hermes Vault Agent write receipt is missing target_relative_path.");
   }
 
   if (gbrainCalled !== false) {
@@ -234,7 +237,7 @@ function normalizeHermesWriteReceipt(payload: Record<string, unknown>): {
 
   const errors = [...contractErrors, ...responseValidationErrors];
 
-  if (contractErrors.length || !recordId || !targetPath || typeof writePerformed !== "boolean" || (status !== "completed" && status !== "rejected")) {
+  if (contractErrors.length || !recordId || !targetRelativePath || typeof writePerformed !== "boolean" || (status !== "completed" && status !== "rejected")) {
     return { errors, warnings };
   }
 
@@ -245,7 +248,9 @@ function normalizeHermesWriteReceipt(payload: Record<string, unknown>): {
       write_performed: writePerformed,
       deduped,
       record_id: recordId,
-      target_path: targetPath,
+      target_path: targetRelativePath,
+      target_relative_path: targetRelativePath,
+      target_absolute_path: targetAbsolutePath,
       content_hash: contentHash,
       path_safety: normalizePathSafety(source.path_safety),
       warnings,

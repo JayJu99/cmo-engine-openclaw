@@ -62,7 +62,8 @@ function writeReceipt(overrides = {}) {
     write_performed: true,
     deduped: false,
     record_id: "turnlog_write_123",
-    target_path: "03 Sessions/holdstation-mini-app/user_123/session_write_123/Turn Logs/turnlog_write_123 - cmo-turn.md",
+    target_relative_path: "03 Sessions/holdstation-mini-app/user_123/session_write_123/Turn Logs/turnlog_write_123 - cmo-turn.md",
+    target_absolute_path: "/Users/jay/Documents/CMO Engine Vault/03 Sessions/holdstation-mini-app/user_123/session_write_123/Turn Logs/turnlog_write_123 - cmo-turn.md",
     content_hash: "sha256:test-write-hash",
     path_safety: {
       safe: true,
@@ -154,7 +155,8 @@ try {
     assert.equal(successPersisted.vault_write_performed, true);
     assert.equal(successPersisted.vault_deduped, false);
     assert.equal(successPersisted.vault_record_id, "turnlog_write_123");
-    assert.match(successPersisted.vault_target_path, /Turn Logs\/turnlog_write_123 - cmo-turn\.md$/);
+    assert.equal(successPersisted.vault_target_path, "03 Sessions/holdstation-mini-app/user_123/session_write_123/Turn Logs/turnlog_write_123 - cmo-turn.md");
+    assert.match(successPersisted.vault_target_absolute_path, /CMO Engine Vault\/03 Sessions\/holdstation-mini-app\/user_123\/session_write_123\/Turn Logs\/turnlog_write_123 - cmo-turn\.md$/);
     assert.equal(successPersisted.vault_content_hash, "sha256:test-write-hash");
     assert.deepEqual(successPersisted.vault_path_safety, { safe: true, normalized: true });
     assert.deepEqual(successPersisted.vault_errors, []);
@@ -165,7 +167,8 @@ try {
       write_performed: false,
       deduped: true,
       record_id: "turnlog_write_deduped",
-      target_path: "03 Sessions/holdstation-mini-app/user_123/session_write_123/Turn Logs/turnlog_write_deduped - cmo-turn.md",
+      target_relative_path: "03 Sessions/holdstation-mini-app/user_123/session_write_123/Turn Logs/turnlog_write_deduped - cmo-turn.md",
+      target_absolute_path: "/Users/jay/Documents/CMO Engine Vault/03 Sessions/holdstation-mini-app/user_123/session_write_123/Turn Logs/turnlog_write_deduped - cmo-turn.md",
       content_hash: "sha256:test-deduped-hash",
       warnings: ["deduped existing turn log"],
     })), {
@@ -180,6 +183,7 @@ try {
     assert.equal(dedupedPersisted.vault_write_performed, false);
     assert.equal(dedupedPersisted.vault_deduped, true);
     assert.equal(dedupedPersisted.vault_record_id, "turnlog_write_deduped");
+    assert.equal(dedupedPersisted.vault_target_path, "03 Sessions/holdstation-mini-app/user_123/session_write_123/Turn Logs/turnlog_write_deduped - cmo-turn.md");
     assert.match(dedupedPersisted.vault_warnings.join("\n"), /deduped existing turn log/);
 
     globalThis.fetch = async () => new Response(JSON.stringify(writeReceipt({
@@ -187,7 +191,8 @@ try {
       write_performed: false,
       deduped: false,
       record_id: "turnlog_write_rejected",
-      target_path: "03 Sessions/holdstation-mini-app/user_123/session_write_123/Turn Logs/turnlog_write_rejected - cmo-turn.md",
+      target_relative_path: "03 Sessions/holdstation-mini-app/user_123/session_write_123/Turn Logs/turnlog_write_rejected - cmo-turn.md",
+      target_absolute_path: "/Users/jay/Documents/CMO Engine Vault/03 Sessions/holdstation-mini-app/user_123/session_write_123/Turn Logs/turnlog_write_rejected - cmo-turn.md",
       errors: ["remote policy rejected write"],
     })), {
       status: 200,

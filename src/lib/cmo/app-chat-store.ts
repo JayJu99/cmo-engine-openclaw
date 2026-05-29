@@ -872,6 +872,7 @@ function normalizeVaultAgentDryRunMetadata(value: unknown): VaultAgentDryRunMeta
     ...(typeof value.vault_deduped === "boolean" ? { vault_deduped: value.vault_deduped } : {}),
     vault_record_id: normalizeOptionalString(value.vault_record_id),
     vault_target_path: normalizeOptionalString(value.vault_target_path),
+    vault_target_absolute_path: normalizeOptionalString(value.vault_target_absolute_path),
     vault_content_hash: normalizeOptionalString(value.vault_content_hash),
     ...(value.vault_path_safety !== undefined ? { vault_path_safety: value.vault_path_safety } : {}),
     vault_warnings: normalizeStringList(value.vault_warnings),

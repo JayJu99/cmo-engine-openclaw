@@ -685,6 +685,7 @@ export interface VaultAgentDryRunMetadata {
   vault_deduped?: boolean;
   vault_record_id?: string;
   vault_target_path?: string;
+  vault_target_absolute_path?: string;
   vault_content_hash?: string;
   vault_path_safety?: unknown;
   vault_warnings?: string[];
