@@ -705,6 +705,7 @@ export interface VaultAgentContextPackSourceMetadata {
   scope?: string;
   visibility?: string;
   confidence?: number;
+  excerpt_or_summary?: string;
 }
 
 export interface VaultAgentContextPackMetadata {

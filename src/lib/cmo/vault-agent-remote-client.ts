@@ -75,6 +75,7 @@ export interface HermesVaultAgentContextPackSource {
   scope?: string;
   visibility?: string;
   confidence?: number;
+  excerpt_or_summary?: string;
   excerpt?: string;
   summary?: string;
 }
@@ -344,6 +345,7 @@ function normalizeContextPackSource(value: unknown, index: number): HermesVaultA
   }
 
   const title = stringValue(value.title) ?? stringValue(value.source_title) ?? stringValue(value.name) ?? `Vault source ${index + 1}`;
+  const excerptOrSummary = stringValue(value.excerpt_or_summary);
   const excerpt = stringValue(value.excerpt) ?? stringValue(value.content_excerpt) ?? stringValue(value.preview);
   const summary = stringValue(value.summary) ?? stringValue(value.canonical_summary) ?? stringValue(value.text);
 
@@ -356,6 +358,7 @@ function normalizeContextPackSource(value: unknown, index: number): HermesVaultA
     scope: stringValue(value.scope),
     visibility: stringValue(value.visibility),
     confidence: numberValue(value.confidence),
+    excerpt_or_summary: excerptOrSummary,
     excerpt,
     summary,
   };

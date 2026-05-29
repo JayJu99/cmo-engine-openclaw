@@ -59,7 +59,7 @@ export function contextPackQueryFromUserMessage(message: string): string {
 }
 
 function sourceSnippet(source: HermesVaultAgentContextPackSource): string {
-  return compactText(source.summary ?? source.excerpt ?? "", MAX_SOURCE_TEXT_CHARS);
+  return compactText(source.excerpt_or_summary ?? source.summary ?? source.excerpt ?? "", MAX_SOURCE_TEXT_CHARS);
 }
 
 function sourceMetadata(source: HermesVaultAgentContextPackSource): VaultAgentContextPackSourceMetadata {
@@ -72,6 +72,7 @@ function sourceMetadata(source: HermesVaultAgentContextPackSource): VaultAgentCo
     ...(source.scope ? { scope: source.scope } : {}),
     ...(source.visibility ? { visibility: source.visibility } : {}),
     ...(typeof source.confidence === "number" ? { confidence: source.confidence } : {}),
+    ...(source.excerpt_or_summary ? { excerpt_or_summary: compactText(source.excerpt_or_summary, MAX_SOURCE_TEXT_CHARS) } : {}),
   };
 }
 

@@ -110,8 +110,7 @@ function contextPackReceipt(overrides = {}) {
         scope: "workspace",
         visibility: "workspace",
         confidence: 0.95,
-        summary: "M3.12 added source ingestion through Hermes Vault Agent with GBrain off and no promotion.",
-        excerpt: "Source ingestion endpoint writes under 13 Sources and does not promote accepted knowledge.",
+        excerpt_or_summary: "M3.12 live source ingestion test reached Hermes Vault Agent, wrote source records under 13 Sources, kept GBrain embed off, and did not promote accepted knowledge.",
       },
     ],
     warnings: [],
@@ -266,18 +265,21 @@ try {
     assert.equal(success.metadata.context_pack_sources[0].scope, "workspace");
     assert.equal(success.metadata.context_pack_sources[0].visibility, "workspace");
     assert.equal(success.metadata.context_pack_sources[0].confidence, 0.95);
+    assert.match(success.metadata.context_pack_sources[0].excerpt_or_summary, /wrote source records under 13 Sources/);
     assert.equal(success.metadata.gbrain_called, true);
     assert.equal(success.metadata.vault_mutation, false);
     assert.equal(success.metadata.promotion_performed, false);
     assert.match(success.hiddenText, /^## Vault Context Pack/);
     assert.match(success.hiddenText, /Do not call Surf just to recover internal Vault facts/);
     assert.match(success.hiddenText, /GBrain Pilot Copy/);
+    assert.match(success.hiddenText, /wrote source records under 13 Sources/);
     assert(success.hiddenText.length <= 4000);
 
     const injected = applyVaultAgentContextPackToCmoContextPackage(baseContextPackage(), success);
     assert.equal(injected.contextPack.vaultAgentContextPack.hidden_text, success.hiddenText);
     assert.equal(injected.contextPack.vaultAgentContextPack.sources[0].source_path, success.metadata.context_pack_sources[0].source_path);
     assert.equal(injected.contextPack.vaultAgentContextPack.sources[0].source_type, "source_note");
+    assert.match(injected.contextPack.vaultAgentContextPack.sources[0].excerpt_or_summary, /wrote source records under 13 Sources/);
 
     globalThis.fetch = async () => new Response(JSON.stringify(sourceAliasReceipt()), {
       status: 200,
