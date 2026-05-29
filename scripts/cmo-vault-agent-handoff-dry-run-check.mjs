@@ -186,9 +186,32 @@ try {
   assert.match(missingUserReceipt.validation_errors.join("\n"), /user_id or user_ref/);
 
   const originalFetch = globalThis.fetch;
-  const remoteReceipt = (status = "dry_run") => ({
-    schema_version: "cmo.vault-agent.v1",
+  const hermesVaultAgentResponse = (status = "completed") => ({
+    schema_version: "hermes.vault_agent.response.v1",
+    mode: "vault.write_turn_log.dry_run",
+    status,
     record_id: `rec_remote_${status}`,
+    target_path_preview: "09 Proposals/Vault Agent Dry Run/holdstation-mini-app/2026/05/rec-remote.md",
+    write_performed: false,
+    gbrain_called: false,
+    memory_mutation: false,
+    safety: {
+      vault_write: false,
+      gbrain_called: false,
+      memory_mutation: false,
+    },
+    indexability: {
+      gbrain_index: false,
+      gbrain_status: "not_indexable",
+      reason: "Remote Hermes Vault Agent dry-run kept raw turn log out of GBrain.",
+    },
+    validation_errors: status === "rejected" ? ["remote policy rejected package"] : [],
+    validation_warnings: status === "rejected" ? ["remote rejected dry-run"] : [],
+  });
+
+  const legacyRemoteReceipt = (status = "dry_run") => ({
+    schema_version: "cmo.vault-agent.v1",
+    record_id: `rec_legacy_${status}`,
     status,
     write_confirmed: false,
     target_path_preview: "09 Proposals/Vault Agent Dry Run/holdstation-mini-app/2026/05/rec-remote.md",
@@ -212,11 +235,7 @@ try {
       assert.equal(body.final_cmo_answer, "Focus the next sprint on activation proof, then review retention signals.");
       assert.equal(body.no_auto_promote, true);
 
-      return new Response(JSON.stringify({
-        schema_version: "hermes.vault_agent.response.v1",
-        status: "completed",
-        receipt: remoteReceipt(),
-      }), {
+      return new Response(JSON.stringify(hermesVaultAgentResponse()), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -224,19 +243,16 @@ try {
 
     const remoteSuccess = await runVaultAgentDryRunHandoff(baseHandoffInput());
     assert.equal(remoteSuccess.mode, "dry_run_remote");
-    assert.equal(remoteSuccess.status, "dry_run_valid");
+    assert.equal(remoteSuccess.status, "completed");
+    assert.equal(remoteSuccess.metadata.vault_handoff_status, "completed");
     assert.equal(remoteSuccess.receipt.write_confirmed, false);
     assert.equal(remoteSuccess.receipt.no_filesystem_write, true);
     assert.equal(remoteSuccess.receipt.no_gbrain_call, true);
-    assert.equal(remoteSuccess.metadata.dry_run_record_id, "rec_remote_dry_run");
+    assert.equal(remoteSuccess.metadata.dry_run_record_id, "rec_remote_completed");
+    assert.equal(remoteSuccess.metadata.dry_run_indexability.gbrain_index, false);
+    assert.equal(remoteSuccess.metadata.dry_run_indexability.gbrain_status, "not_indexable");
 
-    globalThis.fetch = async () => new Response(JSON.stringify({
-      schema_version: "hermes.vault_agent.response.v1",
-      status: "rejected",
-      result: {
-        receipt: remoteReceipt("rejected"),
-      },
-    }), {
+    globalThis.fetch = async () => new Response(JSON.stringify(hermesVaultAgentResponse("rejected")), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -246,6 +262,19 @@ try {
     assert.equal(remoteRejected.status, "dry_run_invalid");
     assert.equal(remoteRejected.metadata.vault_handoff_status, "dry_run_invalid");
     assert.match(remoteRejected.metadata.vault_handoff_errors.join("\n"), /remote policy rejected/);
+
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      schema_version: "legacy.wrapper.v1",
+      receipt: legacyRemoteReceipt(),
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    const legacyWrapperRemote = await runVaultAgentDryRunHandoff(baseHandoffInput());
+    assert.equal(legacyWrapperRemote.mode, "dry_run_remote");
+    assert.equal(legacyWrapperRemote.status, "completed");
+    assert.equal(legacyWrapperRemote.metadata.dry_run_record_id, "rec_legacy_dry_run");
 
     globalThis.fetch = async () => {
       throw new Error("mock network failure");

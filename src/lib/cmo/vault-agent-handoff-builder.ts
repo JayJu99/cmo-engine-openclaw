@@ -12,7 +12,7 @@ import { decideIndexability } from "./vault-scope-policy";
 import { CANONICAL_VAULT_LANGUAGE, type TurnCompletedPackage, type VaultAgentWriteReceipt } from "./vault-agent-contracts";
 import type { CmoServerUserIdentity } from "./user-metadata";
 
-export type VaultAgentHandoffStatus = "skipped" | "dry_run_valid" | "dry_run_invalid" | "failed";
+export type VaultAgentHandoffStatus = "skipped" | "dry_run_valid" | "dry_run_invalid" | "completed" | "failed";
 
 export interface VaultAgentDryRunHandoffMetadata {
   vault_handoff_mode: CmoVaultAgentHandoffMode;
@@ -119,16 +119,17 @@ function metadataFromReceipt(
   receipt: VaultAgentWriteReceipt,
   pkg: TurnCompletedPackage,
   extraWarnings: string[] = [],
+  remoteIndexability?: VaultAgentDryRunHandoffMetadata["dry_run_indexability"],
 ): VaultAgentDryRunHandoffMetadata {
   const normalized = normalizeVaultRecord(pkg);
   const indexability = decideIndexability(normalized);
-  const dryRunIndexability = receipt.markdown_preview || receipt.target_path_preview
+  const dryRunIndexability = remoteIndexability ?? (receipt.markdown_preview || receipt.target_path_preview
     ? {
         gbrain_index: indexability.gbrain_index,
         gbrain_status: indexability.gbrain_status,
         reason: indexability.reason,
       }
-    : undefined;
+    : undefined);
 
   return {
     vault_handoff_mode: mode,
@@ -175,16 +176,16 @@ export async function runVaultAgentDryRunHandoff(input: CompletedTurnHandoffInpu
         };
       }
 
-      const status: VaultAgentHandoffStatus = remote.receipt.status === "dry_run" || remote.receipt.status === "validated"
-        ? "dry_run_valid"
-        : "dry_run_invalid";
+      const status: VaultAgentHandoffStatus = remote.handoffStatus ?? (
+        remote.receipt.status === "dry_run" || remote.receipt.status === "validated" ? "completed" : "dry_run_invalid"
+      );
 
       return {
         mode,
         status,
         package: pkg,
         receipt: remote.receipt,
-        metadata: metadataFromReceipt(mode, status, remote.receipt, pkg, remote.warnings),
+        metadata: metadataFromReceipt(mode, status, remote.receipt, pkg, remote.warnings, remote.indexability),
       };
     }
 

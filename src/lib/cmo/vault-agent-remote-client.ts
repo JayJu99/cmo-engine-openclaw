@@ -7,6 +7,12 @@ const HERMES_VAULT_AGENT_RESPONSE_SCHEMA = "hermes.vault_agent.response.v1" as c
 export interface HermesVaultAgentDryRunResult {
   ok: boolean;
   receipt?: VaultAgentWriteReceipt;
+  handoffStatus?: "completed" | "dry_run_invalid";
+  indexability?: {
+    gbrain_index: boolean;
+    gbrain_status: string;
+    reason: string;
+  };
   error?: string;
   warnings: string[];
 }
@@ -100,6 +106,132 @@ function receiptCandidate(payload: Record<string, unknown>): unknown {
   return typeof payload.record_id === "string" ? payload : undefined;
 }
 
+function nestedRecord(value: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  return isRecord(value[key]) ? value[key] : undefined;
+}
+
+function booleanFalseIfPresent(value: Record<string, unknown>, key: string): boolean {
+  return value[key] === undefined || value[key] === false;
+}
+
+function responseWarnings(payload: Record<string, unknown>, result?: Record<string, unknown>): string[] {
+  return [
+    ...stringList(payload.warnings),
+    ...stringList(payload.validation_warnings),
+    ...(result ? stringList(result.warnings) : []),
+    ...(result ? stringList(result.validation_warnings) : []),
+  ];
+}
+
+function responseErrors(payload: Record<string, unknown>, result?: Record<string, unknown>): string[] {
+  return [
+    ...stringList(payload.errors),
+    ...stringList(payload.validation_errors),
+    ...(result ? stringList(result.errors) : []),
+    ...(result ? stringList(result.validation_errors) : []),
+  ];
+}
+
+function normalizeIndexability(value: unknown): HermesVaultAgentDryRunResult["indexability"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const status = stringValue(value.gbrain_status) ?? stringValue(value.status) ?? "not_indexable";
+  const reason = stringValue(value.reason) ?? stringValue(value.summary) ?? "Hermes Vault Agent dry-run indexability decision.";
+
+  return {
+    gbrain_index: value.gbrain_index === true || value.indexable === true,
+    gbrain_status: status,
+    reason,
+  };
+}
+
+function normalizeHermesDryRunResponse(payload: Record<string, unknown>): {
+  receipt?: VaultAgentWriteReceipt;
+  handoffStatus?: "completed" | "dry_run_invalid";
+  indexability?: HermesVaultAgentDryRunResult["indexability"];
+  errors: string[];
+  warnings: string[];
+} {
+  const result = nestedRecord(payload, "result");
+  const safety = nestedRecord(payload, "safety") ?? (result ? nestedRecord(result, "safety") : undefined);
+  const recordId = stringValue(payload.record_id) ?? (result ? stringValue(result.record_id) : undefined);
+  const status = stringValue(payload.status) ?? (result ? stringValue(result.status) : undefined);
+  const mode = stringValue(payload.mode) ?? (result ? stringValue(result.mode) : undefined);
+  const targetPath = stringValue(payload.target_path_preview) ?? (result ? stringValue(result.target_path_preview) : undefined);
+  const validationErrors = responseErrors(payload, result);
+  const contractErrors: string[] = [];
+  const warnings = responseWarnings(payload, result);
+
+  if (payload.schema_version !== HERMES_VAULT_AGENT_RESPONSE_SCHEMA) {
+    contractErrors.push("Hermes Vault Agent response schema_version must be hermes.vault_agent.response.v1.");
+  }
+
+  if (mode !== "vault.write_turn_log.dry_run") {
+    contractErrors.push("Hermes Vault Agent response mode must be vault.write_turn_log.dry_run.");
+  }
+
+  if (!recordId) {
+    contractErrors.push("Hermes Vault Agent response is missing record_id.");
+  }
+
+  if (status !== "completed" && status !== "rejected") {
+    contractErrors.push("Hermes Vault Agent response status must be completed or rejected.");
+  }
+
+  if ((payload.write_performed ?? result?.write_performed) !== false) {
+    contractErrors.push("Hermes Vault Agent dry-run response must have write_performed=false.");
+  }
+
+  if ((payload.gbrain_called ?? result?.gbrain_called) !== false) {
+    contractErrors.push("Hermes Vault Agent dry-run response must have gbrain_called=false.");
+  }
+
+  if ((payload.memory_mutation ?? result?.memory_mutation) !== false) {
+    contractErrors.push("Hermes Vault Agent dry-run response must have memory_mutation=false.");
+  }
+
+  if (safety && !booleanFalseIfPresent(safety, "vault_write")) {
+    contractErrors.push("Hermes Vault Agent dry-run safety.vault_write must be false when present.");
+  }
+
+  if (safety && !booleanFalseIfPresent(safety, "gbrain_called")) {
+    contractErrors.push("Hermes Vault Agent dry-run safety.gbrain_called must be false when present.");
+  }
+
+  if (safety && !booleanFalseIfPresent(safety, "memory_mutation")) {
+    contractErrors.push("Hermes Vault Agent dry-run safety.memory_mutation must be false when present.");
+  }
+
+  const handoffStatus = status === "completed" ? "completed" : status === "rejected" ? "dry_run_invalid" : undefined;
+
+  if (contractErrors.length || !recordId || !handoffStatus) {
+    return { errors: contractErrors, warnings };
+  }
+
+  const indexability = normalizeIndexability(payload.indexability ?? result?.indexability);
+
+  return {
+    receipt: {
+      schema_version: VAULT_AGENT_CONTRACT_VERSION,
+      record_id: recordId,
+      status: handoffStatus === "completed" ? "validated" : "rejected",
+      write_confirmed: false,
+      target_path_preview: targetPath,
+      markdown_preview: stringValue(payload.markdown_preview) ?? (result ? stringValue(result.markdown_preview) : undefined),
+      validation_errors: validationErrors,
+      validation_warnings: warnings,
+      no_filesystem_write: true,
+      no_gbrain_call: true,
+    },
+    handoffStatus,
+    indexability,
+    errors: [],
+    warnings,
+  };
+}
+
 function normalizeRemoteReceipt(value: unknown): { receipt?: VaultAgentWriteReceipt; errors: string[] } {
   if (!isRecord(value)) {
     return { errors: ["Hermes Vault Agent response did not include a receipt object."] };
@@ -153,15 +285,19 @@ function normalizeRemoteReceipt(value: unknown): { receipt?: VaultAgentWriteRece
   };
 }
 
-function extractReceipt(payload: unknown): { receipt?: VaultAgentWriteReceipt; errors: string[]; warnings: string[] } {
+function extractReceipt(payload: unknown): {
+  receipt?: VaultAgentWriteReceipt;
+  handoffStatus?: "completed" | "dry_run_invalid";
+  indexability?: HermesVaultAgentDryRunResult["indexability"];
+  errors: string[];
+  warnings: string[];
+} {
   if (!isRecord(payload)) {
     return { errors: ["Hermes Vault Agent response body must be an object."], warnings: [] };
   }
 
-  const warnings: string[] = [];
-
-  if (payload.schema_version !== HERMES_VAULT_AGENT_RESPONSE_SCHEMA) {
-    warnings.push("Hermes Vault Agent response schema_version was not hermes.vault_agent.response.v1.");
+  if (payload.schema_version === HERMES_VAULT_AGENT_RESPONSE_SCHEMA) {
+    return normalizeHermesDryRunResponse(payload);
   }
 
   const candidate = receiptCandidate(payload);
@@ -169,7 +305,7 @@ function extractReceipt(payload: unknown): { receipt?: VaultAgentWriteReceipt; e
 
   return {
     ...normalized,
-    warnings,
+    warnings: [],
   };
 }
 
@@ -219,6 +355,8 @@ export async function callHermesVaultAgentDryRun(pkg: TurnCompletedPackage): Pro
     return {
       ok: true,
       receipt: extracted.receipt,
+      handoffStatus: extracted.handoffStatus,
+      indexability: extracted.indexability,
       warnings: extracted.warnings,
     };
   } catch (error) {

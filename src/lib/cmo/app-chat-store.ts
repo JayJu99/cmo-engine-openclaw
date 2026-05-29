@@ -843,6 +843,7 @@ function normalizeVaultAgentDryRunMetadata(value: unknown): VaultAgentDryRunMeta
   const status = value.vault_handoff_status === "skipped" ||
     value.vault_handoff_status === "dry_run_valid" ||
     value.vault_handoff_status === "dry_run_invalid" ||
+    value.vault_handoff_status === "completed" ||
     value.vault_handoff_status === "failed"
     ? value.vault_handoff_status
     : undefined;
