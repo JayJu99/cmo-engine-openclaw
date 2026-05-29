@@ -331,6 +331,10 @@ try {
         vault_handoff_errors: [],
       },
     });
+    console.log("dry-run check raw handoff.status:", "completed");
+    console.log("dry-run check raw receipt.status:", "validated");
+    console.log("dry-run check raw metadata.vault_handoff_status:", "dry_run_invalid");
+    console.log("dry-run check final persisted vault_handoff_status:", liveShapePersistedMetadata.vault_handoff_status);
     assert.equal(liveShapePersistedMetadata.vault_handoff_mode, "dry_run_remote");
     assert.equal(liveShapePersistedMetadata.vault_handoff_status, "completed");
     assert.equal(liveShapePersistedMetadata.dry_run_record_id, "turnlog_04e7af3c63819549");

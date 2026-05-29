@@ -1,14 +1,39 @@
 import type { VaultAgentDryRunMetadata } from "./app-workspace-types";
 import type { VaultAgentDryRunHandoffResult } from "./vault-agent-handoff-builder";
 
-function completedRemoteReceipt(result: VaultAgentDryRunHandoffResult): boolean {
+function hasErrors(metadata: VaultAgentDryRunMetadata): boolean {
+  return Boolean(metadata.vault_handoff_errors?.length);
+}
+
+function hasRecordAndTarget(metadata: VaultAgentDryRunMetadata): boolean {
+  return Boolean(metadata.dry_run_record_id && metadata.dry_run_target_path);
+}
+
+function mappedHandoffStatus(result: VaultAgentDryRunHandoffResult): VaultAgentDryRunMetadata["vault_handoff_status"] {
+  if (result.status === "failed") {
+    return "failed";
+  }
+
   const receiptStatus = result.receipt?.status as string | undefined;
 
-  return result.mode === "dry_run_remote" &&
-    (result.status === "completed" ||
-      receiptStatus === "completed" ||
-      receiptStatus === "validated" ||
-      receiptStatus === "dry_run");
+  if (
+    result.status === "completed" ||
+    receiptStatus === "completed" ||
+    receiptStatus === "validated" ||
+    receiptStatus === "dry_run"
+  ) {
+    return "completed";
+  }
+
+  if (receiptStatus === "rejected" || result.status === "dry_run_invalid") {
+    return "dry_run_invalid";
+  }
+
+  if (!hasRecordAndTarget(result.metadata) && hasErrors(result.metadata)) {
+    return result.mode === "dry_run_remote" ? "failed" : "dry_run_invalid";
+  }
+
+  return result.metadata.vault_handoff_status;
 }
 
 export function vaultAgentDryRunMetadataForPersistence(
@@ -18,12 +43,8 @@ export function vaultAgentDryRunMetadataForPersistence(
     return undefined;
   }
 
-  if (completedRemoteReceipt(result)) {
-    return {
-      ...result.metadata,
-      vault_handoff_status: "completed",
-    };
-  }
-
-  return result.metadata;
+  return {
+    ...result.metadata,
+    vault_handoff_status: mappedHandoffStatus(result),
+  };
 }
