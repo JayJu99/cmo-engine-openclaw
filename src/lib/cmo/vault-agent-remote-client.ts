@@ -1,10 +1,12 @@
 import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs } from "./config";
-import { VAULT_AGENT_CONTRACT_VERSION, type TurnCompletedPackage, type VaultAgentWriteReceipt } from "./vault-agent-contracts";
+import { VAULT_AGENT_CONTRACT_VERSION, type SourceIngestionPackage, type TurnCompletedPackage, type VaultAgentWriteReceipt } from "./vault-agent-contracts";
 
 const HERMES_VAULT_AGENT_DRY_RUN_PATH = "/agents/vault-agent/dry-run" as const;
 const HERMES_VAULT_AGENT_WRITE_TURN_LOG_PATH = "/agents/vault-agent/write-turn-log" as const;
+const HERMES_VAULT_AGENT_INGEST_SOURCE_PATH = "/agents/vault-agent/ingest-source" as const;
 const HERMES_VAULT_AGENT_RESPONSE_SCHEMA = "hermes.vault_agent.response.v1" as const;
 const HERMES_VAULT_AGENT_WRITE_RECEIPT_SCHEMA = "hermes.vault_agent.write_receipt.v1" as const;
+const HERMES_VAULT_AGENT_SOURCE_INGESTION_RECEIPT_SCHEMA = "hermes.vault_agent.source_ingestion_receipt.v1" as const;
 
 export interface HermesVaultAgentDryRunResult {
   ok: boolean;
@@ -43,6 +45,25 @@ export interface HermesVaultAgentWriteTurnLogResult {
   warnings: string[];
 }
 
+export interface HermesVaultAgentSourceIngestionReceipt {
+  schema_version: typeof HERMES_VAULT_AGENT_SOURCE_INGESTION_RECEIPT_SCHEMA;
+  status: "completed" | "rejected";
+  write_performed: boolean;
+  record_ids: Record<string, string>;
+  target_paths: Record<string, string>;
+  warnings: string[];
+  errors: string[];
+  gbrain_called: false;
+  promotion_performed: false;
+}
+
+export interface HermesVaultAgentSourceIngestionResult {
+  ok: boolean;
+  receipt?: HermesVaultAgentSourceIngestionReceipt;
+  error?: string;
+  warnings: string[];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -55,6 +76,18 @@ function stringList(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim())
     : [];
+}
+
+function stringRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string" && Boolean(entry[1].trim()))
+      .map(([key, item]) => [key, item.trim()]),
+  );
 }
 
 function compactText(value: string, max = 500): string {
@@ -179,6 +212,76 @@ function booleanValue(value: unknown): boolean | undefined {
 
 function normalizePathSafety(value: unknown): unknown {
   return value === undefined ? undefined : value;
+}
+
+function normalizeHermesSourceIngestionReceipt(payload: Record<string, unknown>): {
+  receipt?: HermesVaultAgentSourceIngestionReceipt;
+  errors: string[];
+  warnings: string[];
+} {
+  const result = nestedRecord(payload, "result");
+  const source = result ?? payload;
+  const safety = nestedRecord(source, "safety") ?? nestedRecord(payload, "safety");
+  const schemaVersion = stringValue(payload.schema_version) ?? stringValue(source.schema_version);
+  const status = stringValue(source.status);
+  const writePerformed = booleanValue(source.write_performed);
+  const recordIds = stringRecord(source.record_ids);
+  const targetPaths = stringRecord(source.target_paths);
+  const gbrainCalled = booleanValue(source.gbrain_called) ?? (safety ? booleanValue(safety.gbrain_called) : undefined);
+  const promotionPerformed = booleanValue(source.promotion_performed) ?? (safety ? booleanValue(safety.promotion_performed) : undefined);
+  const warnings = responseWarnings(payload, result);
+  const responseValidationErrors = responseErrors(payload, result);
+  const contractErrors: string[] = [];
+
+  if (schemaVersion !== HERMES_VAULT_AGENT_SOURCE_INGESTION_RECEIPT_SCHEMA) {
+    contractErrors.push("Hermes Vault Agent source ingestion receipt schema_version must be hermes.vault_agent.source_ingestion_receipt.v1.");
+  }
+
+  if (status !== "completed" && status !== "rejected") {
+    contractErrors.push("Hermes Vault Agent source ingestion receipt status must be completed or rejected.");
+  }
+
+  if (typeof writePerformed !== "boolean") {
+    contractErrors.push("Hermes Vault Agent source ingestion receipt must include write_performed boolean.");
+  }
+
+  if (!Object.keys(recordIds).length) {
+    contractErrors.push("Hermes Vault Agent source ingestion receipt is missing record_ids.");
+  }
+
+  if (!Object.keys(targetPaths).length) {
+    contractErrors.push("Hermes Vault Agent source ingestion receipt is missing target_paths.");
+  }
+
+  if (gbrainCalled !== false) {
+    contractErrors.push("Hermes Vault Agent source ingestion receipt must have gbrain_called=false.");
+  }
+
+  if (promotionPerformed !== false) {
+    contractErrors.push("Hermes Vault Agent source ingestion receipt must have promotion_performed=false.");
+  }
+
+  const errors = [...contractErrors, ...responseValidationErrors];
+
+  if (contractErrors.length || typeof writePerformed !== "boolean" || (status !== "completed" && status !== "rejected")) {
+    return { errors, warnings };
+  }
+
+  return {
+    receipt: {
+      schema_version: HERMES_VAULT_AGENT_SOURCE_INGESTION_RECEIPT_SCHEMA,
+      status,
+      write_performed: writePerformed,
+      record_ids: recordIds,
+      target_paths: targetPaths,
+      warnings,
+      errors: responseValidationErrors,
+      gbrain_called: false,
+      promotion_performed: false,
+    },
+    errors: [],
+    warnings,
+  };
 }
 
 function normalizeHermesWriteReceipt(payload: Record<string, unknown>): {
@@ -549,6 +652,72 @@ export async function callHermesVaultAgentWriteTurnLog(pkg: TurnCompletedPackage
     return {
       ok: false,
       error: error instanceof Error ? error.message : "Hermes Vault Agent write-turn-log request failed.",
+      warnings: [],
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function callHermesVaultAgentIngestSource(pkg: SourceIngestionPackage): Promise<HermesVaultAgentSourceIngestionResult> {
+  const baseUrl = getCmoHermesBaseUrl();
+  const apiKey = getCmoHermesApiKey();
+
+  if (!baseUrl) {
+    return { ok: false, error: "CMO_HERMES_BASE_URL is not configured.", warnings: [] };
+  }
+
+  if (!apiKey) {
+    return { ok: false, error: "CMO_HERMES_API_KEY is not configured.", warnings: [] };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), getCmoHermesTimeoutMs());
+
+  try {
+    const response = await fetch(`${baseUrl}${HERMES_VAULT_AGENT_INGEST_SOURCE_PATH}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(pkg),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return { ok: false, error: await httpFailureReason(response, "source ingestion"), warnings: [] };
+    }
+
+    const payload = await parseJson(response);
+    if (!isRecord(payload)) {
+      return { ok: false, error: "Hermes Vault Agent source ingestion receipt body must be an object.", warnings: [] };
+    }
+
+    const normalized = normalizeHermesSourceIngestionReceipt(payload);
+    if (!normalized.receipt) {
+      return {
+        ok: false,
+        error: normalized.errors.join(" "),
+        warnings: normalized.warnings,
+      };
+    }
+
+    return {
+      ok: true,
+      receipt: normalized.receipt,
+      warnings: normalized.warnings,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return { ok: false, error: "Hermes Vault Agent source ingestion request timed out.", warnings: [] };
+    }
+
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Hermes Vault Agent source ingestion request failed.",
       warnings: [],
     };
   } finally {

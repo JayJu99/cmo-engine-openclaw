@@ -1,5 +1,6 @@
 export const VAULT_AGENT_CONTRACT_VERSION = "cmo.vault-agent.v1" as const;
 export const TURN_COMPLETED_PACKAGE_SCHEMA_VERSION = "cmo.turn_package.v1" as const;
+export const SOURCE_INGESTION_PACKAGE_SCHEMA_VERSION = "cmo.source_ingestion.v1" as const;
 export const VAULT_AGENT_WRITER = "vault_agent" as const;
 export const VAULT_AGENT_WRITER_VERSION = "m3.3a-dry-run" as const;
 export const CANONICAL_VAULT_LANGUAGE = "en" as const;
@@ -26,6 +27,9 @@ export type VaultGBrainStatus = "not_indexable" | "pending_index" | "indexed" | 
 export type VaultPiiPolicy = "raw_private" | "redacted" | "safe_public" | "unknown";
 export type VaultTranslationStatus = "not_required" | "pending" | "translated" | "mixed";
 export type VaultSourceAgent = "CMO" | "Echo" | "Surf" | "Vault Agent" | "GBrain" | "User" | "System";
+export type SourceIngestionSourceType = "text" | "document" | "image" | "screenshot" | "spreadsheet" | "url" | "other";
+export type SourceIngestionVisibility = "private" | "workspace";
+export type SourceIngestionScope = "user" | "workspace" | "session";
 
 export interface TurnCompletedPackage {
   schema_version: typeof TURN_COMPLETED_PACKAGE_SCHEMA_VERSION;
@@ -52,6 +56,29 @@ export interface TurnCompletedPackage {
   canonical_language: typeof CANONICAL_VAULT_LANGUAGE;
   source_refs?: string[];
   related_records?: string[];
+  created_at: string;
+}
+
+export interface SourceIngestionPackage {
+  schema_version: typeof SOURCE_INGESTION_PACKAGE_SCHEMA_VERSION;
+  tenant_id: string;
+  workspace_id: string;
+  user_id?: string;
+  user_ref?: string;
+  session_id?: string;
+  source_type: SourceIngestionSourceType;
+  source_title: string;
+  original_filename?: string;
+  original_language: string;
+  canonical_language: typeof CANONICAL_VAULT_LANGUAGE;
+  source_text?: string;
+  extracted_summary?: string;
+  visual_summary?: string;
+  table_summary?: string;
+  no_auto_promote: true;
+  visibility: SourceIngestionVisibility;
+  scope: SourceIngestionScope;
+  source_refs?: string[];
   created_at: string;
 }
 
