@@ -63,6 +63,7 @@ import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-m
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { autoCaptureTurnOnce } from "@/lib/cmo/vault-auto-capture";
 import { runVaultAgentDryRunHandoff } from "@/lib/cmo/vault-agent-handoff-builder";
+import { vaultAgentDryRunMetadataForPersistence } from "@/lib/cmo/vault-agent-handoff-persistence";
 
 const APP_CHAT_DIR = path.join(process.cwd(), "data", "cmo-dashboard", "app-chat");
 const DEFAULT_LIMIT = 20;
@@ -1565,9 +1566,7 @@ export async function createAppChatSession(
     surfCalls,
     echoCalls,
   }) : undefined;
-  const vaultAgentDryRunMetadata = vaultAgentHandoff?.mode === "dry_run" || vaultAgentHandoff?.mode === "dry_run_remote"
-    ? vaultAgentHandoff.metadata
-    : undefined;
+  const vaultAgentDryRunMetadata = vaultAgentDryRunMetadataForPersistence(vaultAgentHandoff);
   if (status === "completed") {
     const finalTotalDurationMs = Date.now() - requestStartedMs;
     persistedSession = {

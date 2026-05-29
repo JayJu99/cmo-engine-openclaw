@@ -65,6 +65,7 @@ try {
     "vault-agent-dry-run.ts",
     "vault-agent-remote-client.ts",
     "vault-agent-handoff-builder.ts",
+    "vault-agent-handoff-persistence.ts",
   ]) {
     cpSync(`src/lib/cmo/${file}`, join(temp, file));
   }
@@ -90,6 +91,7 @@ try {
     join(temp, "vault-agent-dry-run.ts"),
     join(temp, "vault-agent-remote-client.ts"),
     join(temp, "vault-agent-handoff-builder.ts"),
+    join(temp, "vault-agent-handoff-persistence.ts"),
   ], { stdio: "inherit" });
 
   const {
@@ -99,6 +101,9 @@ try {
   const {
     buildVaultAgentDryRunReceipt,
   } = requireFromScript(join(dist, "vault-agent-dry-run.js"));
+  const {
+    vaultAgentDryRunMetadataForPersistence,
+  } = requireFromScript(join(dist, "vault-agent-handoff-persistence.js"));
 
   const cmoOnlyPackage = buildTurnCompletedPackage(baseHandoffInput());
   assert.equal(cmoOnlyPackage.tenant_id, "holdstation");
@@ -298,6 +303,41 @@ try {
     assert.equal(completedStatusWrapperRemote.metadata.vault_handoff_errors.length, 0);
     assert.equal(completedStatusWrapperRemote.metadata.dry_run_indexability.gbrain_status, "not_indexable");
 
+    const liveShapePersistedMetadata = vaultAgentDryRunMetadataForPersistence({
+      mode: "dry_run_remote",
+      status: "completed",
+      receipt: {
+        schema_version: "cmo.vault-agent.v1",
+        record_id: "turnlog_04e7af3c63819549",
+        status: "validated",
+        write_confirmed: false,
+        target_path_preview: "03 Sessions/holdstation-mini-app/user/session/Turn Logs/turnlog_04e7af3c63819549 - cmo-turn.md",
+        validation_errors: [],
+        validation_warnings: [],
+        no_filesystem_write: true,
+        no_gbrain_call: true,
+      },
+      metadata: {
+        vault_handoff_mode: "dry_run_remote",
+        vault_handoff_status: "dry_run_invalid",
+        dry_run_record_id: "turnlog_04e7af3c63819549",
+        dry_run_target_path: "03 Sessions/holdstation-mini-app/user/session/Turn Logs/turnlog_04e7af3c63819549 - cmo-turn.md",
+        dry_run_indexability: {
+          gbrain_index: false,
+          gbrain_status: "not_indexable",
+          reason: "Hermes Vault Agent dry-run indexability decision.",
+        },
+        vault_handoff_warnings: [],
+        vault_handoff_errors: [],
+      },
+    });
+    assert.equal(liveShapePersistedMetadata.vault_handoff_mode, "dry_run_remote");
+    assert.equal(liveShapePersistedMetadata.vault_handoff_status, "completed");
+    assert.equal(liveShapePersistedMetadata.dry_run_record_id, "turnlog_04e7af3c63819549");
+    assert.match(liveShapePersistedMetadata.dry_run_target_path, /Turn Logs\/turnlog_04e7af3c63819549 - cmo-turn\.md$/);
+    assert.equal(liveShapePersistedMetadata.dry_run_indexability.gbrain_status, "not_indexable");
+    assert.deepEqual(liveShapePersistedMetadata.vault_handoff_errors, []);
+
     globalThis.fetch = async () => {
       throw new Error("mock network failure");
     };
@@ -319,10 +359,7 @@ try {
   assert.doesNotMatch(responseBlock, /vaultAgentDryRun|vault_handoff|dry_run_record_id/);
 
   const appChatStoreSource = readFileSync("src/lib/cmo/app-chat-store.ts", "utf8");
-  assert.match(
-    appChatStoreSource,
-    /vaultAgentHandoff\?\.mode === "dry_run" \|\| vaultAgentHandoff\?\.mode === "dry_run_remote"/,
-  );
+  assert.match(appChatStoreSource, /vaultAgentDryRunMetadataForPersistence\(vaultAgentHandoff\)/);
   const handoffBuilderSource = readFileSync("src/lib/cmo/vault-agent-handoff-builder.ts", "utf8");
   assert.doesNotMatch(
     handoffBuilderSource,
