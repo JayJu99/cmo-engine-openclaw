@@ -120,8 +120,14 @@ export function normalizeVaultRecord(input: VaultAgentRecordInput | TurnComplete
         scope: "session" as const,
         visibility: "private" as const,
         source_agent: input.source_agent,
-        original_text: input.original_text,
-        canonical_summary: input.canonical_summary,
+        original_text: input.original_text ?? [
+          "## User Message",
+          input.user_message,
+          "",
+          "## Final CMO Answer",
+          input.final_cmo_answer,
+        ].join("\n"),
+        canonical_summary: input.canonical_summary ?? input.final_cmo_answer,
       };
   const now = new Date().toISOString();
   const sourceAgent = recordInput.source_agent ?? "Vault Agent";

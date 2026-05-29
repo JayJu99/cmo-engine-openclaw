@@ -29,6 +29,7 @@ import type {
   HermesCmoForbiddenCounters,
   HermesCmoPlatformPersistenceSummary,
   HermesCmoSafetyCounters,
+  VaultAgentDryRunMetadata,
   CmoMemoryCandidateReviewStatus,
   CmoSuggestedActionReviewStatus,
   CmoTaskCandidateReviewStatus,
@@ -61,6 +62,7 @@ import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/
 import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { autoCaptureTurnOnce } from "@/lib/cmo/vault-auto-capture";
+import { runVaultAgentDryRunHandoff } from "@/lib/cmo/vault-agent-handoff-builder";
 
 const APP_CHAT_DIR = path.join(process.cwd(), "data", "cmo-dashboard", "app-chat");
 const DEFAULT_LIMIT = 20;
@@ -828,6 +830,42 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
   };
 }
 
+function normalizeVaultAgentDryRunMetadata(value: unknown): VaultAgentDryRunMetadata | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const mode = value.vault_handoff_mode === "dry_run" ? "dry_run" : value.vault_handoff_mode === "off" ? "off" : undefined;
+  const status = value.vault_handoff_status === "skipped" ||
+    value.vault_handoff_status === "dry_run_valid" ||
+    value.vault_handoff_status === "dry_run_invalid" ||
+    value.vault_handoff_status === "failed"
+    ? value.vault_handoff_status
+    : undefined;
+
+  if (!mode && !status) {
+    return undefined;
+  }
+
+  const indexability = isRecord(value.dry_run_indexability)
+    ? {
+        gbrain_index: value.dry_run_indexability.gbrain_index === true,
+        gbrain_status: stringValue(value.dry_run_indexability.gbrain_status),
+        reason: stringValue(value.dry_run_indexability.reason),
+      }
+    : undefined;
+
+  return {
+    ...(mode ? { vault_handoff_mode: mode } : {}),
+    ...(status ? { vault_handoff_status: status } : {}),
+    dry_run_record_id: normalizeOptionalString(value.dry_run_record_id),
+    dry_run_target_path: normalizeOptionalString(value.dry_run_target_path),
+    ...(indexability ? { dry_run_indexability: indexability } : {}),
+    vault_handoff_warnings: normalizeStringList(value.vault_handoff_warnings),
+    vault_handoff_errors: normalizeStringList(value.vault_handoff_errors),
+  };
+}
+
 function messageUserMetadata(identity: CmoServerUserIdentity): Pick<CMOChatMessage, "authMode" | "userId" | "userEmail"> {
   return {
     authMode: identity.authMode,
@@ -916,6 +954,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             forbiddenCounters: normalizeHermesCmoForbiddenCounters(message.forbiddenCounters),
             platformPersistenceSummary: normalizeHermesCmoPlatformPersistenceSummary(message.platformPersistenceSummary),
             delegationsMode: normalizeHermesCmoDelegationsMode(message.delegationsMode),
+            vaultAgentDryRun: normalizeVaultAgentDryRunMetadata(message.vaultAgentDryRun),
             contextUsedCount: typeof message.contextUsedCount === "number" && Number.isFinite(message.contextUsedCount) ? Math.max(0, Math.floor(message.contextUsedCount)) : undefined,
             graphHintCount: typeof message.graphHintCount === "number" && Number.isFinite(message.graphHintCount) ? Math.max(0, Math.floor(message.graphHintCount)) : undefined,
             indexedContextStatus: normalizeIndexedContextStatus(message.indexedContextStatus),
@@ -990,6 +1029,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     forbiddenCounters: normalizeHermesCmoForbiddenCounters(value.forbiddenCounters),
     platformPersistenceSummary: normalizeHermesCmoPlatformPersistenceSummary(value.platformPersistenceSummary),
     delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode),
+    vaultAgentDryRun: normalizeVaultAgentDryRunMetadata(value.vaultAgentDryRun),
     missingContext,
     contextDiagnostics,
     contextQualitySummary: normalizeContextQualitySummary(value.contextQualitySummary ?? contextDiagnostics, [...contextUsed, ...missingContext]),
@@ -1506,14 +1546,34 @@ export async function createAppChatSession(
     runtimeProvider,
     runtimeAgent,
   }) : { ok: false, savedToVault: false, warnings: [], error: "Chat response failed; auto capture skipped" };
+  const vaultAgentHandoff = status === "completed" ? runVaultAgentDryRunHandoff({
+    request,
+    session,
+    userIdentity,
+    userMessageId: messageId,
+    assistantMessageId: assistantId,
+    answer,
+    createdAt: now,
+    activityEvents,
+    delegationSummary,
+    agentsUsed,
+    surfCalls,
+    echoCalls,
+  }) : undefined;
+  const vaultAgentDryRunMetadata = vaultAgentHandoff?.mode === "dry_run" ? vaultAgentHandoff.metadata : undefined;
   if (status === "completed") {
     const finalTotalDurationMs = Date.now() - requestStartedMs;
     persistedSession = {
       ...session,
       totalDurationMs: finalTotalDurationMs,
       messages: session.messages.map((message) =>
-        message.id === assistantId ? { ...message, totalDurationMs: finalTotalDurationMs } : message,
+        message.id === assistantId ? {
+          ...message,
+          totalDurationMs: finalTotalDurationMs,
+          ...(vaultAgentDryRunMetadata ? { vaultAgentDryRun: vaultAgentDryRunMetadata } : {}),
+        } : message,
       ),
+      ...(vaultAgentDryRunMetadata ? { vaultAgentDryRun: vaultAgentDryRunMetadata } : {}),
       rawCapturePath: autoCapture.relativePath,
       rawCaptureStatus: autoCapture.ok ? "saved" : "failed",
       ...(autoCapture.error ? { rawCaptureError: autoCapture.error } : {}),

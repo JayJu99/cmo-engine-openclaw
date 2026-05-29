@@ -35,10 +35,19 @@ export interface TurnCompletedPackage {
   turn_id?: string;
   message_id?: string;
   source_agent: VaultSourceAgent;
+  user_message: string;
+  final_cmo_answer: string;
+  activity_events?: unknown[];
+  delegation_summary?: unknown[];
+  agents_used?: string[];
+  surf_calls?: number;
+  echo_calls?: number;
+  no_auto_promote: true;
   title?: string;
   original_text?: string;
   canonical_summary?: string;
   original_language?: string;
+  canonical_language: typeof CANONICAL_VAULT_LANGUAGE;
   source_refs?: string[];
   related_records?: string[];
   created_at: string;
@@ -109,6 +118,7 @@ export interface VaultAgentRecordInput {
   source_note_id?: string;
   accepted_claims?: string[];
   cited_claims?: string[];
+  no_auto_promote?: boolean;
 }
 
 export interface NormalizedVaultRecord {

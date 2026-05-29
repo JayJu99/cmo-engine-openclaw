@@ -671,6 +671,20 @@ export interface HermesCmoChatMetadata {
   platformPersistenceSummary?: HermesCmoPlatformPersistenceSummary;
 }
 
+export interface VaultAgentDryRunMetadata {
+  vault_handoff_mode?: "off" | "dry_run";
+  vault_handoff_status?: "skipped" | "dry_run_valid" | "dry_run_invalid" | "failed";
+  dry_run_record_id?: string;
+  dry_run_target_path?: string;
+  dry_run_indexability?: {
+    gbrain_index: boolean;
+    gbrain_status: string;
+    reason: string;
+  };
+  vault_handoff_warnings?: string[];
+  vault_handoff_errors?: string[];
+}
+
 export interface ContextItem {
   id: string;
   kind: ContextItemKind;
@@ -840,6 +854,7 @@ export interface CMOChatMessage {
   forbiddenCounters?: HermesCmoForbiddenCounters;
   platformPersistenceSummary?: HermesCmoPlatformPersistenceSummary;
   delegationsMode?: HermesCmoDelegationsMode;
+  vaultAgentDryRun?: VaultAgentDryRunMetadata;
   contextUsedCount?: number;
   graphHintCount?: number;
   indexedContextStatus?: CmoIndexedContextStatus;
@@ -903,6 +918,7 @@ export interface CMOChatSession {
   forbiddenCounters?: HermesCmoForbiddenCounters;
   platformPersistenceSummary?: HermesCmoPlatformPersistenceSummary;
   delegationsMode?: HermesCmoDelegationsMode;
+  vaultAgentDryRun?: VaultAgentDryRunMetadata;
   missingContext?: VaultNoteRef[];
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
