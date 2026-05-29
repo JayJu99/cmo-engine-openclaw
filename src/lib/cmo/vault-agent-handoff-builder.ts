@@ -9,7 +9,12 @@ import type {
 import { buildVaultAgentDryRunReceipt, normalizeVaultRecord } from "./vault-agent-dry-run";
 import { callHermesVaultAgentDryRun } from "./vault-agent-remote-client";
 import { decideIndexability } from "./vault-scope-policy";
-import { CANONICAL_VAULT_LANGUAGE, type TurnCompletedPackage, type VaultAgentWriteReceipt } from "./vault-agent-contracts";
+import {
+  CANONICAL_VAULT_LANGUAGE,
+  TURN_COMPLETED_PACKAGE_SCHEMA_VERSION,
+  type TurnCompletedPackage,
+  type VaultAgentWriteReceipt,
+} from "./vault-agent-contracts";
 import type { CmoServerUserIdentity } from "./user-metadata";
 
 export type VaultAgentHandoffStatus = "skipped" | "dry_run_valid" | "dry_run_invalid" | "completed" | "failed";
@@ -84,6 +89,7 @@ export function buildTurnCompletedPackage(input: CompletedTurnHandoffInput): Tur
   const userRef = userId ? undefined : stableUserRef(input);
 
   return {
+    schema_version: TURN_COMPLETED_PACKAGE_SCHEMA_VERSION,
     tenant_id: input.request.workspaceId,
     workspace_id: input.request.appId,
     ...(userId ? { user_id: userId } : { user_ref: userRef }),

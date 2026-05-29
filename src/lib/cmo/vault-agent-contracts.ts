@@ -1,4 +1,5 @@
 export const VAULT_AGENT_CONTRACT_VERSION = "cmo.vault-agent.v1" as const;
+export const TURN_COMPLETED_PACKAGE_SCHEMA_VERSION = "cmo.turn_package.v1" as const;
 export const VAULT_AGENT_WRITER = "vault_agent" as const;
 export const VAULT_AGENT_WRITER_VERSION = "m3.3a-dry-run" as const;
 export const CANONICAL_VAULT_LANGUAGE = "en" as const;
@@ -27,6 +28,7 @@ export type VaultTranslationStatus = "not_required" | "pending" | "translated" |
 export type VaultSourceAgent = "CMO" | "Echo" | "Surf" | "Vault Agent" | "GBrain" | "User" | "System";
 
 export interface TurnCompletedPackage {
+  schema_version: typeof TURN_COMPLETED_PACKAGE_SCHEMA_VERSION;
   tenant_id: string;
   workspace_id: string;
   user_id?: string;

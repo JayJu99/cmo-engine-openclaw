@@ -208,6 +208,7 @@ function packageDiagnostics(pkg) {
   return {
     top_level_keys: Object.keys(pkg).sort(),
     schema_version_presence: keyPresence(pkg, ["schema_version", "schemaVersion"]),
+    schema_version_value: pkg.schema_version ?? pkg.schemaVersion ?? null,
     tenant_id_presence: keyPresence(pkg, ["tenant_id", "tenantId"]),
     workspace_id_presence: keyPresence(pkg, ["workspace_id", "workspaceId"]),
     user_presence: keyPresence(pkg, ["user_id", "userId", "user_ref", "userRef"]),

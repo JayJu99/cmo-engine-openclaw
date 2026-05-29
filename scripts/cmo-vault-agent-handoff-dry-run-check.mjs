@@ -106,6 +106,7 @@ try {
   } = requireFromScript(join(dist, "vault-agent-handoff-persistence.js"));
 
   const cmoOnlyPackage = buildTurnCompletedPackage(baseHandoffInput());
+  assert.equal(cmoOnlyPackage.schema_version, "cmo.turn_package.v1");
   assert.equal(cmoOnlyPackage.tenant_id, "holdstation");
   assert.equal(cmoOnlyPackage.workspace_id, "holdstation-mini-app");
   assert.equal(cmoOnlyPackage.user_id, "user_123");
@@ -145,6 +146,7 @@ try {
     surfCalls: 1,
     echoCalls: 1,
   }));
+  assert.equal(surfEchoPackage.schema_version, "cmo.turn_package.v1");
   assert.deepEqual(surfEchoPackage.agents_used, ["cmo", "surf", "echo"]);
   assert.equal(surfEchoPackage.surf_calls, 1);
   assert.equal(surfEchoPackage.echo_calls, 1);
