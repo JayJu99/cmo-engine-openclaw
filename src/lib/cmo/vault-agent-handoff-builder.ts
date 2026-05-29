@@ -2,12 +2,13 @@ import { getCmoVaultAgentHandoffMode, type CmoVaultAgentHandoffMode } from "./co
 import type {
   CMOAppChatRequest,
   CMOChatSession,
+  VaultAgentDryRunMetadata,
   HermesCmoActivityEventSummary,
   HermesCmoAgentUsed,
   HermesCmoDelegationSummaryItem,
 } from "./app-workspace-types";
 import { buildVaultAgentDryRunReceipt, normalizeVaultRecord } from "./vault-agent-dry-run";
-import { callHermesVaultAgentDryRun } from "./vault-agent-remote-client";
+import { callHermesVaultAgentDryRun, callHermesVaultAgentWriteTurnLog, type HermesVaultAgentWriteReceipt } from "./vault-agent-remote-client";
 import { decideIndexability } from "./vault-scope-policy";
 import {
   CANONICAL_VAULT_LANGUAGE,
@@ -17,20 +18,11 @@ import {
 } from "./vault-agent-contracts";
 import type { CmoServerUserIdentity } from "./user-metadata";
 
-export type VaultAgentHandoffStatus = "skipped" | "dry_run_valid" | "dry_run_invalid" | "completed" | "failed";
+export type VaultAgentHandoffStatus = "skipped" | "dry_run_valid" | "dry_run_invalid" | "completed" | "failed" | "rejected";
 
-export interface VaultAgentDryRunHandoffMetadata {
+export interface VaultAgentDryRunHandoffMetadata extends VaultAgentDryRunMetadata {
   vault_handoff_mode: CmoVaultAgentHandoffMode;
   vault_handoff_status: VaultAgentHandoffStatus;
-  dry_run_record_id?: string;
-  dry_run_target_path?: string;
-  dry_run_indexability?: {
-    gbrain_index: boolean;
-    gbrain_status: string;
-    reason: string;
-  };
-  vault_handoff_warnings?: string[];
-  vault_handoff_errors?: string[];
 }
 
 export interface CompletedTurnHandoffInput {
@@ -53,6 +45,7 @@ export interface VaultAgentDryRunHandoffResult {
   status: VaultAgentHandoffStatus;
   package?: TurnCompletedPackage;
   receipt?: VaultAgentWriteReceipt;
+  writeReceipt?: HermesVaultAgentWriteReceipt;
   metadata: VaultAgentDryRunHandoffMetadata;
 }
 
@@ -148,6 +141,32 @@ function metadataFromReceipt(
   };
 }
 
+function metadataFromWriteReceipt(
+  mode: CmoVaultAgentHandoffMode,
+  receipt: HermesVaultAgentWriteReceipt,
+  extraWarnings: string[] = [],
+): VaultAgentDryRunHandoffMetadata {
+  const status: VaultAgentHandoffStatus = receipt.status === "completed" ? "completed" : "rejected";
+  const warnings = [...extraWarnings, ...receipt.warnings];
+
+  return {
+    vault_handoff_mode: mode,
+    vault_handoff_status: status,
+    vault_write_performed: receipt.write_performed,
+    vault_deduped: receipt.deduped,
+    vault_record_id: receipt.record_id,
+    vault_target_path: receipt.target_path,
+    vault_content_hash: receipt.content_hash,
+    ...(receipt.path_safety !== undefined ? { vault_path_safety: receipt.path_safety } : {}),
+    vault_warnings: warnings,
+    vault_errors: receipt.errors,
+    gbrain_called: false,
+    memory_mutation: false,
+    vault_handoff_warnings: warnings,
+    vault_handoff_errors: receipt.errors,
+  };
+}
+
 function handoffStatusFromReceipt(
   receipt: VaultAgentWriteReceipt,
   handoffStatus?: Extract<VaultAgentHandoffStatus, "completed" | "dry_run_invalid">,
@@ -210,6 +229,38 @@ export async function runVaultAgentDryRunHandoff(input: CompletedTurnHandoffInpu
       };
     }
 
+    if (mode === "write_remote") {
+      const remote = await callHermesVaultAgentWriteTurnLog(pkg);
+
+      if (!remote.ok || !remote.receipt) {
+        return {
+          mode,
+          status: "failed",
+          package: pkg,
+          metadata: {
+            vault_handoff_mode: mode,
+            vault_handoff_status: "failed",
+            vault_warnings: remote.warnings,
+            vault_errors: [remote.error ?? "Hermes Vault Agent write-turn-log failed."],
+            gbrain_called: false,
+            memory_mutation: false,
+            vault_handoff_warnings: remote.warnings,
+            vault_handoff_errors: [remote.error ?? "Hermes Vault Agent write-turn-log failed."],
+          },
+        };
+      }
+
+      const status: VaultAgentHandoffStatus = remote.receipt.status === "completed" ? "completed" : "rejected";
+
+      return {
+        mode,
+        status,
+        package: pkg,
+        writeReceipt: remote.receipt,
+        metadata: metadataFromWriteReceipt(mode, remote.receipt, remote.warnings),
+      };
+    }
+
     const receipt = buildVaultAgentDryRunReceipt(pkg);
     const status = handoffStatusFromReceipt(receipt);
 
@@ -227,7 +278,7 @@ export async function runVaultAgentDryRunHandoff(input: CompletedTurnHandoffInpu
       metadata: {
         vault_handoff_mode: mode,
         vault_handoff_status: "failed",
-        vault_handoff_errors: [error instanceof Error ? error.message : "Vault Agent dry-run handoff failed"],
+        vault_handoff_errors: [error instanceof Error ? error.message : "Vault Agent handoff failed"],
       },
     };
   }

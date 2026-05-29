@@ -836,7 +836,7 @@ function normalizeVaultAgentDryRunMetadata(value: unknown): VaultAgentDryRunMeta
     return undefined;
   }
 
-  const mode = value.vault_handoff_mode === "dry_run" || value.vault_handoff_mode === "dry_run_remote"
+  const mode = value.vault_handoff_mode === "dry_run" || value.vault_handoff_mode === "dry_run_remote" || value.vault_handoff_mode === "write_remote"
     ? value.vault_handoff_mode
     : value.vault_handoff_mode === "off"
       ? "off"
@@ -845,7 +845,8 @@ function normalizeVaultAgentDryRunMetadata(value: unknown): VaultAgentDryRunMeta
     value.vault_handoff_status === "dry_run_valid" ||
     value.vault_handoff_status === "dry_run_invalid" ||
     value.vault_handoff_status === "completed" ||
-    value.vault_handoff_status === "failed"
+    value.vault_handoff_status === "failed" ||
+    value.vault_handoff_status === "rejected"
     ? value.vault_handoff_status
     : undefined;
 
@@ -867,6 +868,16 @@ function normalizeVaultAgentDryRunMetadata(value: unknown): VaultAgentDryRunMeta
     dry_run_record_id: normalizeOptionalString(value.dry_run_record_id),
     dry_run_target_path: normalizeOptionalString(value.dry_run_target_path),
     ...(indexability ? { dry_run_indexability: indexability } : {}),
+    ...(typeof value.vault_write_performed === "boolean" ? { vault_write_performed: value.vault_write_performed } : {}),
+    ...(typeof value.vault_deduped === "boolean" ? { vault_deduped: value.vault_deduped } : {}),
+    vault_record_id: normalizeOptionalString(value.vault_record_id),
+    vault_target_path: normalizeOptionalString(value.vault_target_path),
+    vault_content_hash: normalizeOptionalString(value.vault_content_hash),
+    ...(value.vault_path_safety !== undefined ? { vault_path_safety: value.vault_path_safety } : {}),
+    vault_warnings: normalizeStringList(value.vault_warnings),
+    vault_errors: normalizeStringList(value.vault_errors),
+    ...(value.gbrain_called === false ? { gbrain_called: false } : {}),
+    ...(value.memory_mutation === false ? { memory_mutation: false } : {}),
     vault_handoff_warnings: normalizeStringList(value.vault_handoff_warnings),
     vault_handoff_errors: normalizeStringList(value.vault_handoff_errors),
   };

@@ -1,5 +1,5 @@
 export type CmoAdapterMode = "local" | "remote";
-export type CmoVaultAgentHandoffMode = "off" | "dry_run" | "dry_run_remote";
+export type CmoVaultAgentHandoffMode = "off" | "dry_run" | "dry_run_remote" | "write_remote";
 
 export function getCmoAdapterMode(): CmoAdapterMode {
   return process.env.CMO_ADAPTER_MODE === "remote" ? "remote" : "local";
@@ -104,5 +104,5 @@ export function getCmoHermesCmoMaxDelegations(): number {
 export function getCmoVaultAgentHandoffMode(): CmoVaultAgentHandoffMode {
   const mode = process.env.CMO_VAULT_AGENT_HANDOFF_MODE;
 
-  return mode === "dry_run" || mode === "dry_run_remote" ? mode : "off";
+  return mode === "dry_run" || mode === "dry_run_remote" || mode === "write_remote" ? mode : "off";
 }

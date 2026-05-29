@@ -6,12 +6,22 @@ function hasErrors(metadata: VaultAgentDryRunMetadata): boolean {
 }
 
 function hasRecordAndTarget(metadata: VaultAgentDryRunMetadata): boolean {
-  return Boolean(metadata.dry_run_record_id && metadata.dry_run_target_path);
+  return Boolean((metadata.dry_run_record_id && metadata.dry_run_target_path) || (metadata.vault_record_id && metadata.vault_target_path));
 }
 
 function mappedHandoffStatus(result: VaultAgentDryRunHandoffResult): VaultAgentDryRunMetadata["vault_handoff_status"] {
   if (result.status === "failed") {
     return "failed";
+  }
+
+  if (result.mode === "write_remote") {
+    if (result.status === "completed" || result.writeReceipt?.status === "completed") {
+      return "completed";
+    }
+
+    if (result.status === "rejected" || result.writeReceipt?.status === "rejected") {
+      return "rejected";
+    }
   }
 
   const receiptStatus = result.receipt?.status as string | undefined;
@@ -39,7 +49,7 @@ function mappedHandoffStatus(result: VaultAgentDryRunHandoffResult): VaultAgentD
 export function vaultAgentDryRunMetadataForPersistence(
   result: VaultAgentDryRunHandoffResult | undefined,
 ): VaultAgentDryRunMetadata | undefined {
-  if (!result || (result.mode !== "dry_run" && result.mode !== "dry_run_remote")) {
+  if (!result || (result.mode !== "dry_run" && result.mode !== "dry_run_remote" && result.mode !== "write_remote")) {
     return undefined;
   }
 

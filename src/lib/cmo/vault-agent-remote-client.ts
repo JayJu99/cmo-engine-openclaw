@@ -2,7 +2,9 @@ import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs } from "
 import { VAULT_AGENT_CONTRACT_VERSION, type TurnCompletedPackage, type VaultAgentWriteReceipt } from "./vault-agent-contracts";
 
 const HERMES_VAULT_AGENT_DRY_RUN_PATH = "/agents/vault-agent/dry-run" as const;
+const HERMES_VAULT_AGENT_WRITE_TURN_LOG_PATH = "/agents/vault-agent/write-turn-log" as const;
 const HERMES_VAULT_AGENT_RESPONSE_SCHEMA = "hermes.vault_agent.response.v1" as const;
+const HERMES_VAULT_AGENT_WRITE_RECEIPT_SCHEMA = "hermes.vault_agent.write_receipt.v1" as const;
 
 export interface HermesVaultAgentDryRunResult {
   ok: boolean;
@@ -13,6 +15,28 @@ export interface HermesVaultAgentDryRunResult {
     gbrain_status: string;
     reason: string;
   };
+  error?: string;
+  warnings: string[];
+}
+
+export interface HermesVaultAgentWriteReceipt {
+  schema_version: typeof HERMES_VAULT_AGENT_WRITE_RECEIPT_SCHEMA;
+  status: "completed" | "rejected";
+  write_performed: boolean;
+  deduped: boolean;
+  record_id?: string;
+  target_path?: string;
+  content_hash?: string;
+  path_safety?: unknown;
+  warnings: string[];
+  errors: string[];
+  gbrain_called: false;
+  memory_mutation: false;
+}
+
+export interface HermesVaultAgentWriteTurnLogResult {
+  ok: boolean;
+  receipt?: HermesVaultAgentWriteReceipt;
   error?: string;
   warnings: string[];
 }
@@ -54,7 +78,7 @@ async function parseJson(response: Response): Promise<unknown> {
   }
 }
 
-async function httpFailureReason(response: Response): Promise<string> {
+async function httpFailureReason(response: Response, operation = "dry-run"): Promise<string> {
   let detail = "";
 
   try {
@@ -69,7 +93,7 @@ async function httpFailureReason(response: Response): Promise<string> {
     detail = "";
   }
 
-  const base = `Hermes Vault Agent dry-run returned HTTP ${response.status}.`;
+  const base = `Hermes Vault Agent ${operation} returned HTTP ${response.status}.`;
   const category =
     response.status === 404
       ? " Endpoint not found; check Hermes Vault Agent route configuration."
@@ -144,6 +168,93 @@ function normalizeIndexability(value: unknown): HermesVaultAgentDryRunResult["in
     gbrain_index: value.gbrain_index === true || value.indexable === true,
     gbrain_status: status,
     reason,
+  };
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function normalizePathSafety(value: unknown): unknown {
+  return value === undefined ? undefined : value;
+}
+
+function normalizeHermesWriteReceipt(payload: Record<string, unknown>): {
+  receipt?: HermesVaultAgentWriteReceipt;
+  errors: string[];
+  warnings: string[];
+} {
+  const result = nestedRecord(payload, "result");
+  const source = result ?? payload;
+  const safety = nestedRecord(source, "safety") ?? nestedRecord(payload, "safety");
+  const schemaVersion = stringValue(payload.schema_version) ?? stringValue(source.schema_version);
+  const status = stringValue(source.status);
+  const writePerformed = booleanValue(source.write_performed);
+  const deduped = booleanValue(source.deduped) ?? false;
+  const recordId = stringValue(source.record_id);
+  const targetPath = stringValue(source.target_path) ?? stringValue(source.target_path_preview);
+  const contentHash = stringValue(source.content_hash);
+  const gbrainCalled = booleanValue(source.gbrain_called) ?? (safety ? booleanValue(safety.gbrain_called) : undefined);
+  const memoryMutation = booleanValue(source.memory_mutation) ?? (safety ? booleanValue(safety.memory_mutation) : undefined);
+  const warnings = responseWarnings(payload, result);
+  const responseValidationErrors = responseErrors(payload, result);
+  const contractErrors: string[] = [];
+
+  if (schemaVersion !== HERMES_VAULT_AGENT_WRITE_RECEIPT_SCHEMA) {
+    contractErrors.push("Hermes Vault Agent write receipt schema_version must be hermes.vault_agent.write_receipt.v1.");
+  }
+
+  if (status !== "completed" && status !== "rejected") {
+    contractErrors.push("Hermes Vault Agent write receipt status must be completed or rejected.");
+  }
+
+  if (typeof writePerformed !== "boolean") {
+    contractErrors.push("Hermes Vault Agent write receipt must include write_performed boolean.");
+  }
+
+  if (status === "completed" && !writePerformed && !deduped) {
+    contractErrors.push("Hermes Vault Agent completed write receipt must either write or dedupe.");
+  }
+
+  if (!recordId) {
+    contractErrors.push("Hermes Vault Agent write receipt is missing record_id.");
+  }
+
+  if (!targetPath) {
+    contractErrors.push("Hermes Vault Agent write receipt is missing target_path.");
+  }
+
+  if (gbrainCalled !== false) {
+    contractErrors.push("Hermes Vault Agent write receipt must have gbrain_called=false.");
+  }
+
+  if (memoryMutation !== false) {
+    contractErrors.push("Hermes Vault Agent write receipt must have memory_mutation=false.");
+  }
+
+  const errors = [...contractErrors, ...responseValidationErrors];
+
+  if (contractErrors.length || !recordId || !targetPath || typeof writePerformed !== "boolean" || (status !== "completed" && status !== "rejected")) {
+    return { errors, warnings };
+  }
+
+  return {
+    receipt: {
+      schema_version: HERMES_VAULT_AGENT_WRITE_RECEIPT_SCHEMA,
+      status,
+      write_performed: writePerformed,
+      deduped,
+      record_id: recordId,
+      target_path: targetPath,
+      content_hash: contentHash,
+      path_safety: normalizePathSafety(source.path_safety),
+      warnings,
+      errors: responseValidationErrors,
+      gbrain_called: false,
+      memory_mutation: false,
+    },
+    errors: [],
+    warnings,
   };
 }
 
@@ -367,6 +478,72 @@ export async function callHermesVaultAgentDryRun(pkg: TurnCompletedPackage): Pro
     return {
       ok: false,
       error: error instanceof Error ? error.message : "Hermes Vault Agent dry-run request failed.",
+      warnings: [],
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function callHermesVaultAgentWriteTurnLog(pkg: TurnCompletedPackage): Promise<HermesVaultAgentWriteTurnLogResult> {
+  const baseUrl = getCmoHermesBaseUrl();
+  const apiKey = getCmoHermesApiKey();
+
+  if (!baseUrl) {
+    return { ok: false, error: "CMO_HERMES_BASE_URL is not configured.", warnings: [] };
+  }
+
+  if (!apiKey) {
+    return { ok: false, error: "CMO_HERMES_API_KEY is not configured.", warnings: [] };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), getCmoHermesTimeoutMs());
+
+  try {
+    const response = await fetch(`${baseUrl}${HERMES_VAULT_AGENT_WRITE_TURN_LOG_PATH}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(pkg),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return { ok: false, error: await httpFailureReason(response, "write-turn-log"), warnings: [] };
+    }
+
+    const payload = await parseJson(response);
+    if (!isRecord(payload)) {
+      return { ok: false, error: "Hermes Vault Agent write receipt body must be an object.", warnings: [] };
+    }
+
+    const normalized = normalizeHermesWriteReceipt(payload);
+    if (!normalized.receipt) {
+      return {
+        ok: false,
+        error: normalized.errors.join(" "),
+        warnings: normalized.warnings,
+      };
+    }
+
+    return {
+      ok: true,
+      receipt: normalized.receipt,
+      warnings: normalized.warnings,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return { ok: false, error: "Hermes Vault Agent write-turn-log request timed out.", warnings: [] };
+    }
+
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Hermes Vault Agent write-turn-log request failed.",
       warnings: [],
     };
   } finally {
