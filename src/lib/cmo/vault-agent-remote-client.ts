@@ -77,7 +77,7 @@ export interface HermesVaultAgentContextPackSource {
 
 export interface HermesVaultAgentContextPackReceipt {
   schema_version: typeof HERMES_VAULT_AGENT_CONTEXT_PACK_SCHEMA;
-  status: "completed" | "rejected";
+  status: "completed" | "empty" | "rejected";
   source_count: number;
   sources: HermesVaultAgentContextPackSource[];
   warnings: string[];
@@ -376,8 +376,8 @@ function normalizeHermesContextPackReceipt(payload: Record<string, unknown>): {
     contractErrors.push("Hermes Vault Agent context pack schema_version must be hermes.vault_agent.context_pack.v1.");
   }
 
-  if (status !== "completed" && status !== "rejected") {
-    contractErrors.push("Hermes Vault Agent context pack status must be completed or rejected.");
+  if (status !== "completed" && status !== "empty" && status !== "rejected") {
+    contractErrors.push("Hermes Vault Agent context pack status must be completed, empty, or rejected.");
   }
 
   if (sourceCount > 0 && sources.length === 0) {
@@ -398,7 +398,7 @@ function normalizeHermesContextPackReceipt(payload: Record<string, unknown>): {
 
   const errors = [...contractErrors, ...responseValidationErrors];
 
-  if (contractErrors.length || typeof gbrainCalled !== "boolean" || (status !== "completed" && status !== "rejected")) {
+  if (contractErrors.length || typeof gbrainCalled !== "boolean" || (status !== "completed" && status !== "empty" && status !== "rejected")) {
     return { errors, warnings };
   }
 

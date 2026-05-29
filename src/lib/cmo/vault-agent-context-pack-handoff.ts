@@ -18,6 +18,7 @@ import type { CmoServerUserIdentity } from "./user-metadata";
 const MAX_CONTEXT_PACK_SOURCES = 3;
 const MAX_CONTEXT_PACK_TEXT_CHARS = 4_000;
 const MAX_SOURCE_TEXT_CHARS = 700;
+const MAX_QUERY_CHARS = 240;
 
 export interface VaultAgentContextPackInput {
   request: CMOAppChatRequest;
@@ -49,6 +50,12 @@ function compactText(value: string, max = MAX_SOURCE_TEXT_CHARS): string {
   const normalized = value.replace(/\s+/g, " ").trim();
 
   return normalized.length > max ? `${normalized.slice(0, max - 3).trimEnd()}...` : normalized;
+}
+
+export function contextPackQueryFromUserMessage(message: string): string {
+  const milestone = message.match(/(?:^|[^\p{L}\p{N}])((?:m|M)\d+(?:\.\d+)?[A-Za-z]?)(?=$|[^\p{L}\p{N}])/u)?.[1];
+
+  return milestone ? milestone.toUpperCase() : compactText(message, MAX_QUERY_CHARS);
 }
 
 function sourceSnippet(source: HermesVaultAgentContextPackSource): string {
@@ -91,7 +98,9 @@ function metadataFromReceipt(
 ): VaultAgentContextPackMetadata {
   return {
     context_pack_mode: mode,
-    context_pack_status: receipt.status === "completed"
+    context_pack_status: receipt.status === "empty"
+      ? "empty"
+      : receipt.status === "completed"
       ? receipt.source_count > 0 && receipt.sources.length > 0
         ? "completed"
         : "empty"
@@ -116,7 +125,7 @@ export function buildVaultAgentContextPackRequest(input: VaultAgentContextPackIn
     workspace_id: input.request.appId,
     ...(userId ? { user_id: userId } : { user_ref: userRef }),
     ...(input.sessionId ? { session_id: input.sessionId } : {}),
-    query: input.request.message,
+    query: contextPackQueryFromUserMessage(input.request.message),
     allowed_scopes: ["workspace"],
     max_results: MAX_CONTEXT_PACK_SOURCES,
     created_at: input.createdAt,

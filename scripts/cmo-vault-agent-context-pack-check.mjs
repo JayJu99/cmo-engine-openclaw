@@ -152,6 +152,7 @@ try {
 
   const {
     buildVaultAgentContextPackRequest,
+    contextPackQueryFromUserMessage,
     runVaultAgentContextPackHandoff,
     applyVaultAgentContextPackToCmoContextPackage,
   } = requireFromScript(join(dist, "vault-agent-context-pack-handoff.js"));
@@ -196,7 +197,7 @@ try {
       assert.equal(body.workspace_id, "holdstation-mini-app");
       assert.equal(body.user_id, "user_123");
       assert.equal(body.session_id, "session_context_pack_123");
-      assert.equal(body.query, "What is the M3.12 source ingestion status?");
+      assert.equal(body.query, "M3.12");
       assert.deepEqual(body.allowed_scopes, ["workspace"]);
       assert.equal(body.max_results, 3);
 
@@ -217,7 +218,20 @@ try {
       createdAt: "2026-05-30T00:00:00.000Z",
     });
     assert.equal(request.schema_version, "cmo.context_pack.request.v1");
+    assert.equal(request.query, "M3.12");
     assert.deepEqual(request.allowed_scopes, ["workspace"]);
+    assert.equal(
+      contextPackQueryFromUserMessage("M3.12 là gì? Tóm tắt source ingestion live test trong Vault context."),
+      "M3.12",
+    );
+    assert.equal(
+      contextPackQueryFromUserMessage("Review M3.10B rollout state for this workspace."),
+      "M3.10B",
+    );
+    assert.equal(
+      contextPackQueryFromUserMessage("Summarize source ingestion readiness.").startsWith("Summarize source ingestion readiness."),
+      true,
+    );
 
     const success = await runVaultAgentContextPackHandoff({
       request: baseRequest(),
@@ -248,8 +262,10 @@ try {
     assert.equal(injected.contextPack.vaultAgentContextPack.sources[0].source_path, success.metadata.context_pack_sources[0].source_path);
 
     globalThis.fetch = async () => new Response(JSON.stringify(contextPackReceipt({
+      status: "empty",
       source_count: 0,
       sources: [],
+      warnings: ["No pilot context matched workspace/scope filters; embeddings are disabled, so natural-language semantic queries may return empty."],
     })), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -260,6 +276,10 @@ try {
       createdAt: "2026-05-30T00:00:00.000Z",
     });
     assert.equal(empty.status, "empty");
+    assert.equal(empty.metadata.context_pack_status, "empty");
+    assert.equal(empty.metadata.context_pack_source_count, 0);
+    assert.deepEqual(empty.metadata.context_pack_errors, []);
+    assert.match(empty.metadata.context_pack_warnings.join("\n"), /No pilot context matched/);
     assert.equal(empty.hiddenText, undefined);
     assert.equal(applyVaultAgentContextPackToCmoContextPackage(baseContextPackage(), empty).contextPack.vaultAgentContextPack, undefined);
 
