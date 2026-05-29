@@ -148,11 +148,11 @@ try {
   process.env.CMO_VAULT_AGENT_HANDOFF_MODE = "dry_run";
   const validHandoff = await runVaultAgentDryRunHandoff(baseHandoffInput());
   assert.equal(validHandoff.mode, "dry_run");
-  assert.equal(validHandoff.status, "dry_run_valid");
+  assert.equal(validHandoff.status, "completed");
   assert.equal(validHandoff.receipt.write_confirmed, false);
   assert.equal(validHandoff.receipt.no_filesystem_write, true);
   assert.equal(validHandoff.receipt.no_gbrain_call, true);
-  assert.equal(validHandoff.metadata.vault_handoff_status, "dry_run_valid");
+  assert.equal(validHandoff.metadata.vault_handoff_status, "completed");
   assert.match(validHandoff.metadata.dry_run_record_id, /^rec_/);
   assert.match(validHandoff.metadata.dry_run_target_path, /^09 Proposals\/Vault Agent Dry Run\//);
   assert.equal(validHandoff.metadata.dry_run_indexability.gbrain_index, false);
@@ -215,6 +215,11 @@ try {
     status,
     write_confirmed: false,
     target_path_preview: "09 Proposals/Vault Agent Dry Run/holdstation-mini-app/2026/05/rec-remote.md",
+    indexability: {
+      gbrain_index: false,
+      gbrain_status: "not_indexable",
+      reason: "Completed dry-run receipt can be intentionally not indexable.",
+    },
     validation_errors: status === "rejected" ? ["remote policy rejected package"] : [],
     validation_warnings: status === "rejected" ? ["remote rejected dry-run"] : [],
     no_filesystem_write: true,
@@ -291,6 +296,7 @@ try {
     assert.equal(completedStatusWrapperRemote.status, "completed");
     assert.equal(completedStatusWrapperRemote.metadata.vault_handoff_status, "completed");
     assert.equal(completedStatusWrapperRemote.metadata.vault_handoff_errors.length, 0);
+    assert.equal(completedStatusWrapperRemote.metadata.dry_run_indexability.gbrain_status, "not_indexable");
 
     globalThis.fetch = async () => {
       throw new Error("mock network failure");
@@ -316,6 +322,11 @@ try {
   assert.match(
     appChatStoreSource,
     /vaultAgentHandoff\?\.mode === "dry_run" \|\| vaultAgentHandoff\?\.mode === "dry_run_remote"/,
+  );
+  const handoffBuilderSource = readFileSync("src/lib/cmo/vault-agent-handoff-builder.ts", "utf8");
+  assert.doesNotMatch(
+    handoffBuilderSource,
+    /receipt\.status === "dry_run" \? "dry_run_valid" : "dry_run_invalid"/,
   );
 
   const bannedFilesystemCalls = /\b(writeFile|appendFile|mkdir|rm|createWriteStream|saveCaptureToCmoEngineVault)\b/;

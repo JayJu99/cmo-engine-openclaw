@@ -142,7 +142,14 @@ function metadataFromReceipt(
   };
 }
 
-function remoteHandoffStatus(receipt: VaultAgentWriteReceipt): VaultAgentHandoffStatus {
+function handoffStatusFromReceipt(
+  receipt: VaultAgentWriteReceipt,
+  handoffStatus?: Extract<VaultAgentHandoffStatus, "completed" | "dry_run_invalid">,
+): VaultAgentHandoffStatus {
+  if (handoffStatus) {
+    return handoffStatus;
+  }
+
   const status = receipt.status as string;
 
   if (status === "dry_run" || status === "validated" || status === "completed") {
@@ -186,7 +193,7 @@ export async function runVaultAgentDryRunHandoff(input: CompletedTurnHandoffInpu
         };
       }
 
-      const status: VaultAgentHandoffStatus = remote.handoffStatus ?? remoteHandoffStatus(remote.receipt);
+      const status = handoffStatusFromReceipt(remote.receipt, remote.handoffStatus);
 
       return {
         mode,
@@ -198,7 +205,7 @@ export async function runVaultAgentDryRunHandoff(input: CompletedTurnHandoffInpu
     }
 
     const receipt = buildVaultAgentDryRunReceipt(pkg);
-    const status: VaultAgentHandoffStatus = receipt.status === "dry_run" ? "dry_run_valid" : "dry_run_invalid";
+    const status = handoffStatusFromReceipt(receipt);
 
     return {
       mode,
