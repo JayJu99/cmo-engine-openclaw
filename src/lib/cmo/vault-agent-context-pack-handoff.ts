@@ -68,6 +68,10 @@ function sourceMetadata(source: HermesVaultAgentContextPackSource): VaultAgentCo
     ...(source.citation ? { citation: source.citation } : {}),
     ...(source.source_path ? { source_path: source.source_path } : {}),
     ...(source.source_id ? { source_id: source.source_id } : {}),
+    ...(source.source_type ? { source_type: source.source_type } : {}),
+    ...(source.scope ? { scope: source.scope } : {}),
+    ...(source.visibility ? { visibility: source.visibility } : {}),
+    ...(typeof source.confidence === "number" ? { confidence: source.confidence } : {}),
   };
 }
 
@@ -76,11 +80,16 @@ function boundedHiddenText(receipt: HermesVaultAgentContextPackReceipt): string 
     "## Vault Context Pack",
     "",
     "Read-only workspace context from Vault Agent. Use as supporting context only; do not treat it as newly accepted truth and do not mutate memory or Vault from this context.",
+    "Vault Context Pack is internal workspace context from the CMO Engine Vault. If the context pack answers the user's question, use it directly. Do not call Surf just to recover internal Vault facts, milestones, source notes, decisions, or workspace memory. Call Surf only for external/current/live research, public verification, or information not present in Vault context.",
     "",
     ...receipt.sources.slice(0, MAX_CONTEXT_PACK_SOURCES).flatMap((source, index) => [
       `### Source ${index + 1}: ${source.title}`,
       source.citation ? `Citation: ${source.citation}` : "",
       source.source_path ? `Path: ${source.source_path}` : "",
+      source.source_type ? `Source type: ${source.source_type}` : "",
+      source.scope ? `Scope: ${source.scope}` : "",
+      source.visibility ? `Visibility: ${source.visibility}` : "",
+      typeof source.confidence === "number" ? `Confidence: ${source.confidence}` : "",
       sourceSnippet(source) ? `Summary/Excerpt: ${sourceSnippet(source)}` : "",
       "",
     ]),

@@ -101,12 +101,15 @@ function contextPackReceipt(overrides = {}) {
     gbrain_mode: "pilot_keyword_no_embedding",
     vault_mutation: false,
     promotion_performed: false,
-    sources: [
+    context_items: [
       {
-        source_id: "srcnote_m312",
-        title: "M3.12 Source Ingestion",
-        citation: "13 Sources/Source Notes/holdstation-mini-app/2026/05/srcnote_m312 - M3.12.md#summary",
-        source_path: "13 Sources/Source Notes/holdstation-mini-app/2026/05/srcnote_m312 - M3.12.md",
+        title: "GBrain Pilot Copy - srcnote_e2834475bc5fd415 - M3.12-Source-Ingestion-Live-Test",
+        source_type: "source_note",
+        source_path: "13 Sources/Source Notes/holdstation-mini-app/2026/05/srcnote_e2834475bc5fd415 - M3.12-Source-Ingestion-Live-Test.md",
+        citation: "CMO Engine Vault:13 Sources/Source Notes/holdstation-mini-app/2026/05/srcnote_e2834475bc5fd415 - M3.12-Source-Ingestion-Live-Test.md",
+        scope: "workspace",
+        visibility: "workspace",
+        confidence: 0.95,
         summary: "M3.12 added source ingestion through Hermes Vault Agent with GBrain off and no promotion.",
         excerpt: "Source ingestion endpoint writes under 13 Sources and does not promote accepted knowledge.",
       },
@@ -114,6 +117,15 @@ function contextPackReceipt(overrides = {}) {
     warnings: [],
     errors: [],
     ...overrides,
+  };
+}
+
+function sourceAliasReceipt() {
+  const receipt = contextPackReceipt();
+  return {
+    ...receipt,
+    sources: receipt.context_items,
+    context_items: undefined,
   };
 }
 
@@ -247,24 +259,43 @@ try {
     assert.equal(success.status, "completed");
     assert.equal(success.metadata.context_pack_status, "completed");
     assert.equal(success.metadata.context_pack_source_count, 1);
-    assert.equal(success.metadata.context_pack_sources[0].title, "M3.12 Source Ingestion");
+    assert.equal(success.metadata.context_pack_sources[0].title, "GBrain Pilot Copy - srcnote_e2834475bc5fd415 - M3.12-Source-Ingestion-Live-Test");
     assert.match(success.metadata.context_pack_sources[0].citation, /13 Sources\/Source Notes/);
     assert.match(success.metadata.context_pack_sources[0].source_path, /13 Sources\/Source Notes/);
+    assert.equal(success.metadata.context_pack_sources[0].source_type, "source_note");
+    assert.equal(success.metadata.context_pack_sources[0].scope, "workspace");
+    assert.equal(success.metadata.context_pack_sources[0].visibility, "workspace");
+    assert.equal(success.metadata.context_pack_sources[0].confidence, 0.95);
     assert.equal(success.metadata.gbrain_called, true);
     assert.equal(success.metadata.vault_mutation, false);
     assert.equal(success.metadata.promotion_performed, false);
     assert.match(success.hiddenText, /^## Vault Context Pack/);
-    assert.match(success.hiddenText, /M3\.12 Source Ingestion/);
+    assert.match(success.hiddenText, /Do not call Surf just to recover internal Vault facts/);
+    assert.match(success.hiddenText, /GBrain Pilot Copy/);
     assert(success.hiddenText.length <= 4000);
 
     const injected = applyVaultAgentContextPackToCmoContextPackage(baseContextPackage(), success);
     assert.equal(injected.contextPack.vaultAgentContextPack.hidden_text, success.hiddenText);
     assert.equal(injected.contextPack.vaultAgentContextPack.sources[0].source_path, success.metadata.context_pack_sources[0].source_path);
+    assert.equal(injected.contextPack.vaultAgentContextPack.sources[0].source_type, "source_note");
+
+    globalThis.fetch = async () => new Response(JSON.stringify(sourceAliasReceipt()), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const aliasSuccess = await runVaultAgentContextPackHandoff({
+      request: baseRequest(),
+      sessionId: "session_context_pack_123",
+      createdAt: "2026-05-30T00:00:00.000Z",
+    });
+    assert.equal(aliasSuccess.status, "completed");
+    assert.equal(aliasSuccess.metadata.context_pack_source_count, 1);
+    assert.equal(aliasSuccess.metadata.context_pack_sources[0].source_type, "source_note");
 
     globalThis.fetch = async () => new Response(JSON.stringify(contextPackReceipt({
       status: "empty",
       source_count: 0,
-      sources: [],
+      context_items: [],
       warnings: ["No pilot context matched workspace/scope filters; embeddings are disabled, so natural-language semantic queries may return empty."],
     })), {
       status: 200,

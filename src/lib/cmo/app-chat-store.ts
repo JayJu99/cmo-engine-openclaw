@@ -924,6 +924,10 @@ function normalizeVaultAgentContextPackMetadata(value: unknown): VaultAgentConte
             ...(normalizeOptionalString(item.citation) ? { citation: normalizeOptionalString(item.citation) } : {}),
             ...(normalizeOptionalString(item.source_path) ? { source_path: normalizeOptionalString(item.source_path) } : {}),
             ...(normalizeOptionalString(item.source_id) ? { source_id: normalizeOptionalString(item.source_id) } : {}),
+            ...(normalizeOptionalString(item.source_type) ? { source_type: normalizeOptionalString(item.source_type) } : {}),
+            ...(normalizeOptionalString(item.scope) ? { scope: normalizeOptionalString(item.scope) } : {}),
+            ...(normalizeOptionalString(item.visibility) ? { visibility: normalizeOptionalString(item.visibility) } : {}),
+            ...(typeof item.confidence === "number" && Number.isFinite(item.confidence) ? { confidence: item.confidence } : {}),
           };
         })
         .filter((item): item is NonNullable<VaultAgentContextPackMetadata["context_pack_sources"]>[number] => Boolean(item))

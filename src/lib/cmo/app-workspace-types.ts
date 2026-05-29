@@ -701,6 +701,10 @@ export interface VaultAgentContextPackSourceMetadata {
   citation?: string;
   source_path?: string;
   source_id?: string;
+  source_type?: string;
+  scope?: string;
+  visibility?: string;
+  confidence?: number;
 }
 
 export interface VaultAgentContextPackMetadata {

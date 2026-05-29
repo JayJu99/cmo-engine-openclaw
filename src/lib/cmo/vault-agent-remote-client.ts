@@ -71,6 +71,10 @@ export interface HermesVaultAgentContextPackSource {
   title: string;
   citation?: string;
   source_path?: string;
+  source_type?: string;
+  scope?: string;
+  visibility?: string;
+  confidence?: number;
   excerpt?: string;
   summary?: string;
 }
@@ -241,6 +245,10 @@ function booleanValue(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function normalizePathSafety(value: unknown): unknown {
   return value === undefined ? undefined : value;
 }
@@ -316,7 +324,7 @@ function normalizeHermesSourceIngestionReceipt(payload: Record<string, unknown>)
 }
 
 function sourceCandidateList(source: Record<string, unknown>): unknown[] {
-  for (const key of ["sources", "context_sources", "items", "results"]) {
+  for (const key of ["context_items", "sources", "context_sources", "items", "results"]) {
     if (Array.isArray(source[key])) {
       return source[key];
     }
@@ -344,6 +352,10 @@ function normalizeContextPackSource(value: unknown, index: number): HermesVaultA
     title,
     citation: stringValue(value.citation) ?? stringValue(value.citation_key),
     source_path: stringValue(value.source_path) ?? stringValue(value.path) ?? stringValue(value.target_path) ?? stringValue(value.target_relative_path),
+    source_type: stringValue(value.source_type) ?? stringValue(value.record_type) ?? stringValue(value.type),
+    scope: stringValue(value.scope),
+    visibility: stringValue(value.visibility),
+    confidence: numberValue(value.confidence),
     excerpt,
     summary,
   };
