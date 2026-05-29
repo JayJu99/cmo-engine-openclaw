@@ -696,6 +696,37 @@ export interface VaultAgentDryRunMetadata {
   vault_handoff_errors?: string[];
 }
 
+export interface VaultAgentContextPackSourceMetadata {
+  title: string;
+  citation?: string;
+  source_path?: string;
+  source_id?: string;
+}
+
+export interface VaultAgentContextPackMetadata {
+  context_pack_mode?: "off" | "pilot_remote";
+  context_pack_status?: "skipped" | "completed" | "empty" | "failed" | "rejected";
+  context_pack_source_count?: number;
+  context_pack_sources?: VaultAgentContextPackSourceMetadata[];
+  context_pack_errors?: string[];
+  context_pack_warnings?: string[];
+  gbrain_called?: boolean;
+  vault_mutation?: false;
+  promotion_performed?: false;
+}
+
+export interface VaultAgentRuntimeContextPack {
+  schema_version: "cmo.vault_context_pack.runtime.v1";
+  mode: "pilot_remote";
+  status: "completed";
+  source_count: number;
+  hidden_text: string;
+  sources: VaultAgentContextPackSourceMetadata[];
+  gbrain_called: boolean;
+  vault_mutation: false;
+  promotion_performed: false;
+}
+
 export interface ContextItem {
   id: string;
   kind: ContextItemKind;
@@ -744,6 +775,7 @@ export interface ContextPack {
   graphStatus?: ContextGraphStatus;
   exclusions: ContextExclusion[];
   contextQualitySummary: CMOContextQualitySummary;
+  vaultAgentContextPack?: VaultAgentRuntimeContextPack;
 }
 
 export interface CMOContextBriefSection {
@@ -866,6 +898,7 @@ export interface CMOChatMessage {
   platformPersistenceSummary?: HermesCmoPlatformPersistenceSummary;
   delegationsMode?: HermesCmoDelegationsMode;
   vaultAgentDryRun?: VaultAgentDryRunMetadata;
+  vaultAgentContextPack?: VaultAgentContextPackMetadata;
   contextUsedCount?: number;
   graphHintCount?: number;
   indexedContextStatus?: CmoIndexedContextStatus;
@@ -930,6 +963,7 @@ export interface CMOChatSession {
   platformPersistenceSummary?: HermesCmoPlatformPersistenceSummary;
   delegationsMode?: HermesCmoDelegationsMode;
   vaultAgentDryRun?: VaultAgentDryRunMetadata;
+  vaultAgentContextPack?: VaultAgentContextPackMetadata;
   missingContext?: VaultNoteRef[];
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;

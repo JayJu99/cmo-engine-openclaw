@@ -1,6 +1,7 @@
 export const VAULT_AGENT_CONTRACT_VERSION = "cmo.vault-agent.v1" as const;
 export const TURN_COMPLETED_PACKAGE_SCHEMA_VERSION = "cmo.turn_package.v1" as const;
 export const SOURCE_INGESTION_PACKAGE_SCHEMA_VERSION = "cmo.source_ingestion.v1" as const;
+export const CONTEXT_PACK_REQUEST_SCHEMA_VERSION = "cmo.context_pack.request.v1" as const;
 export const VAULT_AGENT_WRITER = "vault_agent" as const;
 export const VAULT_AGENT_WRITER_VERSION = "m3.3a-dry-run" as const;
 export const CANONICAL_VAULT_LANGUAGE = "en" as const;
@@ -79,6 +80,19 @@ export interface SourceIngestionPackage {
   visibility: SourceIngestionVisibility;
   scope: SourceIngestionScope;
   source_refs?: string[];
+  created_at: string;
+}
+
+export interface VaultAgentContextPackRequest {
+  schema_version: typeof CONTEXT_PACK_REQUEST_SCHEMA_VERSION;
+  tenant_id: string;
+  workspace_id: string;
+  user_id?: string;
+  user_ref?: string;
+  session_id?: string;
+  query: string;
+  allowed_scopes: Array<Extract<VaultContextScope, "workspace">>;
+  max_results: number;
   created_at: string;
 }
 

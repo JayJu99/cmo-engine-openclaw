@@ -30,6 +30,7 @@ import type {
   HermesCmoPlatformPersistenceSummary,
   HermesCmoSafetyCounters,
   VaultAgentDryRunMetadata,
+  VaultAgentContextPackMetadata,
   CmoMemoryCandidateReviewStatus,
   CmoSuggestedActionReviewStatus,
   CmoTaskCandidateReviewStatus,
@@ -63,6 +64,7 @@ import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/
 import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { autoCaptureTurnOnce, type AutoCaptureResult } from "@/lib/cmo/vault-auto-capture";
+import { applyVaultAgentContextPackToCmoContextPackage, runVaultAgentContextPackHandoff } from "@/lib/cmo/vault-agent-context-pack-handoff";
 import { runVaultAgentDryRunHandoff } from "@/lib/cmo/vault-agent-handoff-builder";
 import { vaultAgentDryRunMetadataForPersistence } from "@/lib/cmo/vault-agent-handoff-persistence";
 
@@ -886,6 +888,60 @@ function normalizeVaultAgentDryRunMetadata(value: unknown): VaultAgentDryRunMeta
   };
 }
 
+function normalizeVaultAgentContextPackMetadata(value: unknown): VaultAgentContextPackMetadata | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const mode = value.context_pack_mode === "pilot_remote" || value.context_pack_mode === "off" ? value.context_pack_mode : undefined;
+  const status = value.context_pack_status === "skipped" ||
+    value.context_pack_status === "completed" ||
+    value.context_pack_status === "empty" ||
+    value.context_pack_status === "failed" ||
+    value.context_pack_status === "rejected"
+    ? value.context_pack_status
+    : undefined;
+
+  if (!mode && !status) {
+    return undefined;
+  }
+
+  const sources = Array.isArray(value.context_pack_sources)
+    ? value.context_pack_sources
+        .map((item) => {
+          if (!isRecord(item)) {
+            return null;
+          }
+
+          const title = stringValue(item.title);
+
+          if (!title) {
+            return null;
+          }
+
+          return {
+            title,
+            ...(normalizeOptionalString(item.citation) ? { citation: normalizeOptionalString(item.citation) } : {}),
+            ...(normalizeOptionalString(item.source_path) ? { source_path: normalizeOptionalString(item.source_path) } : {}),
+            ...(normalizeOptionalString(item.source_id) ? { source_id: normalizeOptionalString(item.source_id) } : {}),
+          };
+        })
+        .filter((item): item is NonNullable<VaultAgentContextPackMetadata["context_pack_sources"]>[number] => Boolean(item))
+    : undefined;
+
+  return {
+    ...(mode ? { context_pack_mode: mode } : {}),
+    ...(status ? { context_pack_status: status } : {}),
+    context_pack_source_count: normalizeOptionalNonNegativeNumber(value.context_pack_source_count),
+    ...(sources ? { context_pack_sources: sources } : {}),
+    context_pack_errors: normalizeStringList(value.context_pack_errors),
+    context_pack_warnings: normalizeStringList(value.context_pack_warnings),
+    ...(typeof value.gbrain_called === "boolean" ? { gbrain_called: value.gbrain_called } : {}),
+    ...(value.vault_mutation === false ? { vault_mutation: false } : {}),
+    ...(value.promotion_performed === false ? { promotion_performed: false } : {}),
+  };
+}
+
 function skippedLegacyAutoCaptureForVaultAgentWriteRemote(): AutoCaptureResult {
   return {
     ok: true,
@@ -997,6 +1053,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             platformPersistenceSummary: normalizeHermesCmoPlatformPersistenceSummary(message.platformPersistenceSummary),
             delegationsMode: normalizeHermesCmoDelegationsMode(message.delegationsMode),
             vaultAgentDryRun: normalizeVaultAgentDryRunMetadata(message.vaultAgentDryRun),
+            vaultAgentContextPack: normalizeVaultAgentContextPackMetadata(message.vaultAgentContextPack),
             contextUsedCount: typeof message.contextUsedCount === "number" && Number.isFinite(message.contextUsedCount) ? Math.max(0, Math.floor(message.contextUsedCount)) : undefined,
             graphHintCount: typeof message.graphHintCount === "number" && Number.isFinite(message.graphHintCount) ? Math.max(0, Math.floor(message.graphHintCount)) : undefined,
             indexedContextStatus: normalizeIndexedContextStatus(message.indexedContextStatus),
@@ -1072,6 +1129,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     platformPersistenceSummary: normalizeHermesCmoPlatformPersistenceSummary(value.platformPersistenceSummary),
     delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode),
     vaultAgentDryRun: normalizeVaultAgentDryRunMetadata(value.vaultAgentDryRun),
+    vaultAgentContextPack: normalizeVaultAgentContextPackMetadata(value.vaultAgentContextPack),
     missingContext,
     contextDiagnostics,
     contextQualitySummary: normalizeContextQualitySummary(value.contextQualitySummary ?? contextDiagnostics, [...contextUsed, ...missingContext]),
@@ -1123,6 +1181,7 @@ export async function createAppChatSession(
   const sessionResolutionDurationMs = Date.now() - sessionResolutionStartedMs;
   const messageId = `msg_${randomUUID().slice(0, 12)}`;
   const assistantId = `msg_${randomUUID().slice(0, 12)}`;
+  const sessionId = continuedSession?.id ?? `session_${now.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
   const localCommand = continuedSession ? parseLocalChatCommand(request.message) : null;
 
   if (localCommand && continuedSession) {
@@ -1165,7 +1224,19 @@ export async function createAppChatSession(
   const indexedContextSourcesCount = indexedContextSupplement.sources.length;
   const indexedContextFallbackReason = indexedContextSupplement.fallbackReason;
   const contextPackResult = applyIndexedContextSupplement(baseContextPackResult, indexedContextSupplement);
-  const { contextPackage, contextUsed, missingContext, contextDiagnostics, contextQualitySummary } = contextPackResult;
+  let { contextPackage } = contextPackResult;
+  const { contextUsed, missingContext, contextDiagnostics, contextQualitySummary } = contextPackResult;
+  const vaultAgentContextPackHandoff = await runVaultAgentContextPackHandoff({
+    request,
+    session: continuedSession,
+    sessionId,
+    userIdentity,
+    createdAt: now,
+  });
+  const vaultAgentContextPackMetadata = vaultAgentContextPackHandoff.mode === "off"
+    ? undefined
+    : vaultAgentContextPackHandoff.metadata;
+  contextPackage = applyVaultAgentContextPackToCmoContextPackage(contextPackage, vaultAgentContextPackHandoff);
   const contextSourceCount = contextPackage.contextPack.items.filter((item) => item.exists).length;
   const contextCharLength = contextPackage.contextPack.items.reduce((total, item) => total + item.content.length, 0);
   const indexedSupplementCharLength = indexedContextSupplement.used ? indexedContextSupplement.text.length : 0;
@@ -1188,7 +1259,6 @@ export async function createAppChatSession(
   const graphHints = contextPackage.graphHints ?? [];
   const graphHintCount = contextPackage.graphHintCount ?? graphHints.length;
   const graphStatus = contextPackage.graphStatus ?? "empty";
-  const sessionId = continuedSession?.id ?? `session_${now.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
   let answer = "";
   let status: CMOChatSession["status"] = "completed";
   let assumptions: string[] = [];
@@ -1515,6 +1585,7 @@ export async function createAppChatSession(
     ...(typeof echoCalls === "number" ? { echoCalls } : {}),
     ...(forbiddenCounters ? { forbiddenCounters } : {}),
     ...(delegationsMode ? { delegationsMode } : {}),
+    ...(vaultAgentContextPackMetadata ? { vaultAgentContextPack: vaultAgentContextPackMetadata } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,
@@ -1561,6 +1632,7 @@ export async function createAppChatSession(
         ...(typeof echoCalls === "number" ? { echoCalls } : {}),
         ...(forbiddenCounters ? { forbiddenCounters } : {}),
         ...(delegationsMode ? { delegationsMode } : {}),
+        ...(vaultAgentContextPackMetadata ? { vaultAgentContextPack: vaultAgentContextPackMetadata } : {}),
         contextUsedCount: contextUsed.length,
         graphHintCount,
         indexedContextStatus,

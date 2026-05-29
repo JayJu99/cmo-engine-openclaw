@@ -140,6 +140,27 @@ function recentChatContext(history: CMOChatMessage[]): Record<string, unknown>[]
     }));
 }
 
+function vaultAgentContextPackArtifact(input: HermesCmoChatRequestInput): Record<string, unknown> | null {
+  const contextPack = input.contextPackage.contextPack.vaultAgentContextPack;
+
+  if (!contextPack?.hidden_text) {
+    return null;
+  }
+
+  return {
+    type: "vault_context_pack",
+    schema_version: contextPack.schema_version,
+    title: "Vault Context Pack",
+    content: contextPack.hidden_text,
+    sources: contextPack.sources,
+    source_count: contextPack.source_count,
+    read_only: true,
+    gbrain_called: contextPack.gbrain_called,
+    vault_mutation: false,
+    promotion_performed: false,
+  };
+}
+
 function userId(input: HermesCmoChatRequestInput): string {
   return (
     input.userIdentity?.userId?.trim() ||
@@ -155,6 +176,7 @@ function displayName(input: HermesCmoChatRequestInput): string | null {
 
 export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): HermesCmoRuntimeRequest {
   const contextItems = input.contextPackage.contextPack.items;
+  const vaultContextPack = vaultAgentContextPackArtifact(input);
   const currentPriority = contextItems
     .filter((item) => item.exists && item.kind === "current_priority")
     .map(contextItemSnapshot);
@@ -189,7 +211,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       selected_context: [...input.contextPackage.selectedContext.map(noteSnapshot), ...recentChatContext(input.history)],
       recent_session_summary: recentSessionSummary(input.history),
       indexed_context_supplement: indexedContextSupplement,
-      artifacts_in: [],
+      artifacts_in: vaultContextPack ? [vaultContextPack] : [],
       read_only_snapshot: true,
       context_quality_summary: input.contextPackage.contextQualitySummary,
       context_graph: {

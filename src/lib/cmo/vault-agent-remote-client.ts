@@ -1,12 +1,14 @@
 import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs } from "./config";
-import { VAULT_AGENT_CONTRACT_VERSION, type SourceIngestionPackage, type TurnCompletedPackage, type VaultAgentWriteReceipt } from "./vault-agent-contracts";
+import { VAULT_AGENT_CONTRACT_VERSION, type SourceIngestionPackage, type TurnCompletedPackage, type VaultAgentContextPackRequest, type VaultAgentWriteReceipt } from "./vault-agent-contracts";
 
 const HERMES_VAULT_AGENT_DRY_RUN_PATH = "/agents/vault-agent/dry-run" as const;
 const HERMES_VAULT_AGENT_WRITE_TURN_LOG_PATH = "/agents/vault-agent/write-turn-log" as const;
 const HERMES_VAULT_AGENT_INGEST_SOURCE_PATH = "/agents/vault-agent/ingest-source" as const;
+const HERMES_VAULT_AGENT_CONTEXT_PACK_PATH = "/agents/vault-agent/get-context-pack" as const;
 const HERMES_VAULT_AGENT_RESPONSE_SCHEMA = "hermes.vault_agent.response.v1" as const;
 const HERMES_VAULT_AGENT_WRITE_RECEIPT_SCHEMA = "hermes.vault_agent.write_receipt.v1" as const;
 const HERMES_VAULT_AGENT_SOURCE_INGESTION_RECEIPT_SCHEMA = "hermes.vault_agent.source_ingestion_receipt.v1" as const;
+const HERMES_VAULT_AGENT_CONTEXT_PACK_SCHEMA = "hermes.vault_agent.context_pack.v1" as const;
 
 export interface HermesVaultAgentDryRunResult {
   ok: boolean;
@@ -60,6 +62,35 @@ export interface HermesVaultAgentSourceIngestionReceipt {
 export interface HermesVaultAgentSourceIngestionResult {
   ok: boolean;
   receipt?: HermesVaultAgentSourceIngestionReceipt;
+  error?: string;
+  warnings: string[];
+}
+
+export interface HermesVaultAgentContextPackSource {
+  source_id?: string;
+  title: string;
+  citation?: string;
+  source_path?: string;
+  excerpt?: string;
+  summary?: string;
+}
+
+export interface HermesVaultAgentContextPackReceipt {
+  schema_version: typeof HERMES_VAULT_AGENT_CONTEXT_PACK_SCHEMA;
+  status: "completed" | "rejected";
+  source_count: number;
+  sources: HermesVaultAgentContextPackSource[];
+  warnings: string[];
+  errors: string[];
+  gbrain_called: boolean;
+  gbrain_mode?: string;
+  vault_mutation: false;
+  promotion_performed: false;
+}
+
+export interface HermesVaultAgentContextPackResult {
+  ok: boolean;
+  receipt?: HermesVaultAgentContextPackReceipt;
   error?: string;
   warnings: string[];
 }
@@ -277,6 +308,111 @@ function normalizeHermesSourceIngestionReceipt(payload: Record<string, unknown>)
       warnings,
       errors: responseValidationErrors,
       gbrain_called: false,
+      promotion_performed: false,
+    },
+    errors: [],
+    warnings,
+  };
+}
+
+function sourceCandidateList(source: Record<string, unknown>): unknown[] {
+  for (const key of ["sources", "context_sources", "items", "results"]) {
+    if (Array.isArray(source[key])) {
+      return source[key];
+    }
+  }
+
+  const nestedContextPack = nestedRecord(source, "context_pack") ?? nestedRecord(source, "contextPack");
+  if (nestedContextPack) {
+    return sourceCandidateList(nestedContextPack);
+  }
+
+  return [];
+}
+
+function normalizeContextPackSource(value: unknown, index: number): HermesVaultAgentContextPackSource | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const title = stringValue(value.title) ?? stringValue(value.source_title) ?? stringValue(value.name) ?? `Vault source ${index + 1}`;
+  const excerpt = stringValue(value.excerpt) ?? stringValue(value.content_excerpt) ?? stringValue(value.preview);
+  const summary = stringValue(value.summary) ?? stringValue(value.canonical_summary) ?? stringValue(value.text);
+
+  return {
+    source_id: stringValue(value.source_id) ?? stringValue(value.record_id) ?? stringValue(value.id),
+    title,
+    citation: stringValue(value.citation) ?? stringValue(value.citation_key),
+    source_path: stringValue(value.source_path) ?? stringValue(value.path) ?? stringValue(value.target_path) ?? stringValue(value.target_relative_path),
+    excerpt,
+    summary,
+  };
+}
+
+function normalizeHermesContextPackReceipt(payload: Record<string, unknown>): {
+  receipt?: HermesVaultAgentContextPackReceipt;
+  errors: string[];
+  warnings: string[];
+} {
+  const result = nestedRecord(payload, "result");
+  const source = result ?? payload;
+  const safety = nestedRecord(source, "safety") ?? nestedRecord(payload, "safety");
+  const schemaVersion = stringValue(payload.schema_version) ?? stringValue(source.schema_version);
+  const status = stringValue(source.status);
+  const sources = sourceCandidateList(source)
+    .map(normalizeContextPackSource)
+    .filter((item): item is HermesVaultAgentContextPackSource => Boolean(item))
+    .slice(0, 10);
+  const rawSourceCount = Number(source.source_count ?? source.sourceCount ?? sources.length);
+  const sourceCount = Number.isFinite(rawSourceCount) ? Math.max(0, Math.floor(rawSourceCount)) : sources.length;
+  const gbrainCalled = booleanValue(source.gbrain_called) ?? (safety ? booleanValue(safety.gbrain_called) : undefined);
+  const vaultMutation = booleanValue(source.vault_mutation) ?? booleanValue(source.vault_write) ?? (safety ? booleanValue(safety.vault_mutation ?? safety.vault_write) : undefined);
+  const promotionPerformed = booleanValue(source.promotion_performed) ?? (safety ? booleanValue(safety.promotion_performed) : undefined);
+  const warnings = responseWarnings(payload, result);
+  const responseValidationErrors = responseErrors(payload, result);
+  const contractErrors: string[] = [];
+
+  if (schemaVersion !== HERMES_VAULT_AGENT_CONTEXT_PACK_SCHEMA) {
+    contractErrors.push("Hermes Vault Agent context pack schema_version must be hermes.vault_agent.context_pack.v1.");
+  }
+
+  if (status !== "completed" && status !== "rejected") {
+    contractErrors.push("Hermes Vault Agent context pack status must be completed or rejected.");
+  }
+
+  if (sourceCount > 0 && sources.length === 0) {
+    contractErrors.push("Hermes Vault Agent context pack source_count is positive but no sources were provided.");
+  }
+
+  if (typeof gbrainCalled !== "boolean") {
+    contractErrors.push("Hermes Vault Agent context pack must include gbrain_called boolean.");
+  }
+
+  if (vaultMutation !== false) {
+    contractErrors.push("Hermes Vault Agent context pack must have vault_mutation=false.");
+  }
+
+  if (promotionPerformed !== false) {
+    contractErrors.push("Hermes Vault Agent context pack must have promotion_performed=false.");
+  }
+
+  const errors = [...contractErrors, ...responseValidationErrors];
+
+  if (contractErrors.length || typeof gbrainCalled !== "boolean" || (status !== "completed" && status !== "rejected")) {
+    return { errors, warnings };
+  }
+
+  return {
+    receipt: {
+      schema_version: HERMES_VAULT_AGENT_CONTEXT_PACK_SCHEMA,
+      status,
+      source_count: sourceCount,
+      sources,
+      warnings,
+      errors: responseValidationErrors,
+      gbrain_called: gbrainCalled,
+      gbrain_mode: stringValue(source.gbrain_mode) ?? (safety ? stringValue(safety.gbrain_mode) : undefined),
+      vault_mutation: false,
       promotion_performed: false,
     },
     errors: [],
@@ -718,6 +854,72 @@ export async function callHermesVaultAgentIngestSource(pkg: SourceIngestionPacka
     return {
       ok: false,
       error: error instanceof Error ? error.message : "Hermes Vault Agent source ingestion request failed.",
+      warnings: [],
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function callHermesVaultAgentContextPack(request: VaultAgentContextPackRequest): Promise<HermesVaultAgentContextPackResult> {
+  const baseUrl = getCmoHermesBaseUrl();
+  const apiKey = getCmoHermesApiKey();
+
+  if (!baseUrl) {
+    return { ok: false, error: "CMO_HERMES_BASE_URL is not configured.", warnings: [] };
+  }
+
+  if (!apiKey) {
+    return { ok: false, error: "CMO_HERMES_API_KEY is not configured.", warnings: [] };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), getCmoHermesTimeoutMs());
+
+  try {
+    const response = await fetch(`${baseUrl}${HERMES_VAULT_AGENT_CONTEXT_PACK_PATH}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(request),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return { ok: false, error: await httpFailureReason(response, "context pack"), warnings: [] };
+    }
+
+    const payload = await parseJson(response);
+    if (!isRecord(payload)) {
+      return { ok: false, error: "Hermes Vault Agent context pack body must be an object.", warnings: [] };
+    }
+
+    const normalized = normalizeHermesContextPackReceipt(payload);
+    if (!normalized.receipt) {
+      return {
+        ok: false,
+        error: normalized.errors.join(" "),
+        warnings: normalized.warnings,
+      };
+    }
+
+    return {
+      ok: true,
+      receipt: normalized.receipt,
+      warnings: normalized.warnings,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return { ok: false, error: "Hermes Vault Agent context pack request timed out.", warnings: [] };
+    }
+
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Hermes Vault Agent context pack request failed.",
       warnings: [],
     };
   } finally {
