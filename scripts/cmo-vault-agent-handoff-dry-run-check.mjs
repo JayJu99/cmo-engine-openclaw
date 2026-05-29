@@ -221,6 +221,11 @@ try {
     no_gbrain_call: true,
   });
 
+  const completedReceiptWrapper = () => ({
+    schema_version: "legacy.wrapper.v1",
+    receipt: legacyRemoteReceipt("completed"),
+  });
+
   try {
     process.env.CMO_VAULT_AGENT_HANDOFF_MODE = "dry_run_remote";
     process.env.CMO_HERMES_BASE_URL = "https://hermes.example.test";
@@ -275,6 +280,17 @@ try {
     assert.equal(legacyWrapperRemote.mode, "dry_run_remote");
     assert.equal(legacyWrapperRemote.status, "completed");
     assert.equal(legacyWrapperRemote.metadata.dry_run_record_id, "rec_legacy_dry_run");
+
+    globalThis.fetch = async () => new Response(JSON.stringify(completedReceiptWrapper()), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    const completedStatusWrapperRemote = await runVaultAgentDryRunHandoff(baseHandoffInput());
+    assert.equal(completedStatusWrapperRemote.mode, "dry_run_remote");
+    assert.equal(completedStatusWrapperRemote.status, "completed");
+    assert.equal(completedStatusWrapperRemote.metadata.vault_handoff_status, "completed");
+    assert.equal(completedStatusWrapperRemote.metadata.vault_handoff_errors.length, 0);
 
     globalThis.fetch = async () => {
       throw new Error("mock network failure");

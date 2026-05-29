@@ -237,7 +237,7 @@ function normalizeRemoteReceipt(value: unknown): { receipt?: VaultAgentWriteRece
     return { errors: ["Hermes Vault Agent response did not include a receipt object."] };
   }
 
-  const status = value.status === "dry_run" || value.status === "validated" || value.status === "rejected"
+  const status = value.status === "dry_run" || value.status === "validated" || value.status === "completed" || value.status === "rejected"
     ? value.status
     : undefined;
   const recordId = stringValue(value.record_id);
@@ -272,7 +272,7 @@ function normalizeRemoteReceipt(value: unknown): { receipt?: VaultAgentWriteRece
     receipt: {
       schema_version: VAULT_AGENT_CONTRACT_VERSION,
       record_id: recordId,
-      status,
+      status: status === "completed" ? "validated" : status,
       write_confirmed: false,
       target_path_preview: stringValue(value.target_path_preview),
       markdown_preview: stringValue(value.markdown_preview),

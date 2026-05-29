@@ -142,6 +142,16 @@ function metadataFromReceipt(
   };
 }
 
+function remoteHandoffStatus(receipt: VaultAgentWriteReceipt): VaultAgentHandoffStatus {
+  const status = receipt.status as string;
+
+  if (status === "dry_run" || status === "validated" || status === "completed") {
+    return "completed";
+  }
+
+  return "dry_run_invalid";
+}
+
 export async function runVaultAgentDryRunHandoff(input: CompletedTurnHandoffInput): Promise<VaultAgentDryRunHandoffResult> {
   const mode = getCmoVaultAgentHandoffMode();
 
@@ -176,9 +186,7 @@ export async function runVaultAgentDryRunHandoff(input: CompletedTurnHandoffInpu
         };
       }
 
-      const status: VaultAgentHandoffStatus = remote.handoffStatus ?? (
-        remote.receipt.status === "dry_run" || remote.receipt.status === "validated" ? "completed" : "dry_run_invalid"
-      );
+      const status: VaultAgentHandoffStatus = remote.handoffStatus ?? remoteHandoffStatus(remote.receipt);
 
       return {
         mode,
