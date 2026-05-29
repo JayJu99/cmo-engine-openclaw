@@ -1,5 +1,5 @@
 export type CmoAdapterMode = "local" | "remote";
-export type CmoVaultAgentHandoffMode = "off" | "dry_run";
+export type CmoVaultAgentHandoffMode = "off" | "dry_run" | "dry_run_remote";
 
 export function getCmoAdapterMode(): CmoAdapterMode {
   return process.env.CMO_ADAPTER_MODE === "remote" ? "remote" : "local";
@@ -51,6 +51,18 @@ export function getCmoAppTurnRequestTimeoutMs(): number {
   return positiveIntEnv("CMO_APP_TURN_REQUEST_TIMEOUT_MS", getCmoLiveAppTurnTimeoutMs());
 }
 
+export function getCmoHermesBaseUrl(): string {
+  return process.env.CMO_HERMES_BASE_URL?.trim().replace(/\/+$/g, "") ?? "";
+}
+
+export function getCmoHermesApiKey(): string {
+  return process.env.CMO_HERMES_API_KEY?.trim() ?? "";
+}
+
+export function getCmoHermesTimeoutMs(): number {
+  return positiveIntEnv("CMO_HERMES_TIMEOUT_MS", 30_000);
+}
+
 function booleanEnv(name: string, fallback = false): boolean {
   const value = process.env[name]?.trim().toLowerCase();
 
@@ -90,5 +102,7 @@ export function getCmoHermesCmoMaxDelegations(): number {
 }
 
 export function getCmoVaultAgentHandoffMode(): CmoVaultAgentHandoffMode {
-  return process.env.CMO_VAULT_AGENT_HANDOFF_MODE === "dry_run" ? "dry_run" : "off";
+  const mode = process.env.CMO_VAULT_AGENT_HANDOFF_MODE;
+
+  return mode === "dry_run" || mode === "dry_run_remote" ? mode : "off";
 }

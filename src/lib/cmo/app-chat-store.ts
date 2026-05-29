@@ -835,7 +835,11 @@ function normalizeVaultAgentDryRunMetadata(value: unknown): VaultAgentDryRunMeta
     return undefined;
   }
 
-  const mode = value.vault_handoff_mode === "dry_run" ? "dry_run" : value.vault_handoff_mode === "off" ? "off" : undefined;
+  const mode = value.vault_handoff_mode === "dry_run" || value.vault_handoff_mode === "dry_run_remote"
+    ? value.vault_handoff_mode
+    : value.vault_handoff_mode === "off"
+      ? "off"
+      : undefined;
   const status = value.vault_handoff_status === "skipped" ||
     value.vault_handoff_status === "dry_run_valid" ||
     value.vault_handoff_status === "dry_run_invalid" ||
@@ -1546,7 +1550,7 @@ export async function createAppChatSession(
     runtimeProvider,
     runtimeAgent,
   }) : { ok: false, savedToVault: false, warnings: [], error: "Chat response failed; auto capture skipped" };
-  const vaultAgentHandoff = status === "completed" ? runVaultAgentDryRunHandoff({
+  const vaultAgentHandoff = status === "completed" ? await runVaultAgentDryRunHandoff({
     request,
     session,
     userIdentity,

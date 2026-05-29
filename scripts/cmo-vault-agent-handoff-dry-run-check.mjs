@@ -63,6 +63,7 @@ try {
     "vault-agent-contracts.ts",
     "vault-scope-policy.ts",
     "vault-agent-dry-run.ts",
+    "vault-agent-remote-client.ts",
     "vault-agent-handoff-builder.ts",
   ]) {
     cpSync(`src/lib/cmo/${file}`, join(temp, file));
@@ -87,6 +88,7 @@ try {
     join(temp, "vault-agent-contracts.ts"),
     join(temp, "vault-scope-policy.ts"),
     join(temp, "vault-agent-dry-run.ts"),
+    join(temp, "vault-agent-remote-client.ts"),
     join(temp, "vault-agent-handoff-builder.ts"),
   ], { stdio: "inherit" });
 
@@ -144,7 +146,7 @@ try {
   assert.equal(surfEchoPackage.delegation_summary?.[0]?.targetAgent, "surf");
 
   process.env.CMO_VAULT_AGENT_HANDOFF_MODE = "dry_run";
-  const validHandoff = runVaultAgentDryRunHandoff(baseHandoffInput());
+  const validHandoff = await runVaultAgentDryRunHandoff(baseHandoffInput());
   assert.equal(validHandoff.mode, "dry_run");
   assert.equal(validHandoff.status, "dry_run_valid");
   assert.equal(validHandoff.receipt.write_confirmed, false);
@@ -156,20 +158,20 @@ try {
   assert.equal(validHandoff.metadata.dry_run_indexability.gbrain_index, false);
 
   process.env.CMO_VAULT_AGENT_HANDOFF_MODE = "off";
-  const offHandoff = runVaultAgentDryRunHandoff(baseHandoffInput());
+  const offHandoff = await runVaultAgentDryRunHandoff(baseHandoffInput());
   assert.equal(offHandoff.mode, "off");
   assert.equal(offHandoff.status, "skipped");
   assert.equal(offHandoff.package, undefined);
   assert.equal(offHandoff.receipt, undefined);
 
   process.env.CMO_VAULT_AGENT_HANDOFF_MODE = "dry_run";
-  const missingWorkspace = runVaultAgentDryRunHandoff(baseHandoffInput({
+  const missingWorkspace = await runVaultAgentDryRunHandoff(baseHandoffInput({
     request: baseRequest({ appId: "" }),
   }));
   assert.equal(missingWorkspace.status, "dry_run_invalid");
   assert.match(missingWorkspace.metadata.vault_handoff_errors.join("\n"), /workspace_id/);
 
-  const missingSession = runVaultAgentDryRunHandoff(baseHandoffInput({
+  const missingSession = await runVaultAgentDryRunHandoff(baseHandoffInput({
     session: baseSession({ id: "" }),
   }));
   assert.equal(missingSession.status, "dry_run_invalid");
@@ -183,16 +185,98 @@ try {
   assert.equal(missingUserReceipt.status, "rejected");
   assert.match(missingUserReceipt.validation_errors.join("\n"), /user_id or user_ref/);
 
+  const originalFetch = globalThis.fetch;
+  const remoteReceipt = (status = "dry_run") => ({
+    schema_version: "cmo.vault-agent.v1",
+    record_id: `rec_remote_${status}`,
+    status,
+    write_confirmed: false,
+    target_path_preview: "09 Proposals/Vault Agent Dry Run/holdstation-mini-app/2026/05/rec-remote.md",
+    validation_errors: status === "rejected" ? ["remote policy rejected package"] : [],
+    validation_warnings: status === "rejected" ? ["remote rejected dry-run"] : [],
+    no_filesystem_write: true,
+    no_gbrain_call: true,
+  });
+
+  try {
+    process.env.CMO_VAULT_AGENT_HANDOFF_MODE = "dry_run_remote";
+    process.env.CMO_HERMES_BASE_URL = "https://hermes.example.test";
+    process.env.CMO_HERMES_API_KEY = "test-key";
+    process.env.CMO_HERMES_TIMEOUT_MS = "1000";
+
+    globalThis.fetch = async (url, init) => {
+      assert.equal(url, "https://hermes.example.test/agents/vault-agent/dry-run");
+      assert.equal(init?.method, "POST");
+      assert.equal(init?.headers?.Authorization, "Bearer test-key");
+      const body = JSON.parse(init?.body);
+      assert.equal(body.final_cmo_answer, "Focus the next sprint on activation proof, then review retention signals.");
+      assert.equal(body.no_auto_promote, true);
+
+      return new Response(JSON.stringify({
+        schema_version: "hermes.vault_agent.response.v1",
+        status: "completed",
+        receipt: remoteReceipt(),
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const remoteSuccess = await runVaultAgentDryRunHandoff(baseHandoffInput());
+    assert.equal(remoteSuccess.mode, "dry_run_remote");
+    assert.equal(remoteSuccess.status, "dry_run_valid");
+    assert.equal(remoteSuccess.receipt.write_confirmed, false);
+    assert.equal(remoteSuccess.receipt.no_filesystem_write, true);
+    assert.equal(remoteSuccess.receipt.no_gbrain_call, true);
+    assert.equal(remoteSuccess.metadata.dry_run_record_id, "rec_remote_dry_run");
+
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      schema_version: "hermes.vault_agent.response.v1",
+      status: "rejected",
+      result: {
+        receipt: remoteReceipt("rejected"),
+      },
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    const remoteRejected = await runVaultAgentDryRunHandoff(baseHandoffInput());
+    assert.equal(remoteRejected.mode, "dry_run_remote");
+    assert.equal(remoteRejected.status, "dry_run_invalid");
+    assert.equal(remoteRejected.metadata.vault_handoff_status, "dry_run_invalid");
+    assert.match(remoteRejected.metadata.vault_handoff_errors.join("\n"), /remote policy rejected/);
+
+    globalThis.fetch = async () => {
+      throw new Error("mock network failure");
+    };
+
+    const remoteFailure = await runVaultAgentDryRunHandoff(baseHandoffInput());
+    assert.equal(remoteFailure.mode, "dry_run_remote");
+    assert.equal(remoteFailure.status, "failed");
+    assert.equal(remoteFailure.metadata.vault_handoff_status, "failed");
+    assert.match(remoteFailure.metadata.vault_handoff_errors.join("\n"), /mock network failure/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.CMO_HERMES_BASE_URL;
+    delete process.env.CMO_HERMES_API_KEY;
+    delete process.env.CMO_HERMES_TIMEOUT_MS;
+  }
+
   const responseTypes = readFileSync("src/lib/cmo/app-workspace-types.ts", "utf8");
   const responseBlock = responseTypes.match(/export interface CMOAppChatResponse \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.doesNotMatch(responseBlock, /vaultAgentDryRun|vault_handoff|dry_run_record_id/);
 
-  const bannedRuntimeCalls = /\b(writeFile|appendFile|mkdir|rm|createWriteStream|fetch|axios|saveCaptureToCmoEngineVault|importGBrain|syncGBrain|embedGBrain|dreamGBrain|extractGBrain)\b/;
+  const bannedFilesystemCalls = /\b(writeFile|appendFile|mkdir|rm|createWriteStream|saveCaptureToCmoEngineVault)\b/;
+  const bannedGBrainCalls = /\b(importGBrain|syncGBrain|embedGBrain|dreamGBrain|extractGBrain)\b/;
   for (const file of [
     "src/lib/cmo/vault-agent-handoff-builder.ts",
+    "src/lib/cmo/vault-agent-remote-client.ts",
     "src/lib/cmo/vault-agent-dry-run.ts",
   ]) {
-    assert.doesNotMatch(readFileSync(file, "utf8"), bannedRuntimeCalls);
+    const source = readFileSync(file, "utf8");
+    assert.doesNotMatch(source, bannedFilesystemCalls);
+    assert.doesNotMatch(source, bannedGBrainCalls);
   }
 
   console.log("CMO Vault Agent handoff dry-run checks passed");

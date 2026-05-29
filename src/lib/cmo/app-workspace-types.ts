@@ -672,7 +672,7 @@ export interface HermesCmoChatMetadata {
 }
 
 export interface VaultAgentDryRunMetadata {
-  vault_handoff_mode?: "off" | "dry_run";
+  vault_handoff_mode?: "off" | "dry_run" | "dry_run_remote";
   vault_handoff_status?: "skipped" | "dry_run_valid" | "dry_run_invalid" | "failed";
   dry_run_record_id?: string;
   dry_run_target_path?: string;

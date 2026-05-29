@@ -7,6 +7,7 @@ import type {
   HermesCmoDelegationSummaryItem,
 } from "./app-workspace-types";
 import { buildVaultAgentDryRunReceipt, normalizeVaultRecord } from "./vault-agent-dry-run";
+import { callHermesVaultAgentDryRun } from "./vault-agent-remote-client";
 import { decideIndexability } from "./vault-scope-policy";
 import { CANONICAL_VAULT_LANGUAGE, type TurnCompletedPackage, type VaultAgentWriteReceipt } from "./vault-agent-contracts";
 import type { CmoServerUserIdentity } from "./user-metadata";
@@ -112,7 +113,35 @@ export function buildTurnCompletedPackage(input: CompletedTurnHandoffInput): Tur
   };
 }
 
-export function runVaultAgentDryRunHandoff(input: CompletedTurnHandoffInput): VaultAgentDryRunHandoffResult {
+function metadataFromReceipt(
+  mode: CmoVaultAgentHandoffMode,
+  status: VaultAgentHandoffStatus,
+  receipt: VaultAgentWriteReceipt,
+  pkg: TurnCompletedPackage,
+  extraWarnings: string[] = [],
+): VaultAgentDryRunHandoffMetadata {
+  const normalized = normalizeVaultRecord(pkg);
+  const indexability = decideIndexability(normalized);
+  const dryRunIndexability = receipt.markdown_preview || receipt.target_path_preview
+    ? {
+        gbrain_index: indexability.gbrain_index,
+        gbrain_status: indexability.gbrain_status,
+        reason: indexability.reason,
+      }
+    : undefined;
+
+  return {
+    vault_handoff_mode: mode,
+    vault_handoff_status: status,
+    dry_run_record_id: receipt.record_id,
+    dry_run_target_path: receipt.target_path_preview,
+    ...(dryRunIndexability ? { dry_run_indexability: dryRunIndexability } : {}),
+    vault_handoff_warnings: [...extraWarnings, ...receipt.validation_warnings],
+    vault_handoff_errors: receipt.validation_errors,
+  };
+}
+
+export async function runVaultAgentDryRunHandoff(input: CompletedTurnHandoffInput): Promise<VaultAgentDryRunHandoffResult> {
   const mode = getCmoVaultAgentHandoffMode();
 
   if (mode === "off") {
@@ -128,16 +157,38 @@ export function runVaultAgentDryRunHandoff(input: CompletedTurnHandoffInput): Va
 
   try {
     const pkg = buildTurnCompletedPackage(input);
-    const normalized = normalizeVaultRecord(pkg);
+
+    if (mode === "dry_run_remote") {
+      const remote = await callHermesVaultAgentDryRun(pkg);
+
+      if (!remote.ok || !remote.receipt) {
+        return {
+          mode,
+          status: "failed",
+          package: pkg,
+          metadata: {
+            vault_handoff_mode: mode,
+            vault_handoff_status: "failed",
+            vault_handoff_warnings: remote.warnings,
+            vault_handoff_errors: [remote.error ?? "Hermes Vault Agent dry-run failed."],
+          },
+        };
+      }
+
+      const status: VaultAgentHandoffStatus = remote.receipt.status === "dry_run" || remote.receipt.status === "validated"
+        ? "dry_run_valid"
+        : "dry_run_invalid";
+
+      return {
+        mode,
+        status,
+        package: pkg,
+        receipt: remote.receipt,
+        metadata: metadataFromReceipt(mode, status, remote.receipt, pkg, remote.warnings),
+      };
+    }
+
     const receipt = buildVaultAgentDryRunReceipt(pkg);
-    const indexability = decideIndexability(normalized);
-    const dryRunIndexability = receipt.markdown_preview
-      ? {
-          gbrain_index: indexability.gbrain_index,
-          gbrain_status: indexability.gbrain_status,
-          reason: indexability.reason,
-        }
-      : undefined;
     const status: VaultAgentHandoffStatus = receipt.status === "dry_run" ? "dry_run_valid" : "dry_run_invalid";
 
     return {
@@ -145,15 +196,7 @@ export function runVaultAgentDryRunHandoff(input: CompletedTurnHandoffInput): Va
       status,
       package: pkg,
       receipt,
-      metadata: {
-        vault_handoff_mode: mode,
-        vault_handoff_status: status,
-        dry_run_record_id: receipt.record_id,
-        dry_run_target_path: receipt.target_path_preview,
-        ...(dryRunIndexability ? { dry_run_indexability: dryRunIndexability } : {}),
-        vault_handoff_warnings: receipt.validation_warnings,
-        vault_handoff_errors: receipt.validation_errors,
-      },
+      metadata: metadataFromReceipt(mode, status, receipt, pkg),
     };
   } catch (error) {
     return {
