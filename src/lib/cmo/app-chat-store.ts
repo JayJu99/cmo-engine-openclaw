@@ -57,11 +57,12 @@ import { shouldUseHermesCmoChat } from "@/lib/cmo/hermes-cmo-chat-router";
 import { runHermesCmoRuntime } from "@/lib/cmo/hermes-cmo-runtime";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
+import { getCmoVaultAgentHandoffMode } from "@/lib/cmo/config";
 import { indexChatMessages, indexChatSession, type CmoIndexResult } from "@/lib/cmo/supabase-indexing";
 import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/lib/cmo/indexed-context-canary";
 import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
-import { autoCaptureTurnOnce } from "@/lib/cmo/vault-auto-capture";
+import { autoCaptureTurnOnce, type AutoCaptureResult } from "@/lib/cmo/vault-auto-capture";
 import { runVaultAgentDryRunHandoff } from "@/lib/cmo/vault-agent-handoff-builder";
 import { vaultAgentDryRunMetadataForPersistence } from "@/lib/cmo/vault-agent-handoff-persistence";
 
@@ -69,6 +70,7 @@ const APP_CHAT_DIR = path.join(process.cwd(), "data", "cmo-dashboard", "app-chat
 const DEFAULT_LIMIT = 20;
 const CONTEXT_SIZE_WARNING_CHARS = 32_000;
 const INDEXED_SUPPLEMENT_WARNING_CHARS = 4_000;
+const LEGACY_AUTO_CAPTURE_WRITE_REMOTE_SKIP_REASON = "skipped_legacy_auto_capture_because_vault_agent_write_remote_enabled";
 
 export interface CmoAppChatTimingInput {
   requestReceivedAt?: string;
@@ -884,6 +886,28 @@ function normalizeVaultAgentDryRunMetadata(value: unknown): VaultAgentDryRunMeta
   };
 }
 
+function skippedLegacyAutoCaptureForVaultAgentWriteRemote(): AutoCaptureResult {
+  return {
+    ok: true,
+    savedToVault: false,
+    warnings: [LEGACY_AUTO_CAPTURE_WRITE_REMOTE_SKIP_REASON],
+    skipped: true,
+    skipReason: LEGACY_AUTO_CAPTURE_WRITE_REMOTE_SKIP_REASON,
+  };
+}
+
+function rawCaptureStatusForAutoCapture(result: AutoCaptureResult): CMOChatSession["rawCaptureStatus"] {
+  if (result.savedToVault) {
+    return "saved";
+  }
+
+  return result.skipped ? "pending" : "failed";
+}
+
+function rawCaptureErrorForAutoCapture(result: AutoCaptureResult): string | undefined {
+  return result.error ?? result.skipReason;
+}
+
 function messageUserMetadata(identity: CmoServerUserIdentity): Pick<CMOChatMessage, "authMode" | "userId" | "userEmail"> {
   return {
     authMode: identity.authMode,
@@ -1550,20 +1574,25 @@ export async function createAppChatSession(
   await writeJsonFile(sessionPath(sessionId), session);
 
   let persistedSession = session;
-  const autoCapture = status === "completed" ? await autoCaptureTurnOnce({
-    request,
-    session,
-    assistantMessageId: assistantId,
-    sourceUserMessageId: messageId,
-    userIdentity,
-    answer,
-    routeKind: "app-chat-response",
-    runtimeSource: runtimeProvider,
-    assistantFooterSourceLabel: runtimeLabel,
-    runtimeLabel,
-    runtimeProvider,
-    runtimeAgent,
-  }) : { ok: false, savedToVault: false, warnings: [], error: "Chat response failed; auto capture skipped" };
+  const vaultAgentHandoffMode = getCmoVaultAgentHandoffMode();
+  const autoCapture: AutoCaptureResult = status !== "completed"
+    ? { ok: false, savedToVault: false, warnings: [], error: "Chat response failed; auto capture skipped" }
+    : vaultAgentHandoffMode === "write_remote"
+      ? skippedLegacyAutoCaptureForVaultAgentWriteRemote()
+      : await autoCaptureTurnOnce({
+          request,
+          session,
+          assistantMessageId: assistantId,
+          sourceUserMessageId: messageId,
+          userIdentity,
+          answer,
+          routeKind: "app-chat-response",
+          runtimeSource: runtimeProvider,
+          assistantFooterSourceLabel: runtimeLabel,
+          runtimeLabel,
+          runtimeProvider,
+          runtimeAgent,
+        });
   const vaultAgentHandoff = status === "completed" ? await runVaultAgentDryRunHandoff({
     request,
     session,
@@ -1581,6 +1610,7 @@ export async function createAppChatSession(
   const vaultAgentDryRunMetadata = vaultAgentDryRunMetadataForPersistence(vaultAgentHandoff);
   if (status === "completed") {
     const finalTotalDurationMs = Date.now() - requestStartedMs;
+    const rawCaptureError = rawCaptureErrorForAutoCapture(autoCapture);
     persistedSession = {
       ...session,
       totalDurationMs: finalTotalDurationMs,
@@ -1593,8 +1623,8 @@ export async function createAppChatSession(
       ),
       ...(vaultAgentDryRunMetadata ? { vaultAgentDryRun: vaultAgentDryRunMetadata } : {}),
       rawCapturePath: autoCapture.relativePath,
-      rawCaptureStatus: autoCapture.ok ? "saved" : "failed",
-      ...(autoCapture.error ? { rawCaptureError: autoCapture.error } : {}),
+      rawCaptureStatus: rawCaptureStatusForAutoCapture(autoCapture),
+      ...(rawCaptureError ? { rawCaptureError } : {}),
     };
     await writeJsonFile(sessionPath(sessionId), persistedSession);
   }
@@ -1609,7 +1639,7 @@ export async function createAppChatSession(
   });
   const platformPersistenceSummary: HermesCmoPlatformPersistenceSummary = {
     sessionJsonSaved: true,
-    rawCaptureSaved: autoCapture.ok === true,
+    rawCaptureSaved: autoCapture.savedToVault === true,
     ...(persistedSession.rawCaptureStatus ? { rawCaptureStatus: persistedSession.rawCaptureStatus } : {}),
     supabaseIndexingStatus: supabaseIndexingStatus([sessionIndexResult, ...messageIndexResults]),
   };

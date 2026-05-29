@@ -259,6 +259,10 @@ try {
 
   const appChatStoreSource = readFileSync("src/lib/cmo/app-chat-store.ts", "utf8");
   assert.match(appChatStoreSource, /vaultAgentDryRunMetadataForPersistence\(vaultAgentHandoff\)/);
+  assert.match(appChatStoreSource, /getCmoVaultAgentHandoffMode\(\)/);
+  assert.match(appChatStoreSource, /vaultAgentHandoffMode === "write_remote"/);
+  assert.match(appChatStoreSource, /skipped_legacy_auto_capture_because_vault_agent_write_remote_enabled/);
+  assert.match(appChatStoreSource, /rawCaptureSaved: autoCapture\.savedToVault === true/);
 
   const responseTypes = readFileSync("src/lib/cmo/app-workspace-types.ts", "utf8");
   const responseBlock = responseTypes.match(/export interface CMOAppChatResponse \{[\s\S]*?\n\}/)?.[0] ?? "";
