@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,6 +60,23 @@ try {
     cpSync(`src/lib/cmo/${file}`, join(temp, file));
   }
 
+  writeFileSync(join(temp, "auth.ts"), `
+    import type { CmoServerUserIdentity } from "./user-metadata";
+
+    export async function getServerUserIdentity(): Promise<CmoServerUserIdentity> {
+      throw new Error("Authentication required.");
+    }
+  `);
+  writeFileSync(
+    join(temp, "ingest-source-route.ts"),
+    readFileSync("src/app/api/cmo/vault/ingest-source/route.ts", "utf8")
+      .replace(/@\/lib\/cmo\/auth/g, "./auth")
+      .replace(/@\/lib\/cmo\/user-metadata/g, "./user-metadata")
+      .replace(/@\/lib\/cmo\/vault-agent-remote-client/g, "./vault-agent-remote-client")
+      .replace(/@\/lib\/cmo\/vault-agent-source-ingestion-auth/g, "./vault-agent-source-ingestion-auth")
+      .replace(/@\/lib\/cmo\/vault-agent-source-ingestion/g, "./vault-agent-source-ingestion"),
+  );
+
   execFileSync(process.execPath, [
     tscBin,
     "--target",
@@ -74,12 +91,14 @@ try {
     "--outDir",
     dist,
     join(temp, "config.ts"),
+    join(temp, "auth.ts"),
     join(temp, "user-metadata.ts"),
     join(temp, "workspace-registry.ts"),
     join(temp, "vault-agent-contracts.ts"),
     join(temp, "vault-agent-remote-client.ts"),
     join(temp, "vault-agent-source-ingestion-auth.ts"),
     join(temp, "vault-agent-source-ingestion.ts"),
+    join(temp, "ingest-source-route.ts"),
   ], { stdio: "inherit" });
 
   const {
@@ -91,6 +110,9 @@ try {
   const {
     vaultIngestInternalAuthStatus,
   } = requireFromScript(join(dist, "vault-agent-source-ingestion-auth.js"));
+  const {
+    POST,
+  } = requireFromScript(join(dist, "ingest-source-route.js"));
 
   const previousIngestKey = process.env.CMO_VAULT_INGEST_API_KEY;
   delete process.env.CMO_VAULT_INGEST_API_KEY;
@@ -159,6 +181,42 @@ try {
       });
     };
 
+    const noAuthResponse = await POST(new Request("https://cmo.test/api/cmo/vault/ingest-source", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(baseSourceInput()),
+    }));
+    assert.equal(noAuthResponse.status, 401);
+    assert.deepEqual((await noAuthResponse.json()).errors, ["Authentication required."]);
+
+    process.env.CMO_VAULT_INGEST_API_KEY = "internal-test-key";
+    const wrongBearerResponse = await POST(new Request("https://cmo.test/api/cmo/vault/ingest-source", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer wrong-key",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(baseSourceInput()),
+    }));
+    assert.equal(wrongBearerResponse.status, 401);
+    assert.deepEqual((await wrongBearerResponse.json()).errors, ["Authentication required."]);
+
+    const correctBearerResponse = await POST(new Request("https://cmo.test/api/cmo/vault/ingest-source", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer internal-test-key",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(baseSourceInput()),
+    }));
+    assert.equal(correctBearerResponse.status, 200);
+    const correctBearerJson = await correctBearerResponse.json();
+    assert.equal(correctBearerJson.status, "completed");
+    assert.equal(correctBearerJson.source_ingestion_status, "completed");
+    assert.equal(correctBearerJson.source_record_ids.source_note, "srcnote_123");
+    assert.equal(correctBearerJson.gbrain_called, false);
+    assert.equal(correctBearerJson.promotion_performed, false);
+
     const success = await callHermesVaultAgentIngestSource(pkg);
     assert.equal(success.ok, true);
     assert.equal(success.receipt.status, "completed");
@@ -200,6 +258,7 @@ try {
     delete process.env.CMO_HERMES_BASE_URL;
     delete process.env.CMO_HERMES_API_KEY;
     delete process.env.CMO_HERMES_TIMEOUT_MS;
+    delete process.env.CMO_VAULT_INGEST_API_KEY;
   }
 
   const routeSource = readFileSync("src/app/api/cmo/vault/ingest-source/route.ts", "utf8");
@@ -214,6 +273,16 @@ try {
   assert.match(routeSource, /source_target_paths/);
   assert.match(routeSource, /source_write_performed/);
   assert.doesNotMatch(routeSource, /source_text:\s*pkg\.source_text|sourceText/);
+
+  const proxySource = readFileSync("src/proxy.ts", "utf8");
+  assert.match(proxySource, /vaultSourceIngestionInternalAuthResponse/);
+  assert.match(proxySource, /vaultIngestInternalAuthStatus/);
+  const proxyFunctionSource = proxySource.slice(proxySource.indexOf("export async function proxy"));
+  assert(
+    proxyFunctionSource.indexOf("vaultSourceIngestionInternalAuthResponse(request)") <
+      proxyFunctionSource.indexOf("isBasicAuthEnabled()"),
+    "Vault source ingestion internal bearer bypass must run before Basic/Supabase auth checks.",
+  );
 
   const responseTypes = readFileSync("src/lib/cmo/app-workspace-types.ts", "utf8");
   const responseBlock = responseTypes.match(/export interface CMOAppChatResponse \{[\s\S]*?\n\}/)?.[0] ?? "";

@@ -6,6 +6,7 @@ import {
   isSupabaseAuthPublicPath,
 } from "@/lib/cmo/auth-route-guard";
 import { toPublicRedirectUrl } from "@/lib/cmo/redirects";
+import { vaultIngestInternalAuthStatus } from "@/lib/cmo/vault-agent-source-ingestion-auth";
 
 const BASIC_AUTH_REALM = "CMO Engine Dashboard";
 
@@ -101,6 +102,28 @@ function unauthorizedResponse(): Response {
   });
 }
 
+function isVaultSourceIngestionPath(pathname: string): boolean {
+  return pathname === "/api/cmo/vault/ingest-source";
+}
+
+function vaultSourceIngestionInternalAuthResponse(request: NextRequest): NextResponse | null {
+  if (!isVaultSourceIngestionPath(request.nextUrl.pathname)) {
+    return null;
+  }
+
+  const internalAuth = vaultIngestInternalAuthStatus(request);
+
+  if (internalAuth.status === "authorized") {
+    return NextResponse.next();
+  }
+
+  if (internalAuth.status === "unauthorized" || internalAuth.status === "not_configured") {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  }
+
+  return null;
+}
+
 function supabaseConfigAvailable(): boolean {
   return Boolean(
     process.env.NEXT_PUBLIC_SUPABASE_URL &&
@@ -170,6 +193,11 @@ async function resolveSupabaseAuth(request: NextRequest): Promise<NextResponse |
 }
 
 export async function proxy(request: NextRequest) {
+  const vaultIngestAuth = vaultSourceIngestionInternalAuthResponse(request);
+  if (vaultIngestAuth) {
+    return vaultIngestAuth;
+  }
+
   if (
     isBasicAuthEnabled() &&
     isBasicAuthProtectedPath(request.nextUrl.pathname) &&
