@@ -29,14 +29,8 @@ import type {
   CmoChannelMetric,
   CmoChannelMetricsSyncStatus,
   CmoChannelMetricsSnapshot,
-  CMOChatMessage,
   CMOChatSession,
   CMORuntimeStatus,
-  CmoAssumptionReviewStatus,
-  CmoDecisionReviewStatus,
-  CmoMemoryCandidateReviewStatus,
-  CmoSuggestedActionReviewStatus,
-  CmoTaskCandidateReviewStatus,
   PriorityLevel,
   PriorityStatus,
   VaultNoteRef,
@@ -70,43 +64,31 @@ function isWorkspaceTab(value: string | null): value is AppWorkspaceTab {
 }
 
 function runtimeLabel(status: CMORuntimeStatus | undefined): string {
-  if (status === "connected") {
-    return "Adapter connected";
+  if (status === "connected" || status === "live" || status === "configured_but_unreachable") {
+    return "CMO Hermes Active";
   }
 
-  if (status === "live") {
-    return "Live app-chat";
-  }
-
-  if (status === "configured_but_unreachable") {
-    return "Live app-chat unavailable";
-  }
-
-  if (status === "live_failed_then_fallback") {
-    return "Fallback used";
-  }
-
-  if (status === "development_fallback") {
-    return "Development fallback";
+  if (status === "live_failed_then_fallback" || status === "development_fallback") {
+    return "Workspace Context Active";
   }
 
   if (status === "runtime_error") {
-    return "Runtime error";
+    return "CMO needs attention";
   }
 
   if (status === "not_configured") {
-    return "Runtime not configured";
+    return "CMO setup pending";
   }
 
-  return "Runtime not checked";
+  return "CMO status checking";
 }
 
 function runtimeVariant(status: CMORuntimeStatus | undefined): "green" | "orange" | "red" | "slate" {
-  if (status === "connected" || status === "live") {
+  if (status === "connected" || status === "live" || status === "configured_but_unreachable") {
     return "green";
   }
 
-  if (status === "configured_but_unreachable" || status === "runtime_error") {
+  if (status === "runtime_error") {
     return "red";
   }
 
@@ -263,38 +245,12 @@ function priorityFormData(form: HTMLFormElement, current: CLevelPriority): CLeve
   };
 }
 
-function sessionPotentialDecisions(session: CMOChatSession | undefined): string[] {
-  const answer = [...(session?.messages ?? [])].reverse().find((message) => message.role === "assistant")?.content ?? "";
-
-  return answer
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^[-*\d.\s]+/, "").trim())
-    .filter((line) => /decision|approve|choose|commit/i.test(line))
-    .slice(0, 5);
-}
-
-function sessionContextSummary(session: CMOChatSession): string {
-  const quality = session.contextQualitySummary;
-
-  if (!quality) {
-    return `${session.contextUsed.length} notes`;
-  }
-
-  return `${quality.confirmedCount} confirmed, ${quality.draftCount} draft, ${quality.placeholderCount} need content, ${quality.missingCount} missing`;
-}
-
 function firstUserMessage(session: CMOChatSession): string {
   return session.messages.find((message) => message.role === "user")?.content ?? "";
 }
 
 function latestAssistantMessage(session: CMOChatSession): string {
   return [...session.messages].reverse().find((message) => message.role === "assistant")?.content ?? "";
-}
-
-function previewText(value: string, limit = 160): string {
-  const compact = value.replace(/\s+/g, " ").trim();
-
-  return compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
 }
 
 function sessionRuntimeModeLabel(session: CMOChatSession): string {
@@ -311,34 +267,7 @@ function isSmokeSession(session: CMOChatSession | undefined): boolean {
   return /\bsmoke\b|ui test|verification session|runtime smoke|app-turn smoke/.test(text);
 }
 
-function assistantMessageProvenance(message: CMOChatMessage, session: CMOChatSession): string | null {
-  if (message.role !== "assistant") {
-    return null;
-  }
-
-  const mode = message.runtimeMode ?? session.runtimeMode;
-
-  if (!mode) {
-    return null;
-  }
-
-  const runtime = mode === "live" ? "Live" : "Fallback";
-  const provider = mode === "live"
-    ? message.runtimeAgent || session.runtimeAgent || message.runtimeProvider || session.runtimeProvider || "OpenClaw CMO"
-    : `reason: ${message.runtimeErrorReason ?? session.runtimeErrorReason ?? "fallback"}`;
-
-  return `${runtime} · ${provider} · ${message.contextUsedCount ?? session.contextUsed.length} context notes`;
-}
-
-type DecisionLayerReviewItemType = "decision" | "assumption" | "suggestedAction" | "memoryCandidate" | "taskCandidate";
-type DecisionLayerReviewStatus =
-  | CmoDecisionReviewStatus
-  | CmoAssumptionReviewStatus
-  | CmoSuggestedActionReviewStatus
-  | CmoMemoryCandidateReviewStatus
-  | CmoTaskCandidateReviewStatus;
-type SessionFilter = "all" | "live" | "fallback" | "saved" | "raw";
-type ContextDrawerTab = "context" | "decision" | "metadata" | "vault";
+type SessionFilter = "all" | "live" | "fallback";
 type PlanReviewTypeFilter = "all" | "decisions" | "tasks" | "memory";
 type PlanReviewStatusFilter = "pending" | "approved" | "skipped";
 type AggregatorChartMode = "transactions" | "volume";
@@ -1240,71 +1169,6 @@ function BusinessMetricTile({
   );
 }
 
-function reviewBadgeVariant(status: string | undefined): "green" | "orange" | "red" | "blue" | "slate" {
-  if (status === "confirmed" || status === "accepted" || status === "reviewed" || status === "approved_for_promotion_later" || status === "approved_for_task_later") {
-    return "green";
-  }
-
-  if (status === "rejected") {
-    return "red";
-  }
-
-  if (status === "deferred" || status === "risky" || status === "review_required") {
-    return "orange";
-  }
-
-  return "slate";
-}
-
-function reviewLabel(status: string | undefined): string {
-  return status?.replace(/_/g, " ") ?? "unreviewed";
-}
-
-function decisionLayerStatus(session: CMOChatSession | undefined): {
-  total: number;
-  reviewed: number;
-  pending: number;
-  suggestedActions: number;
-  memoryCandidates: number;
-  taskCandidates: number;
-  deferred: number;
-  approvedForLater: number;
-} {
-  const layer = session?.decisionLayer;
-
-  if (!layer) {
-    return {
-      total: 0,
-      reviewed: 0,
-      pending: 0,
-      suggestedActions: 0,
-      memoryCandidates: 0,
-      taskCandidates: 0,
-      deferred: 0,
-      approvedForLater: 0,
-    };
-  }
-
-  const statuses = [
-    ...layer.decisions.map((item) => item.reviewStatus ?? "unreviewed"),
-    ...layer.assumptions.map((item) => item.reviewStatus ?? "unreviewed"),
-    ...layer.suggestedActions.map((item) => item.reviewStatus ?? "unreviewed"),
-    ...layer.memoryCandidates.map((item) => item.reviewStatus),
-    ...layer.taskCandidates.map((item) => item.reviewStatus ?? "unreviewed"),
-  ];
-
-  return {
-    total: statuses.length,
-    reviewed: statuses.filter((status) => status !== "unreviewed" && status !== "review_required").length,
-    pending: statuses.filter((status) => status === "unreviewed" || status === "review_required").length,
-    suggestedActions: layer.suggestedActions.length,
-    memoryCandidates: layer.memoryCandidates.length,
-    taskCandidates: layer.taskCandidates.length,
-    deferred: statuses.filter((status) => status === "deferred").length,
-    approvedForLater: statuses.filter((status) => status === "approved_for_promotion_later" || status === "approved_for_task_later").length,
-  };
-}
-
 function sessionOutputCount(session: CMOChatSession): number {
   return session.decisionLayer
     ? session.decisionLayer.decisions.length +
@@ -1351,11 +1215,7 @@ function matchesSessionFilter(session: CMOChatSession, filter: SessionFilter): b
     return session.runtimeMode !== "live" || session.isRuntimeFallback === true || session.isDevelopmentFallback === true;
   }
 
-  if (filter === "saved") {
-    return session.savedToVault === true;
-  }
-
-  return Boolean(session.rawCapturePath);
+  return true;
 }
 
 export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
@@ -1379,18 +1239,8 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [sessions, setSessions] = useState<CMOChatSession[]>(state.latestSessions);
   const [latestPromotion, setLatestPromotion] = useState(state.latestPromotion);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(state.latestSessions[0]?.id ?? null);
-  const [sessionStatus, setSessionStatus] = useState<string | null>(null);
-  const [sessionError, setSessionError] = useState<string | null>(null);
-  const [isSavingSelectedSession, setIsSavingSelectedSession] = useState(false);
-  const [isCapturingSelectedSession, setIsCapturingSelectedSession] = useState(false);
-  const [reviewingDecisionItemId, setReviewingDecisionItemId] = useState<string | null>(null);
-  const [decisionReviewStatus, setDecisionReviewStatus] = useState<string | null>(null);
-  const [decisionReviewError, setDecisionReviewError] = useState<string | null>(null);
-  const [showAdvancedDecisionControls, setShowAdvancedDecisionControls] = useState(false);
   const [sessionSearch, setSessionSearch] = useState("");
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>("all");
-  const [contextDrawerOpen, setContextDrawerOpen] = useState(true);
-  const [contextDrawerTab, setContextDrawerTab] = useState<ContextDrawerTab>("decision");
   const [dateRange, setDateRange] = useState<CmoAppMetricDateRangePreset>("this_week");
   const [comparePrevious, setComparePrevious] = useState(false);
   const showChannelPerformance = app.id !== "holdstation-mini-app";
@@ -1416,7 +1266,6 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const appNoteQuality = useMemo(() => summarizeContextQuality(appNotes), [appNotes]);
   const selectedQuality = contextBrief.contextQualitySummary;
   const selectedSession = selectedSessionId ? sessions.find((session) => session.id === selectedSessionId) : undefined;
-  const selectedDecisionStatus = decisionLayerStatus(selectedSession);
   const filteredSessions = useMemo(() => {
     const query = sessionSearch.trim().toLowerCase();
 
@@ -1447,8 +1296,8 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const mostAppNotesArePlaceholders = appNoteQuality.selectedCount > 0 && appNoteQuality.placeholderCount > appNoteQuality.selectedCount / 2;
   const contextStatus = contextStatusLabel(selectedQuality);
   const memoryHealth = `${appNoteQuality.confirmedCount} confirmed / ${appNoteQuality.draftCount} draft / ${appNoteQuality.placeholderCount} need content`;
-  const sourceStatus = state.todayRawExists || selectedSession?.rawCapturePath ? "Exists" : "Missing";
-  const lastUpdated = app.lastUpdated || priorityState.activePriority?.updatedAt || latestDisplaySession?.createdAt || "Vault-backed";
+  const appLastUpdated = app.lastUpdated && app.lastUpdated !== "Vault-backed" ? app.lastUpdated : undefined;
+  const lastUpdated = appLastUpdated || priorityState.activePriority?.updatedAt || latestDisplaySession?.createdAt || "Workspace context";
   const metricById = useMemo(() => {
     const lookup = new Map<string, CmoAppMetric>();
 
@@ -1691,20 +1540,6 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     return () => controller.abort();
   }, [app.id, showChannelPerformance]);
 
-  function selectTab(tab: AppWorkspaceTab, hash?: string) {
-    const next = new URLSearchParams(searchParams.toString());
-    next.set("tab", tab);
-    const target = `${pathname}?${next.toString()}${hash ? `#${hash}` : ""}`;
-
-    setActiveTab(tab);
-
-    if (typeof window !== "undefined") {
-      window.history.replaceState(null, "", target);
-    }
-
-    router.replace(target, { scroll: false });
-  }
-
   async function refreshWorkspace() {
     const payload = await readJsonResponse<{ data: AppWorkspaceState }>(
       await fetch(`/api/apps/${app.id}/workspace`, { cache: "no-store" }),
@@ -1751,10 +1586,6 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
     setActiveTab("sessions");
     setSelectedSessionId(null);
-    setSessionStatus(null);
-    setSessionError(null);
-    setDecisionReviewStatus(null);
-    setDecisionReviewError(null);
     setSessionFocusSignal((current) => current + 1);
 
     if (typeof window !== "undefined") {
@@ -1852,177 +1683,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     }
   }
 
-  async function saveSelectedSessionToVault() {
-    if (!selectedSession || isSavingSelectedSession) {
-      return;
-    }
-
-    setIsSavingSelectedSession(true);
-    setSessionStatus("Saving session...");
-    setSessionError(null);
-
-    try {
-      const response = await readJsonResponse<{ path: string; alreadySaved: boolean }>(
-        await fetch("/api/cmo/sessions/save-to-vault", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            appId: app.id,
-            sessionId: selectedSession.id,
-            topic: selectedSession.topic,
-            relatedPriority: priorityState.activePriority?.title,
-          }),
-        }),
-      );
-
-      setSessionStatus(`${response.alreadySaved ? "Already saved" : "Saved to Vault"}: ${response.path}`);
-      await refreshSessions(selectedSession.id);
-      setPromotionRefreshSignal((current) => current + 1);
-    } catch (error) {
-      setSessionStatus(null);
-      setSessionError(`Failed to save: ${error instanceof Error ? error.message : "Session save failed"}`);
-    } finally {
-      setIsSavingSelectedSession(false);
-    }
-  }
-
-  async function captureSelectedSessionToRawVault() {
-    if (!selectedSession || selectedSession.rawCapturePath || isCapturingSelectedSession) {
-      return;
-    }
-
-    setIsCapturingSelectedSession(true);
-    setSessionStatus("Capturing...");
-    setSessionError(null);
-
-    try {
-      const topic = selectedSession.topic || "CMO session";
-      const assistantAnswer = [...selectedSession.messages].reverse().find((message) => message.role === "assistant")?.content ?? "No CMO answer captured.";
-      const userInputs = selectedSession.messages.filter((message) => message.role === "user").map((message) => message.content).join("\n");
-
-      const response = await readJsonResponse<{ path: string }>(
-        await fetch("/api/vault/raw-captures", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            workspaceId: "holdstation",
-            appId: app.id,
-            appName: app.name,
-            topic,
-            source: "cmo-session",
-            relatedSource: "cmo-session",
-            sessionId: selectedSession.id,
-            sessionNotePath: selectedSession.sessionNotePath,
-            relatedPriority: priorityState.activePriority?.title,
-            relatedPlan: plans.weekly.exists ? plans.weekly.path : undefined,
-            summary: [
-              `CMO session for ${app.name}.`,
-              `Runtime: ${selectedSession.runtimeStatus ?? "not captured"}.`,
-              `Runtime mode: ${selectedSession.runtimeMode ?? "not captured"}.`,
-              `Attempted runtime mode: ${selectedSession.attemptedRuntimeMode ?? "not captured"}.`,
-              `Fallback: ${selectedSession.isDevelopmentFallback ? "true" : "false"}.`,
-              `Runtime fallback: ${selectedSession.isRuntimeFallback ? "true" : "false"}.`,
-              `Runtime error reason: ${selectedSession.runtimeErrorReason ?? "none"}.`,
-              `Runtime provider: ${selectedSession.runtimeProvider ?? "not captured"}.`,
-              `Runtime agent: ${selectedSession.runtimeAgent ?? "not captured"}.`,
-              `Context quality: ${sessionContextSummary(selectedSession)}.`,
-              `Graph status: ${selectedSession.graphStatus ?? "empty"}.`,
-              `Graph hints used: ${selectedSession.graphHintCount ?? selectedSession.graphHints?.length ?? 0}.`,
-              selectedSession.graphHints?.length
-                ? `Graph hint refs: ${selectedSession.graphHints.map((hint) => `${hint.title} (${hint.path})`).join(", ")}.`
-                : "Graph hint refs: none.",
-              selectedSession.decisionLayer
-                ? `Decision layer: ${selectedSession.decisionLayer.decisions.length} decisions, ${selectedSession.decisionLayer.assumptions.length} assumptions, ${selectedSession.decisionLayer.suggestedActions.length} actions, ${selectedSession.decisionLayer.memoryCandidates.length} memory candidates, ${selectedSession.decisionLayer.taskCandidates.length} task candidates.`
-                : "Decision layer: not extracted.",
-              selectedSession.sessionNotePath ? `Full session note: ${selectedSession.sessionNotePath}.` : "Full session note not saved yet.",
-            ].join("\n"),
-            selectedContextNotes: [...selectedSession.contextUsed, ...(selectedSession.missingContext ?? [])],
-            graphHints: selectedSession.graphHints,
-            graphHintCount: selectedSession.graphHintCount,
-            graphStatus: selectedSession.graphStatus,
-            decisionLayer: selectedSession.decisionLayer,
-            messages: selectedSession.messages.map((message) => ({
-              role: message.role,
-              content: message.content,
-            })),
-            contextUsed: selectedSession.contextUsed,
-            missingContext: selectedSession.missingContext,
-            runtimeStatus: selectedSession.runtimeStatus,
-            runtimeMode: selectedSession.runtimeMode,
-            attemptedRuntimeMode: selectedSession.attemptedRuntimeMode,
-            isDevelopmentFallback: selectedSession.isDevelopmentFallback,
-            isRuntimeFallback: selectedSession.isRuntimeFallback,
-            runtimeErrorReason: selectedSession.runtimeErrorReason,
-            runtimeProvider: selectedSession.runtimeProvider,
-            runtimeAgent: selectedSession.runtimeAgent,
-            contextDiagnostics: selectedSession.contextDiagnostics,
-            contextQualitySummary: selectedSession.contextQualitySummary,
-            assumptions: selectedSession.assumptions,
-            suggestedActions: selectedSession.suggestedActions,
-            openQuestions: userInputs ? [`Review user input: ${userInputs.slice(0, 160)}`] : [],
-          }),
-        }),
-      );
-
-      setSessionStatus(`Captured to Raw Vault: ${response.path}. CMO answer included: ${assistantAnswer ? "yes" : "no"}.`);
-      await refreshSessions(selectedSession.id);
-      setPromotionRefreshSignal((current) => current + 1);
-    } catch (error) {
-      setSessionStatus(null);
-      setSessionError(`Failed to capture: ${error instanceof Error ? error.message : "Raw capture failed"}`);
-    } finally {
-      setIsCapturingSelectedSession(false);
-    }
-  }
-
-  async function reviewDecisionLayerItem(itemType: DecisionLayerReviewItemType, itemId: string, reviewStatus: DecisionLayerReviewStatus) {
-    if (!selectedSession || reviewingDecisionItemId) {
-      return;
-    }
-
-    setReviewingDecisionItemId(itemId);
-    setDecisionReviewStatus(null);
-    setDecisionReviewError(null);
-
-    try {
-      const payload = await readJsonResponse<{ data: CMOChatSession }>(
-        await fetch("/api/cmo/sessions/decision-layer/review", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            appId: app.id,
-            sessionId: selectedSession.id,
-            itemType,
-            itemId,
-            reviewStatus,
-          }),
-        }),
-      );
-
-      setSessions((current) => current.map((session) => (session.id === payload.data.id ? payload.data : session)));
-      setSelectedSessionId(payload.data.id);
-      setDecisionReviewStatus(`Review saved: ${reviewLabel(reviewStatus)}.`);
-      setPromotionRefreshSignal((current) => current + 1);
-    } catch (error) {
-      setDecisionReviewError(error instanceof Error ? error.message : "Decision review update failed");
-    } finally {
-      setReviewingDecisionItemId(null);
-    }
-  }
-
   function sessionHistoryPanel() {
     const filters: Array<{ id: SessionFilter; label: string }> = [
       { id: "all", label: "All" },
       { id: "live", label: "Live" },
       { id: "fallback", label: "Fallback" },
-      { id: "saved", label: "Saved" },
-      { id: "raw", label: "Raw" },
     ];
 
     return (
@@ -2069,8 +1734,6 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                       <span>·</span>
                       <Badge variant={session.runtimeMode === "live" || session.runtimeStatus === "live" ? "green" : "orange"}>{session.runtimeMode === "live" || session.runtimeStatus === "live" ? "Live" : "Fallback"}</Badge>
                       <Badge variant={sessionOutputCount(session) ? "blue" : "slate"}>{sessionOutputCount(session)} outputs</Badge>
-                      {session.savedToVault ? <Badge variant="green">saved</Badge> : null}
-                      {session.rawCapturePath ? <Badge variant="green">raw</Badge> : null}
                     </div>
                   </button>
                 ))}
@@ -2092,7 +1755,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   );
 
   return (
-    <PageChrome title={app.name} description="Executive app workspace with chat-first CMO review, status, and Vault provenance." actions={headerActions}>
+    <PageChrome title={app.name} description="Executive app workspace with chat-first CMO review and workspace context." actions={headerActions}>
       <Card className="p-4">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
@@ -2100,7 +1763,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               <Badge variant={app.stage === "Active" ? "green" : "slate"}>{app.stage || "Unknown stage"}</Badge>
               <Badge title={state.initialRuntimeStatus ?? "not_checked"} variant={runtimeVariant(state.initialRuntimeStatus)}>{runtimeLabel(state.initialRuntimeStatus)}</Badge>
               <Badge variant={contextStatusVariant(contextStatus)}>Context: {contextStatus}</Badge>
-              <Badge variant="slate">Source: Vault-backed</Badge>
+              <Badge variant="slate">Workspace context enabled</Badge>
             </div>
             <h2 className="mt-3 text-xl font-bold tracking-tight text-slate-950">{app.name}</h2>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
@@ -2163,12 +1826,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
           ) : null}
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <StatusChipCard label="Context" badge={contextStatus} variant={contextStatusVariant(contextStatus)} detail={`${selectedQuality.existingCount}/${selectedQuality.selectedCount} source checks`} />
-          <StatusChipCard label="Memory" badge={memoryHealth} variant={appNoteQuality.placeholderCount ? "orange" : "green"} detail="Backend managed" />
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatusChipCard label="CMO" badge="Hermes Active" variant="green" detail="Product workspace ready" />
+          <StatusChipCard label="Context" badge={contextStatus} variant={contextStatusVariant(contextStatus)} detail="Vault-backed workspace context enabled" />
+          <StatusChipCard label="Memory" badge={memoryHealth} variant={appNoteQuality.placeholderCount ? "orange" : "green"} detail="Available to CMO" />
           <StatusChipCard label="Metrics" badge={metricsHealthLabel} variant={metricsHealthVariant} detail={`Source: ${metricsSource}; updated ${metricsLastUpdated}`} />
-          <StatusChipCard label="Vault" badge="Backed" variant="green" detail="App-scoped source" />
-          <StatusChipCard label="Raw" badge={sourceStatus} variant={sourceStatus === "Exists" ? "green" : "orange"} detail="Capture provenance" />
         </div>
       </Card>
 
@@ -2847,17 +2509,13 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
           <div className="flex flex-col gap-3 rounded-xl border border-slate-100 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-lg font-bold tracking-tight text-slate-950">{app.name} CMO Chat</h2>
-              <p className="text-sm text-slate-500">Chat is the primary workspace. Context, review state, and Vault provenance stay in the side drawer.</p>
+              <p className="text-sm text-slate-500">Chat is the primary workspace. Hermes uses workspace context automatically.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Badge title={state.initialRuntimeStatus ?? "not_checked"} variant={runtimeVariant(state.initialRuntimeStatus)}>{runtimeLabel(state.initialRuntimeStatus)}</Badge>
               <Badge variant={selectedQuality.missingCount ? "orange" : "green"}>
-                Context {selectedQuality.existingCount}/{selectedQuality.selectedCount}
+                Vault-backed workspace context enabled
               </Badge>
-              <Button type="button" size="sm" variant="outline" onClick={() => setContextDrawerOpen((current) => !current)}>
-                {contextDrawerOpen ? <icons.ChevronRight /> : <icons.ChevronDown />}
-                Context Drawer
-              </Button>
               <Button type="button" size="sm" onClick={focusCurrentCmoSession}>
                 <icons.MessageSquare />
                 Start CMO Session
@@ -2870,7 +2528,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             <div className="mt-3">{sessionHistoryPanel()}</div>
           </details>
 
-          <div className={cn("grid gap-4", contextDrawerOpen ? "xl:grid-cols-[280px_minmax(0,1fr)_360px]" : "xl:grid-cols-[280px_minmax(0,1fr)]")}>
+          <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
             <aside className="hidden xl:block">
               <div className="sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border border-slate-100 bg-white p-3">
                 <div className="mb-3 flex items-center justify-between">
@@ -2891,219 +2549,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                   setPromotionRefreshSignal((current) => current + 1);
                 }}
                 onStartNewSession={focusCurrentCmoSession}
-                onSessionSaved={() => {
-                  void refreshSessions();
-                  setPromotionRefreshSignal((current) => current + 1);
-                }}
                 initialRuntimeStatus={state.initialRuntimeStatus ?? null}
-                initialRuntimeLabel={state.initialRuntimeLabel ?? ""}
                 focusSignal={sessionFocusSignal}
-                relatedPriority={priorityState.activePriority?.title}
                 activeSessionId={selectedSessionId}
               />
             </main>
-
-            {contextDrawerOpen ? (
-              <aside className="min-w-0">
-                <div className="sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border border-slate-100 bg-white p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-bold text-slate-950">Context Drawer</div>
-                      <div className="text-xs font-medium text-slate-500">Status, provenance, and review tracking</div>
-                    </div>
-                    <Button type="button" size="icon" variant="ghost" onClick={() => setContextDrawerOpen(false)} title="Collapse context drawer">
-                      <icons.ChevronRight />
-                    </Button>
-                  </div>
-                  <div className="mb-4 grid grid-cols-2 gap-2">
-                    {[
-                      ["context", "Context"],
-                      ["decision", "Decision"],
-                      ["metadata", "Metadata"],
-                      ["vault", "Vault"],
-                    ].map(([id, label]) => (
-                      <button
-                        key={id}
-                        type="button"
-                        onClick={() => setContextDrawerTab(id as ContextDrawerTab)}
-                        className={cn(
-                          "rounded-lg border px-3 py-2 text-xs font-bold transition",
-                          contextDrawerTab === id ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-100 bg-slate-50 text-slate-500 hover:border-slate-200",
-                        )}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-
-                  {contextDrawerTab === "context" ? (
-                    <div className="space-y-3">
-                      <StatusChipCard label="Context" badge={contextStatus} variant={contextStatusVariant(contextStatus)} detail="Resolved automatically for this app" />
-                      <StatusChipCard label="Memory" badge={memoryHealth} variant={appNoteQuality.placeholderCount ? "orange" : "green"} detail="Backend managed" />
-                      <StatusChipCard label="Metrics" badge={metricsHealthLabel} variant={metricsHealthVariant} detail={`Source: ${metricsSource}; updated ${metricsLastUpdated}`} />
-                      <StatusChipCard label="Vault" badge="Backed" variant="green" detail="App-scoped source" />
-                      <StatusChipCard label="Raw" badge={sourceStatus} variant={sourceStatus === "Exists" ? "green" : "orange"} detail="Capture provenance" />
-                      <details className="rounded-xl border border-slate-100 bg-white p-3">
-                        <summary className="cursor-pointer text-sm font-bold text-slate-950">System Details</summary>
-                        <div className="mt-3">
-                          <ContextBriefCard brief={contextBrief} />
-                        </div>
-                      </details>
-                    </div>
-                  ) : null}
-
-                  {contextDrawerTab === "metadata" ? (
-                    selectedSession ? (
-                      <div className="space-y-3">
-                        <div>
-                          <div className="text-xs font-semibold uppercase text-slate-400">Topic</div>
-                          <div className="mt-1 text-sm font-bold text-slate-950">{selectedSession.topic || "CMO session"}</div>
-                        </div>
-                        <div className="grid gap-3">
-                          <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                            <div className="text-xs font-semibold uppercase text-slate-400">Runtime</div>
-                            <Badge className="mt-2" title={selectedSession.runtimeStatus} variant={runtimeVariant(selectedSession.runtimeStatus)}>{runtimeLabel(selectedSession.runtimeStatus)}</Badge>
-                          </div>
-                          <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                            <div className="text-xs font-semibold uppercase text-slate-400">Provider</div>
-                            <div className="mt-1 text-sm font-bold text-slate-950">{selectedSession.runtimeAgent || selectedSession.runtimeProvider || "not captured"}</div>
-                          </div>
-                          <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                            <div className="text-xs font-semibold uppercase text-slate-400">Context Status</div>
-                            <div className="mt-1 text-sm font-bold text-slate-950">{contextStatus}</div>
-                          </div>
-                          <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                            <div className="text-xs font-semibold uppercase text-slate-400">Created</div>
-                            <div className="mt-1 text-sm font-bold text-slate-950">{displayDate(selectedSession.createdAt)}</div>
-                          </div>
-                          {(() => {
-                            const assistantMessage = [...selectedSession.messages].reverse().find((message) => message.role === "assistant");
-                            const provenance = assistantMessage ? assistantMessageProvenance(assistantMessage, selectedSession) : null;
-
-                            return provenance ? (
-                              <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                                <div className="text-xs font-semibold uppercase text-slate-400">Latest Answer</div>
-                                <div className="mt-1 text-xs font-semibold text-slate-600">{provenance}</div>
-                              </div>
-                            ) : null;
-                          })()}
-                        </div>
-                      </div>
-                    ) : (
-                      <EmptyCopy>No session selected.</EmptyCopy>
-                    )
-                  ) : null}
-
-                  {contextDrawerTab === "decision" ? (
-                    selectedSession?.decisionLayer ? (
-                      <div className="space-y-4">
-                        <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
-                          CMO tracks these outputs automatically. Use chat to review or change status. Nothing is pushed or promoted without explicit approval.
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          {[
-                            ["Outputs", selectedDecisionStatus.total],
-                            ["Reviewed", selectedDecisionStatus.reviewed],
-                            ["Pending", selectedDecisionStatus.pending],
-                            ["Deferred", selectedDecisionStatus.deferred],
-                            ["Approved Later", selectedDecisionStatus.approvedForLater],
-                            ["Actions", selectedDecisionStatus.suggestedActions],
-                            ["Memory", selectedDecisionStatus.memoryCandidates],
-                            ["Tasks", selectedDecisionStatus.taskCandidates],
-                          ].map(([label, value]) => (
-                            <div key={label} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                              <div className="text-[11px] font-bold uppercase text-slate-400">{label}</div>
-                              <div className="mt-1 text-lg font-bold text-slate-950">{value}</div>
-                            </div>
-                          ))}
-                        </div>
-                        <details className="rounded-xl border border-slate-100 bg-white p-3">
-                          <summary className="cursor-pointer text-sm font-bold text-slate-950">Advanced review rows</summary>
-                          <div className="mt-3 space-y-3">
-                            <div className="flex items-center justify-between">
-                              <div className="text-xs font-bold uppercase text-slate-400">Detailed Rows</div>
-                              <Button type="button" size="sm" variant="outline" onClick={() => setShowAdvancedDecisionControls((current) => !current)}>
-                                {showAdvancedDecisionControls ? "Hide controls" : "Show controls"}
-                              </Button>
-                            </div>
-                          {selectedSession.decisionLayer.suggestedActions.map((item, index) => (
-                            <div key={item.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                              <div className="text-sm font-bold text-slate-950">Action {index + 1}: {item.title}</div>
-                              <div className="mt-2 flex flex-wrap gap-1.5">
-                                <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
-                                <Badge variant="slate">{item.priorityHint ?? "no priority"}</Badge>
-                              </div>
-                              {showAdvancedDecisionControls ? <Button className="mt-2" size="sm" variant="outline" disabled={reviewingDecisionItemId === item.id} onClick={() => void reviewDecisionLayerItem("suggestedAction", item.id, "reviewed")}>Mark Reviewed</Button> : null}
-                            </div>
-                          ))}
-                          {selectedSession.decisionLayer.memoryCandidates.map((item, index) => (
-                            <div key={item.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                              <div className="text-sm font-bold text-slate-950">Memory Candidate {index + 1}</div>
-                              <div className="mt-1 text-sm leading-5 text-slate-600">{previewText(item.statement, 140)}</div>
-                              <div className="mt-2 flex flex-wrap gap-1.5">
-                                <Badge variant="blue">{item.type}</Badge>
-                                <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
-                              </div>
-                            </div>
-                          ))}
-                          {selectedSession.decisionLayer.taskCandidates.map((item, index) => (
-                            <div key={item.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                              <div className="text-sm font-bold text-slate-950">Task Candidate {index + 1}: {item.title}</div>
-                              <div className="mt-2 flex flex-wrap gap-1.5">
-                                <Badge variant={reviewBadgeVariant(item.reviewStatus)}>{reviewLabel(item.reviewStatus)}</Badge>
-                                <Badge variant="slate">{item.pushStatus}</Badge>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="space-y-2">
-                          <div className="text-xs font-bold uppercase text-slate-400">Potential Decisions</div>
-                          {sessionPotentialDecisions(selectedSession).length ? sessionPotentialDecisions(selectedSession).map((decision) => (
-                            <div key={decision} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-700">{decision}</div>
-                          )) : <EmptyCopy>No potential decisions extracted.</EmptyCopy>}
-                          </div>
-                        </details>
-                        {decisionReviewStatus ? <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">{decisionReviewStatus}</div> : null}
-                        {decisionReviewError ? <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{decisionReviewError}</div> : null}
-                      </div>
-                    ) : (
-                      <EmptyCopy>No Decision Layer has been extracted for the selected session.</EmptyCopy>
-                    )
-                  ) : null}
-
-                  {contextDrawerTab === "vault" ? (
-                    selectedSession ? (
-                      <div id="raw-capture" className="space-y-3">
-                        <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                          <div className="text-xs font-semibold uppercase text-slate-400">Session Note</div>
-                          <div className="mt-1 break-all text-xs font-medium text-slate-600">{selectedSession.sessionNotePath || "not saved yet"}</div>
-                        </div>
-                        <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-                          <div className="text-xs font-semibold uppercase text-slate-400">Raw Capture</div>
-                          <div className="mt-1 break-all text-xs font-medium text-slate-600">{selectedSession.rawCapturePath || "not captured yet"}</div>
-                        </div>
-                        <Button className="w-full" variant="outline" onClick={() => void saveSelectedSessionToVault()} disabled={!selectedSession.messages.length || isSavingSelectedSession}>
-                          {isSavingSelectedSession ? <icons.RefreshCw className="animate-spin" /> : <icons.FileText />}
-                          Save Session to Vault
-                        </Button>
-                        <Button className="w-full" onClick={() => void captureSelectedSessionToRawVault()} disabled={!selectedSession.messages.length || Boolean(selectedSession.rawCapturePath) || isCapturingSelectedSession}>
-                          {isCapturingSelectedSession ? <icons.RefreshCw className="animate-spin" /> : <icons.Database />}
-                          {selectedSession.rawCapturePath ? "Raw Captured" : "Capture to Raw Vault"}
-                        </Button>
-                        <Button type="button" className="w-full" size="sm" variant="outline" onClick={() => selectTab("plan", "promotion-candidates")}>
-                          <icons.Sparkles />
-                          Promotion Candidates
-                        </Button>
-                        {sessionStatus ? <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">{sessionStatus}</div> : null}
-                        {sessionError ? <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{sessionError}</div> : null}
-                      </div>
-                    ) : (
-                      <EmptyCopy>No session selected.</EmptyCopy>
-                    )
-                  ) : null}
-                </div>
-              </aside>
-            ) : null}
           </div>
         </div>
       ) : null}

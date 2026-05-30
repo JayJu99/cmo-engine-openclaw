@@ -33,19 +33,6 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
   return payload as T;
 }
 
-type AppCapturePreviewEventType = "cmo_session" | "echo_output" | "surf_research" | "surf_x_signal" | "last30days_trend" | "pulse_pack" | "cmo_decision";
-type AppCapturePreviewResult = { ok: boolean; mode: "dry_run"; savedToVault: false; target?: { relativePath: string; folder: string; filename: string }; markdown?: string; warnings: string[]; error?: string };
-type AppCaptureSaveResult = { ok: boolean; savedToVault: true; target?: { relativePath: string; folder: string; filename: string }; writtenPath?: string; relativePath?: string; markdown?: string; warnings: string[]; error?: string };
-const appCaptureEventOptions: Array<{ label: string; value: AppCapturePreviewEventType }> = [
-  { label: "CMO Session", value: "cmo_session" },
-  { label: "Echo Output", value: "echo_output" },
-  { label: "Surf Research", value: "surf_research" },
-  { label: "Surf X Signal", value: "surf_x_signal" },
-  { label: "Last30Days Trend", value: "last30days_trend" },
-  { label: "Pulse Pack", value: "pulse_pack" },
-  { label: "CMO Decision", value: "cmo_decision" },
-];
-
 function nowIso() {
   return new Date().toISOString();
 }
@@ -55,43 +42,31 @@ function messageId(prefix: string) {
 }
 
 function runtimeStatusLabel(status: CMORuntimeStatus | null): string {
-  if (status === "connected") {
-    return "Adapter connected";
+  if (status === "connected" || status === "live" || status === "configured_but_unreachable") {
+    return "CMO Hermes Active";
   }
 
-  if (status === "live") {
-    return "Live app-chat";
-  }
-
-  if (status === "configured_but_unreachable") {
-    return "Live app-chat unavailable";
-  }
-
-  if (status === "live_failed_then_fallback") {
-    return "Fallback used";
-  }
-
-  if (status === "runtime_error") {
-    return "Runtime error";
-  }
-
-  if (status === "development_fallback") {
-    return "Development fallback";
+  if (status === "live_failed_then_fallback" || status === "development_fallback") {
+    return "Workspace Context Active";
   }
 
   if (status === "not_configured") {
-    return "Runtime not configured";
+    return "CMO setup pending";
   }
 
-  return "Runtime not checked";
+  if (status === "runtime_error") {
+    return "CMO needs attention";
+  }
+
+  return "CMO status checking";
 }
 
 function runtimeStatusVariant(status: CMORuntimeStatus | null): "green" | "orange" | "red" | "slate" {
-  if (status === "connected" || status === "live") {
+  if (status === "connected" || status === "live" || status === "configured_but_unreachable") {
     return "green";
   }
 
-  if (status === "configured_but_unreachable" || status === "runtime_error") {
+  if (status === "runtime_error") {
     return "red";
   }
 
@@ -103,60 +78,57 @@ function runtimeStatusVariant(status: CMORuntimeStatus | null): "green" | "orang
 }
 
 function runtimeExplanation(status: CMORuntimeStatus | null, reason: CmoRuntimeErrorReason | null): string | null {
-  if (status === "live") {
-    return "CMO response received from the live CMO runtime.";
-  }
-
-  if (status === "configured_but_unreachable") {
-    return "Live app-chat is unavailable. Fallback answers use workspace context.";
+  if (status === "connected" || status === "live" || status === "configured_but_unreachable") {
+    return "Vault-backed workspace context enabled.";
   }
 
   if (status === "development_fallback") {
-    return "Using development fallback for this session.";
+    return "Workspace context is available for this session.";
   }
 
   if (status === "live_failed_then_fallback") {
     if (reason === "timeout") {
-      return "Live app-turn timed out; fallback answer generated from workspace context.";
+      return "Workspace context was used after the CMO request timed out.";
     }
 
     if (reason === "execution_error") {
-      return "Live app-chat intentionally bypassed; fallback generated this response from workspace context.";
+      return "Workspace context was used for this answer.";
     }
 
     if (reason === "invalid_response" || reason === "empty_answer") {
-      return "Live app-turn returned an invalid response; fallback generated this response from workspace context.";
+      return "Workspace context was used after the CMO response could not be completed.";
     }
 
-    return "Live app-chat unavailable; fallback answer generated from workspace context.";
+    return "Workspace context was used for this answer.";
   }
 
   if (status === "runtime_error") {
-    return "Runtime returned an error. Use the visible fallback or try again later.";
+    return "CMO runtime returned an error. Try again later.";
   }
 
   if (status === "not_configured") {
-    return "CMO runtime is not configured yet. Using development fallback.";
+    return "CMO runtime setup is pending.";
   }
 
   return null;
 }
 
-function assistantProvenance(message: CMOChatMessage, sessionSaved: boolean, rawCaptured: boolean): string | null {
+function assistantProvenance(message: CMOChatMessage): string | null {
   if (message.role !== "assistant" || !message.runtimeMode) {
     return null;
   }
 
-  const runtime = message.runtimeMode === "live" ? "Live" : "Fallback";
-  const provider = message.runtimeMode === "live" ? message.runtimeAgent || message.runtimeProvider || "OpenClaw CMO" : `reason: ${message.runtimeErrorReason ?? "fallback"}`;
-  const saved = sessionSaved ? "Saved" : "Not saved";
-  const raw = rawCaptured ? "Raw captured" : "Raw pending";
-
-  return `${runtime} · ${provider} · ${message.contextUsedCount ?? 0} context notes · ${saved} · ${raw}`;
+  return message.runtimeMode === "live" ? "CMO Hermes - workspace context enabled" : "Workspace context answer";
 }
 
 function isBackendContextLine(line: string): boolean {
-  return /^(context used|unavailable context|context quality|context caution|draft or placeholder notes|graph hints|graph status|graph hint refs|runtime note|remote cmo adapter|cmo context pack)/i.test(line);
+  return (
+    /^(context used|unavailable context|context quality|context caution|draft or placeholder notes|graph hints|graph status|graph hint refs|runtime note|remote cmo adapter|cmo context pack)/i.test(line) ||
+    /\b(saved to vault|raw capture|context refs|session:\s*session_|vault path|record id|record_id|target path|target_path|gbrain_called|dry-run|receipt)\b/i.test(line) ||
+    /\bsource:\s*[^.]+\.md\b/i.test(line) ||
+    /\b[A-Z][^:\n]*\/[^:\n]+\.md\b/.test(line) ||
+    /\b[A-Z][\w -]+\.md\b/.test(line)
+  );
 }
 
 function isBackendContextHeading(value: string): boolean {
@@ -249,25 +221,15 @@ export function CMOChatPanel({
   app: AppWorkspace;
   contextBrief: CMOContextBrief;
   onSessionCreated?: (sessionId?: string) => void;
-  onSessionSaved?: (path: string) => void;
   onStartNewSession?: () => void;
   initialRuntimeStatus?: CMORuntimeStatus | null;
-  initialRuntimeLabel?: string;
   focusSignal?: number;
-  relatedPriority?: string;
   activeSessionId?: string | null;
   selectedSession?: CMOChatSession | null;
 }) {
   const [messages, setMessages] = useState<CMOChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [savedSessionNotePath, setSavedSessionNotePath] = useState<string | null>(null);
-  const [rawCapturePath, setRawCapturePath] = useState<string | null>(null);
-  const [capturePreviewEventType, setCapturePreviewEventType] = useState<AppCapturePreviewEventType>("cmo_session");
-  const [capturePreview, setCapturePreview] = useState<AppCapturePreviewResult | null>(null);
-  const [capturePreviewLoading, setCapturePreviewLoading] = useState(false);
-  const [captureSave, setCaptureSave] = useState<AppCaptureSaveResult | null>(null);
-  const [captureSaveLoading, setCaptureSaveLoading] = useState(false);
   const [isDevelopmentFallback, setIsDevelopmentFallback] = useState(false);
   const [isRuntimeFallback, setIsRuntimeFallback] = useState(false);
   const [runtimeStatus, setRuntimeStatus] = useState<CMORuntimeStatus | null>(initialRuntimeStatus);
@@ -282,9 +244,6 @@ export function CMOChatPanel({
   const selectedQualitySummary = contextBrief.contextQualitySummary;
   const visibleMessages = messages.length ? messages : selectedSession?.messages ?? [];
   const activeDisplaySessionId = activeSessionId ?? sessionId ?? selectedSession?.id ?? null;
-  const activeSavedToVault = selectedSession?.savedToVault || Boolean(savedSessionNotePath);
-  const activeRawCaptured = Boolean(selectedSession?.rawCapturePath || rawCapturePath);
-  const activeRawCaptureStatus = selectedSession?.rawCaptureStatus;
 
   useEffect(() => {
     let isMounted = true;
@@ -334,8 +293,6 @@ export function CMOChatPanel({
     const timeout = window.setTimeout(() => {
       setSessionId(null);
       setMessages([]);
-      setSavedSessionNotePath(null);
-      setRawCapturePath(null);
       setIsDevelopmentFallback(false);
       setIsRuntimeFallback(false);
       setRuntimeStatus(initialRuntimeStatus);
@@ -357,8 +314,6 @@ export function CMOChatPanel({
       const timeout = window.setTimeout(() => {
         setSessionId(null);
         setMessages([]);
-        setSavedSessionNotePath(null);
-        setRawCapturePath(null);
         setIsDevelopmentFallback(false);
         setIsRuntimeFallback(false);
         setRuntimeStatus(initialRuntimeStatus);
@@ -374,8 +329,6 @@ export function CMOChatPanel({
     const timeout = window.setTimeout(() => {
       setSessionId(selectedSession.id);
       setMessages(selectedSession.messages);
-      setSavedSessionNotePath(selectedSession.sessionNotePath ?? null);
-      setRawCapturePath(selectedSession.rawCapturePath ?? null);
       setIsDevelopmentFallback(selectedSession.isDevelopmentFallback === true);
       setIsRuntimeFallback(selectedSession.isRuntimeFallback === true);
       setRuntimeStatus(selectedSession.runtimeStatus ?? initialRuntimeStatus);
@@ -436,10 +389,6 @@ export function CMOChatPanel({
     setPendingElapsedMs(0);
     setError(null);
     setSendStatus("Sending...");
-    if (!activeSessionId) {
-      setSavedSessionNotePath(null);
-      setRawCapturePath(null);
-    }
     setRuntimeStatus(null);
     setIsDevelopmentFallback(false);
     setIsRuntimeFallback(false);
@@ -468,7 +417,6 @@ export function CMOChatPanel({
       );
 
       setSessionId(response.sessionId);
-      setRawCapturePath(response.rawCapturePath ?? null);
       setIsDevelopmentFallback(response.isDevelopmentFallback);
       setIsRuntimeFallback(response.isRuntimeFallback === true);
       setRuntimeStatus(response.runtimeStatus);
@@ -481,15 +429,15 @@ export function CMOChatPanel({
             ? "CMO response received from live Hermes CMO."
           : response.isRuntimeFallback || response.runtimeStatus === "live_failed_then_fallback"
           ? response.runtimeErrorReason === "timeout"
-            ? "Live app-turn timed out; fallback answer generated from workspace context."
+            ? "Workspace context was used after the CMO request timed out."
             : response.runtimeErrorReason === "invalid_response" || response.runtimeErrorReason === "empty_answer"
-              ? "Live app-turn returned an invalid response; fallback generated this response from workspace context."
+              ? "Workspace context was used after the CMO response could not be completed."
               : response.runtimeErrorReason === "execution_error"
-                ? "Live app-chat intentionally bypassed; fallback generated this response from workspace context."
-                : "Live app-chat unavailable; fallback answer generated from workspace context."
+                ? "Workspace context was used for this answer."
+                : "Workspace context was used for this answer."
           : response.isDevelopmentFallback
-            ? "Runtime unavailable; using development fallback."
-            : "CMO response received from live OpenClaw app-turn.",
+            ? "Workspace context is available for this session."
+            : "CMO response received from live Hermes CMO.",
       );
       setMessages((current) =>
         current.map((message) =>
@@ -570,60 +518,6 @@ export function CMOChatPanel({
     inputRef.current?.focus();
   }
 
-  async function previewVaultCapture(message?: CMOChatMessage) {
-    const targetMessage = message ?? [...messages].reverse().find((item) => item.role === "assistant") ?? messages[messages.length - 1];
-    setCapturePreviewLoading(true);
-    try {
-      const result = await readJsonResponse<AppCapturePreviewResult>(await fetch("/api/cmo/vault/capture-preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          appId: app.id,
-          sessionId: sessionId ?? activeSessionId ?? selectedSession?.id,
-          messageId: targetMessage?.id,
-          eventType: capturePreviewEventType,
-          content: targetMessage?.content,
-          topic: app.name,
-          project: app.name,
-          workspaceId: app.id,
-        }),
-      }));
-      setCapturePreview(result);
-      setCaptureSave(null);
-    } catch (previewError) {
-      setCapturePreview({ ok: false, mode: "dry_run", savedToVault: false, warnings: [], error: previewError instanceof Error ? previewError.message : "Failed to build capture preview" });
-    } finally {
-      setCapturePreviewLoading(false);
-    }
-  }
-
-  async function saveVaultCapture() {
-    const targetMessage = [...messages].reverse().find((item) => item.role === "assistant") ?? messages[messages.length - 1];
-    setCaptureSaveLoading(true);
-    try {
-      const result = await readJsonResponse<AppCaptureSaveResult>(await fetch("/api/cmo/vault/capture-save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          appId: app.id,
-          sessionId: sessionId ?? activeSessionId ?? selectedSession?.id,
-          messageId: targetMessage?.id,
-          eventType: capturePreviewEventType,
-          content: targetMessage?.content,
-          topic: app.name,
-          project: app.name,
-          workspaceId: app.id,
-          confirmed: true,
-        }),
-      }));
-      setCaptureSave(result);
-    } catch (saveError) {
-      setCaptureSave({ ok: false, savedToVault: true, warnings: [], error: saveError instanceof Error ? saveError.message : "Failed to save capture" });
-    } finally {
-      setCaptureSaveLoading(false);
-    }
-  }
-
   return (
     <div id="cmo-session" className="space-y-5">
       <Card className="overflow-hidden">
@@ -634,17 +528,12 @@ export function CMOChatPanel({
             </div>
             <div>
               <CardTitle>CMO Chat</CardTitle>
-              <CardDescription>{activeDisplaySessionId ? `Session ${activeDisplaySessionId}` : `App context: ${app.name}`}</CardDescription>
+              <CardDescription>{activeDisplaySessionId ? "Active CMO session" : `App context: ${app.name}`}</CardDescription>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge title={runtimeStatus ?? "not_checked"} variant={runtimeStatusVariant(runtimeStatus)}>{runtimeStatusLabel(runtimeStatus)}</Badge>
-            <Badge variant={selectedQualitySummary.missingCount ? "orange" : "slate"}>
-              Context: {selectedQualitySummary.existingCount}/{selectedQualitySummary.selectedCount} ready
-            </Badge>
-            <Badge variant={selectedQualitySummary.confirmedCount ? "green" : "slate"}>{selectedQualitySummary.confirmedCount} confirmed</Badge>
-            <Badge variant={selectedQualitySummary.draftCount ? "blue" : "slate"}>{selectedQualitySummary.draftCount} draft</Badge>
-            <Badge variant={selectedQualitySummary.placeholderCount ? "orange" : "slate"}>{selectedQualitySummary.placeholderCount} need content</Badge>
+            <Badge variant={selectedQualitySummary.missingCount ? "orange" : "green"}>Vault-backed workspace context enabled</Badge>
             {isRuntimeFallback ? <Badge variant="orange">fallback used</Badge> : isDevelopmentFallback ? <Badge variant="orange">development response</Badge> : null}
             <Button variant="outline" size="sm" onClick={focusChat}>
               <icons.MessageSquare />
@@ -653,13 +542,12 @@ export function CMOChatPanel({
           </div>
         </div>
         <div className="border-b border-slate-100 bg-white px-5 py-3 text-xs font-medium text-slate-500">
-          Use chat for review commands like &quot;What should I review next?&quot; and &quot;Mark action 1 reviewed.&quot; Save and capture live in the Vault drawer.
+          Ask what this app should focus on next. Hermes uses workspace context automatically.
         </div>
 
         {visibleMessages.length && runtimeExplanation(runtimeStatus, runtimeErrorReason) ? (
-          <div className={cn("border-b px-5 py-3 text-sm font-medium", runtimeStatus === "live" ? "border-emerald-100 bg-emerald-50 text-emerald-800" : "border-orange-100 bg-orange-50 text-orange-800")}>
+          <div className={cn("border-b px-5 py-3 text-sm font-medium", runtimeStatus === "runtime_error" || runtimeStatus === "live_failed_then_fallback" ? "border-orange-100 bg-orange-50 text-orange-800" : "border-emerald-100 bg-emerald-50 text-emerald-800")}>
             {runtimeExplanation(runtimeStatus, runtimeErrorReason)}
-            {runtimeStatus ? <span className={cn("ml-2 text-xs", runtimeStatus === "live" ? "text-emerald-700" : "text-orange-700")}>Status: {runtimeStatus}</span> : null}
           </div>
         ) : null}
 
@@ -689,9 +577,9 @@ export function CMOChatPanel({
                       elapsedMs={pendingAssistantMessageId === message.id ? pendingElapsedMs : null}
                     />
                   ) : null}
-                  {message.role === "assistant" && assistantProvenance(message, activeSavedToVault, activeRawCaptured) ? (
-                    <div className={cn("mt-4 border-t pt-3 text-xs font-semibold", activeRawCaptureStatus === "failed" ? "border-rose-100 text-rose-600" : "border-emerald-100 text-emerald-700")}>
-                      {assistantProvenance(message, activeSavedToVault, activeRawCaptured)}
+                  {message.role === "assistant" && assistantProvenance(message) ? (
+                    <div className="mt-4 border-t border-emerald-100 pt-3 text-xs font-semibold text-emerald-700">
+                      {assistantProvenance(message)}
                     </div>
                   ) : null}
                 </div>
@@ -717,45 +605,11 @@ export function CMOChatPanel({
 
         <div className="border-t border-slate-100 bg-white p-4">
           <div className="flex flex-col gap-3">
-            <div className="rounded-2xl border border-dashed border-indigo-200 bg-indigo-50/60 p-3 text-xs text-slate-700">
-              <div className="flex flex-wrap items-center gap-2">
-                <strong className="text-slate-950">Advanced / Debug Vault Capture</strong>
-                <select value={capturePreviewEventType} onChange={(event) => setCapturePreviewEventType(event.target.value as AppCapturePreviewEventType)} className="rounded-lg border border-indigo-200 bg-white px-2 py-1 font-semibold text-indigo-700">
-                  {appCaptureEventOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
-                <Button variant="outline" size="sm" disabled={capturePreviewLoading || !messages.length} onClick={() => void previewVaultCapture()}>
-                  {capturePreviewLoading ? "Building preview..." : "Preview latest assistant message"}
-                </Button>
-                <Button variant="outline" size="sm" disabled>Write disabled in Phase 2.11F</Button>
-              </div>
-              <div className="mt-2 font-medium">Default auto-capture saves raw notes automatically. Use this dry-run/manual panel only for debugging.</div>
-            </div>
-            {capturePreview ? (
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm shadow-sm">
-                <div className="mb-2 text-xs font-bold uppercase tracking-wide text-indigo-600">Capture Target</div>
-                <div className="font-mono text-xs text-slate-700">{capturePreview.target?.relativePath ?? "No target"}</div>
-                <div className="my-3 flex flex-wrap gap-2 text-xs">
-                  <span className="rounded-full bg-emerald-50 px-2 py-1 font-bold text-emerald-700">savedToVault: {captureSave?.ok ? "true" : "false"}</span>
-                  <span className="rounded-full bg-slate-100 px-2 py-1 font-bold">mode: {capturePreview.mode}</span>
-                  <Button variant="outline" size="sm" disabled={captureSaveLoading || !capturePreview.ok} onClick={() => void saveVaultCapture()}>
-                    {captureSaveLoading ? "Saving..." : "Save to CMO Engine Vault"}
-                  </Button>
-                </div>
-                {capturePreview.warnings.length ? <ul className="mb-3 list-disc pl-4 text-xs text-amber-700">{capturePreview.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
-                {capturePreview.error ? <div className="mb-3 text-xs font-semibold text-rose-600">{capturePreview.error}</div> : null}
-                {captureSave?.ok ? <div className="mb-3 rounded-xl bg-emerald-50 p-3 text-xs font-semibold text-emerald-700">Saved to CMO Engine Vault: <span className="font-mono">{captureSave.relativePath ?? captureSave.target?.relativePath}</span></div> : null}
-                {captureSave?.error ? <div className="mb-3 text-xs font-semibold text-rose-600">{captureSave.error}</div> : null}
-                <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Markdown Preview</div>
-                <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-950 p-3 text-xs text-slate-50">{capturePreview.markdown ?? "No markdown generated."}</pre>
-                <div className="mt-3 text-xs font-semibold text-slate-500">Safety Notice: Default auto-capture saves raw notes automatically. Use this dry-run/manual panel only for debugging.</div>
-              </div>
-            ) : null}
             <div className="flex flex-wrap gap-2">
               {[
                 "What should I review next?",
                 "Mark action 1 reviewed",
                 "Save this session",
-                "Capture to raw vault (legacy/debug)",
               ].map((command) => (
                 <button
                   key={command}

@@ -14,7 +14,6 @@ interface ActivityRow {
   label: string;
   status: ActivityStatus;
   detail?: string;
-  sourceMode?: string;
 }
 
 interface CmoAgentActivityPanelProps {
@@ -156,14 +155,12 @@ function delegationRows(delegations: HermesCmoDelegationSummaryItem[], hasDelega
         label: `Calling ${label}`,
         status: status === "failed" ? "completed" : status,
         detail: delegation.objective,
-        sourceMode: delegation.mode,
       },
       {
         key: `delegation-result-${delegation.delegationId}-${index}`,
         label: status === "failed" ? `${label} failed` : `${label} completed`,
         status,
         detail: delegation.failureReason ?? delegation.summary,
-        sourceMode: delegation.mode,
       },
     ];
   });
@@ -177,7 +174,6 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
         label: "CMO analyzing",
         status: "running",
         detail: "Preparing the CMO runtime request.",
-        sourceMode: "cmo.default",
       },
     ];
   }
@@ -196,7 +192,6 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
       label: "CMO analyzing",
       status: "completed",
       detail: firstCmoEvent?.message,
-      sourceMode: firstCmoEvent?.sourceMode ?? "cmo.default",
     });
   }
 
@@ -206,7 +201,6 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
       label: eventLabel(event),
       status: displayStatusForEvent(event, delegationOutcomes),
       detail: event.message,
-      sourceMode: event.sourceMode,
     })),
   );
 
@@ -221,7 +215,6 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
       label: "CMO synthesizing final answer",
       status: finalStatus,
       detail: currentStep,
-      sourceMode: "cmo.default",
     });
   }
 
@@ -313,7 +306,6 @@ export function CmoAgentActivityPanel({ message, running = false, elapsedMs = nu
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-bold text-slate-900">{row.label}</span>
                 <Badge className="px-2 py-0.5" variant={statusVariant(row.status)}>{row.status}</Badge>
-                {row.sourceMode ? <span className="text-[11px] font-semibold text-slate-400">{row.sourceMode}</span> : null}
               </div>
               {row.detail ? <div className="mt-0.5 line-clamp-2 text-xs leading-5 text-slate-600">{row.detail}</div> : null}
             </div>

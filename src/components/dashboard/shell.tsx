@@ -169,7 +169,7 @@ export function DashboardShell({
                 <span className="font-bold text-orange-600">Phase 1</span>
               </div>
               <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-600">
-                App context, CMO chat, Raw Vault capture, and Daily Review.
+                App context, CMO chat, workspace memory, and Daily Review.
               </div>
             </div>
           </div>
