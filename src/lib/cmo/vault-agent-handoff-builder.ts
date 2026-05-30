@@ -2,6 +2,7 @@ import { getCmoVaultAgentHandoffMode, type CmoVaultAgentHandoffMode } from "./co
 import type {
   CMOAppChatRequest,
   CMOChatSession,
+  CmoSourceReviewContext,
   VaultAgentDryRunMetadata,
   HermesCmoActivityEventSummary,
   HermesCmoAgentUsed,
@@ -68,6 +69,45 @@ function compact(value: string, max = 1200): string {
   return normalized.length > max ? `${normalized.slice(0, max - 3).trimEnd()}...` : normalized;
 }
 
+function sourceReviewString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function sourceReviewStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const list = value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim());
+
+  return list.length ? list.slice(0, 8) : undefined;
+}
+
+function sourceReviewMetadata(reviewContext?: CmoSourceReviewContext): TurnCompletedPackage["source_metadata"] | undefined {
+  if (!reviewContext) {
+    return undefined;
+  }
+
+  const source = reviewContext.source;
+  const extraction = reviewContext.extraction;
+  const summary = sourceReviewString(extraction.extracted_summary);
+  const sourceText = sourceReviewString(extraction.source_text);
+
+  return {
+    ...(sourceReviewString(source.original_url) ? { original_url: sourceReviewString(source.original_url) } : {}),
+    ...(sourceReviewString(source.canonical_url) ? { canonical_url: sourceReviewString(source.canonical_url) } : {}),
+    ...(sourceReviewString(source.original_filename) ? { original_filename: sourceReviewString(source.original_filename) } : {}),
+    ...(sourceReviewString(source.source_title) ? { source_title: sourceReviewString(source.source_title) } : {}),
+    ...(sourceReviewString(source.source_type) ? { source_type: sourceReviewString(source.source_type) } : {}),
+    ...(sourceReviewString(extraction.status) ? { extraction_status: sourceReviewString(extraction.status) } : {}),
+    ...(sourceReviewString(extraction.content_hash) ? { content_hash: sourceReviewString(extraction.content_hash) } : {}),
+    ...(sourceReviewStringList(extraction.warnings) ? { extraction_warnings: sourceReviewStringList(extraction.warnings) } : {}),
+    ...(sourceReviewStringList(extraction.errors) ? { extraction_errors: sourceReviewStringList(extraction.errors) } : {}),
+    ...(summary ? { extracted_summary: compact(summary, 1000) } : {}),
+    ...(sourceText ? { extracted_excerpt: compact(sourceText, 600) } : {}),
+  };
+}
+
 function tenantIdForRequest(request: CMOAppChatRequest): string {
   return request.tenantId ?? (request.workspaceId === request.appId ? "holdstation" : request.workspaceId);
 }
@@ -78,6 +118,9 @@ function vaultWorkspaceIdForRequest(request: CMOAppChatRequest): string {
 
 export function buildTurnCompletedPackage(input: CompletedTurnHandoffInput): TurnCompletedPackage {
   const userMessage = input.request.message;
+  const reviewContext = input.session.sourceReviewContext;
+  const reviewMetadata = sourceReviewMetadata(reviewContext);
+  const sourceReviewId = sourceReviewString(reviewContext?.source.source_id);
   const originalText = [
     "## User Message",
     userMessage,
@@ -114,8 +157,18 @@ export function buildTurnCompletedPackage(input: CompletedTurnHandoffInput): Tur
       `session:${input.session.id}`,
       `message:${input.assistantMessageId}`,
       `app:${input.request.appId}`,
+      ...(sourceReviewId ? [`source_review:${sourceReviewId}`] : []),
     ],
     related_records: [],
+    ...(reviewContext
+      ? {
+          source_review_only: true,
+          source_saved_to_vault: false,
+          source_official_project_source: false,
+          source_save_surface: "inputs_and_priorities",
+        }
+      : {}),
+    ...(reviewMetadata ? { source_metadata: reviewMetadata } : {}),
     created_at: input.createdAt,
   };
 }

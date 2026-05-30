@@ -38,6 +38,50 @@ function baseSession(overrides = {}) {
   };
 }
 
+function sourceReviewContext(overrides = {}) {
+  return {
+    schema_version: "cmo.source_review_context.v1",
+    mode: "review_only",
+    tenant_id: "holdstation",
+    workspace_id: "feeback",
+    user_id: "user_123",
+    session_id: "session_feeback_source_123",
+    request_id: "msg_user_source_123",
+    source: {
+      source_id: "source_review_feeback_site",
+      source_type: "url",
+      source_title: "Feeback website",
+      original_url: "https://feeback.org/",
+      canonical_url: "https://feeback.org/",
+      original_filename: null,
+      mime_type: "text/html",
+      size_bytes: 2048,
+      retrieved_at: "2026-05-30T00:00:00.000Z",
+      timezone: "Asia/Ho_Chi_Minh",
+      access_type: "public_url",
+      permission_status: "allowed",
+    },
+    extraction: {
+      status: "completed",
+      content_hash: "sha256:feeback-site",
+      source_text: "Feeback website extracted text that should be bounded before turn-log metadata stores it. ".repeat(30),
+      extracted_summary: "Feeback is a project website source captured for chat review only.",
+      visual_summary: null,
+      table_summary: null,
+      detected_language: "en",
+      warnings: ["source text truncated"],
+      errors: [],
+    },
+    safety: {
+      read_only: true,
+      vault_mutation: false,
+      gbrain_mutation: false,
+      no_promotion: true,
+    },
+    ...overrides,
+  };
+}
+
 function baseHandoffInput(overrides = {}) {
   return {
     request: baseRequest(),
@@ -150,6 +194,67 @@ try {
     assert.equal(aionPackage.session_id, "session_aion_write_123");
     assert.deepEqual(aionPackage.source_refs.includes("app:aion"), true);
 
+    const feebackSourceReviewPackage = buildTurnCompletedPackage(baseHandoffInput({
+      request: baseRequest({
+        tenantId: "holdstation",
+        workspaceId: "feeback",
+        appId: "feeback",
+        appName: "Feeback",
+        message: "Ban xem qua link nay nhe: https://feeback.org/",
+      }),
+      session: baseSession({
+        id: "session_feeback_source_123",
+        appId: "feeback",
+        appName: "Feeback",
+        sourceReviewContext: sourceReviewContext(),
+      }),
+      userMessageId: "msg_user_source_123",
+      assistantMessageId: "msg_assistant_source_123",
+      answer: "I can read the Feeback website source as review-only context.",
+    }));
+    assert.equal(feebackSourceReviewPackage.tenant_id, "holdstation");
+    assert.equal(feebackSourceReviewPackage.workspace_id, "feeback");
+    assert.equal(feebackSourceReviewPackage.session_id, "session_feeback_source_123");
+    assert.equal(feebackSourceReviewPackage.source_review_only, true);
+    assert.equal(feebackSourceReviewPackage.source_saved_to_vault, false);
+    assert.equal(feebackSourceReviewPackage.source_official_project_source, false);
+    assert.equal(feebackSourceReviewPackage.source_save_surface, "inputs_and_priorities");
+    assert.equal(feebackSourceReviewPackage.no_auto_promote, true);
+    assert.equal(feebackSourceReviewPackage.source_metadata.original_url, "https://feeback.org/");
+    assert.equal(feebackSourceReviewPackage.source_metadata.canonical_url, "https://feeback.org/");
+    assert.equal(feebackSourceReviewPackage.source_metadata.source_title, "Feeback website");
+    assert.equal(feebackSourceReviewPackage.source_metadata.source_type, "url");
+    assert.equal(feebackSourceReviewPackage.source_metadata.extraction_status, "completed");
+    assert.equal(feebackSourceReviewPackage.source_metadata.content_hash, "sha256:feeback-site");
+    assert.deepEqual(feebackSourceReviewPackage.source_metadata.extraction_warnings, ["source text truncated"]);
+    assert.equal(feebackSourceReviewPackage.source_metadata.extraction_errors, undefined);
+    assert.match(feebackSourceReviewPackage.source_metadata.extracted_summary, /chat review only/);
+    assert.ok(feebackSourceReviewPackage.source_metadata.extracted_excerpt.length <= 603);
+    assert.equal(feebackSourceReviewPackage.source_text, undefined);
+    assert.deepEqual(feebackSourceReviewPackage.source_refs.includes("source_review:source_review_feeback_site"), true);
+
+    const feebackFollowUpPackage = buildTurnCompletedPackage(baseHandoffInput({
+      request: baseRequest({
+        tenantId: "holdstation",
+        workspaceId: "feeback",
+        appId: "feeback",
+        appName: "Feeback",
+        message: "Ban co doc duoc link do khong?",
+      }),
+      session: baseSession({
+        id: "session_feeback_source_123",
+        appId: "feeback",
+        appName: "Feeback",
+      }),
+      userMessageId: "msg_user_followup_123",
+      assistantMessageId: "msg_assistant_followup_123",
+      answer: "Yes, I can refer to the source from the session history if it was in this conversation.",
+    }));
+    assert.equal(feebackFollowUpPackage.workspace_id, "feeback");
+    assert.equal(feebackFollowUpPackage.turn_id, "msg_user_followup_123");
+    assert.equal(feebackFollowUpPackage.source_review_only, undefined);
+    assert.equal(feebackFollowUpPackage.source_metadata, undefined);
+
     globalThis.fetch = async (url, init) => {
       assert.equal(url, "https://hermes.example.test/agents/vault-agent/write-turn-log");
       assert.equal(init?.method, "POST");
@@ -158,6 +263,7 @@ try {
       assert.equal(body.schema_version, "cmo.turn_package.v1");
       assert.equal(body.no_auto_promote, true);
       assert.equal(body.final_cmo_answer, "Focus the next sprint on activation proof, then review retention signals.");
+      assert.notEqual(body.source_review_only, true);
 
       return new Response(JSON.stringify(writeReceipt()), {
         status: 200,
@@ -181,6 +287,58 @@ try {
     assert.deepEqual(successPersisted.vault_errors, []);
     assert.equal(successPersisted.gbrain_called, false);
     assert.equal(successPersisted.memory_mutation, false);
+
+    let sourceReviewWriteBody;
+    globalThis.fetch = async (url, init) => {
+      assert.equal(url, "https://hermes.example.test/agents/vault-agent/write-turn-log");
+      assert.equal(init?.method, "POST");
+      sourceReviewWriteBody = JSON.parse(init?.body);
+      assert.equal(sourceReviewWriteBody.schema_version, "cmo.turn_package.v1");
+      assert.equal(sourceReviewWriteBody.workspace_id, "feeback");
+      assert.equal(sourceReviewWriteBody.source_review_only, true);
+      assert.equal(sourceReviewWriteBody.source_saved_to_vault, false);
+      assert.equal(sourceReviewWriteBody.source_official_project_source, false);
+      assert.equal(sourceReviewWriteBody.source_save_surface, "inputs_and_priorities");
+      assert.equal(sourceReviewWriteBody.no_auto_promote, true);
+      assert.equal(sourceReviewWriteBody.source_metadata.original_url, "https://feeback.org/");
+      assert.equal(sourceReviewWriteBody.source_metadata.extraction_status, "completed");
+      assert.equal(sourceReviewWriteBody.source_text, undefined);
+      assert.equal(sourceReviewWriteBody.extracted_summary, undefined);
+
+      return new Response(JSON.stringify(writeReceipt({
+        record_id: "turnlog_feeback_source_review",
+        target_relative_path: "03 Sessions/feeback/user_123/session_feeback_source_123/Turn Logs/turnlog_feeback_source_review - cmo-turn.md",
+        target_absolute_path: "/Users/jay/Documents/CMO Engine Vault/03 Sessions/feeback/user_123/session_feeback_source_123/Turn Logs/turnlog_feeback_source_review - cmo-turn.md",
+      })), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const sourceReviewWrite = await runVaultAgentDryRunHandoff(baseHandoffInput({
+      request: baseRequest({
+        tenantId: "holdstation",
+        workspaceId: "feeback",
+        appId: "feeback",
+        appName: "Feeback",
+        message: "Ban xem qua link nay nhe: https://feeback.org/",
+      }),
+      session: baseSession({
+        id: "session_feeback_source_123",
+        appId: "feeback",
+        appName: "Feeback",
+        sourceReviewContext: sourceReviewContext(),
+      }),
+      userMessageId: "msg_user_source_123",
+      assistantMessageId: "msg_assistant_source_123",
+      answer: "I can read the Feeback website source as review-only context.",
+    }));
+    const sourceReviewWritePersisted = vaultAgentDryRunMetadataForPersistence(sourceReviewWrite);
+    assert.equal(sourceReviewWrite.status, "completed");
+    assert.equal(sourceReviewWritePersisted.vault_handoff_status, "completed");
+    assert.equal(sourceReviewWritePersisted.vault_target_path, "03 Sessions/feeback/user_123/session_feeback_source_123/Turn Logs/turnlog_feeback_source_review - cmo-turn.md");
+    assert.equal(sourceReviewWritePersisted.gbrain_called, false);
+    assert.equal(sourceReviewWritePersisted.memory_mutation, false);
+    assert.equal(sourceReviewWriteBody.workspace_id, "feeback");
 
     globalThis.fetch = async () => new Response(JSON.stringify(writeReceipt({
       write_performed: false,

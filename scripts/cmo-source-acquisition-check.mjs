@@ -498,8 +498,8 @@ try {
   assert.match(appChatStoreSource, /runtimeContext/);
   assert.match(appChatStoreSource, /hasSourceReviewContext/);
   assert.match(appChatStoreSource, /!hasSourceReviewContext[\s\S]*executeCmoSurfEvidence/);
-  assert.match(appChatStoreSource, /skipped_vault_mutation_for_source_review_only/);
-  assert.match(appChatStoreSource, /status === "completed" && !sourceReviewContext/);
+  assert.match(appChatStoreSource, /status === "completed" \? await runVaultAgentDryRunHandoff/);
+  assert.doesNotMatch(appChatStoreSource, /skipped_vault_mutation_for_source_review_only/);
   assert.doesNotMatch(appChatStoreSource, /run.*GBrain.*source/i);
 
   const hermesMapperSource = readFileSync("src/lib/cmo/hermes-cmo-chat-mapper.ts", "utf8");

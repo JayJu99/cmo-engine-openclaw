@@ -57,6 +57,23 @@ export interface TurnCompletedPackage {
   canonical_language: typeof CANONICAL_VAULT_LANGUAGE;
   source_refs?: string[];
   related_records?: string[];
+  source_review_only?: true;
+  source_saved_to_vault?: false;
+  source_official_project_source?: false;
+  source_save_surface?: "inputs_and_priorities";
+  source_metadata?: {
+    original_url?: string;
+    canonical_url?: string;
+    original_filename?: string;
+    source_title?: string;
+    source_type?: string;
+    extraction_status?: string;
+    content_hash?: string;
+    extraction_warnings?: string[];
+    extraction_errors?: string[];
+    extracted_summary?: string;
+    extracted_excerpt?: string;
+  };
   created_at: string;
 }
 
