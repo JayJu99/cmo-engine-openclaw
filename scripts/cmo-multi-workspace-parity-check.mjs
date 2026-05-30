@@ -45,6 +45,12 @@ try {
   }
 
   assert.equal(resolveWorkspaceRegistryEntry("feedback")?.appId, "feeback", "feedback route alias must resolve to the existing app id");
+  assert.equal(resolveWorkspaceRegistryEntry("feedback")?.workspaceId, "feeback", "feedback route alias must preserve canonical workspace id");
+  assert.equal(resolveWorkspaceRegistryEntry("feedback")?.route, "/apps/feedback", "feedback alias route may remain public");
+
+  const appWorkspaces = source("src/lib/cmo/app-workspaces.ts");
+  assert.match(appWorkspaces, /id:\s*"feeback"[\s\S]*?name:\s*"Feeback"/, "Feeback display name must stay intentionally misspelled");
+  assert.doesNotMatch(appWorkspaces, /id:\s*"feeback"[\s\S]*?name:\s*"Feedback"/, "Feeback must not display as Feedback");
 
   const appsPage = source("src/app/apps/[appId]/page.tsx");
   assert.match(appsPage, /<AppWorkspaceView state=\{state\} \/>/, "dynamic app route must use shared AppWorkspaceView");
@@ -70,6 +76,12 @@ try {
 
   const contextHandoff = source("src/lib/cmo/vault-agent-context-pack-handoff.ts");
   assert.match(contextHandoff, /workspace_id:\s*vaultWorkspaceIdForRequest\(input\.request\)/, "Vault context-pack request must send selected workspace_id");
+
+  const runtime = source("src/lib/cmo/runtime.ts");
+  assert.match(runtime, /vaultAgentContextPackStatus/, "fallback runtime must receive Vault Agent context-pack status");
+  assert.match(runtime, /accepted workspace sources or goals/, "empty-context greeting must ask for source or goal");
+  assert.match(runtime, /no accepted knowledge\/source context/, "empty-context explanation must be explicit and workspace-scoped");
+  assert.doesNotMatch(runtime, /Pick one: activation, retention, campaign messaging, or app memory cleanup\.[\s\S]*vaultContextIsEmpty/, "empty-context fallback must not use the repeated strategy template");
 
   console.log("CMO multi-workspace parity checks passed");
 } finally {

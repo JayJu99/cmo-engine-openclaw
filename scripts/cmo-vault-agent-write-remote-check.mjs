@@ -118,6 +118,7 @@ try {
 
   const {
     runVaultAgentDryRunHandoff,
+    buildTurnCompletedPackage,
   } = requireFromScript(join(dist, "vault-agent-handoff-builder.js"));
   const {
     vaultAgentDryRunMetadataForPersistence,
@@ -130,6 +131,24 @@ try {
     process.env.CMO_HERMES_BASE_URL = "https://hermes.example.test";
     process.env.CMO_HERMES_API_KEY = "test-key";
     process.env.CMO_HERMES_TIMEOUT_MS = "1000";
+
+    const aionPackage = buildTurnCompletedPackage(baseHandoffInput({
+      request: baseRequest({
+        tenantId: "holdstation",
+        workspaceId: "aion",
+        appId: "aion",
+        appName: "AION",
+      }),
+      session: baseSession({
+        id: "session_aion_write_123",
+        appId: "aion",
+        appName: "AION",
+      }),
+    }));
+    assert.equal(aionPackage.tenant_id, "holdstation");
+    assert.equal(aionPackage.workspace_id, "aion");
+    assert.equal(aionPackage.session_id, "session_aion_write_123");
+    assert.deepEqual(aionPackage.source_refs.includes("app:aion"), true);
 
     globalThis.fetch = async (url, init) => {
       assert.equal(url, "https://hermes.example.test/agents/vault-agent/write-turn-log");

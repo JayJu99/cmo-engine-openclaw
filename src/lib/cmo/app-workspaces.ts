@@ -42,7 +42,7 @@ export const holdstationApps: AppWorkspace[] = [
     id: "feeback",
     slug: "feedback",
     ...registryFields("feeback"),
-    name: "Feedback",
+    name: "Feeback",
     group: "World Mini App",
     stage: "Discovery",
     currentMission: "Capture context and identify the first useful CMO question.",

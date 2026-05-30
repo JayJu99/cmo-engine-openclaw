@@ -1429,6 +1429,7 @@ export async function createAppChatSession(
       request,
       contextUsed,
       missingContext,
+      vaultAgentContextPackStatus: vaultAgentContextPackMetadata?.context_pack_status,
     });
 
     answer = runtimeResult.answer;

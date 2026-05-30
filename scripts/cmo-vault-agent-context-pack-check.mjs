@@ -231,6 +231,20 @@ try {
     assert.equal(request.schema_version, "cmo.context_pack.request.v1");
     assert.equal(request.query, "M3.12");
     assert.deepEqual(request.allowed_scopes, ["workspace"]);
+    const aionRequest = buildVaultAgentContextPackRequest({
+      request: baseRequest({
+        tenantId: "holdstation",
+        workspaceId: "aion",
+        appId: "aion",
+        appName: "AION",
+        message: "What should AION focus on next?",
+      }),
+      sessionId: "session_aion_context_pack_123",
+      createdAt: "2026-05-30T00:00:00.000Z",
+    });
+    assert.equal(aionRequest.tenant_id, "holdstation");
+    assert.equal(aionRequest.workspace_id, "aion");
+    assert.equal(aionRequest.session_id, "session_aion_context_pack_123");
     assert.equal(
       contextPackQueryFromUserMessage("M3.12 là gì? Tóm tắt source ingestion live test trong Vault context."),
       "M3.12",

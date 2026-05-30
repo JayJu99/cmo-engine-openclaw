@@ -30,6 +30,7 @@ export interface CmoRuntimeHealth {
 export interface CmoRuntimeTurnInput {
   contextPack: ContextPack;
   contextPackage: CMOContextPackage;
+  vaultAgentContextPackStatus?: "skipped" | "completed" | "empty" | "failed" | "rejected";
   message: string;
   history: CMOChatMessage[];
   request: CMOAppChatRequest;
@@ -76,7 +77,7 @@ interface FallbackComposition {
   suggestedActions: CMOAppChatResponse["suggestedActions"];
 }
 
-type FallbackIntent = "greeting" | "start_session" | "strategic_recommendation" | "context_explanation" | "business_metrics" | "general";
+type FallbackIntent = "greeting" | "start_session" | "strategic_recommendation" | "context_explanation" | "source_input" | "business_metrics" | "general";
 
 function runtimeModeFromStatus(status: CMORuntimeStatus): CmoRuntimeMode {
   if (status === "connected" || status === "live") {
@@ -125,6 +126,14 @@ function fallbackRecommendations(input: CmoRuntimeTurnInput): CMOAppChatResponse
   ];
 }
 
+function looksLikeSourceInput(message: string): boolean {
+  const normalized = normalizeMessage(message);
+
+  return /\bhttps?:\/\/\S+/i.test(message) ||
+    /\b(url|link|doc|document):/i.test(message) ||
+    /\b(paste|pasted|source note|source material|save this source|add this source|url:|link:|doc:|document:|tai lieu nay|nguon nay)\b/i.test(normalized);
+}
+
 function normalizeMessage(value: string): string {
   return value
     .toLowerCase()
@@ -137,6 +146,10 @@ function normalizeMessage(value: string): string {
 
 function fallbackIntent(message: string): FallbackIntent {
   const normalized = normalizeMessage(message);
+
+  if (looksLikeSourceInput(message)) {
+    return "source_input";
+  }
 
   if (/\b(dune|worldchain|wld|partner stats|partner|aggregator|business metrics|traffic|transactions|transaction|fees|fee|revenue|volume 24h|volume 7d|volume 30d|defillama)\b/.test(normalized)) {
     return "business_metrics";
@@ -153,7 +166,10 @@ function fallbackIntent(message: string): FallbackIntent {
     return "strategic_recommendation";
   }
 
-  if (/\b(context|memory|source|sources|using|loaded|included)\b/.test(normalized) && /\b(what|which|show|explain|tell|state)\b/.test(normalized)) {
+  if (
+    /\b(context|memory|source|sources|using|loaded|included)\b/.test(normalized) &&
+    /\b(what|which|show|explain|tell|state|gi|co gi|dang co)\b/.test(normalized)
+  ) {
     return "context_explanation";
   }
 
@@ -232,6 +248,77 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
   const qualityLine = `${qualitySummary.confirmedCount} confirmed / ${qualitySummary.placeholderOrDraftCount} draft-placeholder / ${qualitySummary.missingCount} missing`;
   const note = runtimeNote(reason);
   const intent = fallbackIntent(input.message);
+  const vaultContextIsEmpty = input.vaultAgentContextPackStatus === "empty";
+
+  if (vaultContextIsEmpty) {
+    if (intent === "greeting") {
+      return {
+        answer: [
+          `Hi Jay, I'm ready for ${input.request.appName}.`,
+          "",
+          "I do not have accepted workspace sources or goals here yet. Send one source, goal, or constraint and I will use that as the starting point.",
+        ].join("\n"),
+        suggestedActions: [
+          {
+            type: "fallback_prompt",
+            label: `Add one source, goal, or constraint for ${input.request.appName}.`,
+          },
+          ...DEFAULT_FALLBACK_ACTIONS,
+        ],
+      };
+    }
+
+    if (intent === "context_explanation") {
+      return {
+        answer: [
+          `${input.request.appName} has no accepted knowledge/source context in the Vault Agent context pack yet.`,
+          "",
+          "Add a source, product goal, audience note, or constraint first. I will keep this workspace separate and will not use Holdstation Mini App facts.",
+        ].join("\n"),
+        suggestedActions: [
+          {
+            type: "fallback_prompt",
+            label: `Add source context or a goal for ${input.request.appName}.`,
+          },
+          ...DEFAULT_FALLBACK_ACTIONS,
+        ],
+      };
+    }
+
+    if (intent === "source_input") {
+      return {
+        answer: [
+          `I can treat this as source material for ${input.request.appName}, but it is not saved as accepted workspace context yet.`,
+          "",
+          "When Source UI is available, save it as a workspace source. For now, tell me the goal or decision you want this source to support.",
+        ].join("\n"),
+        suggestedActions: [
+          {
+            type: "fallback_prompt",
+            label: "Attach a goal or decision for this source.",
+          },
+          ...DEFAULT_FALLBACK_ACTIONS,
+        ],
+      };
+    }
+
+    if (intent === "strategic_recommendation" || intent === "start_session" || intent === "general") {
+      return {
+        answer: [
+          `I can help with ${input.request.appName}, but this workspace has no accepted source context yet.`,
+          "",
+          "Give me one of these first: the goal, the target user, a source link/doc, or a hard constraint. Then I can make the strategy specific without borrowing another workspace's facts.",
+        ].join("\n"),
+        suggestedActions: [
+          {
+            type: "fallback_prompt",
+            label: `Provide one goal, user, source, or constraint for ${input.request.appName}.`,
+          },
+          ...DEFAULT_FALLBACK_ACTIONS,
+        ],
+      };
+    }
+  }
 
   if (intent === "greeting") {
     return {
