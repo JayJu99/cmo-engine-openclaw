@@ -7,6 +7,7 @@ import type {
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
   CmoRuntimeContext,
+  CmoSourceReviewContext,
   ContextPack,
   ContextItem,
   VaultNoteRef,
@@ -192,6 +193,101 @@ function runtimeNote(reason: string): string {
     : `${reason} Fallback generated this response from workspace context.`;
 }
 
+function sourceReviewContext(input: CmoRuntimeTurnInput): CmoSourceReviewContext | undefined {
+  return input.contextPackage.sourceReviewContext ?? input.contextPackage.contextPack?.sourceReviewContext;
+}
+
+function sourceReviewString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function sourceReviewStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim())
+    : [];
+}
+
+function compactSourceReviewText(value: string, maxChars = 1300): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+
+  return compact.length > maxChars ? `${compact.slice(0, maxChars - 3).trimEnd()}...` : compact;
+}
+
+function sourceReviewFallbackAnswer(input: CmoRuntimeTurnInput): FallbackComposition | undefined {
+  const reviewContext = sourceReviewContext(input);
+
+  if (!reviewContext) {
+    return undefined;
+  }
+
+  const source = reviewContext.source;
+  const extraction = reviewContext.extraction;
+  const extractionStatus = sourceReviewString(extraction.status);
+  const title = sourceReviewString(source.source_title) || sourceReviewString(source.canonical_url) || "Source";
+  const canonicalUrl = sourceReviewString(source.canonical_url) || sourceReviewString(source.original_url);
+  const summary = compactSourceReviewText(sourceReviewString(extraction.extracted_summary));
+  const sourceText = compactSourceReviewText(sourceReviewString(extraction.source_text), 1800);
+  const tableSummary = compactSourceReviewText(sourceReviewString(extraction.table_summary), 800);
+  const visualSummary = compactSourceReviewText(sourceReviewString(extraction.visual_summary), 800);
+  const warnings = sourceReviewStringList(extraction.warnings);
+  const errors = sourceReviewStringList(extraction.errors);
+  const canReview = (extractionStatus === "completed" || extractionStatus === "partial") && Boolean(summary || sourceText || tableSummary || visualSummary);
+
+  if (!canReview) {
+    return {
+      answer: [
+        `I found the URL/source for ${input.request.appName}, but I could not extract reviewable text from it.`,
+        "",
+        `Source: ${title}${canonicalUrl ? ` (${canonicalUrl})` : ""}`,
+        errors.length ? `Reason: ${errors.join(" / ")}` : "",
+        warnings.length ? `Notes: ${warnings.join(" / ")}` : "",
+        "",
+        "If this is a private document, publish/export it as public text/PDF or paste the relevant excerpt. I did not save anything to Vault.",
+      ].filter(Boolean).join("\n"),
+      suggestedActions: [
+        {
+          type: "source_review_blocked",
+          label: "Provide a public/exported source or paste the relevant excerpt.",
+        },
+        ...DEFAULT_FALLBACK_ACTIONS,
+      ],
+    };
+  }
+
+  return {
+    answer: [
+      `## Source Review: ${title}`,
+      "",
+      `Workspace: ${input.request.appName} (${reviewContext.workspace_id})`,
+      canonicalUrl ? `Source URL: ${canonicalUrl}` : "",
+      "",
+      "## What I Read",
+      "",
+      summary || sourceText,
+      tableSummary ? `\nTable notes: ${tableSummary}` : "",
+      visualSummary ? `\nVisual notes: ${visualSummary}` : "",
+      "",
+      "## CMO Read",
+      "",
+      "This source is available as temporary review-only context for this turn. I can summarize it, extract positioning claims, list open questions, or turn it into workspace source material if you explicitly choose Save to Vault later.",
+      warnings.length ? `\nWarnings: ${warnings.join(" / ")}` : "",
+      "",
+      "No Vault save, GBrain indexing, or knowledge promotion was performed.",
+    ].filter(Boolean).join("\n"),
+    suggestedActions: [
+      {
+        type: "source_review",
+        label: `Review extracted source for ${input.request.appName}.`,
+      },
+      {
+        type: "save_source_to_vault",
+        label: "Save this source to Vault",
+      },
+      ...DEFAULT_FALLBACK_ACTIONS,
+    ],
+  };
+}
+
 export function cleanFallbackAnswerFormatting(answer: string): string {
   return answer
     .replace(/^##\s+Context Used\s+Contex(?:t)?\s*$/gim, "## Context Used")
@@ -256,6 +352,11 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
   const intent = fallbackIntent(input.message);
   const vaultContextIsEmpty = input.vaultAgentContextPackStatus === "empty";
   const runtimeContext = input.runtimeContext ?? input.contextPackage.runtimeContext;
+  const reviewFallback = sourceReviewFallbackAnswer(input);
+
+  if (reviewFallback) {
+    return reviewFallback;
+  }
 
   if (intent === "current_time" && runtimeContext) {
     const localTime = new Intl.DateTimeFormat(runtimeContext.locale || "vi-VN", {

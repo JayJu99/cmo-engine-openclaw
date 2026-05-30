@@ -243,6 +243,43 @@ const sampleTurnInput = {
   missingContext: [],
 };
 sampleTurnInput.contextPackage.contextPack = sampleTurnInput.contextPack;
+sampleTurnInput.contextPackage.runtimeContext = {
+  now_iso: "2026-05-28T11:00:00.000Z",
+  timezone: "Asia/Ho_Chi_Minh",
+  timezone_label: "Vietnam time",
+  locale: "vi-VN",
+  user_display_name: "jay@example.com",
+};
+sampleTurnInput.contextPackage.sourceReviewContext = {
+  schema_version: "cmo.source_review_context.v1",
+  mode: "review_only",
+  tenant_id: "holdstation",
+  workspace_id: "holdstation-mini-app",
+  user_id: "user_h6",
+  session_id: "session_h6",
+  request_id: "msg_001",
+  source: {
+    source_id: "source_review_fixture",
+    source_type: "url",
+    source_title: "Fixture source",
+  },
+  extraction: {
+    status: "completed",
+    content_hash: "hash_fixture",
+    source_text: "Fixture source text",
+    extracted_summary: "Fixture source summary",
+    detected_language: "en",
+    warnings: [],
+    errors: [],
+  },
+  safety: {
+    read_only: true,
+    vault_mutation: false,
+    gbrain_mutation: false,
+    no_promotion: true,
+  },
+};
+sampleTurnInput.contextPack.sourceReviewContext = sampleTurnInput.contextPackage.sourceReviewContext;
 
 const makeRuntimeResult = (overrides = {}) => {
   const response = {
@@ -386,6 +423,13 @@ try {
     assert.equal(hermesRequest.schema_version, "hermes.cmo.request.v1");
     assert.equal(hermesRequest.workspace.app_id, "holdstation-mini-app");
     assert.equal(hermesRequest.context_pack.read_only_snapshot, true);
+    assert.equal(hermesRequest.runtime_context.timezone, "Asia/Ho_Chi_Minh");
+    assert.equal(hermesRequest.runtime_context.timezone_label, "Vietnam time");
+    assert.equal(hermesRequest.runtime_context.locale, "vi-VN");
+    assert.equal(hermesRequest.context_pack.source_review_context.schema_version, "cmo.source_review_context.v1");
+    assert.equal(hermesRequest.context_pack.source_review_context.safety.vault_mutation, false);
+    assert.equal(hermesRequest.context_pack.source_review_context.safety.gbrain_mutation, false);
+    assert.ok(hermesRequest.context_pack.artifacts_in.some((artifact) => artifact.type === "source_review_context"), "source review context must be passed as a read-only artifact");
     const priorAssistantContext = hermesRequest.context_pack.selected_context.find((item) => item?.kind === "recent_chat_message" && item?.role === "assistant");
     assert.ok(priorAssistantContext, "follow-up context must include prior assistant message in selected_context");
     assert.match(priorAssistantContext.content, /POST 1:/);

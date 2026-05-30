@@ -75,6 +75,7 @@ const DEFAULT_LIMIT = 20;
 const CONTEXT_SIZE_WARNING_CHARS = 32_000;
 const INDEXED_SUPPLEMENT_WARNING_CHARS = 4_000;
 const LEGACY_AUTO_CAPTURE_WRITE_REMOTE_SKIP_REASON = "skipped_legacy_auto_capture_because_vault_agent_write_remote_enabled";
+const SOURCE_REVIEW_ONLY_SKIP_REASON = "skipped_vault_mutation_for_source_review_only";
 
 export interface CmoAppChatTimingInput {
   requestReceivedAt?: string;
@@ -969,6 +970,16 @@ function skippedLegacyAutoCaptureForVaultAgentWriteRemote(): AutoCaptureResult {
   };
 }
 
+function skippedVaultMutationForSourceReviewOnly(): AutoCaptureResult {
+  return {
+    ok: true,
+    savedToVault: false,
+    warnings: [SOURCE_REVIEW_ONLY_SKIP_REASON],
+    skipped: true,
+    skipReason: SOURCE_REVIEW_ONLY_SKIP_REASON,
+  };
+}
+
 function rawCaptureStatusForAutoCapture(result: AutoCaptureResult): CMOChatSession["rawCaptureStatus"] {
   if (result.savedToVault) {
     return "saved";
@@ -1412,13 +1423,14 @@ export async function createAppChatSession(
 
   if (!usedHermesCmoChat) {
   const routeIntent = routeIntentForMessage(request.message);
+  const hasSourceReviewContext = Boolean(sourceReviewContext);
   const allowDirectSurfBridge = routeIntent === "surf_x" || routeIntent === "surf_trend" || routeIntent === "surf_research";
   const allowDirectEchoBridge = routeIntent === "echo_execution";
   const surfBridge = allowDirectSurfBridge ? await maybeHandleSurfBridge(request) : { handled: false };
   const echoBridge = !surfBridge.handled && allowDirectEchoBridge ? await maybeHandleEchoBridge(request) : { handled: false };
   const mixedCmoEchoRequest = !surfBridge.handled && !echoBridge.handled && routeIntent !== "cmo_review" && isMixedCmoEchoRequest(request.message);
   const mixedCmoEchoClarification = mixedCmoEchoRequest && mixedEchoNeedsClarification(request.message);
-  const cmoSurfEvidence = !surfBridge.handled && !echoBridge.handled && !mixedCmoEchoRequest && routeIntent !== "cmo_review" ? await executeCmoSurfEvidence(request) : undefined;
+  const cmoSurfEvidence = !hasSourceReviewContext && !surfBridge.handled && !echoBridge.handled && !mixedCmoEchoRequest && routeIntent !== "cmo_review" ? await executeCmoSurfEvidence(request) : undefined;
   const cmoSurfClarification = cmoSurfEvidence?.plan.action === "need_clarification";
 
   try {
@@ -1691,6 +1703,8 @@ export async function createAppChatSession(
   const vaultAgentHandoffMode = getCmoVaultAgentHandoffMode();
   const autoCapture: AutoCaptureResult = status !== "completed"
     ? { ok: false, savedToVault: false, warnings: [], error: "Chat response failed; auto capture skipped" }
+    : sourceReviewContext
+      ? skippedVaultMutationForSourceReviewOnly()
     : vaultAgentHandoffMode === "write_remote"
       ? skippedLegacyAutoCaptureForVaultAgentWriteRemote()
       : await autoCaptureTurnOnce({
@@ -1707,7 +1721,7 @@ export async function createAppChatSession(
           runtimeProvider,
           runtimeAgent,
         });
-  const vaultAgentHandoff = status === "completed" ? await runVaultAgentDryRunHandoff({
+  const vaultAgentHandoff = status === "completed" && !sourceReviewContext ? await runVaultAgentDryRunHandoff({
     request,
     session,
     userIdentity,

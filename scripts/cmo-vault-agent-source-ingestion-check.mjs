@@ -160,6 +160,38 @@ try {
   assert.equal(pkg.visibility, "workspace");
   assert.equal(pkg.scope, "workspace");
 
+  const metadataPackage = buildSourceIngestionPackage(baseSourceInput({
+    source_title: "Public source",
+    source_type: "url",
+    original_url: "https://example.com/a?utm_source=test",
+    canonical_url: "https://example.com/a",
+    original_filename: "source.html",
+    mime_type: "text/html",
+    size_bytes: 1234,
+    retrieved_at: "2026-05-30T01:02:03.000Z",
+    timezone: "Asia/Ho_Chi_Minh",
+    extraction: {
+      status: "completed",
+      content_hash: "hash_123",
+      detected_language: "en",
+      warnings: ["truncated"],
+      errors: [],
+    },
+  }), {
+    authMode: "supabase",
+    userId: "user_123",
+    userEmail: "operator@example.test",
+  }, "2026-05-30T01:02:03.000Z");
+  assert.equal(metadataPackage.original_url, "https://example.com/a?utm_source=test");
+  assert.equal(metadataPackage.canonical_url, "https://example.com/a");
+  assert.equal(metadataPackage.original_filename, "source.html");
+  assert.equal(metadataPackage.mime_type, "text/html");
+  assert.equal(metadataPackage.size_bytes, 1234);
+  assert.equal(metadataPackage.retrieved_at, "2026-05-30T01:02:03.000Z");
+  assert.equal(metadataPackage.timezone, "Asia/Ho_Chi_Minh");
+  assert.equal(metadataPackage.extraction.status, "completed");
+  assert.equal(metadataPackage.no_auto_promote, true);
+
   const originalFetch = globalThis.fetch;
   try {
     process.env.CMO_HERMES_BASE_URL = "https://hermes.example.test";
