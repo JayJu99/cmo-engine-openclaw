@@ -21,8 +21,16 @@ export interface CmoSourceIngestionRequest {
   sourceType?: SourceIngestionSourceType;
   source_text?: string;
   sourceText?: string;
+  original_url?: string;
+  originalUrl?: string;
+  canonical_url?: string;
+  canonicalUrl?: string;
   original_filename?: string;
   originalFilename?: string;
+  mime_type?: string;
+  mimeType?: string;
+  size_bytes?: number;
+  sizeBytes?: number;
   original_language?: string;
   originalLanguage?: string;
   extracted_summary?: string;
@@ -31,6 +39,10 @@ export interface CmoSourceIngestionRequest {
   visualSummary?: string;
   table_summary?: string;
   tableSummary?: string;
+  retrieved_at?: string;
+  retrievedAt?: string;
+  timezone?: string;
+  extraction?: SourceIngestionPackage["extraction"];
   scope?: SourceIngestionScope;
   visibility?: SourceIngestionVisibility;
   session_id?: string;
@@ -58,6 +70,10 @@ function stringList(value: unknown): string[] | undefined {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim())
     : undefined;
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
 }
 
 function sourceType(value: unknown): SourceIngestionSourceType {
@@ -118,6 +134,12 @@ export function buildSourceIngestionPackage(
   const extractedSummary = stringValue(input.extracted_summary) ?? stringValue(input.extractedSummary);
   const visualSummary = stringValue(input.visual_summary) ?? stringValue(input.visualSummary);
   const tableSummary = stringValue(input.table_summary) ?? stringValue(input.tableSummary);
+  const originalUrl = stringValue(input.original_url) ?? stringValue(input.originalUrl);
+  const canonicalUrl = stringValue(input.canonical_url) ?? stringValue(input.canonicalUrl);
+  const originalFilename = stringValue(input.original_filename) ?? stringValue(input.originalFilename);
+  const mimeType = stringValue(input.mime_type) ?? stringValue(input.mimeType);
+  const sizeBytes = positiveNumber(input.size_bytes) ?? positiveNumber(input.sizeBytes);
+  const retrievedAt = stringValue(input.retrieved_at) ?? stringValue(input.retrievedAt);
 
   if (!bodyText && !extractedSummary && !visualSummary && !tableSummary) {
     throw new Error("source_text, extracted_summary, visual_summary, or table_summary is required for source ingestion.");
@@ -131,15 +153,20 @@ export function buildSourceIngestionPackage(
     ...(sessionId ? { session_id: sessionId } : {}),
     source_type: sourceType(input.source_type ?? input.sourceType),
     source_title: sourceTitle,
-    ...(stringValue(input.original_filename) ?? stringValue(input.originalFilename)
-      ? { original_filename: stringValue(input.original_filename) ?? stringValue(input.originalFilename) }
-      : {}),
+    ...(originalUrl ? { original_url: originalUrl } : {}),
+    ...(canonicalUrl ? { canonical_url: canonicalUrl } : {}),
+    ...(originalFilename ? { original_filename: originalFilename } : {}),
+    ...(mimeType ? { mime_type: mimeType } : {}),
+    ...(sizeBytes !== undefined ? { size_bytes: sizeBytes } : {}),
     original_language: stringValue(input.original_language) ?? stringValue(input.originalLanguage) ?? "en",
     canonical_language: CANONICAL_VAULT_LANGUAGE,
     ...(bodyText ? { source_text: bodyText } : {}),
     ...(extractedSummary ? { extracted_summary: extractedSummary } : {}),
     ...(visualSummary ? { visual_summary: visualSummary } : {}),
     ...(tableSummary ? { table_summary: tableSummary } : {}),
+    ...(retrievedAt ? { retrieved_at: retrievedAt } : {}),
+    ...(stringValue(input.timezone) ? { timezone: stringValue(input.timezone) } : {}),
+    ...(input.extraction ? { extraction: input.extraction } : {}),
     no_auto_promote: true,
     visibility: visibilityValue(input.visibility),
     scope: scopeValue(input.scope, Boolean(sessionId)),

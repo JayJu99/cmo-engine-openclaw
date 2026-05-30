@@ -162,6 +162,19 @@ function vaultAgentContextPackArtifact(input: HermesCmoChatRequestInput): Record
   };
 }
 
+function sourceReviewContextArtifact(input: HermesCmoChatRequestInput): Record<string, unknown> | null {
+  const reviewContext = input.contextPackage.sourceReviewContext ?? input.contextPackage.contextPack.sourceReviewContext;
+
+  if (!reviewContext) {
+    return null;
+  }
+
+  return {
+    type: "source_review_context",
+    ...reviewContext,
+  };
+}
+
 function userId(input: HermesCmoChatRequestInput): string {
   return (
     input.userIdentity?.userId?.trim() ||
@@ -178,6 +191,7 @@ function displayName(input: HermesCmoChatRequestInput): string | null {
 export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): HermesCmoRuntimeRequest {
   const contextItems = input.contextPackage.contextPack.items;
   const vaultContextPack = vaultAgentContextPackArtifact(input);
+  const sourceReviewContext = sourceReviewContextArtifact(input);
   const currentPriority = contextItems
     .filter((item) => item.exists && item.kind === "current_priority")
     .map(contextItemSnapshot);
@@ -212,7 +226,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       selected_context: [...input.contextPackage.selectedContext.map(noteSnapshot), ...recentChatContext(input.history)],
       recent_session_summary: recentSessionSummary(input.history),
       indexed_context_supplement: indexedContextSupplement,
-      artifacts_in: vaultContextPack ? [vaultContextPack] : [],
+      artifacts_in: [vaultContextPack, sourceReviewContext].filter((artifact): artifact is Record<string, unknown> => Boolean(artifact)),
+      ...(sourceReviewContext ? { source_review_context: sourceReviewContext } : {}),
       read_only_snapshot: true,
       context_quality_summary: input.contextPackage.contextQualitySummary,
       context_graph: {
@@ -259,6 +274,13 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       activity_stream_required: true,
       heartbeat_required: true,
       existing_cmo_chat_response_shape_required: true,
+    },
+    runtime_context: input.contextPackage.runtimeContext ?? {
+      now_iso: input.createdAt,
+      timezone: "Asia/Ho_Chi_Minh",
+      timezone_label: "Vietnam time",
+      locale: "vi-VN",
+      ...(displayName(input) ? { user_display_name: displayName(input) } : {}),
     },
   };
 }

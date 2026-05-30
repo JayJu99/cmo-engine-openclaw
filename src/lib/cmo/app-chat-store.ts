@@ -64,6 +64,7 @@ import { indexChatMessages, indexChatSession, type CmoIndexResult } from "@/lib/
 import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/lib/cmo/indexed-context-canary";
 import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
+import { buildRuntimeContext, buildSourceReviewContextFromMessage } from "@/lib/cmo/source-acquisition";
 import { autoCaptureTurnOnce, type AutoCaptureResult } from "@/lib/cmo/vault-auto-capture";
 import { applyVaultAgentContextPackToCmoContextPackage, runVaultAgentContextPackHandoff } from "@/lib/cmo/vault-agent-context-pack-handoff";
 import { runVaultAgentDryRunHandoff } from "@/lib/cmo/vault-agent-handoff-builder";
@@ -86,6 +87,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function sourceReviewUserId(identity: CmoServerUserIdentity): string {
+  return identity.userId?.trim() || identity.userEmail?.trim() || identity.createdByEmail?.trim() || "legacy_dashboard_user";
 }
 
 function normalizeContextQuality(value: unknown): CMOContextQuality | undefined {
@@ -1249,6 +1254,26 @@ export async function createAppChatSession(
     ? undefined
     : vaultAgentContextPackHandoff.metadata;
   contextPackage = applyVaultAgentContextPackToCmoContextPackage(contextPackage, vaultAgentContextPackHandoff);
+  const runtimeContext = buildRuntimeContext({ nowIso: now, userIdentity });
+  const sourceReviewContext = await buildSourceReviewContextFromMessage({
+    tenantId: request.tenantId ?? "holdstation",
+    workspaceId: request.workspaceId,
+    userId: sourceReviewUserId(userIdentity),
+    sessionId,
+    requestId: messageId,
+    message: request.message,
+    nowIso: now,
+    timezone: runtimeContext.timezone,
+  });
+  contextPackage = {
+    ...contextPackage,
+    runtimeContext,
+    ...(sourceReviewContext ? { sourceReviewContext } : {}),
+    contextPack: {
+      ...contextPackage.contextPack,
+      ...(sourceReviewContext ? { sourceReviewContext } : {}),
+    },
+  };
   const contextSourceCount = contextPackage.contextPack.items.filter((item) => item.exists).length;
   const contextCharLength = contextPackage.contextPack.items.reduce((total, item) => total + item.content.length, 0);
   const indexedSupplementCharLength = indexedContextSupplement.used ? indexedContextSupplement.text.length : 0;
@@ -1430,6 +1455,7 @@ export async function createAppChatSession(
       contextUsed,
       missingContext,
       vaultAgentContextPackStatus: vaultAgentContextPackMetadata?.context_pack_status,
+      runtimeContext,
     });
 
     answer = runtimeResult.answer;
@@ -1598,6 +1624,8 @@ export async function createAppChatSession(
     ...(forbiddenCounters ? { forbiddenCounters } : {}),
     ...(delegationsMode ? { delegationsMode } : {}),
     ...(vaultAgentContextPackMetadata ? { vaultAgentContextPack: vaultAgentContextPackMetadata } : {}),
+    runtimeContext,
+    ...(sourceReviewContext ? { sourceReviewContext } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,
@@ -1645,6 +1673,8 @@ export async function createAppChatSession(
         ...(forbiddenCounters ? { forbiddenCounters } : {}),
         ...(delegationsMode ? { delegationsMode } : {}),
         ...(vaultAgentContextPackMetadata ? { vaultAgentContextPack: vaultAgentContextPackMetadata } : {}),
+        runtimeContext,
+        ...(sourceReviewContext ? { sourceReviewContext } : {}),
         contextUsedCount: contextUsed.length,
         graphHintCount,
         indexedContextStatus,
@@ -1773,6 +1803,8 @@ export async function createAppChatSession(
     ...(forbiddenCounters ? { forbiddenCounters } : {}),
     ...(platformPersistenceSummary ? { platformPersistenceSummary } : {}),
     ...(delegationsMode ? { delegationsMode } : {}),
+    runtimeContext,
+    ...(sourceReviewContext ? { sourceReviewContext } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,

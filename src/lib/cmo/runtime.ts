@@ -6,6 +6,7 @@ import type {
   CMORuntimeStatus,
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
+  CmoRuntimeContext,
   ContextPack,
   ContextItem,
   VaultNoteRef,
@@ -31,6 +32,7 @@ export interface CmoRuntimeTurnInput {
   contextPack: ContextPack;
   contextPackage: CMOContextPackage;
   vaultAgentContextPackStatus?: "skipped" | "completed" | "empty" | "failed" | "rejected";
+  runtimeContext?: CmoRuntimeContext;
   message: string;
   history: CMOChatMessage[];
   request: CMOAppChatRequest;
@@ -77,7 +79,7 @@ interface FallbackComposition {
   suggestedActions: CMOAppChatResponse["suggestedActions"];
 }
 
-type FallbackIntent = "greeting" | "start_session" | "strategic_recommendation" | "context_explanation" | "source_input" | "business_metrics" | "general";
+type FallbackIntent = "greeting" | "start_session" | "strategic_recommendation" | "context_explanation" | "source_input" | "business_metrics" | "current_time" | "general";
 
 function runtimeModeFromStatus(status: CMORuntimeStatus): CmoRuntimeMode {
   if (status === "connected" || status === "live") {
@@ -153,6 +155,10 @@ function fallbackIntent(message: string): FallbackIntent {
 
   if (/\b(dune|worldchain|wld|partner stats|partner|aggregator|business metrics|traffic|transactions|transaction|fees|fee|revenue|volume 24h|volume 7d|volume 30d|defillama)\b/.test(normalized)) {
     return "business_metrics";
+  }
+
+  if (/\b(time|current time|what time|clock|gio|mấy giờ|may gio|bay gio|bây giờ)\b/.test(normalized)) {
+    return "current_time";
   }
 
   if (/^(hi|hello|hey|yo|chao|xin chao|alo|hi there|hello there)$/.test(normalized)) {
@@ -249,6 +255,24 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
   const note = runtimeNote(reason);
   const intent = fallbackIntent(input.message);
   const vaultContextIsEmpty = input.vaultAgentContextPackStatus === "empty";
+  const runtimeContext = input.runtimeContext ?? input.contextPackage.runtimeContext;
+
+  if (intent === "current_time" && runtimeContext) {
+    const localTime = new Intl.DateTimeFormat(runtimeContext.locale || "vi-VN", {
+      timeZone: runtimeContext.timezone || "Asia/Ho_Chi_Minh",
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(runtimeContext.now_iso));
+
+    return {
+      answer: [
+        `${localTime} (${runtimeContext.timezone_label || runtimeContext.timezone}).`,
+        "",
+        `now_iso: ${runtimeContext.now_iso}`,
+      ].join("\n"),
+      suggestedActions: DEFAULT_FALLBACK_ACTIONS,
+    };
+  }
 
   if (vaultContextIsEmpty) {
     if (intent === "greeting") {

@@ -69,13 +69,26 @@ export interface SourceIngestionPackage {
   session_id?: string;
   source_type: SourceIngestionSourceType;
   source_title: string;
+  original_url?: string;
+  canonical_url?: string;
   original_filename?: string;
+  mime_type?: string;
+  size_bytes?: number;
   original_language: string;
   canonical_language: typeof CANONICAL_VAULT_LANGUAGE;
   source_text?: string;
   extracted_summary?: string;
   visual_summary?: string;
   table_summary?: string;
+  retrieved_at?: string;
+  timezone?: string;
+  extraction?: {
+    status?: string;
+    content_hash?: string;
+    detected_language?: string;
+    warnings?: string[];
+    errors?: string[];
+  };
   no_auto_promote: true;
   visibility: SourceIngestionVisibility;
   scope: SourceIngestionScope;

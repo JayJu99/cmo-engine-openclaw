@@ -494,12 +494,15 @@ function appTurnBody(contextPackage: CMOContextPackage, history: CMOChatMessage[
     graphHints: contextPackage.graphHints ?? [],
     graphHintCount: contextPackage.graphHintCount ?? contextPackage.graphHints?.length ?? 0,
     graphStatus: contextPackage.graphStatus ?? "empty",
+    runtimeContext: contextPackage.runtimeContext,
+    sourceReviewContext: contextPackage.sourceReviewContext,
     userMessage: contextPackage.userMessage,
     message: contextPackage.userMessage,
     history,
     metadata: {
       requestedBy: "app-cmo-workspace",
       appName: contextPackage.app.name,
+      runtimeContext: contextPackage.runtimeContext,
     },
   };
 }
@@ -515,6 +518,8 @@ function runtimeBody(contextPackage: CMOContextPackage) {
     question: contextPackage.userMessage,
     message: contextPackage.userMessage,
     mode: contextPackage.mode,
+    runtime_context: contextPackage.runtimeContext,
+    source_review_context: contextPackage.sourceReviewContext,
     context_package: contextPackage,
     app_context_package: contextPackage,
     requested_by: "app-cmo-workspace",

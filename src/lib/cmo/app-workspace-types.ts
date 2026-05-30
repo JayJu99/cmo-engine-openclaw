@@ -623,6 +623,32 @@ export interface HermesCmoForbiddenCounters {
   directSupabaseMutations: number;
 }
 
+export interface CmoRuntimeContext {
+  now_iso: string;
+  timezone: string;
+  timezone_label: string;
+  locale: string;
+  user_display_name?: string;
+}
+
+export interface CmoSourceReviewContext {
+  schema_version: "cmo.source_review_context.v1";
+  mode: "review_only";
+  tenant_id: string;
+  workspace_id: string;
+  user_id: string;
+  session_id: string;
+  request_id: string;
+  source: Record<string, unknown>;
+  extraction: Record<string, unknown>;
+  safety: {
+    read_only: true;
+    vault_mutation: false;
+    gbrain_mutation: false;
+    no_promotion: true;
+  };
+}
+
 export interface HermesCmoActivityEventSummary {
   eventId: string;
   type: string;
@@ -782,6 +808,7 @@ export interface ContextPack {
   exclusions: ContextExclusion[];
   contextQualitySummary: CMOContextQualitySummary;
   vaultAgentContextPack?: VaultAgentRuntimeContextPack;
+  sourceReviewContext?: CmoSourceReviewContext;
 }
 
 export interface CMOContextBriefSection {
@@ -820,6 +847,8 @@ export interface CMOContextPackage {
   workspaceId: string;
   sourceId: string;
   runtimeWorkspaceId?: string;
+  runtimeContext?: CmoRuntimeContext;
+  sourceReviewContext?: CmoSourceReviewContext;
   mode: "app_context";
   contextPack: ContextPack;
   app: {
@@ -923,6 +952,8 @@ export interface CMOChatMessage {
   sessionResolutionDurationMs?: number;
   contextPackBuildDurationMs?: number;
   indexedContextBuildDurationMs?: number;
+  runtimeContext?: CmoRuntimeContext;
+  sourceReviewContext?: CmoSourceReviewContext;
 }
 
 export interface CMOChatSession {
@@ -992,6 +1023,8 @@ export interface CMOChatSession {
   sessionResolutionDurationMs?: number;
   contextPackBuildDurationMs?: number;
   indexedContextBuildDurationMs?: number;
+  runtimeContext?: CmoRuntimeContext;
+  sourceReviewContext?: CmoSourceReviewContext;
   decisionLayer?: CmoDecisionLayer;
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
@@ -1080,6 +1113,8 @@ export interface CMOAppChatResponse {
   sessionResolutionDurationMs?: number;
   contextPackBuildDurationMs?: number;
   indexedContextBuildDurationMs?: number;
+  runtimeContext?: CmoRuntimeContext;
+  sourceReviewContext?: CmoSourceReviewContext;
   decisionLayer?: CmoDecisionLayer;
   rawCapturePath?: string;
   rawCaptureStatus?: "saved" | "failed" | "pending";
