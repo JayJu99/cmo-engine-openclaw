@@ -292,11 +292,11 @@ function withMetric(metrics: CmoAppMetric[], id: string, next: Partial<CmoAppMet
   return metrics.map((metric) => (metric.id === id ? { ...metric, ...next } : metric));
 }
 
-export async function readAppMetricsSnapshot(options: ReadAppMetricsOptions): Promise<CmoAppMetricsSnapshot | null> {
-  if (options.appId !== SUPPORTED_APP_ID) {
-    return null;
-  }
+function isAcceptedWorkspaceId(value: unknown, fallback: Pick<CmoAppMetricsSnapshot, "appId" | "workspaceId">): boolean {
+  return value === fallback.workspaceId || (fallback.appId === SUPPORTED_APP_ID && value === "holdstation");
+}
 
+export async function readAppMetricsSnapshot(options: ReadAppMetricsOptions): Promise<CmoAppMetricsSnapshot | null> {
   const app = getAppWorkspace(options.appId);
 
   if (!app) {
@@ -448,7 +448,7 @@ export function normalizeMetricsIngestPayload(appId: string, payload: unknown): 
     throw new AppMetricsIngestError("schemaVersion must be cmo.app-metrics.v1.", 400, "metrics_ingest_invalid_schema");
   }
 
-  if (record.workspaceId !== app.workspaceId || record.appId !== app.id || record.sourceId !== app.sourceId) {
+  if (!isAcceptedWorkspaceId(record.workspaceId, { appId: app.id, workspaceId: app.workspaceId }) || record.appId !== app.id || record.sourceId !== app.sourceId) {
     throw new AppMetricsIngestError("workspaceId, appId, and sourceId must match the Holdstation Mini App scope.", 403, "metrics_ingest_scope_mismatch");
   }
 

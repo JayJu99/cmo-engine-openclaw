@@ -1,13 +1,11 @@
 import type { AppWorkspace, VaultNoteRef } from "@/lib/cmo/app-workspace-types";
 import { buildSourceId, requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 
-export const HOLDSTATION_WORKSPACE_ID = "holdstation";
-export const HOLDSTATION_VAULT_ROOT = "knowledge/holdstation";
-
 function registryFields(appId: string) {
   const entry = requireWorkspaceRegistryEntry(appId);
 
   return {
+    tenantId: entry.tenantId,
     workspaceId: entry.workspaceId,
     sourceId: entry.sourceId || buildSourceId(entry.workspaceId, entry.appId),
     logicalAppPath: entry.logicalAppPath,
@@ -42,9 +40,9 @@ export const holdstationApps: AppWorkspace[] = [
   },
   {
     id: "feeback",
-    slug: "feeback",
+    slug: "feedback",
     ...registryFields("feeback"),
-    name: "Feeback",
+    name: "Feedback",
     group: "World Mini App",
     stage: "Discovery",
     currentMission: "Capture context and identify the first useful CMO question.",
@@ -167,7 +165,9 @@ export function listAppWorkspaces(): AppWorkspace[] {
 }
 
 export function getAppWorkspace(appId: string): AppWorkspace | undefined {
-  return holdstationApps.find((app) => app.id === appId || app.slug === appId);
+  const normalized = appId.trim();
+  const route = normalized.startsWith("/") ? normalized : `/apps/${normalized}`;
+  return holdstationApps.find((app) => app.id === normalized || app.slug === normalized || app.route === route);
 }
 
 export function buildAppContextNotes(app: AppWorkspace): VaultNoteRef[] {

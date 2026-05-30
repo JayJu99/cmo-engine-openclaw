@@ -16,7 +16,7 @@ export function AppsIndexView({ apps }: { apps: AppWorkspace[] }) {
       description="Choose the app context before opening a CMO session."
       actions={
         <Button asChild>
-          <Link href={`/apps/${apps[0]?.slug ?? "holdstation-mini-app"}`}>
+          <Link href={apps[0]?.route ?? "/apps/holdstation-mini-app"}>
             <icons.Rocket />
             Open App Workspace
           </Link>
@@ -42,7 +42,7 @@ export function AppsIndexView({ apps }: { apps: AppWorkspace[] }) {
             <div className="mt-5 flex items-center justify-between gap-3">
               <div className="text-xs font-semibold text-slate-500">Last updated: {app.lastUpdated || "Unknown"}</div>
               <Button asChild size="sm">
-                <Link href={`/apps/${app.slug}`}>
+                <Link href={app.route}>
                   Open Workspace
                   <icons.ChevronRight />
                 </Link>

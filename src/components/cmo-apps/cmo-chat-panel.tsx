@@ -392,7 +392,7 @@ export function CMOChatPanel({
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            workspaceId: "holdstation",
+            workspaceId: app.workspaceId,
             appId: app.id,
             appName: app.name,
             sessionId: activeSessionId ?? sessionId ?? undefined,
@@ -516,7 +516,7 @@ export function CMOChatPanel({
             </div>
             <div>
               <CardTitle>CMO Chat</CardTitle>
-              <CardDescription>{activeDisplaySessionId ? "Active CMO session" : `App context: ${app.name}`}</CardDescription>
+              <CardDescription>{activeDisplaySessionId ? "Active CMO session" : `Active CMO session ready for ${app.name}`}</CardDescription>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">

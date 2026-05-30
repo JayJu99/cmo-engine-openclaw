@@ -21,7 +21,7 @@ import type {
   ContextPackRuntimeMode,
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
-import { appNoteTemplates, getAppWorkspace, HOLDSTATION_WORKSPACE_ID } from "@/lib/cmo/app-workspaces";
+import { appNoteTemplates, getAppWorkspace } from "@/lib/cmo/app-workspaces";
 import { resolveBusinessMetrics } from "@/lib/cmo/business-metrics-resolver";
 import { getOpenClawWorkspaceId } from "@/lib/cmo/config";
 import { analyzeContextQuality, summarizeContextQuality } from "@/lib/cmo/context-quality";
@@ -1230,7 +1230,7 @@ export async function buildContextPack(options: BuildContextPackOptions): Promis
   const registryEntry = requireWorkspaceRegistryEntry(app.id);
   const workspaceId = options.workspaceId || registryEntry.workspaceId;
 
-  if (workspaceId !== HOLDSTATION_WORKSPACE_ID || workspaceId !== registryEntry.workspaceId) {
+  if (workspaceId !== registryEntry.workspaceId) {
     throw new CmoAdapterError(`Unsupported workspaceId: ${workspaceId}`, 400, "context_pack_unsupported_workspace");
   }
 

@@ -403,6 +403,10 @@ function missingMetricIds(metrics: CmoBusinessMetric[]): string[] {
   return metrics.filter((metric) => metric.status === "missing" || metric.status === "placeholder" || !metricHasData(metric)).map((metric) => metric.id);
 }
 
+function isAcceptedWorkspaceId(value: unknown, fallback: Pick<CmoBusinessMetricsSnapshot, "appId" | "workspaceId">): boolean {
+  return value === fallback.workspaceId || (fallback.appId === SUPPORTED_APP_ID && value === "holdstation");
+}
+
 function businessMetricsFilePath(appId: string, source: CmoBusinessMetricSourceType, group: CmoBusinessMetricGroup): string {
   return path.join(BUSINESS_METRICS_DIR, appId, source, `${group}.json`);
 }
@@ -414,7 +418,7 @@ function normalizeSnapshot(value: unknown, fallback: CmoBusinessMetricsSnapshot)
 
   if (
     value.schemaVersion !== "cmo.business-metrics.v1" ||
-    value.workspaceId !== fallback.workspaceId ||
+    !isAcceptedWorkspaceId(value.workspaceId, fallback) ||
     value.appId !== fallback.appId ||
     value.sourceId !== fallback.sourceId ||
     value.metricDomain !== fallback.metricDomain ||
@@ -503,7 +507,7 @@ export function normalizeBusinessMetricsHandoffPayload(appId: string, payload: u
     throw new BusinessMetricsHandoffError("Only Dune and deprecated DefiLlama business metrics handoff are supported.", 400, "metrics_handoff_unsupported_source");
   }
 
-  if (record.workspaceId !== app.workspaceId || appRecord.appId !== app.id || appRecord.sourceId !== app.sourceId) {
+  if (!isAcceptedWorkspaceId(record.workspaceId, { appId: app.id, workspaceId: app.workspaceId }) || appRecord.appId !== app.id || appRecord.sourceId !== app.sourceId) {
     throw new BusinessMetricsHandoffError("workspaceId, app.appId, and app.sourceId must match the Holdstation Mini App scope.", 403, "metrics_handoff_scope_mismatch");
   }
 

@@ -28,8 +28,12 @@ const WORKSPACE_KEY_BY_APP_ID: Record<string, string> = {
   tickx: "tickx",
   "holdstation-mini-app": "world-app-holdstation-mini-app",
   "world-app-holdstation-mini-app": "world-app-holdstation-mini-app",
+  aion: "world-app-aion",
   "world-app-aion": "world-app-aion",
+  winance: "world-app-winance",
   "world-app-winance": "world-app-winance",
+  feeback: "world-app-feeback",
+  feedback: "world-app-feeback",
   "world-app-feeback": "world-app-feeback",
 };
 

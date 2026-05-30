@@ -68,6 +68,14 @@ function compact(value: string, max = 1200): string {
   return normalized.length > max ? `${normalized.slice(0, max - 3).trimEnd()}...` : normalized;
 }
 
+function tenantIdForRequest(request: CMOAppChatRequest): string {
+  return request.tenantId ?? (request.workspaceId === request.appId ? "holdstation" : request.workspaceId);
+}
+
+function vaultWorkspaceIdForRequest(request: CMOAppChatRequest): string {
+  return request.workspaceId === "holdstation" ? request.appId : request.workspaceId;
+}
+
 export function buildTurnCompletedPackage(input: CompletedTurnHandoffInput): TurnCompletedPackage {
   const userMessage = input.request.message;
   const originalText = [
@@ -82,8 +90,8 @@ export function buildTurnCompletedPackage(input: CompletedTurnHandoffInput): Tur
 
   return {
     schema_version: TURN_COMPLETED_PACKAGE_SCHEMA_VERSION,
-    tenant_id: input.request.workspaceId,
-    workspace_id: input.request.appId,
+    tenant_id: tenantIdForRequest(input.request),
+    workspace_id: vaultWorkspaceIdForRequest(input.request),
     ...(userId ? { user_id: userId } : { user_ref: userRef }),
     session_id: input.session.id,
     turn_id: input.userMessageId,

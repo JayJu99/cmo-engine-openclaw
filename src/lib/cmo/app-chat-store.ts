@@ -40,7 +40,7 @@ import type {
   ContextGraphStatus,
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
-import { getAppWorkspace, HOLDSTATION_WORKSPACE_ID } from "@/lib/cmo/app-workspaces";
+import { getAppWorkspace } from "@/lib/cmo/app-workspaces";
 import { buildContextPack, withContextPackMessage } from "@/lib/cmo/context-pack-builder";
 import { summarizeContextQuality } from "@/lib/cmo/context-quality";
 import { buildDecisionLayer } from "@/lib/cmo/decision-layer";
@@ -420,15 +420,21 @@ function normalizeAppChatRequest(body: unknown): CMOAppChatRequest {
   }
 
   const registryEntry = requireWorkspaceRegistryEntry(knownApp.id);
-  const workspaceId = stringValue(body.workspaceId, registryEntry.workspaceId);
+  const requestedWorkspaceId = stringValue(body.workspaceId);
+  const legacyHoldstationMiniAppScope =
+    knownApp.id === "holdstation-mini-app" && requestedWorkspaceId === registryEntry.tenantId;
+  const workspaceId = legacyHoldstationMiniAppScope
+    ? registryEntry.workspaceId
+    : requestedWorkspaceId || registryEntry.workspaceId;
 
-  if (workspaceId !== HOLDSTATION_WORKSPACE_ID || workspaceId !== registryEntry.workspaceId) {
+  if (workspaceId !== registryEntry.workspaceId) {
     throw new CmoAdapterError(`Unsupported workspaceId: ${workspaceId}`, 400, "cmo_app_chat_unsupported_workspace");
   }
 
   return {
+    tenantId: registryEntry.tenantId,
     workspaceId,
-    appId,
+    appId: knownApp.id,
     appName,
     sessionId: stringValue(body.sessionId) || undefined,
     message,
@@ -1187,7 +1193,7 @@ export async function createAppChatSession(
   const sessionResolutionDurationMs = Date.now() - sessionResolutionStartedMs;
   const messageId = `msg_${randomUUID().slice(0, 12)}`;
   const assistantId = `msg_${randomUUID().slice(0, 12)}`;
-  const sessionId = continuedSession?.id ?? `session_${now.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
+  const sessionId = continuedSession?.id ?? `session_${safeId(request.workspaceId)}_${now.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
   const localCommand = continuedSession ? parseLocalChatCommand(request.message) : null;
 
   if (localCommand && continuedSession) {
@@ -2152,7 +2158,7 @@ function reviewNoteValue(value: string | undefined): string | undefined {
 export async function updateDecisionLayerReview(input: UpdateDecisionLayerReviewInput): Promise<CMOChatSession | null> {
   const app = getAppWorkspace(input.appId);
 
-  if (!app || app.workspaceId !== HOLDSTATION_WORKSPACE_ID) {
+  if (!app) {
     throw new Error(`Unknown appId: ${input.appId}`);
   }
 

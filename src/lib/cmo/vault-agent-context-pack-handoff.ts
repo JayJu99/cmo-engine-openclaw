@@ -52,6 +52,14 @@ function compactText(value: string, max = MAX_SOURCE_TEXT_CHARS): string {
   return normalized.length > max ? `${normalized.slice(0, max - 3).trimEnd()}...` : normalized;
 }
 
+function tenantIdForRequest(request: CMOAppChatRequest): string {
+  return request.tenantId ?? (request.workspaceId === request.appId ? "holdstation" : request.workspaceId);
+}
+
+function vaultWorkspaceIdForRequest(request: CMOAppChatRequest): string {
+  return request.workspaceId === "holdstation" ? request.appId : request.workspaceId;
+}
+
 export function contextPackQueryFromUserMessage(message: string): string {
   const milestone = message.match(/(?:^|[^\p{L}\p{N}])((?:m|M)\d+(?:\.\d+)?[A-Za-z]?)(?=$|[^\p{L}\p{N}])/u)?.[1];
 
@@ -131,8 +139,8 @@ export function buildVaultAgentContextPackRequest(input: VaultAgentContextPackIn
 
   return {
     schema_version: CONTEXT_PACK_REQUEST_SCHEMA_VERSION,
-    tenant_id: input.request.workspaceId,
-    workspace_id: input.request.appId,
+    tenant_id: tenantIdForRequest(input.request),
+    workspace_id: vaultWorkspaceIdForRequest(input.request),
     ...(userId ? { user_id: userId } : { user_ref: userRef }),
     ...(input.sessionId ? { session_id: input.sessionId } : {}),
     query: contextPackQueryFromUserMessage(input.request.message),

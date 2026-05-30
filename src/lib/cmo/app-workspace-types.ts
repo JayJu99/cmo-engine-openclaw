@@ -50,6 +50,7 @@ export interface AppWorkspace {
   id: string;
   name: string;
   slug: string;
+  tenantId: string;
   workspaceId: string;
   sourceId: string;
   logicalAppPath: string;
@@ -1005,6 +1006,7 @@ export interface CMOChatSession {
 }
 
 export interface CMOAppChatRequest {
+  tenantId?: string;
   workspaceId: string;
   appId: string;
   appName: string;

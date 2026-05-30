@@ -269,6 +269,10 @@ function availableMetricIds(metrics: CmoChannelMetric[]): string[] {
   return metrics.filter((metric) => metric.status === "connected" && metric.value !== null).map((metric) => metric.id);
 }
 
+function isAcceptedWorkspaceId(value: unknown, fallback: Pick<CmoChannelMetricsSnapshot, "appId" | "workspaceId">): boolean {
+  return value === fallback.workspaceId || (fallback.appId === SUPPORTED_APP_ID && value === "holdstation");
+}
+
 function normalizeSnapshot(value: unknown, fallback: CmoChannelMetricsSnapshot): CmoChannelMetricsSnapshot {
   if (!isRecord(value)) {
     return fallback;
@@ -276,7 +280,7 @@ function normalizeSnapshot(value: unknown, fallback: CmoChannelMetricsSnapshot):
 
   if (
     value.schemaVersion !== "cmo.channel-metrics.v1" ||
-    value.workspaceId !== fallback.workspaceId ||
+    !isAcceptedWorkspaceId(value.workspaceId, fallback) ||
     value.appId !== fallback.appId ||
     value.sourceId !== fallback.sourceId ||
     value.channel !== fallback.channel

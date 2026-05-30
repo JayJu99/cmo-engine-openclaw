@@ -187,7 +187,7 @@ function businessMetricsFallbackAnswer(input: CmoRuntimeTurnInput, note: string)
       answer: [
         "I do not have connected Dune / Worldchain business metrics in this local context pack yet.",
         "",
-        "CMO should only answer exact Holdstation Mini App business metrics from authoritative Dune / Worldchain `cmo.business-metrics.v1` JSON files. It should not use DefiLlama, the Vault Markdown snapshot, or inferred values as the exact-number source of truth.",
+        `CMO should only answer exact ${input.request.appName} business metrics from authoritative Dune / Worldchain \`cmo.business-metrics.v1\` JSON files. It should not use another workspace's metrics, DefiLlama, the Vault Markdown snapshot, or inferred values as the exact-number source of truth.`,
         "",
         "## Runtime Note",
         "",
@@ -205,7 +205,7 @@ function businessMetricsFallbackAnswer(input: CmoRuntimeTurnInput, note: string)
       "",
       "## Source Boundary",
       "",
-      "These numbers come from app-scoped Dune / Worldchain `cmo.business-metrics.v1` JSON handoff files. DefiLlama is deprecated for Holdstation Mini App metrics, and the Vault Markdown snapshot is for human review/provenance only.",
+      `These numbers come from ${input.request.appName} app-scoped Dune / Worldchain \`cmo.business-metrics.v1\` JSON handoff files. DefiLlama and Vault Markdown snapshots are not exact-number sources of truth for this answer.`,
       "",
       "## Runtime Note",
       "",
@@ -221,6 +221,10 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
   const contextLabels = includedContextLabels(input);
   const suggestedActions = fallbackRecommendations(input);
   const contextUsedDisplay = contextLabels.length ? contextLabels.join(" / ") : contextList;
+  const hasWorkspaceContext = input.contextUsed.length > 0 || contextLabels.length > 0;
+  const contextBoundaryLine = hasWorkspaceContext
+    ? `I will only use ${input.request.appName} workspace context for workspace-specific facts.`
+    : `${input.request.appName} workspace context is currently limited or empty, so I will not borrow facts from another workspace.`;
   const graphHints = input.contextPack.graphHints ?? [];
   const graphLine = graphHints.length
     ? `Graph hints: ${graphHints.map((hint) => `${hint.title} (${hint.confidence})`).join(" / ")}.`
@@ -232,7 +236,7 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
   if (intent === "greeting") {
     return {
       answer: [
-        `Hi Jay, I'm ready. I'll use the current ${input.request.appName} context: ${contextUsedDisplay}.`,
+        `Hi Jay, I'm ready. ${contextBoundaryLine}`,
         "",
         "What do you want to focus on: activation, retention, campaign messaging, or app memory cleanup?",
         "",
@@ -259,7 +263,7 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
         graphLine,
         `Quality: ${qualityLine}.`,
         "",
-        "This context is resolved automatically from the Holdstation Mini App workspace. Vault file picking, all-vault RAG, fake metrics, and fake Task Tracker data are not part of this answer.",
+        `This context is resolved automatically from the ${input.request.appName} workspace. Vault file picking, all-vault RAG, fake metrics, and fake Task Tracker data are not part of this answer.`,
         "",
         "## Runtime Note",
         "",
@@ -282,7 +286,7 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
   if (intent === "start_session" || intent === "general") {
     return {
       answer: [
-        `I'm ready to help with ${input.request.appName}. Based on the workspace context, the most useful next CMO angle is to choose one focus area before generating a plan.`,
+        `I'm ready to help with ${input.request.appName}. ${contextBoundaryLine} The most useful next CMO angle is to choose one focus area before generating a plan.`,
         "",
         "Pick one: activation, retention, campaign messaging, or app memory cleanup.",
         "",
@@ -316,6 +320,8 @@ function fallbackAnswer(input: CmoRuntimeTurnInput, reason: string): FallbackCom
       "",
       `3. ${suggestedActions[2].label.replace(/\.$/, "")}`,
       "Choose the next prompt, reminder, or content touch for users who reach the activation moment. Treat it as a retention hypothesis, not a proven result.",
+      "",
+      contextBoundaryLine,
       "",
       "## Context Used",
       "",

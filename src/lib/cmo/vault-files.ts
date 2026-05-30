@@ -37,7 +37,7 @@ import type {
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
 import { readDashboardStatus } from "@/lib/cmo/adapter";
-import { buildAppContextNotes, getAppWorkspace, HOLDSTATION_WORKSPACE_ID, listAppWorkspaces } from "@/lib/cmo/app-workspaces";
+import { buildAppContextNotes, getAppWorkspace, listAppWorkspaces } from "@/lib/cmo/app-workspaces";
 import { readAppChatSession, readAppChatSessions, updateAppChatSessionMetadata } from "@/lib/cmo/app-chat-store";
 import { buildContextPack } from "@/lib/cmo/context-pack-builder";
 import { analyzeContextQuality, summarizeContextQuality } from "@/lib/cmo/context-quality";
@@ -2595,14 +2595,14 @@ function formatRawCaptureSection(request: RawCaptureRequest, date: string, times
 }
 
 export async function saveRawCapture(request: RawCaptureRequest): Promise<RawCaptureResponse> {
-  if (request.workspaceId !== HOLDSTATION_WORKSPACE_ID) {
-    throw new Error(`Unsupported workspaceId: ${request.workspaceId}`);
-  }
-
   const app = getAppWorkspace(request.appId);
 
   if (!app) {
     throw new Error(`Unknown appId: ${request.appId}`);
+  }
+
+  if (request.workspaceId !== app.workspaceId) {
+    throw new Error(`Unsupported workspaceId: ${request.workspaceId}`);
   }
 
   const normalizedRequest: RawCaptureRequest = {

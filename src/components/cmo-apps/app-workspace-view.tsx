@@ -1239,7 +1239,8 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>("all");
   const [dateRange, setDateRange] = useState<CmoAppMetricDateRangePreset>("this_week");
   const [comparePrevious, setComparePrevious] = useState(false);
-  const showChannelPerformance = app.id !== "holdstation-mini-app";
+  const showChannelPerformance = app.id === "holdstation-mini-app";
+  const showBusinessMetrics = app.id === "holdstation-mini-app";
   const [metricsSnapshot, setMetricsSnapshot] = useState<CmoAppMetricsSnapshot | null>(null);
   const [metricsStatus, setMetricsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [metricsError, setMetricsError] = useState<string | null>(null);
@@ -1448,6 +1449,10 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   }, [app.id, dateRange, showChannelPerformance]);
 
   useEffect(() => {
+    if (!showBusinessMetrics) {
+      return;
+    }
+
     const controller = new AbortController();
 
     async function loadBusinessMetrics() {
@@ -1494,7 +1499,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     void loadBusinessMetrics();
 
     return () => controller.abort();
-  }, [app.id]);
+  }, [app.id, showBusinessMetrics]);
 
   useEffect(() => {
     if (!showChannelPerformance) {
@@ -1978,19 +1983,20 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             </SectionCard>
           ) : null}
 
+          {showBusinessMetrics ? (
           <SectionCard
             title="Business Metrics - Dune"
             icon={<icons.BarChart3 />}
             action={
               <div className="flex flex-wrap justify-end gap-2">
-                <Badge variant="blue">Dune</Badge>
-                <Badge variant={businessMetricsHealthVariant}>{businessMetricsHealthLabel}</Badge>
+              <Badge variant="blue">Dune</Badge>
+              <Badge variant={businessMetricsHealthVariant}>{businessMetricsHealthLabel}</Badge>
               </div>
             }
           >
             <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
               <Badge variant="slate">Source: Dune / Worldchain</Badge>
-              <Badge variant="slate">App: Holdstation Wallet Miniapp</Badge>
+              <Badge variant="slate">App: {app.name}</Badge>
               <Badge variant="slate">Query: holdstation_wld_aggregator_tx</Badge>
               <Badge variant="slate">Query: Partner Stats on WLD</Badge>
               <Badge variant="slate">Last updated: {businessMetricsLastUpdated ? displayDate(businessMetricsLastUpdated) : "Not connected"}</Badge>
@@ -2054,6 +2060,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               Dune / Worldchain JSON files remain the machine-readable source of truth. n8n exports Dune data into CMO, CMO does not call Dune directly, and deprecated DefiLlama data is not used for Mini App metric answers.
             </div>
           </SectionCard>
+          ) : null}
 
           <div className="grid gap-5 xl:grid-cols-3">
             <SectionCard title="Week Plan Summary" icon={<icons.CalendarDays />}>

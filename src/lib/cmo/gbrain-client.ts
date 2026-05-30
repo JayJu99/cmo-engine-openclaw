@@ -1,4 +1,4 @@
-import { buildSourceId } from "@/lib/cmo/workspace-registry";
+import { buildSourceId, resolveWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 
 export interface GBrainSourceScopedRequest {
   workspaceId: string;
@@ -7,7 +7,10 @@ export interface GBrainSourceScopedRequest {
 }
 
 export function requireGBrainSourceBoundary(request: GBrainSourceScopedRequest): void {
-  const expectedSourceId = buildSourceId(request.workspaceId, request.appId);
+  const registryEntry = resolveWorkspaceRegistryEntry(request.appId);
+  const expectedSourceId = registryEntry?.workspaceId === request.workspaceId
+    ? registryEntry.sourceId
+    : buildSourceId(request.workspaceId, request.appId);
 
   if (!request.sourceId || request.sourceId !== expectedSourceId) {
     throw new Error(`GBrain requests must be scoped to sourceId ${expectedSourceId}`);
@@ -19,4 +22,3 @@ export class GBrainClient {
     requireGBrainSourceBoundary(request);
   }
 }
-

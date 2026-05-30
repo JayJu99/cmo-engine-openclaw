@@ -95,8 +95,8 @@ export function buildSourceIngestionPackage(
 ): SourceIngestionPackage {
   const appId = stringValue(input.appId) ?? stringValue(input.workspace_id) ?? stringValue(input.workspaceId);
   const registryEntry = appId ? resolveWorkspaceRegistryEntry(appId) : undefined;
-  const workspaceId = registryEntry?.appId ?? appId;
-  const tenantId = stringValue(input.tenant_id) ?? stringValue(input.tenantId) ?? registryEntry?.workspaceId;
+  const workspaceId = registryEntry?.workspaceId ?? appId;
+  const tenantId = stringValue(input.tenant_id) ?? stringValue(input.tenantId) ?? registryEntry?.tenantId;
   const sourceTitle = stringValue(input.source_title) ?? stringValue(input.sourceTitle);
   const sessionId = stringValue(input.session_id) ?? stringValue(input.sessionId);
   const userId = identity?.userId;
