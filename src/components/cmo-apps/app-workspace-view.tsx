@@ -254,7 +254,7 @@ function latestAssistantMessage(session: CMOChatSession): string {
 }
 
 function sessionRuntimeModeLabel(session: CMOChatSession): string {
-  return session.runtimeMode === "live" ? "live" : session.isRuntimeFallback || session.isDevelopmentFallback ? "fallback used" : "runtime pending";
+  return session.runtimeMode === "live" ? "Live" : session.isRuntimeFallback || session.isDevelopmentFallback ? "Workspace context" : "Pending";
 }
 
 function isSmokeSession(session: CMOChatSession | undefined): boolean {
@@ -264,10 +264,10 @@ function isSmokeSession(session: CMOChatSession | undefined): boolean {
 
   const text = `${session.topic} ${firstUserMessage(session)}`.toLowerCase();
 
-  return /\bsmoke\b|ui test|verification session|runtime smoke|app-turn smoke/.test(text);
+  return /\bsmoke\b|ui test|ui qa|verification|runtime smoke|app-turn smoke|\bphase\s+\d/i.test(text);
 }
 
-type SessionFilter = "all" | "live" | "fallback";
+type SessionFilter = "all" | "live";
 type PlanReviewTypeFilter = "all" | "decisions" | "tasks" | "memory";
 type PlanReviewStatusFilter = "pending" | "approved" | "skipped";
 type AggregatorChartMode = "transactions" | "volume";
@@ -1211,10 +1211,6 @@ function matchesSessionFilter(session: CMOChatSession, filter: SessionFilter): b
     return session.runtimeMode === "live" || session.runtimeStatus === "live";
   }
 
-  if (filter === "fallback") {
-    return session.runtimeMode !== "live" || session.isRuntimeFallback === true || session.isDevelopmentFallback === true;
-  }
-
   return true;
 }
 
@@ -1238,7 +1234,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [planError, setPlanError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<CMOChatSession[]>(state.latestSessions);
   const [latestPromotion, setLatestPromotion] = useState(state.latestPromotion);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(state.latestSessions[0]?.id ?? null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(state.latestSessions.find((session) => !isSmokeSession(session))?.id ?? state.latestSessions[0]?.id ?? null);
   const [sessionSearch, setSessionSearch] = useState("");
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>("all");
   const [dateRange, setDateRange] = useState<CmoAppMetricDateRangePreset>("this_week");
@@ -1276,7 +1272,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
         latestAssistantMessage(session),
       ].join(" ").toLowerCase();
 
-      return matchesSessionFilter(session, sessionFilter) && (!query || searchable.includes(query));
+      return matchesSessionFilter(session, sessionFilter) && (query || !isSmokeSession(session)) && (!query || searchable.includes(query));
     });
   }, [sessionFilter, sessionSearch, sessions]);
   const groupedSessions = useMemo(() => {
@@ -1574,7 +1570,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
         return current;
       }
 
-      return current === null ? null : payload.data[0]?.id ?? null;
+      return current === null ? null : payload.data.find((session) => !isSmokeSession(session))?.id ?? payload.data[0]?.id ?? null;
     });
     return payload.data;
   }
@@ -1687,7 +1683,6 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     const filters: Array<{ id: SessionFilter; label: string }> = [
       { id: "all", label: "All" },
       { id: "live", label: "Live" },
-      { id: "fallback", label: "Fallback" },
     ];
 
     return (
@@ -1732,7 +1727,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                     <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-slate-500">
                       <span>{displayDate(session.createdAt)}</span>
                       <span>·</span>
-                      <Badge variant={session.runtimeMode === "live" || session.runtimeStatus === "live" ? "green" : "orange"}>{session.runtimeMode === "live" || session.runtimeStatus === "live" ? "Live" : "Fallback"}</Badge>
+                      {session.runtimeMode === "live" || session.runtimeStatus === "live" ? <Badge variant="green">Live</Badge> : null}
                       <Badge variant={sessionOutputCount(session) ? "blue" : "slate"}>{sessionOutputCount(session)} outputs</Badge>
                     </div>
                   </button>
@@ -2079,7 +2074,6 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                   <div className="flex flex-wrap gap-2">
                     <Badge title={latestDisplaySession.runtimeStatus} variant={runtimeVariant(latestDisplaySession.runtimeStatus)}>{runtimeLabel(latestDisplaySession.runtimeStatus)}</Badge>
                     <Badge variant={latestDisplaySession.runtimeMode === "live" ? "green" : "orange"}>{sessionRuntimeModeLabel(latestDisplaySession)}</Badge>
-                    {isSmokeSession(latestSession) && latestDisplaySession.id !== latestSession?.id ? <Badge variant="slate">smoke hidden</Badge> : null}
                   </div>
                   <CardDescription>{displayDate(latestDisplaySession.createdAt)}</CardDescription>
                 </div>
@@ -2105,7 +2099,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
                 <div className="text-xs font-semibold uppercase text-slate-400">Runtime</div>
                 <Badge className="mt-2" title={state.initialRuntimeStatus ?? "not_checked"} variant={runtimeVariant(state.initialRuntimeStatus)}>{runtimeLabel(state.initialRuntimeStatus)}</Badge>
-                {state.initialRuntimeStatus === "configured_but_unreachable" ? <p className="mt-2 text-xs font-medium text-slate-500">CMO runtime is not connected yet. Using development fallback.</p> : null}
+                {state.initialRuntimeStatus === "configured_but_unreachable" ? <p className="mt-2 text-xs font-medium text-slate-500">Workspace context is available.</p> : null}
               </div>
               <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
                 <div className="text-xs font-semibold uppercase text-slate-400">Memory</div>

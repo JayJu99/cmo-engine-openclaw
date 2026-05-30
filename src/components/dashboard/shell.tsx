@@ -48,22 +48,22 @@ function AuthStatusCard({
   const next = encodeURIComponent(pathname || "/");
   const title =
     authStatus.state === "signed_in"
-      ? authStatus.displayName || authStatus.email || "Signed in"
+      ? "Workspace Access"
       : authStatus.state === "signed_out"
-        ? "Signed out"
+        ? "Workspace Access"
         : authStatus.state === "misconfigured"
-          ? "Auth misconfigured"
-          : "Supabase auth disabled";
+          ? "Workspace Access"
+          : "Workspace Access";
   const subtitle =
     authStatus.state === "signed_in"
-      ? `${authStatus.role} / ${authStatus.workspaceCount} workspace${authStatus.workspaceCount === 1 ? "" : "s"}`
+      ? "Signed in"
       : authStatus.state === "signed_out"
         ? authStatus.authRequired
-          ? "Login required"
-          : "Legacy access allowed"
+          ? "Sign in required"
+          : "Signed in"
         : authStatus.state === "misconfigured"
-          ? "Check Supabase env"
-          : "Legacy admin mode";
+          ? "Access configuration pending"
+          : "Signed in";
 
   return (
     <div className={cn("rounded-2xl border border-slate-200 bg-white p-4 shadow-sm", compact && "p-3")}>
@@ -163,13 +163,13 @@ export function DashboardShell({
               </div>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="text-xs font-medium text-slate-500">CMO Engine Status</div>
+              <div className="text-xs font-medium text-slate-500">CMO System</div>
               <div className="mt-3 flex items-center gap-2">
-                <span className="size-2 rounded-full bg-orange-500" />
-                <span className="font-bold text-orange-600">Phase 1</span>
+                <span className="size-2 rounded-full bg-emerald-500" />
+                <span className="font-bold text-emerald-700">Hermes CMO active</span>
               </div>
               <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-600">
-                App context, CMO chat, workspace memory, and Daily Review.
+                Vault-backed workspace context.
               </div>
             </div>
           </div>
@@ -181,7 +181,7 @@ export function DashboardShell({
           <div className="flex items-center justify-between gap-4">
             <Logo />
             <div className="flex items-center gap-3">
-              <Badge variant="orange">Phase 1</Badge>
+              <Badge variant="green">Hermes CMO active</Badge>
               <AuthStatusCard authStatus={authStatus} compact />
             </div>
           </div>

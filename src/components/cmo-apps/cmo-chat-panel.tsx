@@ -230,8 +230,6 @@ export function CMOChatPanel({
   const [messages, setMessages] = useState<CMOChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [isDevelopmentFallback, setIsDevelopmentFallback] = useState(false);
-  const [isRuntimeFallback, setIsRuntimeFallback] = useState(false);
   const [runtimeStatus, setRuntimeStatus] = useState<CMORuntimeStatus | null>(initialRuntimeStatus);
   const [runtimeErrorReason, setRuntimeErrorReason] = useState<CmoRuntimeErrorReason | null>(null);
   const [isSending, setIsSending] = useState(false);
@@ -293,8 +291,6 @@ export function CMOChatPanel({
     const timeout = window.setTimeout(() => {
       setSessionId(null);
       setMessages([]);
-      setIsDevelopmentFallback(false);
-      setIsRuntimeFallback(false);
       setRuntimeStatus(initialRuntimeStatus);
       setRuntimeErrorReason(null);
       setError(null);
@@ -314,8 +310,6 @@ export function CMOChatPanel({
       const timeout = window.setTimeout(() => {
         setSessionId(null);
         setMessages([]);
-        setIsDevelopmentFallback(false);
-        setIsRuntimeFallback(false);
         setRuntimeStatus(initialRuntimeStatus);
         setRuntimeErrorReason(null);
         setPendingAssistantMessageId(null);
@@ -329,8 +323,6 @@ export function CMOChatPanel({
     const timeout = window.setTimeout(() => {
       setSessionId(selectedSession.id);
       setMessages(selectedSession.messages);
-      setIsDevelopmentFallback(selectedSession.isDevelopmentFallback === true);
-      setIsRuntimeFallback(selectedSession.isRuntimeFallback === true);
       setRuntimeStatus(selectedSession.runtimeStatus ?? initialRuntimeStatus);
       setRuntimeErrorReason(selectedSession.runtimeErrorReason ?? null);
       setPendingAssistantMessageId(null);
@@ -390,8 +382,6 @@ export function CMOChatPanel({
     setError(null);
     setSendStatus("Sending...");
     setRuntimeStatus(null);
-    setIsDevelopmentFallback(false);
-    setIsRuntimeFallback(false);
     setRuntimeErrorReason(null);
 
     try {
@@ -417,8 +407,6 @@ export function CMOChatPanel({
       );
 
       setSessionId(response.sessionId);
-      setIsDevelopmentFallback(response.isDevelopmentFallback);
-      setIsRuntimeFallback(response.isRuntimeFallback === true);
       setRuntimeStatus(response.runtimeStatus);
       setRuntimeErrorReason(response.runtimeErrorReason ?? null);
       setError(response.status === "failed" ? response.runtimeError || "CMO runtime returned an error." : null);
@@ -534,7 +522,6 @@ export function CMOChatPanel({
           <div className="flex flex-wrap items-center gap-2">
             <Badge title={runtimeStatus ?? "not_checked"} variant={runtimeStatusVariant(runtimeStatus)}>{runtimeStatusLabel(runtimeStatus)}</Badge>
             <Badge variant={selectedQualitySummary.missingCount ? "orange" : "green"}>Vault-backed workspace context enabled</Badge>
-            {isRuntimeFallback ? <Badge variant="orange">fallback used</Badge> : isDevelopmentFallback ? <Badge variant="orange">development response</Badge> : null}
             <Button variant="outline" size="sm" onClick={focusChat}>
               <icons.MessageSquare />
               Start CMO Session
