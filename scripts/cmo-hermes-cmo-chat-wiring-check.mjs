@@ -424,6 +424,156 @@ try {
       "delegations must map as reviewable proposals only",
     );
 
+    const noDelegationNeedsSurfBase = makeRuntimeResult();
+    const noDelegationNeedsSurfMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...noDelegationNeedsSurfBase,
+      response: {
+        ...noDelegationNeedsSurfBase.response,
+        structured_output: {
+          ...noDelegationNeedsSurfBase.response.structured_output,
+          classification: "needs_surf",
+        },
+        delegations: [],
+        activity_summary: {
+          events_count: 3,
+          final_state: "completed",
+        },
+      },
+      activity_events: [
+        ...noDelegationNeedsSurfBase.activity_events,
+        {
+          schema_version: "hermes.activity.event.v1",
+          event_id: "evt_h6_surf_started_stale",
+          request_id: "req_h6_msg_001",
+          session_id: "session_h6",
+          turn_id: "msg_001",
+          seq: 2,
+          created_at: "2026-05-28T11:00:02.000Z",
+          source: {
+            agent: "surf",
+            mode: "surf.default",
+          },
+          type: "delegation.started",
+          status: "running",
+          message: "Calling Surf.",
+          user_visible: true,
+          data: {},
+        },
+        {
+          schema_version: "hermes.activity.event.v1",
+          event_id: "evt_h6_surf_completed_stale",
+          request_id: "req_h6_msg_001",
+          session_id: "session_h6",
+          turn_id: "msg_001",
+          seq: 3,
+          created_at: "2026-05-28T11:00:03.000Z",
+          source: {
+            agent: "surf",
+            mode: "surf.default",
+          },
+          type: "delegation.completed",
+          status: "completed",
+          message: "Surf completed.",
+          user_visible: true,
+          data: {},
+        },
+      ],
+      safety_counters: { ...expectedCounters, surfCalls: 1 },
+      safety: {
+        counters: { ...expectedCounters, surfCalls: 1 },
+      },
+      delegationSummary: [],
+      agentsUsed: ["cmo", "surf"],
+      surfCalls: 1,
+      echoCalls: 0,
+    });
+    assert.equal(noDelegationNeedsSurfMapped.hermesCmoMetadata.surfCalls, 0);
+    assert.equal(noDelegationNeedsSurfMapped.hermesCmoCounters.surfCalls, 0);
+    assert.deepEqual(noDelegationNeedsSurfMapped.hermesCmoMetadata.agentsUsed, ["cmo"]);
+    assert.equal(noDelegationNeedsSurfMapped.hermesCmoMetadata.delegationSummary.length, 0);
+    assert.equal(
+      noDelegationNeedsSurfMapped.hermesCmoMetadata.activityEvents.some((event) => event.sourceAgent === "surf"),
+      false,
+      "classification needs_surf without executable delegations must not create Surf activity rows",
+    );
+
+    const realSurfDelegationBase = makeRuntimeResult();
+    const realSurfDelegationMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...realSurfDelegationBase,
+      response: {
+        ...realSurfDelegationBase.response,
+        delegations: [],
+        activity_summary: {
+          events_count: 3,
+          final_state: "completed",
+        },
+      },
+      activity_events: [
+        ...realSurfDelegationBase.activity_events,
+        {
+          schema_version: "hermes.activity.event.v1",
+          event_id: "evt_h6_surf_started_real",
+          request_id: "req_h6_msg_001",
+          session_id: "session_h6",
+          turn_id: "msg_001",
+          seq: 2,
+          created_at: "2026-05-28T11:00:02.000Z",
+          source: {
+            agent: "surf",
+            mode: "surf.default",
+          },
+          type: "delegation.started",
+          status: "running",
+          message: "Calling Surf.",
+          user_visible: true,
+          data: {},
+        },
+        {
+          schema_version: "hermes.activity.event.v1",
+          event_id: "evt_h6_surf_completed_real",
+          request_id: "req_h6_msg_001",
+          session_id: "session_h6",
+          turn_id: "msg_001",
+          seq: 3,
+          created_at: "2026-05-28T11:00:03.000Z",
+          source: {
+            agent: "surf",
+            mode: "surf.default",
+          },
+          type: "delegation.completed",
+          status: "completed",
+          message: "Surf completed.",
+          user_visible: true,
+          data: {},
+        },
+      ],
+      safety_counters: { ...expectedCounters, surfCalls: 1 },
+      safety: {
+        counters: { ...expectedCounters, surfCalls: 1 },
+      },
+      delegationSummary: [
+        {
+          delegationId: "dlg_h6_surf_real",
+          targetAgent: "surf",
+          mode: "surf.default",
+          objective: "Gather live evidence.",
+          status: "completed",
+          summary: "Surf completed.",
+        },
+      ],
+      agentsUsed: ["cmo", "surf"],
+      surfCalls: 1,
+      echoCalls: 0,
+    });
+    assert.equal(realSurfDelegationMapped.hermesCmoMetadata.surfCalls, 1);
+    assert.equal(realSurfDelegationMapped.hermesCmoCounters.surfCalls, 1);
+    assert.deepEqual(realSurfDelegationMapped.hermesCmoMetadata.agentsUsed, ["cmo", "surf"]);
+    assert.equal(
+      realSurfDelegationMapped.hermesCmoMetadata.activityEvents.some((event) => event.sourceAgent === "surf"),
+      true,
+      "real executed Surf delegations must keep Surf activity rows",
+    );
+
     const invalidCounters = mapper.validateHermesCmoChatCounters(
       makeRuntimeResult({
         forbidden_counters: {

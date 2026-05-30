@@ -3,6 +3,7 @@ import type {
   CMOChatMessage,
   CMOContextNote,
   ContextItem,
+  HermesCmoAgentUsed,
   HermesCmoActivityEventSummary,
   HermesCmoChatMetadata,
   HermesCmoDelegationSummaryItem,
@@ -453,16 +454,57 @@ function delegationSummaryFromHermes(result: HermesCmoRuntimeResult): HermesCmoD
   }));
 }
 
-function activityEventsFromHermes(result: HermesCmoRuntimeResult): HermesCmoActivityEventSummary[] {
-  return result.activity_events.map((event: HermesCmoRuntimeActivityEvent) => ({
-    eventId: event.event_id,
-    type: event.type,
-    status: event.status,
-    message: event.message,
-    userVisible: event.user_visible,
-    sourceAgent: event.source.agent,
-    sourceMode: event.source.mode,
-  }));
+function executedAgentCounts(delegationSummary: HermesCmoDelegationSummaryItem[]): Pick<HermesCmoSafetyCounters, "surfCalls" | "echoCalls"> {
+  return {
+    surfCalls: delegationSummary.filter((delegation) => delegation.targetAgent === "surf").length,
+    echoCalls: delegationSummary.filter((delegation) => delegation.targetAgent === "echo").length,
+  };
+}
+
+function countersFromExecutedDelegations(
+  counters: HermesCmoSafetyCounters,
+  delegationSummary: HermesCmoDelegationSummaryItem[],
+): HermesCmoSafetyCounters {
+  const executedCounts = executedAgentCounts(delegationSummary);
+
+  return {
+    ...counters,
+    surfCalls: executedCounts.surfCalls,
+    echoCalls: executedCounts.echoCalls,
+  };
+}
+
+function agentsUsedFromExecutedDelegations(delegationSummary: HermesCmoDelegationSummaryItem[]): HermesCmoAgentUsed[] {
+  return Array.from(new Set<HermesCmoAgentUsed>(["cmo", ...delegationSummary.map((delegation) => delegation.targetAgent)]));
+}
+
+function executedDelegationMatchKeys(delegationSummary: HermesCmoDelegationSummaryItem[]): Set<string> {
+  return new Set(delegationSummary.map((delegation) => `${delegation.targetAgent}:${delegation.mode}`));
+}
+
+function activityEventsFromHermes(
+  result: HermesCmoRuntimeResult,
+  delegationSummary: HermesCmoDelegationSummaryItem[],
+): HermesCmoActivityEventSummary[] {
+  const executedMatches = executedDelegationMatchKeys(delegationSummary);
+
+  return result.activity_events
+    .map((event: HermesCmoRuntimeActivityEvent) => ({
+      eventId: event.event_id,
+      type: event.type,
+      status: event.status,
+      message: event.message,
+      userVisible: event.user_visible,
+      sourceAgent: event.source.agent,
+      sourceMode: event.source.mode,
+    }))
+    .filter((event) => {
+      if (event.sourceAgent !== "surf" && event.sourceAgent !== "echo") {
+        return true;
+      }
+
+      return executedMatches.has(`${event.sourceAgent}:${event.sourceMode}`);
+    });
 }
 
 function metadataFromHermes(
@@ -471,7 +513,8 @@ function metadataFromHermes(
   forbiddenCounters: HermesCmoForbiddenCounters,
 ): HermesCmoChatMetadata {
   const delegationSummary = delegationSummaryFromHermes(result);
-  const activityEvents = activityEventsFromHermes(result);
+  const activityEvents = activityEventsFromHermes(result, delegationSummary);
+  const executedCounts = executedAgentCounts(delegationSummary);
 
   return {
     runtimeMode: "hermes_cmo",
@@ -486,12 +529,12 @@ function metadataFromHermes(
     ...(result.mainBottleneck ? { mainBottleneck: result.mainBottleneck } : {}),
     ...(result.decisionLabel ? { decisionLabel: result.decisionLabel } : {}),
     ...(result.currentStep ? { currentStep: result.currentStep } : {}),
-    activityEventsCount: result.activity_events.length,
+    activityEventsCount: activityEvents.length,
     activityEvents,
     delegationSummary,
-    agentsUsed: result.agentsUsed,
-    surfCalls: result.surfCalls,
-    echoCalls: result.echoCalls,
+    agentsUsed: agentsUsedFromExecutedDelegations(delegationSummary),
+    surfCalls: executedCounts.surfCalls,
+    echoCalls: executedCounts.echoCalls,
   };
 }
 
@@ -509,6 +552,7 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
   }
 
   const delegationSummary = delegationSummaryFromHermes(result);
+  const counters = countersFromExecutedDelegations(validation.counters, delegationSummary);
 
   return {
     answer: answerFromHermes(result.response),
@@ -524,7 +568,7 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
     calledHermesCmo: true,
     hermesCmoStatus: "live",
     delegationsMode: delegationSummary.length > 0 ? HERMES_CMO_BOUNDED_DELEGATIONS : HERMES_CMO_PROPOSALS_ONLY,
-    hermesCmoCounters: validation.counters,
-    hermesCmoMetadata: metadataFromHermes(result, validation.counters, forbiddenCounters),
+    hermesCmoCounters: counters,
+    hermesCmoMetadata: metadataFromHermes(result, counters, forbiddenCounters),
   };
 }
