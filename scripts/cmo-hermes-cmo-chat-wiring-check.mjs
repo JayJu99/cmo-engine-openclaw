@@ -496,6 +496,57 @@ try {
       false,
       "classification needs_surf without executable delegations must not create Surf activity rows",
     );
+    const staleMappedResult = mapper.sanitizeHermesCmoMappedChatResult({
+      ...noDelegationNeedsSurfMapped,
+      hermesCmoCounters: { ...noDelegationNeedsSurfMapped.hermesCmoCounters, surfCalls: 1 },
+      hermesCmoMetadata: {
+        ...noDelegationNeedsSurfMapped.hermesCmoMetadata,
+        counters: { ...noDelegationNeedsSurfMapped.hermesCmoMetadata.counters, surfCalls: 1 },
+        activityEvents: [
+          ...(noDelegationNeedsSurfMapped.hermesCmoMetadata.activityEvents ?? []),
+          {
+            eventId: "evt_h6_surf_stale_app_chat",
+            type: "delegation.completed",
+            status: "completed",
+            message: "Surf completed.",
+            userVisible: true,
+            sourceAgent: "surf",
+            sourceMode: "surf.default",
+          },
+        ],
+        delegationSummary: [],
+        agentsUsed: ["cmo", "surf"],
+        surfCalls: 1,
+        echoCalls: 0,
+      },
+    });
+    assert.equal(staleMappedResult.hermesCmoMetadata.surfCalls, 0);
+    assert.equal(staleMappedResult.hermesCmoMetadata.counters.surfCalls, 0);
+    assert.equal(staleMappedResult.hermesCmoCounters.surfCalls, 0);
+    assert.deepEqual(staleMappedResult.hermesCmoMetadata.agentsUsed, ["cmo"]);
+    assert.equal(
+      staleMappedResult.hermesCmoMetadata.activityEvents.some((event) => event.sourceAgent === "surf"),
+      false,
+      "final app-chat sanitizer must remove stale Surf activity when delegationSummary is empty",
+    );
+    const finalNoDelegationAppChatFields = {
+      activityEvents: staleMappedResult.hermesCmoMetadata.activityEvents,
+      delegationSummary: staleMappedResult.hermesCmoMetadata.delegationSummary,
+      agentsUsed: staleMappedResult.hermesCmoMetadata.agentsUsed,
+      surfCalls: staleMappedResult.hermesCmoMetadata.surfCalls,
+      echoCalls: staleMappedResult.hermesCmoMetadata.echoCalls,
+      hermesCmoCounters: staleMappedResult.hermesCmoCounters,
+      hermesCmoMetadata: staleMappedResult.hermesCmoMetadata,
+    };
+    assert.equal(finalNoDelegationAppChatFields.surfCalls, 0);
+    assert.deepEqual(finalNoDelegationAppChatFields.agentsUsed, ["cmo"]);
+    assert.equal(finalNoDelegationAppChatFields.hermesCmoCounters.surfCalls, 0);
+    assert.equal(finalNoDelegationAppChatFields.hermesCmoMetadata.surfCalls, 0);
+    assert.equal(
+      finalNoDelegationAppChatFields.activityEvents.some((event) => event.sourceAgent === "surf"),
+      false,
+      "final top-level app-chat fields must not expose Surf rows without executable delegations",
+    );
 
     const realSurfDelegationBase = makeRuntimeResult();
     const realSurfDelegationMapped = mapper.mapHermesCmoResponseToChatResult({

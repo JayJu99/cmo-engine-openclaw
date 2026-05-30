@@ -538,6 +538,36 @@ function metadataFromHermes(
   };
 }
 
+export function sanitizeHermesCmoMappedChatResult(result: HermesCmoMappedChatResult): HermesCmoMappedChatResult {
+  const delegationSummary = result.hermesCmoMetadata.delegationSummary ?? [];
+  const counters = countersFromExecutedDelegations(result.hermesCmoCounters, delegationSummary);
+  const activityEvents = (result.hermesCmoMetadata.activityEvents ?? []).filter((event) => {
+    if (event.sourceAgent !== "surf" && event.sourceAgent !== "echo") {
+      return true;
+    }
+
+    return executedDelegationMatchKeys(delegationSummary).has(`${event.sourceAgent}:${event.sourceMode}`);
+  });
+  const executedCounts = executedAgentCounts(delegationSummary);
+  const metadata: HermesCmoChatMetadata = {
+    ...result.hermesCmoMetadata,
+    counters,
+    activityEventsCount: activityEvents.length,
+    activityEvents,
+    delegationSummary,
+    agentsUsed: agentsUsedFromExecutedDelegations(delegationSummary),
+    surfCalls: executedCounts.surfCalls,
+    echoCalls: executedCounts.echoCalls,
+  };
+
+  return {
+    ...result,
+    delegationsMode: delegationSummary.length > 0 ? HERMES_CMO_BOUNDED_DELEGATIONS : HERMES_CMO_PROPOSALS_ONLY,
+    hermesCmoCounters: counters,
+    hermesCmoMetadata: metadata,
+  };
+}
+
 export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult): HermesCmoMappedChatResult {
   const validation = validateHermesCmoChatCounters(result);
 
@@ -554,7 +584,7 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
   const delegationSummary = delegationSummaryFromHermes(result);
   const counters = countersFromExecutedDelegations(validation.counters, delegationSummary);
 
-  return {
+  return sanitizeHermesCmoMappedChatResult({
     answer: answerFromHermes(result.response),
     assumptions: result.response.answer_basis.assumptions_used.map(assumptionText),
     suggestedActions: suggestedActionsFromHermes(result.response),
@@ -570,5 +600,5 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
     delegationsMode: delegationSummary.length > 0 ? HERMES_CMO_BOUNDED_DELEGATIONS : HERMES_CMO_PROPOSALS_ONLY,
     hermesCmoCounters: counters,
     hermesCmoMetadata: metadataFromHermes(result, counters, forbiddenCounters),
-  };
+  });
 }

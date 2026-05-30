@@ -52,6 +52,7 @@ import {
   HERMES_CMO_PROPOSALS_ONLY,
   mapCmoChatToHermesCmoRequest,
   mapHermesCmoResponseToChatResult,
+  sanitizeHermesCmoMappedChatResult,
   validateHermesCmoChatCounters,
 } from "@/lib/cmo/hermes-cmo-chat-mapper";
 import { shouldUseHermesCmoChat } from "@/lib/cmo/hermes-cmo-chat-router";
@@ -1339,8 +1340,10 @@ export async function createAppChatSession(
         throw new Error(counterValidation.errorReason ?? "invalid_counters_schema");
       }
 
-      const mappedHermesResult = mapHermesCmoResponseToChatResult(hermesResult);
+      const mappedHermesResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesResult));
       if (vaultAgentContextPackMetadata?.context_pack_status === "completed") {
+        const finalDelegationSummary = mappedHermesResult.hermesCmoMetadata.delegationSummary ?? [];
+        const finalActivityEvents = mappedHermesResult.hermesCmoMetadata.activityEvents ?? [];
         console.info("[cmo-m315-context-routing]", {
           phase: "app_chat_mapped",
           contextPackStatus: vaultAgentContextPackMetadata.context_pack_status,
@@ -1357,7 +1360,17 @@ export async function createAppChatSession(
 
             return mode ? `${agent}:${mode}` : agent;
           }),
-          mappedSurfCalls: mappedHermesResult.hermesCmoMetadata.surfCalls ?? 0,
+          rawResultSurfCalls: hermesResult.surfCalls,
+          rawResultEchoCalls: hermesResult.echoCalls,
+          rawResultAgentsUsed: hermesResult.agentsUsed,
+          rawResultDelegationSummaryLength: hermesResult.delegationSummary.length,
+          rawResultActivitySurfRows: hermesResult.activity_events.filter((event) => event.source.agent === "surf").length,
+          finalTopLevelSurfCalls: mappedHermesResult.hermesCmoMetadata.surfCalls ?? 0,
+          finalMetadataSurfCalls: mappedHermesResult.hermesCmoMetadata.surfCalls ?? 0,
+          finalCountersSurfCalls: mappedHermesResult.hermesCmoCounters.surfCalls,
+          finalAgentsUsed: mappedHermesResult.hermesCmoMetadata.agentsUsed ?? [],
+          finalActivitySurfRows: finalActivityEvents.filter((event) => event.sourceAgent === "surf").length,
+          delegationSummaryLength: finalDelegationSummary.length,
         });
       }
 
