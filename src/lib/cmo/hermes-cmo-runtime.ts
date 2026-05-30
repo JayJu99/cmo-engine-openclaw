@@ -484,6 +484,107 @@ const getHermesCmoAgentConfig = (): HermesCmoAgentConfig => {
   };
 };
 
+function endpointHostAndPath(endpoint: string): { host: string; path: string } {
+  try {
+    const url = new URL(endpoint);
+
+    return {
+      host: url.host,
+      path: url.pathname,
+    };
+  } catch {
+    return {
+      host: "invalid_endpoint",
+      path: HERMES_CMO_AGENT_PATH,
+    };
+  }
+}
+
+function vaultContextPackArtifact(request: HermesCmoRuntimeRequest): Record<string, unknown> | null {
+  const artifact = request.context_pack.artifacts_in.find((item) => isRecord(item) && item.type === "vault_context_pack");
+
+  return isRecord(artifact) ? artifact : null;
+}
+
+function contextPackHasExcerpt(artifact: Record<string, unknown> | null): boolean {
+  const sources = Array.isArray(artifact?.sources) ? artifact.sources : [];
+
+  return sources.some((source) => isRecord(source) && typeof source.excerpt_or_summary === "string" && source.excerpt_or_summary.trim().length > 0);
+}
+
+function responseCandidateFromPayload(payload: unknown): Record<string, unknown> | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+
+  return isRecord(payload.response) ? payload.response : payload;
+}
+
+function responseClassification(response: Record<string, unknown> | null): string | null {
+  if (!response) {
+    return null;
+  }
+
+  const structured = isRecord(response.structured_output) ? response.structured_output : {};
+  const classification = response.classification ?? structured.classification;
+
+  return typeof classification === "string" && classification.trim() ? classification.trim() : null;
+}
+
+function delegationTarget(value: unknown): string {
+  if (!isRecord(value)) {
+    return "unknown";
+  }
+
+  const target = isRecord(value.target) ? value.target : {};
+  const agent = typeof target.agent === "string" ? target.agent : typeof value.targetAgent === "string" ? value.targetAgent : typeof value.agent === "string" ? value.agent : "unknown";
+  const mode = typeof target.mode === "string" ? target.mode : typeof value.mode === "string" ? value.mode : "";
+
+  return mode ? `${agent}:${mode}` : agent;
+}
+
+function logM315HermesRequest(endpoint: string, request: HermesCmoRuntimeRequest) {
+  const artifact = vaultContextPackArtifact(request);
+
+  if (!artifact) {
+    return;
+  }
+
+  const endpointInfo = endpointHostAndPath(endpoint);
+
+  console.info("[cmo-m315-context-routing]", {
+    phase: "hermes_request",
+    hermesBaseUrlHost: endpointInfo.host,
+    hermesEndpointPath: endpointInfo.path,
+    contextPackStatus: "completed",
+    contextPackSourceCount: typeof artifact.source_count === "number" ? artifact.source_count : 0,
+    contextPackHasExcerpt: contextPackHasExcerpt(artifact),
+    contextPackInjectedFieldNames: ["context_pack.artifacts_in", ...Object.keys(artifact).sort()],
+  });
+}
+
+function logM315HermesResponse(endpoint: string, request: HermesCmoRuntimeRequest, payload: unknown) {
+  if (!vaultContextPackArtifact(request)) {
+    return;
+  }
+
+  const endpointInfo = endpointHostAndPath(endpoint);
+  const response = responseCandidateFromPayload(payload);
+  const delegations = Array.isArray(response?.delegations) ? response.delegations : [];
+  const activityEvents = isRecord(payload) && Array.isArray(payload.activity_events) ? payload.activity_events : [];
+
+  console.info("[cmo-m315-context-routing]", {
+    phase: "hermes_response",
+    hermesBaseUrlHost: endpointInfo.host,
+    hermesEndpointPath: endpointInfo.path,
+    hermesResponseStatus: typeof response?.status === "string" ? response.status : null,
+    hermesClassification: responseClassification(response),
+    hermesDelegationCount: delegations.length,
+    hermesDelegationTargets: delegations.map(delegationTarget),
+    activityEventsCount: activityEvents.length,
+  });
+}
+
 export const validateHermesCmoRuntimeRequest = (request: unknown): request is HermesCmoRuntimeRequest => {
   if (!isRecord(request)) {
     return false;
@@ -1350,6 +1451,7 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest): Promise<unk
   const timeout = setTimeout(() => controller.abort(), hermesTimeoutMs());
 
   try {
+    logM315HermesRequest(config.endpoint, request);
     const response = await fetch(config.endpoint, {
       method: "POST",
       headers: {
@@ -1366,7 +1468,10 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest): Promise<unk
       throw new Error(await hermesHttpFailureReason(response, "Hermes CMO Agent"));
     }
 
-    return parseHermesJson(response, "Hermes CMO Agent");
+    const payload = await parseHermesJson(response, "Hermes CMO Agent");
+    logM315HermesResponse(config.endpoint, request, payload);
+
+    return payload;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("Hermes CMO Agent request timed out.");

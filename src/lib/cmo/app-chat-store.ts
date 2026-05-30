@@ -947,6 +947,20 @@ function normalizeVaultAgentContextPackMetadata(value: unknown): VaultAgentConte
   };
 }
 
+function contextPackMetadataHasExcerpt(metadata: VaultAgentContextPackMetadata | undefined): boolean {
+  return metadata?.context_pack_sources?.some((source) => Boolean(source.excerpt_or_summary?.trim())) === true;
+}
+
+function hermesResponseClassification(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const structured = isRecord(value.structured_output) ? value.structured_output : {};
+
+  return stringValue(value.classification ?? structured.classification) || undefined;
+}
+
 function skippedLegacyAutoCaptureForVaultAgentWriteRemote(): AutoCaptureResult {
   return {
     ok: true,
@@ -1326,6 +1340,26 @@ export async function createAppChatSession(
       }
 
       const mappedHermesResult = mapHermesCmoResponseToChatResult(hermesResult);
+      if (vaultAgentContextPackMetadata?.context_pack_status === "completed") {
+        console.info("[cmo-m315-context-routing]", {
+          phase: "app_chat_mapped",
+          contextPackStatus: vaultAgentContextPackMetadata.context_pack_status,
+          contextPackSourceCount: vaultAgentContextPackMetadata.context_pack_source_count ?? 0,
+          contextPackHasExcerpt: contextPackMetadataHasExcerpt(vaultAgentContextPackMetadata),
+          contextPackInjectedFieldNames: ["context_pack.artifacts_in", "vault_context_pack"],
+          hermesResponseStatus: hermesResult.response.status,
+          hermesClassification: hermesResponseClassification(hermesResult.response),
+          hermesDelegationCount: hermesResult.response.delegations.length,
+          hermesDelegationTargets: hermesResult.response.delegations.map((delegation) => {
+            const target = isRecord(delegation.target) ? delegation.target : {};
+            const agent = stringValue(target.agent ?? delegation.targetAgent ?? delegation.agent, "unknown");
+            const mode = stringValue(target.mode ?? delegation.mode);
+
+            return mode ? `${agent}:${mode}` : agent;
+          }),
+          mappedSurfCalls: mappedHermesResult.hermesCmoMetadata.surfCalls ?? 0,
+        });
+      }
 
       answer = mappedHermesResult.answer;
       status = "completed";
