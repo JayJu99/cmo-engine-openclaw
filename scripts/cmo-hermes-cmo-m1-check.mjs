@@ -330,6 +330,8 @@ const startServer = async () => {
           const m43UnknownActivityFixture = body.request_id === "req_m43_unknown_activity";
           const m44aContextLoadedFixture = body.request_id === "req_m44a_context_loaded";
           const m44aAnswerGroundedFixture = body.request_id === "req_m44a_answer_grounded";
+          const m44aAnswerGroundedRawTextFixture = body.request_id === "req_m44a_answer_grounded_raw_text";
+          const m44aAnswerGroundedUnknownKeyFixture = body.request_id === "req_m44a_answer_grounded_unknown_key";
           const m44aDurableActionFixture = body.request_id === "req_m44a_durable_action_proposed";
           const m44aToolReadFixture = body.request_id === "req_m44a_tool_read";
           const m44aContextOldFieldsFixture = body.request_id === "req_m44a_context_loaded_old_fields";
@@ -399,10 +401,61 @@ const startServer = async () => {
                     ...activity(body, 1, "cmo.answer.grounded", "CMO grounded the answer in available source metadata."),
                     status: "completed",
                     data: {
+                      answer_basis_mode: "source_answer",
+                      classification: "source_answer",
+                      response_style: "source_answer",
+                      source_context_type: "session_local_source",
+                      answerable: true,
                       source_answerable: true,
+                      evidence_source_count: 1,
+                      source_count: 1,
+                      used_tool_count: 0,
                       extraction_quality: "good",
                       saved_to_vault: false,
+                      no_auto_promote: true,
                       truth_status: "session_only",
+                    },
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m44aAnswerGroundedRawTextFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.answer.grounded", "CMO grounded the answer in available source metadata."),
+                    status: "completed",
+                    data: {
+                      answer_basis_mode: "source_answer",
+                      source_answerable: true,
+                      source_text: "raw source text should never be emitted in grounded answer activity metadata",
+                    },
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m44aAnswerGroundedUnknownKeyFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.answer.grounded", "CMO grounded the answer in available source metadata."),
+                    status: "completed",
+                    data: {
+                      answer_basis_mode: "source_answer",
+                      source_answerable: true,
+                      unexpected_grounding_key: "safe-looking but not allowlisted",
                     },
                   },
                 ],
@@ -2805,6 +2858,9 @@ try {
       true,
       "M4.4A cmo.answer.grounded activity must be accepted",
     );
+    assert.equal(m44aAnswerGroundedResult.activity_events[0].data.answer_basis_mode, "source_answer");
+    assert.equal(m44aAnswerGroundedResult.activity_events[0].data.classification, "source_answer");
+    assert.equal(m44aAnswerGroundedResult.activity_events[0].data.response_style, "source_answer");
 
     const m44aDurableActionResult = await runHermesCmoRuntime({
       ...sampleRequest,
@@ -2907,6 +2963,38 @@ try {
         }),
       /Rejected field: data_unsafe:cmo\.context\.loaded key=data\.context_pack type=object reason=unsafe_key_name/,
       "cmo.context.loaded must reject full context_pack objects",
+    );
+
+    await assert.rejects(
+      () =>
+        runHermesCmoRuntime({
+          ...sampleRequest,
+          request_id: "req_m44a_answer_grounded_raw_text",
+          session_id: "session_m44a_answer_grounded_raw_text",
+          turn_id: "turn_m44a_answer_grounded_raw_text_001",
+          intent: {
+            ...sampleRequest.intent,
+            user_message: "Fixture with raw source text in answer grounded metadata.",
+          },
+        }),
+      /Rejected field: data_unsafe:cmo\.answer\.grounded key=data\.source_text type=string reason=unsafe_key_name/,
+      "cmo.answer.grounded must reject raw source text fields",
+    );
+
+    await assert.rejects(
+      () =>
+        runHermesCmoRuntime({
+          ...sampleRequest,
+          request_id: "req_m44a_answer_grounded_unknown_key",
+          session_id: "session_m44a_answer_grounded_unknown_key",
+          turn_id: "turn_m44a_answer_grounded_unknown_key_001",
+          intent: {
+            ...sampleRequest.intent,
+            user_message: "Fixture with unknown answer grounded metadata.",
+          },
+        }),
+      /Rejected field: data_unsafe:cmo\.answer\.grounded key=data\.unexpected_grounding_key type=string reason=unknown_key/,
+      "cmo.answer.grounded must reject unknown metadata keys",
     );
 
     await assert.rejects(

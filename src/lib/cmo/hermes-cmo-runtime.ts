@@ -403,20 +403,27 @@ const m44aSafeMetadataActivityTypes = new Set<HermesActivityType>([
 ]);
 const m44aSafeActivityDataKeys = new Set([
   "active_source_count",
+  "answer_basis_mode",
+  "answerable",
+  "classification",
   "context_item_count",
   "context_pack_present",
+  "evidence_source_count",
   "extraction_quality",
   "has_source_answer_context",
   "no_auto_promote",
   "proposed_action",
   "requires_confirmation",
+  "response_style",
   "saved_to_vault",
   "source_answerable",
   "source_count",
+  "source_context_type",
   "session_id",
   "tool_type",
   "tool_policy_present",
   "truth_status",
+  "used_tool_count",
   "workspace_id",
 ]);
 const m44aSafeProposedActionKeys = new Set([
