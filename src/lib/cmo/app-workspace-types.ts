@@ -633,7 +633,7 @@ export interface CmoRuntimeContext {
 
 export interface CmoSourceReviewContext {
   schema_version: "cmo.source_review_context.v1";
-  mode: "review_only";
+  mode: "review_only" | "session_local";
   tenant_id: string;
   workspace_id: string;
   user_id: string;
@@ -646,6 +646,41 @@ export interface CmoSourceReviewContext {
     vault_mutation: false;
     gbrain_mutation: false;
     no_promotion: true;
+  };
+  persistence?: {
+    saved_to_vault: false;
+    truth_status: "session_only";
+    review_status: "temporary";
+    no_auto_promote: true;
+  };
+}
+
+export interface CmoSessionLocalSource {
+  type: "session_local_source";
+  schema_version: "cmo.session_local_source.v1";
+  workspace_id: string;
+  session_id: string;
+  turn_id: string;
+  source_id: string;
+  source_type: string;
+  source_title: string;
+  original_url?: string;
+  canonical_url?: string;
+  original_filename?: string;
+  extracted_summary?: string;
+  source_text_excerpt?: string;
+  extraction_status: "completed" | "partial" | "failed";
+  content_hash?: string;
+  saved_to_vault: false;
+  official_project_source: false;
+  truth_status: "session_only";
+  review_status: "temporary";
+  no_auto_promote: true;
+  safety: {
+    read_only: true;
+    vault_mutation: false;
+    gbrain_mutation: false;
+    promotion_performed: false;
   };
 }
 
@@ -849,6 +884,8 @@ export interface CMOContextPackage {
   runtimeWorkspaceId?: string;
   runtimeContext?: CmoRuntimeContext;
   sourceReviewContext?: CmoSourceReviewContext;
+  sessionLocalSources?: CmoSessionLocalSource[];
+  activeSourceId?: string;
   mode: "app_context";
   contextPack: ContextPack;
   app: {
@@ -954,6 +991,8 @@ export interface CMOChatMessage {
   indexedContextBuildDurationMs?: number;
   runtimeContext?: CmoRuntimeContext;
   sourceReviewContext?: CmoSourceReviewContext;
+  sessionLocalSources?: CmoSessionLocalSource[];
+  activeSourceId?: string;
 }
 
 export interface CMOChatSession {
@@ -1025,6 +1064,8 @@ export interface CMOChatSession {
   indexedContextBuildDurationMs?: number;
   runtimeContext?: CmoRuntimeContext;
   sourceReviewContext?: CmoSourceReviewContext;
+  sessionLocalSources?: CmoSessionLocalSource[];
+  activeSourceId?: string;
   decisionLayer?: CmoDecisionLayer;
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
@@ -1115,6 +1156,8 @@ export interface CMOAppChatResponse {
   indexedContextBuildDurationMs?: number;
   runtimeContext?: CmoRuntimeContext;
   sourceReviewContext?: CmoSourceReviewContext;
+  sessionLocalSources?: CmoSessionLocalSource[];
+  activeSourceId?: string;
   decisionLayer?: CmoDecisionLayer;
   rawCapturePath?: string;
   rawCaptureStatus?: "saved" | "failed" | "pending";

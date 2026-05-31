@@ -92,9 +92,9 @@ const loadCompiledModules = async () => {
 const sampleTurnInput = {
   contextPack: {
     policyVersion: "context-pack-v1",
-    workspaceId: "holdstation",
+    workspaceId: "holdstation-mini-app",
     appId: "holdstation-mini-app",
-    sourceId: "holdstation:holdstation-mini-app",
+    sourceId: "holdstation-mini-app__holdstation-mini-app",
     logicalAppPath: "02 Apps/World Mini App/Holdstation Mini App",
     physicalAppVaultPath: "knowledge/holdstation/02 Apps/World Mini App/Holdstation Mini App",
     appVaultPath: "02 Apps/World Mini App/Holdstation Mini App",
@@ -155,8 +155,8 @@ const sampleTurnInput = {
     },
   },
   contextPackage: {
-    workspaceId: "holdstation",
-    sourceId: "holdstation:holdstation-mini-app",
+    workspaceId: "holdstation-mini-app",
+    sourceId: "holdstation-mini-app__holdstation-mini-app",
     mode: "app_context",
     contextPack: null,
     app: {
@@ -222,7 +222,7 @@ const sampleTurnInput = {
     },
   ],
   request: {
-    workspaceId: "holdstation",
+    workspaceId: "holdstation-mini-app",
     appId: "holdstation-mini-app",
     appName: "Holdstation Mini App",
     message: "Review activation plan.",
@@ -252,7 +252,7 @@ sampleTurnInput.contextPackage.runtimeContext = {
 };
 sampleTurnInput.contextPackage.sourceReviewContext = {
   schema_version: "cmo.source_review_context.v1",
-  mode: "review_only",
+  mode: "session_local",
   tenant_id: "holdstation",
   workspace_id: "holdstation-mini-app",
   user_id: "user_h6",
@@ -260,17 +260,23 @@ sampleTurnInput.contextPackage.sourceReviewContext = {
   request_id: "msg_001",
   source: {
     source_id: "source_review_fixture",
+    workspace_id: "holdstation-mini-app",
     source_type: "url",
     source_title: "Fixture source",
+    original_url: "https://example.test/source",
+    canonical_url: "https://example.test/source",
   },
   extraction: {
     status: "completed",
-    content_hash: "hash_fixture",
-    source_text: "Fixture source text",
+    content_hash: "sha256:hash_fixture",
+    source_text_excerpt: "Fixture source text",
     extracted_summary: "Fixture source summary",
-    detected_language: "en",
-    warnings: [],
-    errors: [],
+  },
+  persistence: {
+    saved_to_vault: false,
+    truth_status: "session_only",
+    review_status: "temporary",
+    no_auto_promote: true,
   },
   safety: {
     read_only: true,
@@ -279,6 +285,36 @@ sampleTurnInput.contextPackage.sourceReviewContext = {
     no_promotion: true,
   },
 };
+sampleTurnInput.contextPackage.sessionLocalSources = [
+  {
+    type: "session_local_source",
+    schema_version: "cmo.session_local_source.v1",
+    workspace_id: "holdstation-mini-app",
+    session_id: "session_h6",
+    turn_id: "msg_source_001",
+    source_id: "source_review_fixture",
+    source_type: "url",
+    source_title: "Fixture source",
+    original_url: "https://example.test/source",
+    canonical_url: "https://example.test/source",
+    extracted_summary: "Fixture source summary",
+    source_text_excerpt: "Fixture source text",
+    extraction_status: "completed",
+    content_hash: "sha256:hash_fixture",
+    saved_to_vault: false,
+    official_project_source: false,
+    truth_status: "session_only",
+    review_status: "temporary",
+    no_auto_promote: true,
+    safety: {
+      read_only: true,
+      vault_mutation: false,
+      gbrain_mutation: false,
+      promotion_performed: false,
+    },
+  },
+];
+sampleTurnInput.contextPackage.activeSourceId = "source_review_fixture";
 sampleTurnInput.contextPack.sourceReviewContext = sampleTurnInput.contextPackage.sourceReviewContext;
 
 const makeRuntimeResult = (overrides = {}) => {
@@ -427,9 +463,70 @@ try {
     assert.equal(hermesRequest.runtime_context.timezone_label, "Vietnam time");
     assert.equal(hermesRequest.runtime_context.locale, "vi-VN");
     assert.equal(hermesRequest.context_pack.source_review_context.schema_version, "cmo.source_review_context.v1");
+    assert.equal(hermesRequest.context_pack.source_review_context.mode, "session_local");
+    assert.equal(hermesRequest.context_pack.source_review_context.persistence.saved_to_vault, false);
     assert.equal(hermesRequest.context_pack.source_review_context.safety.vault_mutation, false);
     assert.equal(hermesRequest.context_pack.source_review_context.safety.gbrain_mutation, false);
-    assert.ok(hermesRequest.context_pack.artifacts_in.some((artifact) => artifact.type === "source_review_context"), "source review context must be passed as a read-only artifact");
+    assert.equal(hermesRequest.context_pack.active_source_id, "source_review_fixture");
+    const sessionLocalSource = hermesRequest.context_pack.artifacts_in.find((artifact) => artifact.type === "session_local_source");
+    assert.ok(sessionLocalSource, "session local source must be passed as a read-only artifact");
+    assert.equal(sessionLocalSource.workspace_id, "holdstation-mini-app");
+    assert.equal(sessionLocalSource.saved_to_vault, false);
+    assert.equal(sessionLocalSource.official_project_source, false);
+    assert.equal(sessionLocalSource.truth_status, "session_only");
+    assert.equal(sessionLocalSource.review_status, "temporary");
+    assert.equal(sessionLocalSource.no_auto_promote, true);
+    for (const workspace of [
+      ["aion", "AION"],
+      ["feeback", "Feeback"],
+      ["winance", "Winance"],
+      ["hold-pay", "Hold Pay"],
+      ["holdstation-wallet", "Holdstation Wallet"],
+    ]) {
+      const [workspaceId, appName] = workspace;
+      const workspaceInput = JSON.parse(JSON.stringify(sampleTurnInput));
+      workspaceInput.contextPack.workspaceId = workspaceId;
+      workspaceInput.contextPack.appId = workspaceId;
+      workspaceInput.contextPackage.workspaceId = workspaceId;
+      workspaceInput.contextPackage.sourceId = `${workspaceId}__${workspaceId}`;
+      workspaceInput.contextPackage.app.id = workspaceId;
+      workspaceInput.contextPackage.app.appId = workspaceId;
+      workspaceInput.contextPackage.app.workspaceId = workspaceId;
+      workspaceInput.contextPackage.app.name = appName;
+      workspaceInput.contextPackage.sourceReviewContext.workspace_id = workspaceId;
+      workspaceInput.contextPackage.sourceReviewContext.source.workspace_id = workspaceId;
+      workspaceInput.contextPackage.sourceReviewContext.session_id = `session_${workspaceId}`;
+      workspaceInput.contextPackage.sessionLocalSources[0].workspace_id = workspaceId;
+      workspaceInput.contextPackage.sessionLocalSources[0].session_id = `session_${workspaceId}`;
+      workspaceInput.contextPackage.sessionLocalSources.push({
+        ...workspaceInput.contextPackage.sessionLocalSources[0],
+        workspace_id: "holdstation-mini-app",
+        session_id: `session_${workspaceId}`,
+        source_id: "leaked_holdstation_source",
+      });
+      workspaceInput.request.workspaceId = workspaceId;
+      workspaceInput.request.appId = workspaceId;
+      workspaceInput.request.appName = appName;
+      const workspaceRequest = mapper.mapCmoChatToHermesCmoRequest({
+        ...workspaceInput,
+        sessionId: `session_${workspaceId}`,
+        userMessageId: `msg_${workspaceId}`,
+        createdAt: "2026-05-28T11:00:00.000Z",
+        userIdentity: {
+          userId: "user_h6",
+          userEmail: "jay@example.com",
+        },
+      });
+      const workspaceArtifacts = workspaceRequest.context_pack.artifacts_in.filter((artifact) => artifact.type === "session_local_source");
+      assert.equal(workspaceRequest.workspace.workspace_id, workspaceId);
+      assert.equal(workspaceRequest.context_pack.source_review_context.workspace_id, workspaceId);
+      assert.equal(workspaceArtifacts.length, 1, `${workspaceId} should receive only its own session-local source`);
+      assert.equal(workspaceArtifacts[0].workspace_id, workspaceId);
+      assert.equal(workspaceArtifacts[0].session_id, `session_${workspaceId}`);
+      assert.equal(workspaceArtifacts[0].saved_to_vault, false);
+      assert.equal(workspaceArtifacts[0].truth_status, "session_only");
+      assert.ok(!workspaceArtifacts.some((artifact) => artifact.source_id === "leaked_holdstation_source"), `${workspaceId} must not receive Holdstation source artifacts`);
+    }
     const priorAssistantContext = hermesRequest.context_pack.selected_context.find((item) => item?.kind === "recent_chat_message" && item?.role === "assistant");
     assert.ok(priorAssistantContext, "follow-up context must include prior assistant message in selected_context");
     assert.match(priorAssistantContext.content, /POST 1:/);

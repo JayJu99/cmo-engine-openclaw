@@ -15,6 +15,8 @@ import type {
   CmoDecisionLabel,
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
+  CmoSessionLocalSource,
+  CmoSourceReviewContext,
   CmoStrategyMode,
   CmoAssumptionReviewStatus,
   CmoDecisionLayer,
@@ -91,6 +93,135 @@ function stringValue(value: unknown, fallback = ""): string {
 
 function sourceReviewUserId(identity: CmoServerUserIdentity): string {
   return identity.userId?.trim() || identity.userEmail?.trim() || identity.createdByEmail?.trim() || "legacy_dashboard_user";
+}
+
+function compactSessionSourceText(value: string, maxChars: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+
+  return compact.length > maxChars ? `${compact.slice(0, maxChars - 3).trimEnd()}...` : compact;
+}
+
+function prefixedContentHash(value: string): string {
+  return value.startsWith("sha256:") ? value : `sha256:${value}`;
+}
+
+function sourceRecordString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function sessionSourceStatus(value: string | undefined): CmoSessionLocalSource["extraction_status"] {
+  return value === "completed" || value === "partial" ? value : "failed";
+}
+
+function sessionLocalSourceFromReviewContext(reviewContext: CmoSourceReviewContext): CmoSessionLocalSource | undefined {
+  const source = reviewContext.source;
+  const extraction = reviewContext.extraction;
+  const status = sessionSourceStatus(sourceRecordString(extraction, "status"));
+
+  if (status === "failed") {
+    return undefined;
+  }
+
+  const sourceId = sourceRecordString(source, "source_id");
+  const sourceTitle = sourceRecordString(source, "source_title") || sourceRecordString(source, "canonical_url") || "Session source";
+  const sourceType = sourceRecordString(source, "source_type") || "text";
+  const summary = sourceRecordString(extraction, "extracted_summary");
+  const sourceText = sourceRecordString(extraction, "source_text") ?? sourceRecordString(extraction, "source_text_excerpt");
+  const contentHash = sourceRecordString(extraction, "content_hash");
+
+  if (!sourceId) {
+    return undefined;
+  }
+
+  return {
+    type: "session_local_source",
+    schema_version: "cmo.session_local_source.v1",
+    workspace_id: reviewContext.workspace_id,
+    session_id: reviewContext.session_id,
+    turn_id: reviewContext.request_id,
+    source_id: sourceId,
+    source_type: sourceType,
+    source_title: sourceTitle,
+    ...(sourceRecordString(source, "original_url") ? { original_url: sourceRecordString(source, "original_url") } : {}),
+    ...(sourceRecordString(source, "canonical_url") ? { canonical_url: sourceRecordString(source, "canonical_url") } : {}),
+    ...(sourceRecordString(source, "original_filename") ? { original_filename: sourceRecordString(source, "original_filename") } : {}),
+    ...(summary ? { extracted_summary: compactSessionSourceText(summary, 1000) } : {}),
+    ...(sourceText ? { source_text_excerpt: compactSessionSourceText(sourceText, 1200) } : {}),
+    extraction_status: status,
+    ...(contentHash ? { content_hash: prefixedContentHash(contentHash) } : {}),
+    saved_to_vault: false,
+    official_project_source: false,
+    truth_status: "session_only",
+    review_status: "temporary",
+    no_auto_promote: true,
+    safety: {
+      read_only: true,
+      vault_mutation: false,
+      gbrain_mutation: false,
+      promotion_performed: false,
+    },
+  };
+}
+
+function mergeSessionLocalSources(existing: CmoSessionLocalSource[] | undefined, next: CmoSessionLocalSource | undefined): CmoSessionLocalSource[] {
+  const scopedExisting = existing ?? [];
+
+  if (!next) {
+    return scopedExisting.slice(0, 3);
+  }
+
+  return [next, ...scopedExisting.filter((source) => source.source_id !== next.source_id)].slice(0, 3);
+}
+
+function sourceReviewContextFromSessionLocalSource(
+  source: CmoSessionLocalSource | undefined,
+  input: {
+    tenantId: string;
+    userId: string;
+  },
+): CmoSourceReviewContext | undefined {
+  if (!source) {
+    return undefined;
+  }
+
+  return {
+    schema_version: "cmo.source_review_context.v1",
+    mode: "session_local",
+    tenant_id: input.tenantId,
+    workspace_id: source.workspace_id,
+    user_id: input.userId,
+    session_id: source.session_id,
+    request_id: source.turn_id,
+    source: {
+      source_type: source.source_type,
+      source_title: source.source_title,
+      ...(source.original_url ? { original_url: source.original_url } : {}),
+      ...(source.canonical_url ? { canonical_url: source.canonical_url } : {}),
+      ...(source.original_filename ? { original_filename: source.original_filename } : {}),
+      source_id: source.source_id,
+      workspace_id: source.workspace_id,
+    },
+    extraction: {
+      status: source.extraction_status,
+      ...(source.extracted_summary ? { extracted_summary: source.extracted_summary } : {}),
+      ...(source.source_text_excerpt ? { source_text_excerpt: source.source_text_excerpt } : {}),
+      ...(source.content_hash ? { content_hash: source.content_hash } : {}),
+    },
+    safety: {
+      read_only: true,
+      vault_mutation: false,
+      gbrain_mutation: false,
+      no_promotion: true,
+    },
+    persistence: {
+      saved_to_vault: false,
+      truth_status: "session_only",
+      review_status: "temporary",
+      no_auto_promote: true,
+    },
+  };
 }
 
 function normalizeContextQuality(value: unknown): CMOContextQuality | undefined {
@@ -600,6 +731,110 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
+function normalizeSourceReviewContext(value: unknown): CmoSourceReviewContext | undefined {
+  if (!isRecord(value) || value.schema_version !== "cmo.source_review_context.v1") {
+    return undefined;
+  }
+
+  const mode = value.mode === "session_local" ? "session_local" : value.mode === "review_only" ? "review_only" : undefined;
+  const workspaceId = normalizeOptionalString(value.workspace_id);
+  const sessionId = normalizeOptionalString(value.session_id);
+  const requestId = normalizeOptionalString(value.request_id);
+  const source = isRecord(value.source) ? value.source : undefined;
+  const extraction = isRecord(value.extraction) ? value.extraction : undefined;
+
+  if (!mode || !workspaceId || !sessionId || !requestId || !source || !extraction) {
+    return undefined;
+  }
+
+  return {
+    schema_version: "cmo.source_review_context.v1",
+    mode,
+    tenant_id: normalizeOptionalString(value.tenant_id) ?? "holdstation",
+    workspace_id: workspaceId,
+    user_id: normalizeOptionalString(value.user_id) ?? "legacy_dashboard_user",
+    session_id: sessionId,
+    request_id: requestId,
+    source,
+    extraction,
+    safety: {
+      read_only: true,
+      vault_mutation: false,
+      gbrain_mutation: false,
+      no_promotion: true,
+    },
+    ...(isRecord(value.persistence)
+      ? {
+          persistence: {
+            saved_to_vault: false,
+            truth_status: "session_only",
+            review_status: "temporary",
+            no_auto_promote: true,
+          },
+        }
+      : {}),
+  };
+}
+
+function normalizeSessionLocalSource(value: unknown): CmoSessionLocalSource | undefined {
+  if (!isRecord(value) || value.type !== "session_local_source" || value.schema_version !== "cmo.session_local_source.v1") {
+    return undefined;
+  }
+
+  const workspaceId = normalizeOptionalString(value.workspace_id);
+  const sessionId = normalizeOptionalString(value.session_id);
+  const turnId = normalizeOptionalString(value.turn_id);
+  const sourceId = normalizeOptionalString(value.source_id);
+  const sourceTitle = normalizeOptionalString(value.source_title);
+  const extractionStatus = sessionSourceStatus(normalizeOptionalString(value.extraction_status));
+
+  if (!workspaceId || !sessionId || !turnId || !sourceId || !sourceTitle || extractionStatus === "failed") {
+    return undefined;
+  }
+
+  return {
+    type: "session_local_source",
+    schema_version: "cmo.session_local_source.v1",
+    workspace_id: workspaceId,
+    session_id: sessionId,
+    turn_id: turnId,
+    source_id: sourceId,
+    source_type: normalizeOptionalString(value.source_type) ?? "text",
+    source_title: sourceTitle,
+    ...(normalizeOptionalString(value.original_url) ? { original_url: normalizeOptionalString(value.original_url) } : {}),
+    ...(normalizeOptionalString(value.canonical_url) ? { canonical_url: normalizeOptionalString(value.canonical_url) } : {}),
+    ...(normalizeOptionalString(value.original_filename) ? { original_filename: normalizeOptionalString(value.original_filename) } : {}),
+    ...(normalizeOptionalString(value.extracted_summary) ? { extracted_summary: normalizeOptionalString(value.extracted_summary) } : {}),
+    ...(normalizeOptionalString(value.source_text_excerpt) ? { source_text_excerpt: normalizeOptionalString(value.source_text_excerpt) } : {}),
+    extraction_status: extractionStatus,
+    ...(normalizeOptionalString(value.content_hash) ? { content_hash: normalizeOptionalString(value.content_hash) } : {}),
+    saved_to_vault: false,
+    official_project_source: false,
+    truth_status: "session_only",
+    review_status: "temporary",
+    no_auto_promote: true,
+    safety: {
+      read_only: true,
+      vault_mutation: false,
+      gbrain_mutation: false,
+      promotion_performed: false,
+    },
+  };
+}
+
+function normalizeSessionLocalSources(value: unknown, workspaceId?: string, sessionId?: string): CmoSessionLocalSource[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map(normalizeSessionLocalSource)
+    .filter((source): source is CmoSessionLocalSource => Boolean(source))
+    .filter((source) => (workspaceId ? source.workspace_id === workspaceId : true))
+    .filter((source) => (sessionId ? source.session_id === sessionId : true))
+    .slice(0, 3);
+}
+
 function normalizeOptionalNonNegativeNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
 }
@@ -1089,6 +1324,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             sessionResolutionDurationMs: normalizeOptionalNonNegativeNumber(message.sessionResolutionDurationMs),
             contextPackBuildDurationMs: normalizeOptionalNonNegativeNumber(message.contextPackBuildDurationMs),
             indexedContextBuildDurationMs: normalizeOptionalNonNegativeNumber(message.indexedContextBuildDurationMs),
+            runtimeContext: isRecord(message.runtimeContext) ? message.runtimeContext as unknown as CMOChatMessage["runtimeContext"] : undefined,
+            sourceReviewContext: normalizeSourceReviewContext(message.sourceReviewContext),
           };
         })
         .filter((message): message is CMOChatMessage => Boolean(message))
@@ -1099,6 +1336,17 @@ function normalizeSession(value: unknown): CMOChatSession | null {
   const decisionLayer = normalizeDecisionLayer(value.decisionLayer);
   const contextDiagnostics = normalizeContextDiagnostics(value.contextDiagnostics);
   const runtimeStatus = normalizeRuntimeStatus(value.runtimeStatus, value.isDevelopmentFallback === true);
+  const persistedSessionLocalSources = normalizeSessionLocalSources(value.sessionLocalSources, undefined, id);
+  const messageSessionLocalSources = [...messages].reverse()
+    .map((message) => message.sourceReviewContext ? sessionLocalSourceFromReviewContext(message.sourceReviewContext) : undefined)
+    .filter((source): source is CmoSessionLocalSource => Boolean(source));
+  const sessionLocalSources = persistedSessionLocalSources.length
+    ? persistedSessionLocalSources
+    : mergeSessionLocalSources(messageSessionLocalSources, undefined);
+  const activeSourceId = normalizeOptionalString(value.activeSourceId);
+  const normalizedActiveSourceId = activeSourceId && sessionLocalSources.some((source) => source.source_id === activeSourceId)
+    ? activeSourceId
+    : sessionLocalSources[0]?.source_id;
 
   return {
     id,
@@ -1169,6 +1417,10 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     sessionResolutionDurationMs: normalizeOptionalNonNegativeNumber(value.sessionResolutionDurationMs),
     contextPackBuildDurationMs: normalizeOptionalNonNegativeNumber(value.contextPackBuildDurationMs),
     indexedContextBuildDurationMs: normalizeOptionalNonNegativeNumber(value.indexedContextBuildDurationMs),
+    runtimeContext: isRecord(value.runtimeContext) ? value.runtimeContext as unknown as CMOChatSession["runtimeContext"] : undefined,
+    sourceReviewContext: normalizeSourceReviewContext(value.sourceReviewContext),
+    sessionLocalSources,
+    ...(normalizedActiveSourceId ? { activeSourceId: normalizedActiveSourceId } : {}),
     decisionLayer,
     assumptions: normalizeStringList(value.assumptions),
     suggestedActions: normalizeSuggestedActions(value.suggestedActions),
@@ -1265,13 +1517,33 @@ export async function createAppChatSession(
     nowIso: now,
     timezone: runtimeContext.timezone,
   });
+  const newSessionLocalSource = sourceReviewContext ? sessionLocalSourceFromReviewContext(sourceReviewContext) : undefined;
+  const sessionLocalSources = mergeSessionLocalSources(
+    continuedSession?.sessionLocalSources?.filter((source) => source.workspace_id === request.workspaceId && source.session_id === sessionId),
+    newSessionLocalSource,
+  );
+  const activeSourceId = newSessionLocalSource?.source_id ?? continuedSession?.activeSourceId ?? sessionLocalSources[0]?.source_id;
+  const activeSessionLocalSource = activeSourceId
+    ? sessionLocalSources.find((source) => source.source_id === activeSourceId)
+    : undefined;
+  const activeSourceReviewContext = newSessionLocalSource
+    ? sourceReviewContextFromSessionLocalSource(newSessionLocalSource, {
+        tenantId: request.tenantId ?? "holdstation",
+        userId: sourceReviewUserId(userIdentity),
+      })
+    : sourceReviewContext ?? sourceReviewContextFromSessionLocalSource(activeSessionLocalSource, {
+        tenantId: request.tenantId ?? "holdstation",
+        userId: sourceReviewUserId(userIdentity),
+      });
   contextPackage = {
     ...contextPackage,
     runtimeContext,
-    ...(sourceReviewContext ? { sourceReviewContext } : {}),
+    ...(activeSourceReviewContext ? { sourceReviewContext: activeSourceReviewContext } : {}),
+    sessionLocalSources,
+    ...(activeSourceId ? { activeSourceId } : {}),
     contextPack: {
       ...contextPackage.contextPack,
-      ...(sourceReviewContext ? { sourceReviewContext } : {}),
+      ...(activeSourceReviewContext ? { sourceReviewContext: activeSourceReviewContext } : {}),
     },
   };
   const contextSourceCount = contextPackage.contextPack.items.filter((item) => item.exists).length;
@@ -1412,7 +1684,7 @@ export async function createAppChatSession(
 
   if (!usedHermesCmoChat) {
   const routeIntent = routeIntentForMessage(request.message);
-  const hasSourceReviewContext = Boolean(sourceReviewContext);
+  const hasSourceReviewContext = Boolean(activeSourceReviewContext);
   const allowDirectSurfBridge = routeIntent === "surf_x" || routeIntent === "surf_trend" || routeIntent === "surf_research";
   const allowDirectEchoBridge = routeIntent === "echo_execution";
   const surfBridge = allowDirectSurfBridge ? await maybeHandleSurfBridge(request) : { handled: false };
@@ -1627,6 +1899,8 @@ export async function createAppChatSession(
     ...(vaultAgentContextPackMetadata ? { vaultAgentContextPack: vaultAgentContextPackMetadata } : {}),
     runtimeContext,
     ...(sourceReviewContext ? { sourceReviewContext } : {}),
+    sessionLocalSources,
+    ...(activeSourceId ? { activeSourceId } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,
@@ -1645,6 +1919,8 @@ export async function createAppChatSession(
         content: request.message,
         createdAt: now,
         ...messageUserMetadata(userIdentity),
+        runtimeContext,
+        ...(sourceReviewContext ? { sourceReviewContext } : {}),
       },
       {
         id: assistantId,
@@ -1676,6 +1952,8 @@ export async function createAppChatSession(
         ...(vaultAgentContextPackMetadata ? { vaultAgentContextPack: vaultAgentContextPackMetadata } : {}),
         runtimeContext,
         ...(sourceReviewContext ? { sourceReviewContext } : {}),
+        sessionLocalSources,
+        ...(activeSourceId ? { activeSourceId } : {}),
         contextUsedCount: contextUsed.length,
         graphHintCount,
         indexedContextStatus,
@@ -1806,6 +2084,8 @@ export async function createAppChatSession(
     ...(delegationsMode ? { delegationsMode } : {}),
     runtimeContext,
     ...(sourceReviewContext ? { sourceReviewContext } : {}),
+    sessionLocalSources,
+    ...(activeSourceId ? { activeSourceId } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,

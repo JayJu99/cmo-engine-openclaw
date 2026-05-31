@@ -169,10 +169,41 @@ function sourceReviewContextArtifact(input: HermesCmoChatRequestInput): Record<s
     return null;
   }
 
-  return {
-    type: "source_review_context",
-    ...reviewContext,
-  };
+  return reviewContext as unknown as Record<string, unknown>;
+}
+
+function sessionLocalSourceArtifacts(input: HermesCmoChatRequestInput): Record<string, unknown>[] {
+  return (input.contextPackage.sessionLocalSources ?? [])
+    .filter((source) => source.workspace_id === input.request.workspaceId)
+    .filter((source) => source.session_id === input.sessionId)
+    .map((source) => ({
+      type: "session_local_source",
+      schema_version: "cmo.session_local_source.v1",
+      workspace_id: source.workspace_id,
+      session_id: source.session_id,
+      turn_id: source.turn_id,
+      source_id: source.source_id,
+      source_type: source.source_type,
+      source_title: source.source_title,
+      ...(source.original_url ? { original_url: source.original_url } : {}),
+      ...(source.canonical_url ? { canonical_url: source.canonical_url } : {}),
+      ...(source.original_filename ? { original_filename: source.original_filename } : {}),
+      ...(source.extracted_summary ? { extracted_summary: source.extracted_summary } : {}),
+      ...(source.source_text_excerpt ? { source_text_excerpt: source.source_text_excerpt } : {}),
+      extraction_status: source.extraction_status,
+      ...(source.content_hash ? { content_hash: source.content_hash } : {}),
+      saved_to_vault: false,
+      official_project_source: false,
+      truth_status: "session_only",
+      review_status: "temporary",
+      no_auto_promote: true,
+      safety: {
+        read_only: true,
+        vault_mutation: false,
+        gbrain_mutation: false,
+        promotion_performed: false,
+      },
+    }));
 }
 
 function userId(input: HermesCmoChatRequestInput): string {
@@ -192,6 +223,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const contextItems = input.contextPackage.contextPack.items;
   const vaultContextPack = vaultAgentContextPackArtifact(input);
   const sourceReviewContext = sourceReviewContextArtifact(input);
+  const sessionLocalSources = sessionLocalSourceArtifacts(input);
   const currentPriority = contextItems
     .filter((item) => item.exists && item.kind === "current_priority")
     .map(contextItemSnapshot);
@@ -226,7 +258,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       selected_context: [...input.contextPackage.selectedContext.map(noteSnapshot), ...recentChatContext(input.history)],
       recent_session_summary: recentSessionSummary(input.history),
       indexed_context_supplement: indexedContextSupplement,
-      artifacts_in: [vaultContextPack, sourceReviewContext].filter((artifact): artifact is Record<string, unknown> => Boolean(artifact)),
+      artifacts_in: [vaultContextPack, ...sessionLocalSources].filter((artifact): artifact is Record<string, unknown> => Boolean(artifact)),
+      ...(input.contextPackage.activeSourceId ? { active_source_id: input.contextPackage.activeSourceId } : {}),
       ...(sourceReviewContext ? { source_review_context: sourceReviewContext } : {}),
       read_only_snapshot: true,
       context_quality_summary: input.contextPackage.contextQualitySummary,

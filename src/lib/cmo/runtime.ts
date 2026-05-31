@@ -226,7 +226,7 @@ function sourceReviewFallbackAnswer(input: CmoRuntimeTurnInput): FallbackComposi
   const title = sourceReviewString(source.source_title) || sourceReviewString(source.canonical_url) || "Source";
   const canonicalUrl = sourceReviewString(source.canonical_url) || sourceReviewString(source.original_url);
   const summary = compactSourceReviewText(sourceReviewString(extraction.extracted_summary));
-  const sourceText = compactSourceReviewText(sourceReviewString(extraction.source_text), 1800);
+  const sourceText = compactSourceReviewText(sourceReviewString(extraction.source_text) || sourceReviewString(extraction.source_text_excerpt), 1800);
   const tableSummary = compactSourceReviewText(sourceReviewString(extraction.table_summary), 800);
   const visualSummary = compactSourceReviewText(sourceReviewString(extraction.visual_summary), 800);
   const warnings = sourceReviewStringList(extraction.warnings);

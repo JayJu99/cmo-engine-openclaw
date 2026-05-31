@@ -496,6 +496,10 @@ try {
   const appChatStoreSource = readFileSync("src/lib/cmo/app-chat-store.ts", "utf8");
   assert.match(appChatStoreSource, /buildSourceReviewContextFromMessage/);
   assert.match(appChatStoreSource, /runtimeContext/);
+  assert.match(appChatStoreSource, /sessionLocalSources/);
+  assert.match(appChatStoreSource, /activeSourceId/);
+  assert.match(appChatStoreSource, /sessionLocalSourceFromReviewContext/);
+  assert.match(appChatStoreSource, /sourceReviewContextFromSessionLocalSource/);
   assert.match(appChatStoreSource, /hasSourceReviewContext/);
   assert.match(appChatStoreSource, /!hasSourceReviewContext[\s\S]*executeCmoSurfEvidence/);
   assert.match(appChatStoreSource, /status === "completed" \? await runVaultAgentDryRunHandoff/);
@@ -504,6 +508,8 @@ try {
 
   const hermesMapperSource = readFileSync("src/lib/cmo/hermes-cmo-chat-mapper.ts", "utf8");
   assert.match(hermesMapperSource, /source_review_context/);
+  assert.match(hermesMapperSource, /session_local_source/);
+  assert.match(hermesMapperSource, /active_source_id/);
   assert.match(hermesMapperSource, /runtime_context/);
 
   console.log("CMO source acquisition checks passed");
