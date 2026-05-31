@@ -239,7 +239,25 @@ const sessionShowsFallbackOrLocalSourceReview = (session) => {
   return Boolean(fallbackStatus || fallbackRuntime || explicitProductFallback || localSourceReview);
 };
 
+const sessionFallbackReason = (session) => {
+  if (!isRecord(session)) return "";
+  const latestAssistant = Array.isArray(session.messages)
+    ? [...session.messages].reverse().find((message) => message?.role === "assistant")
+    : null;
+
+  return String(session.productFallbackReason ?? latestAssistant?.productFallbackReason ?? "");
+};
+
 const rootCauseClassification = ({ request, replay, session }) => {
+  const fallbackReason = sessionFallbackReason(session);
+
+  if (/Rejected field/i.test(fallbackReason)) {
+    return {
+      case_id: "D_validator_rejected_valid_or_new_shape",
+      summary: `CMO Engine validator rejected the Hermes response shape: ${compact(fallbackReason, 400)}`,
+    };
+  }
+
   if (!request) {
     return {
       case_id: "no_trace_available",
