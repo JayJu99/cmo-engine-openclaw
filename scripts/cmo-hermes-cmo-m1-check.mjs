@@ -334,6 +334,9 @@ const startServer = async () => {
           const m44aAnswerGroundedUnknownKeyFixture = body.request_id === "req_m44a_answer_grounded_unknown_key";
           const m44aDurableActionFixture = body.request_id === "req_m44a_durable_action_proposed";
           const m44aToolReadFixture = body.request_id === "req_m44a_tool_read";
+          const m44aToolReadCompletedHtmlFixture = body.request_id === "req_m44a_tool_read_completed_html";
+          const m44aDurableActionUnsafeWriteFixture = body.request_id === "req_m44a_durable_action_unsafe_write";
+          const m44aSecretsFixture = body.request_id === "req_m44a_activity_secret_value";
           const m44aContextOldFieldsFixture = body.request_id === "req_m44a_context_loaded_old_fields";
           const m44aContextRawTextFixture = body.request_id === "req_m44a_context_loaded_raw_text";
           const m44aContextFullPackFixture = body.request_id === "req_m44a_context_loaded_full_pack";
@@ -403,17 +406,8 @@ const startServer = async () => {
                     data: {
                       answer_basis_mode: "source_answer",
                       classification: "source_answer",
-                      response_style: "source_answer",
-                      source_context_type: "session_local_source",
-                      answerable: true,
-                      source_answerable: true,
-                      evidence_source_count: 1,
-                      source_count: 1,
-                      used_tool_count: 0,
-                      extraction_quality: "good",
-                      saved_to_vault: false,
-                      no_auto_promote: true,
-                      truth_status: "session_only",
+                      delegations_count: 0,
+                      safe_metadata_only: true,
                     },
                   },
                 ],
@@ -433,7 +427,6 @@ const startServer = async () => {
                     status: "completed",
                     data: {
                       answer_basis_mode: "source_answer",
-                      source_answerable: true,
                       source_text: "raw source text should never be emitted in grounded answer activity metadata",
                     },
                   },
@@ -454,7 +447,6 @@ const startServer = async () => {
                     status: "completed",
                     data: {
                       answer_basis_mode: "source_answer",
-                      source_answerable: true,
                       unexpected_grounding_key: "safe-looking but not allowlisted",
                     },
                   },
@@ -474,16 +466,16 @@ const startServer = async () => {
                     ...activity(body, 1, "cmo.durable_action.proposed", "CMO proposed a durable action requiring confirmation."),
                     status: "completed",
                     data: {
-                      requires_confirmation: true,
+                      delegation_id: "del_save_source_proposal",
+                      target: "vault_agent",
+                      plan_only: true,
+                      direct_write_performed: false,
+                      safe_metadata_only: true,
+                      workspace_id: "feeback",
+                      session_id: "session_m44a_durable_action_proposed",
+                      action_type: "save_source",
                       saved_to_vault: false,
-                      proposed_action: {
-                        type: "save_source",
-                        label: "Save source to Vault",
-                        requires_confirmation: true,
-                        saved_to_vault: false,
-                        no_auto_promote: true,
-                        truth_status: "session_only",
-                      },
+                      no_auto_promote: true,
                     },
                   },
                 ],
@@ -517,18 +509,100 @@ const startServer = async () => {
                     ...activity(body, 1, "cmo.tool_read.started", "CMO started a read-only source tool read."),
                     status: "completed",
                     data: {
-                      tool_type: "web",
-                      saved_to_vault: false,
+                      tool_family: "web",
+                      read_only: true,
+                      source_type: "url",
+                      workspace_id: "feeback",
+                      session_id: "session_m44a_tool_read",
+                      source_id: "source_review_fixture",
+                      url_present: true,
+                      tool_policy: "read_only",
+                      request_id: "req_m44a_tool_read",
                     },
                   },
                   {
                     ...activity(body, 2, "cmo.tool_read.completed", "CMO completed a read-only source tool read."),
                     status: "completed",
                     data: {
-                      tool_type: "web",
-                      extraction_quality: "good",
-                      source_answerable: true,
-                      saved_to_vault: false,
+                      tool_family: "web",
+                      read_only: true,
+                      source_type: "url",
+                      status: "completed",
+                      workspace_id: "feeback",
+                      session_id: "session_m44a_tool_read",
+                      source_id: "source_review_fixture",
+                      http_status: 200,
+                      content_type: "text/html",
+                      bytes_read: 1200,
+                      canonical_url_present: true,
+                    },
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m44aToolReadCompletedHtmlFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.tool_read.completed", "CMO completed a read-only source tool read."),
+                    status: "completed",
+                    data: {
+                      tool_family: "web",
+                      read_only: true,
+                      source_type: "url",
+                      status: "completed",
+                      html: "<html><body>raw page body</body></html>",
+                    },
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m44aDurableActionUnsafeWriteFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.durable_action.proposed", "CMO proposed a durable action requiring confirmation."),
+                    status: "completed",
+                    data: {
+                      delegation_id: "del_unsafe_write",
+                      target: "vault_agent",
+                      plan_only: false,
+                      direct_write_performed: true,
+                      safe_metadata_only: true,
+                      vault_write_path: "13 Sources/private.md",
+                    },
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m44aSecretsFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.answer.grounded", "CMO grounded the answer in available source metadata."),
+                    status: "completed",
+                    data: {
+                      answer_basis_mode: "source_answer",
+                      safe_metadata_only: true,
+                      classification: "Bearer sk-this-should-never-appear",
                     },
                   },
                 ],
@@ -616,7 +690,7 @@ const startServer = async () => {
                     ...activity(body, 1, "cmo.tool_read.completed", "CMO completed a read-only tool read."),
                     status: "completed",
                     data: {
-                      tool_type: "web",
+                      tool_family: "web",
                       raw_source_text: "full source text should not be included in activity metadata",
                     },
                   },
@@ -2860,7 +2934,8 @@ try {
     );
     assert.equal(m44aAnswerGroundedResult.activity_events[0].data.answer_basis_mode, "source_answer");
     assert.equal(m44aAnswerGroundedResult.activity_events[0].data.classification, "source_answer");
-    assert.equal(m44aAnswerGroundedResult.activity_events[0].data.response_style, "source_answer");
+    assert.equal(m44aAnswerGroundedResult.activity_events[0].data.delegations_count, 0);
+    assert.equal(m44aAnswerGroundedResult.activity_events[0].data.safe_metadata_only, true);
 
     const m44aDurableActionResult = await runHermesCmoRuntime({
       ...sampleRequest,
@@ -2900,6 +2975,9 @@ try {
       true,
       "M4.4A cmo.tool_read.completed activity must be accepted",
     );
+    assert.equal(m44aToolReadResult.activity_events[0].data.tool_family, "web");
+    assert.equal(m44aToolReadResult.activity_events[0].data.read_only, true);
+    assert.equal(m44aToolReadResult.activity_events[1].data.http_status, 200);
 
     await assert.rejects(
       () =>
@@ -2995,6 +3073,54 @@ try {
         }),
       /Rejected field: data_unsafe:cmo\.answer\.grounded key=data\.unexpected_grounding_key type=string reason=unknown_key/,
       "cmo.answer.grounded must reject unknown metadata keys",
+    );
+
+    await assert.rejects(
+      () =>
+        runHermesCmoRuntime({
+          ...sampleRequest,
+          request_id: "req_m44a_tool_read_completed_html",
+          session_id: "session_m44a_tool_read_completed_html",
+          turn_id: "turn_m44a_tool_read_completed_html_001",
+          intent: {
+            ...sampleRequest.intent,
+            user_message: "Fixture with raw HTML in tool read completed metadata.",
+          },
+        }),
+      /Rejected field: data_unsafe:cmo\.tool_read\.completed key=data\.html type=string reason=unsafe_key_name/,
+      "cmo.tool_read.completed must reject raw HTML fields",
+    );
+
+    await assert.rejects(
+      () =>
+        runHermesCmoRuntime({
+          ...sampleRequest,
+          request_id: "req_m44a_durable_action_unsafe_write",
+          session_id: "session_m44a_durable_action_unsafe_write",
+          turn_id: "turn_m44a_durable_action_unsafe_write_001",
+          intent: {
+            ...sampleRequest.intent,
+            user_message: "Fixture with unsafe durable action write metadata.",
+          },
+        }),
+      /Rejected field: data_unsafe:cmo\.durable_action\.proposed key=data\.direct_write_performed type=boolean reason=raw_content_like_value/,
+      "durable action metadata must reject direct write completion",
+    );
+
+    await assert.rejects(
+      () =>
+        runHermesCmoRuntime({
+          ...sampleRequest,
+          request_id: "req_m44a_activity_secret_value",
+          session_id: "session_m44a_activity_secret_value",
+          turn_id: "turn_m44a_activity_secret_value_001",
+          intent: {
+            ...sampleRequest.intent,
+            user_message: "Fixture with secret-like activity metadata.",
+          },
+        }),
+      /Rejected field: data_unsafe:cmo\.answer\.grounded key=data\.classification type=string reason=secret_like_value/,
+      "activity metadata must reject secret-like values",
     );
 
     await assert.rejects(

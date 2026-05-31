@@ -401,42 +401,67 @@ const m44aSafeMetadataActivityTypes = new Set<HermesActivityType>([
   "cmo.tool_read.started",
   "cmo.tool_read.completed",
 ]);
-const m44aSafeActivityDataKeys = new Set([
-  "active_source_count",
-  "answer_basis_mode",
-  "answerable",
-  "classification",
-  "context_item_count",
-  "context_pack_present",
-  "evidence_source_count",
-  "extraction_quality",
-  "has_source_answer_context",
-  "no_auto_promote",
-  "proposed_action",
-  "requires_confirmation",
-  "response_style",
-  "saved_to_vault",
-  "source_answerable",
-  "source_count",
-  "source_context_type",
-  "session_id",
-  "tool_type",
-  "tool_policy_present",
-  "truth_status",
-  "used_tool_count",
-  "workspace_id",
-]);
-const m44aSafeProposedActionKeys = new Set([
-  "action_type",
-  "label",
-  "no_auto_promote",
-  "requires_confirmation",
-  "saved_to_vault",
-  "truth_status",
-  "type",
-]);
+const m44bActivityDataKeysByType: Partial<Record<HermesActivityType, Set<string>>> = {
+  "cmo.context.loaded": new Set([
+    "active_source_count",
+    "context_item_count",
+    "context_pack_present",
+    "has_source_answer_context",
+    "no_auto_promote",
+    "saved_to_vault",
+    "source_answerable",
+    "source_count",
+    "session_id",
+    "tool_policy_present",
+    "truth_status",
+    "workspace_id",
+  ]),
+  "cmo.answer.grounded": new Set([
+    "answer_basis_mode",
+    "classification",
+    "delegations_count",
+    "safe_metadata_only",
+  ]),
+  "cmo.tool_read.started": new Set([
+    "read_only",
+    "request_id",
+    "session_id",
+    "source_id",
+    "source_type",
+    "tool_family",
+    "tool_policy",
+    "url_present",
+    "workspace_id",
+  ]),
+  "cmo.tool_read.completed": new Set([
+    "bytes_read",
+    "canonical_url_present",
+    "content_type",
+    "error_code",
+    "http_status",
+    "read_only",
+    "session_id",
+    "source_id",
+    "source_type",
+    "status",
+    "tool_family",
+    "workspace_id",
+  ]),
+  "cmo.durable_action.proposed": new Set([
+    "action_type",
+    "delegation_id",
+    "direct_write_performed",
+    "no_auto_promote",
+    "plan_only",
+    "safe_metadata_only",
+    "saved_to_vault",
+    "session_id",
+    "target",
+    "workspace_id",
+  ]),
+};
 const m44aUnsafeActivityDataKeyPattern =
-  /^(artifacts_in|authorization|body|context_pack|cookie|cookies|credential|credentials|env|file_body|file_content|file_contents|full_content|full_source|full_text|html|markdown|password|private_key|raw|raw_.*|relevant_snippets|secret|secrets|source_text.*|text|token)$/i;
+  /^(api_key|artifacts_in|authorization|body|content|context_pack|cookie|cookies|credential|credentials|env|file_body|file_content|file_contents|full_content|full_source|full_text|html|markdown|password|private_key|raw|raw_.*|relevant_snippets|secret|secrets|source_text.*|text|token|vault_write_path)$/i;
 const m44aUnsafeActivityDataTextPattern =
   /(Bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|AKIA[0-9A-Z]{12,}|BEGIN (?:RSA |OPENSSH |EC |PRIVATE )?PRIVATE KEY|api[_-]?key\s*[:=]|password\s*[:=])/i;
 const executableDelegationEventTypes = new Set<HermesActivityType>([
@@ -553,14 +578,13 @@ const m44aActivityDataDiagnostic = (
       };
     }
 
-    if (key === "proposed_action") {
-      const nested = m44aActivityDataDiagnostic(nestedValue, m44aSafeProposedActionKeys, keyPath, depth + 1);
-
-      if (!nested.ok) {
-        return nested;
-      }
-
-      continue;
+    if (key === "direct_write_performed" && nestedValue !== false) {
+      return {
+        ok: false,
+        keyPath,
+        valueType: valueTypeLabel(nestedValue),
+        reason: "raw_content_like_value",
+      };
     }
 
     if (Array.isArray(nestedValue)) {
@@ -595,7 +619,9 @@ const m44aActivityDataDiagnostic = (
 };
 
 const m44aActivityEventDataDiagnostic = (eventType: HermesActivityType, data: unknown): M44aActivityDataDiagnostic =>
-  !m44aSafeMetadataActivityTypes.has(eventType) ? { ok: true } : m44aActivityDataDiagnostic(data, m44aSafeActivityDataKeys);
+  !m44aSafeMetadataActivityTypes.has(eventType)
+    ? { ok: true }
+    : m44aActivityDataDiagnostic(data, m44bActivityDataKeysByType[eventType] ?? new Set());
 
 const m44aActivityEventDataIsSafe = (eventType: HermesActivityType, data: unknown): boolean =>
   m44aActivityEventDataDiagnostic(eventType, data).ok;

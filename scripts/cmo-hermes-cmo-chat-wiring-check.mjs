@@ -1150,8 +1150,10 @@ try {
     assert.match(hermesRuntimeSource, /data_unsafe:\$\{String\(eventType\)\} key=/);
     assert.match(hermesRuntimeSource, /context_pack_present/);
     assert.match(hermesRuntimeSource, /answer_basis_mode/);
-    assert.match(hermesRuntimeSource, /evidence_source_count/);
-    assert.match(hermesRuntimeSource, /used_tool_count/);
+    assert.match(hermesRuntimeSource, /safe_metadata_only/);
+    assert.match(hermesRuntimeSource, /delegations_count/);
+    assert.match(hermesRuntimeSource, /tool_family/);
+    assert.match(hermesRuntimeSource, /bytes_read/);
     assert.match(hermesRuntimeSource, /source_text\.\*/);
 
     const replaySource = await readFile(path.join(rootDir, "scripts", "cmo-hermes-cmo-replay-trace.mjs"), "utf8");
