@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from "fs/promises";
+import path from "path";
+
 import { getCmoHermesCmoMaxDelegations, isCmoHermesCmoOrchestrationEnabled } from "./config";
 import {
   executeHermesCmoDelegations,
@@ -572,6 +575,123 @@ const hermesTimeoutMs = () => {
   const value = Number.parseInt(process.env.CMO_HERMES_TIMEOUT_MS ?? "30000", 10);
 
   return Number.isFinite(value) && value > 0 ? value : 30000;
+};
+
+const traceEnabled = () =>
+  process.env.CMO_HERMES_CMO_TRACE_ENABLED === "true" || Boolean(process.env.CMO_HERMES_CMO_TRACE_DIR?.trim());
+
+const traceDirectory = () =>
+  path.resolve(process.env.CMO_HERMES_CMO_TRACE_DIR?.trim() || path.join(process.cwd(), "data", "cmo-dashboard", "hermes-cmo-traces"));
+
+const safeTraceId = (value: string) => value.replace(/[^a-z0-9_.-]+/gi, "_").slice(0, 96) || "unknown";
+
+const traceString = (value: string, max = 1200) => {
+  const compact = value.replace(/\s+/g, " ").trim();
+
+  return compact.length > max ? `${compact.slice(0, max - 3).trimEnd()}...` : compact;
+};
+
+const traceValue = (value: unknown, depth = 0): unknown => {
+  if (typeof value === "string") {
+    return traceString(value);
+  }
+
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 12).map((item) => traceValue(item, depth + 1));
+  }
+
+  if (depth >= 5 || !isRecord(value)) {
+    return "[object_redacted]";
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => {
+      if (/api[_-]?key|authorization|token|secret|password/i.test(key)) {
+        return [key, "[redacted]"];
+      }
+
+      return [key, traceValue(item, depth + 1)];
+    }),
+  );
+};
+
+const hermesTracePath = (request: HermesCmoRuntimeRequest, suffix: string) =>
+  path.join(
+    traceDirectory(),
+    `${new Date().toISOString().replace(/[:.]/g, "-")}_${safeTraceId(request.workspace.app_id)}_${safeTraceId(request.session_id)}_${safeTraceId(request.turn_id)}_${suffix}.json`,
+  );
+
+const writeHermesTrace = async (
+  request: HermesCmoRuntimeRequest,
+  suffix: string,
+  payload: Record<string, unknown>,
+) => {
+  if (!traceEnabled()) {
+    return;
+  }
+
+  try {
+    const filePath = hermesTracePath(request, suffix);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, `${JSON.stringify(traceValue(payload), null, 2)}\n`, "utf8");
+  } catch (error) {
+    console.warn("[hermes-cmo-runtime] Failed to write safe Hermes CMO trace.", {
+      requestId: request.request_id,
+      sessionId: request.session_id,
+      turnId: request.turn_id,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
+
+const responseTraceSummary = (payload: unknown): Record<string, unknown> => {
+  const root = isRecord(payload) ? payload : {};
+  const response = isRecord(root.response) ? root.response : root;
+  const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
+  const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
+  const answer = isRecord(response.answer) ? response.answer : {};
+  const responseSafety = isRecord(response.safety) ? response.safety : {};
+  const rootSafety = isRecord(root.safety) ? root.safety : {};
+
+  return {
+    http_payload_shape: isRecord(root.response) ? "wrapped_response" : "response",
+    schema_version: response.schema_version,
+    status: response.status,
+    classification: response.classification ?? structuredOutput.classification,
+    answer_basis_mode: answerBasis.mode,
+    delegations: Array.isArray(response.delegations)
+      ? response.delegations.map((delegation) => {
+          const record = isRecord(delegation) ? delegation : {};
+          const target = isRecord(record.target) ? record.target : {};
+
+          return {
+            id: record.id ?? record.delegation_id ?? record.handoff_id,
+            target_agent: target.agent ?? record.targetAgent ?? record.target_agent ?? record.agent,
+            mode: target.mode ?? record.mode,
+            status: record.status,
+            objective: record.objective,
+          };
+        })
+      : response.delegations,
+    activity_event_types: Array.isArray(root.activity_events)
+      ? root.activity_events.map((event) => isRecord(event) ? event.type : undefined)
+      : [],
+    safety_counters: response.safety_counters ?? root.safety_counters ?? responseSafety.counters ?? rootSafety.counters,
+    forbidden_counters: response.forbidden_counters ?? root.forbidden_counters,
+    mutation_flags: {
+      direct_vault_write: response.direct_vault_write,
+      direct_memory_mutation: response.direct_memory_mutation,
+      direct_supabase_mutation: response.direct_supabase_mutation,
+      direct_supabase_write: response.direct_supabase_write,
+      openclaw_call: response.openclaw_call,
+      gbrain_mutation: response.gbrain_mutation,
+    },
+    answer_body_preview: typeof answer.body === "string" ? traceString(answer.body, 1000) : undefined,
+  };
 };
 
 const compactText = (value: string, max = 500) => value.replace(/\s+/g, " ").trim().slice(0, max);
@@ -1548,6 +1668,11 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest): Promise<unk
   const timeout = setTimeout(() => controller.abort(), hermesTimeoutMs());
 
   try {
+    await writeHermesTrace(request, "request", {
+      kind: "hermes_cmo_request",
+      endpoint_path: HERMES_CMO_AGENT_PATH,
+      request,
+    });
     const response = await fetch(config.endpoint, {
       method: "POST",
       headers: {
@@ -1565,9 +1690,21 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest): Promise<unk
     }
 
     const payload = await parseHermesJson(response, "Hermes CMO Agent");
+    await writeHermesTrace(request, "response", {
+      kind: "hermes_cmo_response",
+      endpoint_path: HERMES_CMO_AGENT_PATH,
+      http_status: response.status,
+      summary: responseTraceSummary(payload),
+      response: payload,
+    });
 
     return payload;
   } catch (error) {
+    await writeHermesTrace(request, "error", {
+      kind: "hermes_cmo_error",
+      endpoint_path: HERMES_CMO_AGENT_PATH,
+      error: error instanceof Error ? error.message : String(error),
+    });
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("Hermes CMO Agent request timed out.");
     }
