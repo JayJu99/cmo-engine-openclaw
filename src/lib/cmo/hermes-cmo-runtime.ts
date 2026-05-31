@@ -402,63 +402,34 @@ const m44aSafeMetadataActivityTypes = new Set<HermesActivityType>([
   "cmo.tool_read.completed",
 ]);
 const m44aSafeActivityDataKeys = new Set([
-  "action",
-  "action_type",
-  "active_source_id",
-  "answerable",
-  "classification",
-  "confidence",
-  "count",
-  "counts",
-  "domain",
-  "domains",
-  "extraction_coverage",
+  "active_source_count",
+  "context_item_count",
+  "context_pack_present",
   "extraction_quality",
-  "extraction_status",
-  "main_content_quality",
-  "no_auto_promote_12_knowledge",
-  "no_auto_save_13_sources",
+  "has_source_answer_context",
+  "no_auto_promote",
   "proposed_action",
-  "read_only",
   "requires_confirmation",
-  "response_style",
   "saved_to_vault",
-  "schema_version",
-  "source_context_type",
+  "source_answerable",
   "source_count",
-  "source_domain",
-  "source_domains",
-  "source_id",
-  "source_ids",
-  "source_title",
-  "source_titles",
-  "status",
-  "target_ref",
-  "target_refs",
-  "target_type",
-  "tool",
-  "tool_name",
+  "session_id",
   "tool_type",
+  "tool_policy_present",
   "truth_status",
-  "uses_session_local_source",
-  "uses_vault_context_pack",
-  "warnings",
+  "workspace_id",
 ]);
 const m44aSafeProposedActionKeys = new Set([
   "action_type",
   "label",
-  "no_auto_save_13_sources",
+  "no_auto_promote",
   "requires_confirmation",
   "saved_to_vault",
-  "source_id",
-  "source_title",
-  "target_ref",
-  "target_type",
   "truth_status",
   "type",
 ]);
 const m44aUnsafeActivityDataKeyPattern =
-  /^(authorization|body|credential|credentials|file_contents|full_content|full_source|full_text|html|markdown|password|private_key|raw|raw_content|raw_file|secret|secrets|source_text|source_text_cache|source_text_excerpt|text|token)$/i;
+  /^(artifacts_in|authorization|body|context_pack|cookie|cookies|credential|credentials|env|file_body|file_content|file_contents|full_content|full_source|full_text|html|markdown|password|private_key|raw|raw_.*|relevant_snippets|secret|secrets|source_text.*|text|token)$/i;
 const m44aUnsafeActivityDataTextPattern =
   /(Bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|AKIA[0-9A-Z]{12,}|BEGIN (?:RSA |OPENSSH |EC |PRIVATE )?PRIVATE KEY|api[_-]?key\s*[:=]|password\s*[:=])/i;
 const executableDelegationEventTypes = new Set<HermesActivityType>([
@@ -498,6 +469,31 @@ const optionalResponseStyleIsAllowed = (value: unknown) =>
 const optionalToolPolicyIsAllowed = (value: unknown) =>
   value === undefined || (typeof value === "string" && toolPolicies.has(value));
 
+type M44aActivityDataRejectionReason =
+  | "unknown_key"
+  | "oversized_string"
+  | "unbounded_array"
+  | "unsafe_key_name"
+  | "raw_content_like_value"
+  | "secret_like_value"
+  | "nested_object_not_allowed";
+
+interface M44aActivityDataDiagnostic {
+  ok: boolean;
+  keyPath?: string;
+  valueType?: string;
+  reason?: M44aActivityDataRejectionReason;
+}
+
+const valueTypeLabel = (value: unknown): string => {
+  if (Array.isArray(value)) return "array";
+  if (value === null) return "null";
+
+  return typeof value;
+};
+
+const safeDiagnosticKey = (keyPath: string): string => keyPath.replace(/[^a-zA-Z0-9_.[\]-]/g, "_").slice(0, 160);
+
 const m44aSafeScalarActivityValue = (value: unknown): boolean => {
   if (value === null || typeof value === "boolean") {
     return true;
@@ -514,44 +510,98 @@ const m44aSafeScalarActivityValue = (value: unknown): boolean => {
   return value.length <= 300 && !m44aUnsafeActivityDataTextPattern.test(value);
 };
 
-const m44aSafeActivityDataRecord = (
+const m44aActivityDataDiagnostic = (
   value: unknown,
   allowedKeys: Set<string>,
+  path = "data",
   depth = 0,
-): value is Record<string, unknown> => {
+): M44aActivityDataDiagnostic => {
   if (!isRecord(value) || depth > 2) {
-    return false;
+    return {
+      ok: false,
+      keyPath: path,
+      valueType: valueTypeLabel(value),
+      reason: "nested_object_not_allowed",
+    };
   }
 
-  return Object.entries(value).every(([key, nestedValue]) => {
-    if (!allowedKeys.has(key) || m44aUnsafeActivityDataKeyPattern.test(key)) {
-      return false;
+  for (const [key, nestedValue] of Object.entries(value)) {
+    const keyPath = `${path}.${key}`;
+
+    if (m44aUnsafeActivityDataKeyPattern.test(key)) {
+      return {
+        ok: false,
+        keyPath,
+        valueType: valueTypeLabel(nestedValue),
+        reason: "unsafe_key_name",
+      };
+    }
+
+    if (!allowedKeys.has(key)) {
+      return {
+        ok: false,
+        keyPath,
+        valueType: valueTypeLabel(nestedValue),
+        reason: "unknown_key",
+      };
     }
 
     if (key === "proposed_action") {
-      return m44aSafeActivityDataRecord(nestedValue, m44aSafeProposedActionKeys, depth + 1);
-    }
+      const nested = m44aActivityDataDiagnostic(nestedValue, m44aSafeProposedActionKeys, keyPath, depth + 1);
 
-    if (key === "counts") {
-      return isRecord(nestedValue) &&
-        Object.entries(nestedValue).every(([countKey, countValue]) =>
-          /^[a-zA-Z0-9_.-]{1,64}$/.test(countKey) &&
-          typeof countValue === "number" &&
-          Number.isFinite(countValue) &&
-          countValue >= 0,
-        );
+      if (!nested.ok) {
+        return nested;
+      }
+
+      continue;
     }
 
     if (Array.isArray(nestedValue)) {
-      return nestedValue.length <= 20 && nestedValue.every(m44aSafeScalarActivityValue);
+      return {
+        ok: false,
+        keyPath,
+        valueType: "array",
+        reason: "unbounded_array",
+      };
     }
 
-    return m44aSafeScalarActivityValue(nestedValue);
-  });
+    if (!m44aSafeScalarActivityValue(nestedValue)) {
+      const reason =
+        typeof nestedValue === "string" && nestedValue.length > 300
+          ? "oversized_string"
+          : typeof nestedValue === "string" && m44aUnsafeActivityDataTextPattern.test(nestedValue)
+            ? "secret_like_value"
+            : isRecord(nestedValue)
+              ? "nested_object_not_allowed"
+              : "raw_content_like_value";
+
+      return {
+        ok: false,
+        keyPath,
+        valueType: valueTypeLabel(nestedValue),
+        reason,
+      };
+    }
+  }
+
+  return { ok: true };
 };
 
+const m44aActivityEventDataDiagnostic = (eventType: HermesActivityType, data: unknown): M44aActivityDataDiagnostic =>
+  !m44aSafeMetadataActivityTypes.has(eventType) ? { ok: true } : m44aActivityDataDiagnostic(data, m44aSafeActivityDataKeys);
+
 const m44aActivityEventDataIsSafe = (eventType: HermesActivityType, data: unknown): boolean =>
-  !m44aSafeMetadataActivityTypes.has(eventType) || m44aSafeActivityDataRecord(data, m44aSafeActivityDataKeys);
+  m44aActivityEventDataDiagnostic(eventType, data).ok;
+
+const m44aActivityEventDataRejection = (eventType: HermesActivityType, data: unknown): string | null => {
+  const diagnostic = m44aActivityEventDataDiagnostic(eventType, data);
+
+  if (diagnostic.ok) {
+    return null;
+  }
+
+  return `data_unsafe:${String(eventType)} key=${safeDiagnosticKey(diagnostic.keyPath ?? "data")} type=${diagnostic.valueType ?? "unknown"} reason=${diagnostic.reason ?? "unknown_key"}`;
+};
 
 const answerTextFromKnownSimpleShape = (answer: unknown): string | null => {
   if (!isRecord(answer)) {
@@ -737,15 +787,15 @@ const activityValidationFailureReason = (
   if (sourceAgent === "cmo" && sourceMode !== "cmo.default") return `source.mode=${String(sourceMode)}`;
   if (sourceAgent === "echo" && sourceMode !== "echo.default" && sourceMode !== "echo.source_translate") return `source.mode=${String(sourceMode)}`;
   if (sourceAgent === "surf" && !allowedSurfModes.has(sourceMode as HermesSurfMode)) return `source.mode=${String(sourceMode)}`;
-  if (isRecord(event.data) && !m44aActivityEventDataIsSafe(eventType as HermesActivityType, event.data)) return `data_unsafe:${String(eventType)}`;
+  if (!isRecord(event.data)) return "data_invalid";
+  const dataRejection = m44aActivityEventDataRejection(eventType as HermesActivityType, event.data);
+  if (dataRejection) return dataRejection;
   if ((sourceAgent === "echo" || sourceAgent === "surf") && (!options.allowExecutableDelegationActivity || !executableDelegationEventTypes.has(eventType as HermesActivityType))) {
     return `delegation_activity_not_allowed:${String(eventType)}`;
   }
   if (!options.allowExecutableDelegationActivity && executableDelegationEventTypes.has(eventType as HermesActivityType)) return `executable_activity_not_allowed:${String(eventType)}`;
   if (typeof event.user_visible !== "boolean" && typeof event.userVisible !== "boolean") return "user_visible_invalid";
   if (!isNonEmptyString(event.message)) return "message_missing";
-  if (!isRecord(event.data)) return "data_invalid";
-  if (!m44aActivityEventDataIsSafe(eventType as HermesActivityType, event.data)) return `data_unsafe:${String(eventType)}`;
 
   return "unknown_activity_validation_failure";
 };

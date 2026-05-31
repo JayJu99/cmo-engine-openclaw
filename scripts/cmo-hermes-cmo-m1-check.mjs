@@ -328,6 +328,14 @@ const startServer = async () => {
           const m43StrategyOnlyFixture = body.request_id === "req_m43_strategy_only_review";
           const m43SourceTranslateFixture = body.request_id === "req_m43_source_translate";
           const m43UnknownActivityFixture = body.request_id === "req_m43_unknown_activity";
+          const m44aContextLoadedFixture = body.request_id === "req_m44a_context_loaded";
+          const m44aAnswerGroundedFixture = body.request_id === "req_m44a_answer_grounded";
+          const m44aDurableActionFixture = body.request_id === "req_m44a_durable_action_proposed";
+          const m44aToolReadFixture = body.request_id === "req_m44a_tool_read";
+          const m44aContextOldFieldsFixture = body.request_id === "req_m44a_context_loaded_old_fields";
+          const m44aContextRawTextFixture = body.request_id === "req_m44a_context_loaded_raw_text";
+          const m44aContextFullPackFixture = body.request_id === "req_m44a_context_loaded_full_pack";
+          const m44aUnsafeActivityDataFixture = body.request_id === "req_m44a_unsafe_activity_data";
           const echoRetryFixture =
             body.request_id === "req_m1_echo_retry_good" ||
             body.request_id === "req_m1_echo_retry_fail" ||
@@ -344,6 +352,220 @@ const startServer = async () => {
                   {
                     ...activity(body, 1, "cmo.unknown_event", "Unknown CMO event."),
                     status: "completed",
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m44aContextLoadedFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.context.loaded", "CMO loaded bounded product context."),
+                    status: "completed",
+                    data: {
+                      context_pack_present: true,
+                      context_item_count: 4,
+                      source_count: 2,
+                      active_source_count: 1,
+                      has_source_answer_context: true,
+                      source_answerable: true,
+                      workspace_id: "feeback",
+                      session_id: "session_m44a_context_loaded",
+                      truth_status: "session_only",
+                      saved_to_vault: false,
+                      no_auto_promote: true,
+                      tool_policy_present: true,
+                    },
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m44aAnswerGroundedFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.answer.grounded", "CMO grounded the answer in available source metadata."),
+                    status: "completed",
+                    data: {
+                      source_answerable: true,
+                      extraction_quality: "good",
+                      saved_to_vault: false,
+                      truth_status: "session_only",
+                    },
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m44aDurableActionFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.durable_action.proposed", "CMO proposed a durable action requiring confirmation."),
+                    status: "completed",
+                    data: {
+                      requires_confirmation: true,
+                      saved_to_vault: false,
+                      proposed_action: {
+                        type: "save_source",
+                        label: "Save source to Vault",
+                        requires_confirmation: true,
+                        saved_to_vault: false,
+                        no_auto_promote: true,
+                        truth_status: "session_only",
+                      },
+                    },
+                  },
+                ],
+                response: {
+                  answer_basis: {
+                    mode: "save_to_vault",
+                  },
+                  structured_output: {
+                    classification: "save_to_vault",
+                    response_style: "save_to_vault",
+                    tool_policy: "vault_agent",
+                    save_requires_explicit_user_confirmation: true,
+                    no_auto_save_13_sources: true,
+                  },
+                  answer: {
+                    body: "I can prepare this source for the explicit save flow, but I will not write it from chat.",
+                  },
+                },
+              }),
+            );
+            return;
+          }
+
+          if (m44aToolReadFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.tool_read.started", "CMO started a read-only source tool read."),
+                    status: "completed",
+                    data: {
+                      tool_type: "web",
+                      saved_to_vault: false,
+                    },
+                  },
+                  {
+                    ...activity(body, 2, "cmo.tool_read.completed", "CMO completed a read-only source tool read."),
+                    status: "completed",
+                    data: {
+                      tool_type: "web",
+                      extraction_quality: "good",
+                      source_answerable: true,
+                      saved_to_vault: false,
+                    },
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m44aContextOldFieldsFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.context.loaded", "CMO loaded bounded product context."),
+                    status: "completed",
+                    data: {
+                      selected_context_count: 5,
+                      safe_metadata_only: true,
+                    },
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m44aContextRawTextFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.context.loaded", "CMO loaded bounded product context."),
+                    status: "completed",
+                    data: {
+                      context_pack_present: true,
+                      source_count: 1,
+                      source_text: "raw source text should never be emitted in activity metadata",
+                    },
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m44aContextFullPackFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.context.loaded", "CMO loaded bounded product context."),
+                    status: "completed",
+                    data: {
+                      context_pack_present: true,
+                      source_count: 1,
+                      context_pack: {
+                        artifacts_in: [
+                          {
+                            type: "session_local_source",
+                            source_text_excerpt: "raw source excerpt must not appear in activity metadata",
+                          },
+                        ],
+                      },
+                    },
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m44aUnsafeActivityDataFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.tool_read.completed", "CMO completed a read-only tool read."),
+                    status: "completed",
+                    data: {
+                      tool_type: "web",
+                      raw_source_text: "full source text should not be included in activity metadata",
+                    },
                   },
                 ],
               }),
@@ -2548,6 +2770,81 @@ try {
     assert.equal(m43SourceTranslateResult.delegationSummary[0].mode, "echo.source_translate");
     assert.equal(m43SourceTranslateResult.delegationSummary[0].status, "completed");
 
+    const m44aContextLoadedResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m44a_context_loaded",
+      session_id: "session_m44a_context_loaded",
+      turn_id: "turn_m44a_context_loaded_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Fixture with M4.4A context loaded activity.",
+      },
+    });
+    assert.equal(
+      m44aContextLoadedResult.activity_events.some((event) => event.type === "cmo.context.loaded"),
+      true,
+      "M4.4A cmo.context.loaded activity must be accepted",
+    );
+    assert.equal(m44aContextLoadedResult.activity_events[0].data.context_pack_present, true);
+    assert.equal(m44aContextLoadedResult.activity_events[0].data.context_item_count, 4);
+    assert.equal(m44aContextLoadedResult.activity_events[0].data.has_source_answer_context, true);
+    assert.equal(m44aContextLoadedResult.activity_events[0].data.workspace_id, "feeback");
+
+    const m44aAnswerGroundedResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m44a_answer_grounded",
+      session_id: "session_m44a_answer_grounded",
+      turn_id: "turn_m44a_answer_grounded_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Fixture with M4.4A grounded answer activity.",
+      },
+    });
+    assert.equal(
+      m44aAnswerGroundedResult.activity_events.some((event) => event.type === "cmo.answer.grounded"),
+      true,
+      "M4.4A cmo.answer.grounded activity must be accepted",
+    );
+
+    const m44aDurableActionResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m44a_durable_action_proposed",
+      session_id: "session_m44a_durable_action_proposed",
+      turn_id: "turn_m44a_durable_action_proposed_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Fixture with M4.4A durable action proposal.",
+      },
+    });
+    assert.equal(
+      m44aDurableActionResult.activity_events.some((event) => event.type === "cmo.durable_action.proposed"),
+      true,
+      "M4.4A durable action proposal activity must be accepted as metadata only",
+    );
+    assert.equal(m44aDurableActionResult.response.structured_output?.classification, "save_to_vault");
+    assert.equal(m44aDurableActionResult.forbidden_counters.vaultWrites, 0);
+
+    const m44aToolReadResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m44a_tool_read",
+      session_id: "session_m44a_tool_read",
+      turn_id: "turn_m44a_tool_read_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Fixture with M4.4A tool read activity.",
+      },
+    });
+    assert.equal(
+      m44aToolReadResult.activity_events.some((event) => event.type === "cmo.tool_read.started"),
+      true,
+      "M4.4A cmo.tool_read.started activity must be accepted",
+    );
+    assert.equal(
+      m44aToolReadResult.activity_events.some((event) => event.type === "cmo.tool_read.completed"),
+      true,
+      "M4.4A cmo.tool_read.completed activity must be accepted",
+    );
+
     await assert.rejects(
       () =>
         runHermesCmoRuntime({
@@ -2562,6 +2859,70 @@ try {
         }),
       /activity_events did not match hermes\.activity\.event\.v1/,
       "unknown activity events must still be rejected",
+    );
+
+    await assert.rejects(
+      () =>
+        runHermesCmoRuntime({
+          ...sampleRequest,
+          request_id: "req_m44a_context_loaded_old_fields",
+          session_id: "session_m44a_context_loaded_old_fields",
+          turn_id: "turn_m44a_context_loaded_old_fields_001",
+          intent: {
+            ...sampleRequest.intent,
+            user_message: "Fixture with old Hermes context loaded metadata fields.",
+          },
+        }),
+      /Rejected field: data_unsafe:cmo\.context\.loaded key=data\.selected_context_count type=number reason=unknown_key/,
+      "old cmo.context.loaded fields must be rejected now that Hermes emits Product-safe keys",
+    );
+
+    await assert.rejects(
+      () =>
+        runHermesCmoRuntime({
+          ...sampleRequest,
+          request_id: "req_m44a_context_loaded_raw_text",
+          session_id: "session_m44a_context_loaded_raw_text",
+          turn_id: "turn_m44a_context_loaded_raw_text_001",
+          intent: {
+            ...sampleRequest.intent,
+            user_message: "Fixture with raw source text in context loaded metadata.",
+          },
+        }),
+      /Rejected field: data_unsafe:cmo\.context\.loaded key=data\.source_text type=string reason=unsafe_key_name/,
+      "cmo.context.loaded must reject raw source text fields",
+    );
+
+    await assert.rejects(
+      () =>
+        runHermesCmoRuntime({
+          ...sampleRequest,
+          request_id: "req_m44a_context_loaded_full_pack",
+          session_id: "session_m44a_context_loaded_full_pack",
+          turn_id: "turn_m44a_context_loaded_full_pack_001",
+          intent: {
+            ...sampleRequest.intent,
+            user_message: "Fixture with full context pack in context loaded metadata.",
+          },
+        }),
+      /Rejected field: data_unsafe:cmo\.context\.loaded key=data\.context_pack type=object reason=unsafe_key_name/,
+      "cmo.context.loaded must reject full context_pack objects",
+    );
+
+    await assert.rejects(
+      () =>
+        runHermesCmoRuntime({
+          ...sampleRequest,
+          request_id: "req_m44a_unsafe_activity_data",
+          session_id: "session_m44a_unsafe_activity_data",
+          turn_id: "turn_m44a_unsafe_activity_data_001",
+          intent: {
+            ...sampleRequest.intent,
+            user_message: "Fixture with unsafe activity data.",
+          },
+        }),
+      /Rejected field: data_unsafe:cmo\.tool_read\.completed key=data\.raw_source_text type=string reason=unsafe_key_name/,
+      "M4.4A metadata events must reject unsafe raw source text",
     );
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {

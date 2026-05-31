@@ -1146,12 +1146,17 @@ try {
     assert.match(runtimeSource, /function sourceReviewFallbackAnswer/);
     assert.match(runtimeSource, /reviewContext\.mode !== "review_only"/);
     assert.match(runtimeSource, /Source Review:/);
+    const hermesRuntimeSource = await readFile(path.join(cmoDir, "hermes-cmo-runtime.ts"), "utf8");
+    assert.match(hermesRuntimeSource, /data_unsafe:\$\{String\(eventType\)\} key=/);
+    assert.match(hermesRuntimeSource, /context_pack_present/);
+    assert.match(hermesRuntimeSource, /source_text\.\*/);
 
     const replaySource = await readFile(path.join(rootDir, "scripts", "cmo-hermes-cmo-replay-trace.mjs"), "utf8");
     assert.match(replaySource, /rootCauseClassification/);
     assert.match(replaySource, /request_present/);
     assert.match(replaySource, /productRenderSource/);
     assert.match(replaySource, /productFallbackReason/);
+    assert.match(replaySource, /D_validator_rejected_valid_or_new_shape/);
     assert.match(replaySource, /A_request_context_missing/);
     assert.match(replaySource, /B_hermes_classification_or_answer_mismatch/);
     assert.match(replaySource, /C_hermes_invalid_or_boundary_rejected/);
