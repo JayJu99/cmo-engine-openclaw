@@ -24,6 +24,7 @@ const safeSourceClassifications = new Set([
   "source_translate",
   "source_transform",
   "save_to_vault",
+  "clarify",
 ]);
 
 const latestFile = (dir, predicate) => {
@@ -69,6 +70,9 @@ const summarizeSession = (session) => {
     runtimeStatus: session.runtimeStatus,
     runtimeProvider: session.runtimeProvider,
     isRuntimeFallback: session.isRuntimeFallback,
+    productRenderSource: session.productRenderSource,
+    productFallbackReason: session.productFallbackReason,
+    hermesRequestSent: session.hermesRequestSent,
     calledHermesCmo: session.calledHermesCmo,
     hermesCmoStatus: session.hermesCmoStatus,
     activeSourceId: session.activeSourceId,
@@ -82,10 +86,15 @@ const summarizeSession = (session) => {
         runtimeStatus: message.runtimeStatus,
         runtimeProvider: message.runtimeProvider,
         isRuntimeFallback: message.isRuntimeFallback,
+        productRenderSource: message.productRenderSource,
+        productFallbackReason: message.productFallbackReason,
+        hermesRequestSent: message.hermesRequestSent,
         calledHermesCmo: message.calledHermesCmo,
         hermesCmoStatus: message.hermesCmoStatus,
         hermesCmoMetadata: message.hermesCmoMetadata
           ? {
+              hermesRequestSent: message.hermesCmoMetadata.hermesRequestSent,
+              productRenderSource: message.hermesCmoMetadata.productRenderSource,
               responseStatus: message.hermesCmoMetadata.responseStatus,
               strategyMode: message.hermesCmoMetadata.strategyMode,
               decisionLabel: message.hermesCmoMetadata.decisionLabel,
@@ -112,11 +121,15 @@ const summarizeSession = (session) => {
 };
 
 const summarizeHermesRequest = (request) => ({
+  request_present: true,
   request_id: request.request_id,
   session_id: request.session_id,
   turn_id: request.turn_id,
   workspace: request.workspace,
   user_message: request.intent?.user_message,
+  tool_policy: request.tool_policy,
+  product_boundary: request.product_boundary,
+  source_acquisition: request.source_acquisition,
   context_pack_keys: Object.keys(request.context_pack ?? {}),
   active_source_id: request.context_pack?.active_source_id,
   artifacts_in: Array.isArray(request.context_pack?.artifacts_in)
@@ -217,12 +230,13 @@ const sessionShowsFallbackOrLocalSourceReview = (session) => {
   if (!isRecord(session)) return false;
   const fallbackStatus = typeof session.hermesCmoStatus === "string" && session.hermesCmoStatus !== "live";
   const fallbackRuntime = session.isRuntimeFallback === true || session.runtimeProvider === "fallback";
+  const explicitProductFallback = session.productRenderSource === "fallback_after_hermes_failure";
   const localSourceReview = Array.isArray(session.messages) && session.messages.some((message) =>
     message?.role === "assistant" &&
       /Source Review:|This source is available as temporary review-only context|No Vault save, GBrain indexing, or knowledge promotion was performed/i.test(message.content ?? ""),
   );
 
-  return Boolean(fallbackStatus || fallbackRuntime || localSourceReview);
+  return Boolean(fallbackStatus || fallbackRuntime || explicitProductFallback || localSourceReview);
 };
 
 const rootCauseClassification = ({ request, replay, session }) => {
@@ -286,6 +300,8 @@ const run = async () => {
     session: foundSessionPath && existsSync(foundSessionPath) ? summarizeSession(readJson(foundSessionPath)) : null,
     request: null,
     replay: null,
+    productRenderSource: null,
+    fallbackReason: null,
     rootCauseClassification: null,
   };
 
@@ -317,6 +333,10 @@ const run = async () => {
       };
     }
   }
+
+  const latestAssistant = output.session?.messages?.filter((message) => message.role === "assistant").at(-1);
+  output.productRenderSource = output.session?.productRenderSource ?? latestAssistant?.productRenderSource ?? null;
+  output.fallbackReason = output.session?.productFallbackReason ?? latestAssistant?.productFallbackReason ?? null;
 
   output.rootCauseClassification = rootCauseClassification({
     request: output.request,

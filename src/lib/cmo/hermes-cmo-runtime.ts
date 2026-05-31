@@ -40,6 +40,7 @@ export type HermesCmoClassification =
   | "strategy_only"
   | "external_research"
   | "save_to_vault"
+  | "clarify"
   | "needs_surf"
   | "needs_echo_retry";
 export type HermesActivityStatus = "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled";
@@ -325,6 +326,7 @@ const classifications = new Set<HermesCmoClassification>([
   "strategy_only",
   "external_research",
   "save_to_vault",
+  "clarify",
   "needs_surf",
   "needs_echo_retry",
 ]);

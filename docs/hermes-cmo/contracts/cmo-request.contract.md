@@ -29,6 +29,10 @@ CMO Engine still saves session/raw/index as current system behavior.
 | `context_pack` | object | yes | Context resolved by CMO Engine. |
 | `constraints` | object | yes | Runtime and policy boundaries. |
 | `ui` | object | yes | Activity Stream and Heartbeat requirements. |
+| `tool_policy` | object | recommended | Product-shell tool/delegation/write boundary. |
+| `product_boundary` | object | recommended | CMO Engine / Hermes CMO / Vault Agent ownership invariant. |
+| `source_acquisition` | object | recommended | Chat source cache role and official ingestion boundary. |
+| `runtime_context` | object | recommended | Server-derived time, locale, timezone, and user display context. |
 
 ## Canonical Shape
 
@@ -78,6 +82,27 @@ CMO Engine still saves session/raw/index as current system behavior.
   "ui": {
     "activity_stream_required": true,
     "heartbeat_required": true
+  },
+  "tool_policy": {
+    "schema_version": "cmo.hermes.tool_policy.v1",
+    "role": "product_shell_context_provider",
+    "allowed_agents": ["echo", "surf"],
+    "delegations_mode": "proposals_only",
+    "read_web_allowed": true,
+    "read_browser_allowed": true,
+    "read_file_allowed": true,
+    "terminal_read_only_allowed": true,
+    "durable_writes_require_confirmation": true,
+    "allowed_toolsets": ["web", "browser", "file", "terminal_read_only", "code_execution", "vision", "skills", "session_search", "clarify", "todo", "memory_read", "delegation"],
+    "disabled_toolsets": ["messaging", "cronjob", "kanban"],
+    "durable_writes": {
+      "session_log_owned_by_cmo_engine": true,
+      "vault_writes_require_explicit_save_flow": true,
+      "source_ingestion_requires_inputs_priorities_or_explicit_save": true,
+      "no_auto_save_13_sources": true,
+      "no_auto_promote_12_knowledge": true,
+      "no_gbrain_mutation": true
+    }
   }
 }
 ```
@@ -102,6 +127,8 @@ CMO Engine still saves session/raw/index as current system behavior.
 
 `constraints.allowed_surf_modes` makes Surf modes explicit. `surf.x`, `surf.trend`, and `surf.pulse` are modes, not agents.
 
+`tool_policy` allows Hermes CMO to be the primary read-only source reader in chat. It may decide whether to use web/browser/file/read-only terminal/source tools, while durable writes still require explicit user approval and approved product flows.
+
 ## Invariants
 
 - CMO must not write Vault directly.
@@ -111,4 +138,5 @@ CMO Engine still saves session/raw/index as current system behavior.
 - CMO must respect allowed agents and Surf modes.
 - CMO must not assume Kanban is available when `kanban_enabled` is false.
 - CMO Engine remains responsible for session save, raw capture, Supabase index, UI state, and current session persistence.
-
+- When Hermes CMO is live, CMO Engine may cache source artifacts but must not synthesize final source-review or source-answer output.
+- Chat URL/file acquisition is session-local context only; official `13 Sources` ingestion requires the future Inputs & Priorities / Sources UI or an explicit save flow.

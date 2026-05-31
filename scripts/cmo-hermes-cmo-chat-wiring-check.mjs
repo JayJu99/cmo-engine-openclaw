@@ -590,13 +590,31 @@ try {
     assert.equal(hermesRequest.constraints.allowSessionWrites, false);
     assert.equal(hermesRequest.constraints.allowRawCaptureWrites, false);
     assert.equal(hermesRequest.constraints.allowOpenClawCalls, false);
+    assert.equal(hermesRequest.constraints.no_direct_supabase_mutation, true);
+    assert.equal(hermesRequest.constraints.no_direct_session_write, true);
+    assert.equal(hermesRequest.constraints.no_direct_raw_capture_write, true);
     assert.equal(hermesRequest.constraints.delegations_mode, "proposals_only");
     assert.deepEqual(hermesRequest.constraints.allowed_agents, ["echo", "surf"]);
     assert.equal(hermesRequest.tool_policy.schema_version, "cmo.hermes.tool_policy.v1");
     assert.equal(hermesRequest.tool_policy.role, "product_shell_context_provider");
+    assert.equal(hermesRequest.tool_policy.read_web_allowed, true);
+    assert.equal(hermesRequest.tool_policy.read_browser_allowed, true);
+    assert.equal(hermesRequest.tool_policy.read_file_allowed, true);
+    assert.equal(hermesRequest.tool_policy.terminal_read_only_allowed, true);
+    assert.equal(hermesRequest.tool_policy.durable_writes_require_confirmation, true);
+    assert.ok(hermesRequest.tool_policy.allowed_toolsets.includes("web"));
+    assert.ok(hermesRequest.tool_policy.allowed_toolsets.includes("browser"));
+    assert.ok(hermesRequest.tool_policy.allowed_toolsets.includes("file"));
+    assert.ok(hermesRequest.tool_policy.allowed_toolsets.includes("terminal_read_only"));
+    assert.deepEqual(hermesRequest.tool_policy.disabled_toolsets, ["messaging", "cronjob", "kanban"]);
     assert.equal(hermesRequest.tool_policy.durable_writes.no_auto_save_13_sources, true);
     assert.equal(hermesRequest.tool_policy.durable_writes.no_auto_promote_12_knowledge, true);
     assert.equal(hermesRequest.tool_policy.durable_writes.no_gbrain_mutation, true);
+    assert.equal(hermesRequest.product_boundary.engine_owns_session, true);
+    assert.equal(hermesRequest.product_boundary.engine_owns_turn_logging, true);
+    assert.equal(hermesRequest.product_boundary.durable_write_requires_approval, true);
+    assert.equal(hermesRequest.product_boundary.no_auto_save_13_sources, true);
+    assert.equal(hermesRequest.product_boundary.no_auto_promote_12_knowledge, true);
     assert.equal(hermesRequest.product_boundary.final_answer_owner_when_live, "hermes_cmo");
     assert.equal(hermesRequest.product_boundary.cmo_engine_must_not_synthesize_source_review_when_live, true);
     assert.equal(hermesRequest.product_boundary.cmo_engine_must_not_synthesize_source_answer_when_live, true);
@@ -612,6 +630,8 @@ try {
     assert.equal(mapped.runtimeAgent, "cmo");
     assert.equal(mapped.calledHermesCmo, true);
     assert.equal(mapped.hermesCmoMetadata.runtimeMode, "hermes_cmo");
+    assert.equal(mapped.hermesCmoMetadata.hermesRequestSent, true);
+    assert.equal(mapped.hermesCmoMetadata.productRenderSource, "hermes_cmo");
     assert.equal(mapped.delegationsMode, "proposals_only");
     assert.deepEqual(mapped.hermesCmoCounters, expectedCounters);
     assert.deepEqual(mapped.hermesCmoMetadata.forbiddenCounters, forbiddenZeroCounters);
@@ -740,6 +760,33 @@ try {
     assert.equal(nativeAcknowledgementMapped.answer, "Ok bro, rõ rồi.");
     assert.doesNotMatch(nativeAcknowledgementMapped.answer, /CMO strategic response|Decision:|REVIEW/);
 
+    const clarifyBase = makeRuntimeResult();
+    const clarifyMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...clarifyBase,
+      response: {
+        ...clarifyBase.response,
+        status: "needs_user_input",
+        classification: "clarify",
+        answer_basis: {
+          mode: "needs_user_input",
+          missing_inputs: ["source URL"],
+          assumptions_used: [],
+          user_can_override: true,
+          suggested_user_inputs: ["Send the source URL or file."],
+        },
+        clarifying_question: {
+          required: true,
+          question: "Please send the source URL or file you want me to read.",
+          reason: "No source was provided.",
+          missing_inputs: ["source URL"],
+        },
+        answer: null,
+        structured_output: null,
+      },
+    });
+    assert.match(clarifyMapped.answer, /Need Clarification/);
+    assert.match(clarifyMapped.answer, /Please send the source URL/);
+
     const saveToVaultIntentBase = makeRuntimeResult();
     const saveToVaultIntentMapped = mapper.mapHermesCmoResponseToChatResult({
       ...saveToVaultIntentBase,
@@ -793,6 +840,50 @@ try {
     });
     assert.match(structuredReviewMapped.answer, /## CMO strategic response/);
     assert.match(structuredReviewMapped.answer, /Decision: KEEP/);
+
+    const externalResearchBase = makeRuntimeResult();
+    const externalResearchMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...externalResearchBase,
+      response: {
+        ...externalResearchBase.response,
+        answer_basis: {
+          ...externalResearchBase.response.answer_basis,
+          mode: "external_research",
+        },
+        answer: {
+          format: "markdown",
+          title: "External research result",
+          summary: "Surf-backed answer",
+          decision: "KEEP",
+          body: "Hermes CMO used Surf evidence and returned the final product answer.",
+        },
+        structured_output: {
+          classification: "external_research",
+          response_style: "research_answer",
+          tool_policy: "surf",
+        },
+      },
+      delegationSummary: [
+        {
+          delegationKey: "surf:surf.default",
+          delegationId: "del_external_research",
+          targetAgent: "surf",
+          mode: "surf.default",
+          objective: "Gather external evidence.",
+          status: "completed",
+          summary: "Surf returned evidence.",
+        },
+      ],
+      safety_counters: {
+        ...externalResearchBase.safety_counters,
+        surfCalls: 1,
+      },
+      surfCalls: 1,
+      agentsUsed: ["cmo", "surf"],
+    });
+    assert.match(externalResearchMapped.answer, /Hermes CMO used Surf evidence/);
+    assert.equal(externalResearchMapped.hermesCmoMetadata.surfCalls, 1);
+    assert.deepEqual(externalResearchMapped.hermesCmoMetadata.agentsUsed, ["cmo", "surf"]);
 
     const strategyOnlyReviewBase = makeRuntimeResult();
     const strategyOnlyReviewMapped = mapper.mapHermesCmoResponseToChatResult({
@@ -1038,20 +1129,29 @@ try {
     assert.match(invalidCounters.errorReason, /^forbidden_counter_non_zero:vaultWrites=1/);
 
     const source = await readFile(path.join(cmoDir, "app-chat-store.ts"), "utf8");
+    assert.match(source, /const hermesCmoChatRequested = !request\.forceFallback && shouldUseHermesCmoChat\(request\.appId\)/);
     assert.match(source, /shouldUseHermesCmoChat\(request\.appId\)/);
     assert.match(source, /runHermesCmoRuntime\(hermesRequest\)/);
     assert.match(source, /answer = mappedHermesResult\.answer/);
+    assert.match(source, /productRenderSource = "hermes_cmo"/);
     assert.match(source, /if \(!usedHermesCmoChat\)/);
+    assert.match(source, /productRenderSource = hermesCmoChatRequested \? "fallback_after_hermes_failure"/);
+    assert.match(source, /productFallbackReason = hermesCmoChatRequested/);
     assert.match(source, /fallbackContextPackage/);
     assert.match(source, /failed_then_existing_fallback/);
     assert.match(source, /guardrail_violation_then_existing_fallback/);
+    assert.doesNotMatch(source, /Source Review:|What I Read|CMO Read/);
 
     const runtimeSource = await readFile(path.join(cmoDir, "runtime.ts"), "utf8");
     assert.match(runtimeSource, /function sourceReviewFallbackAnswer/);
     assert.match(runtimeSource, /reviewContext\.mode !== "review_only"/);
+    assert.match(runtimeSource, /Source Review:/);
 
     const replaySource = await readFile(path.join(rootDir, "scripts", "cmo-hermes-cmo-replay-trace.mjs"), "utf8");
     assert.match(replaySource, /rootCauseClassification/);
+    assert.match(replaySource, /request_present/);
+    assert.match(replaySource, /productRenderSource/);
+    assert.match(replaySource, /productFallbackReason/);
     assert.match(replaySource, /A_request_context_missing/);
     assert.match(replaySource, /B_hermes_classification_or_answer_mismatch/);
     assert.match(replaySource, /C_hermes_invalid_or_boundary_rejected/);

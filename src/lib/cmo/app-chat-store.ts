@@ -13,6 +13,7 @@ import type {
   CMORuntimeStatus,
   CmoAuthMode,
   CmoDecisionLabel,
+  CmoProductRenderSource,
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
   CmoSessionLocalSource,
@@ -643,6 +644,17 @@ function normalizeRuntimeProvider(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
+function normalizeProductRenderSource(value: unknown): CmoProductRenderSource | undefined {
+  return value === "hermes_cmo" ||
+    value === "fallback_after_hermes_failure" ||
+    value === "local_runtime_fallback" ||
+    value === "legacy_cmo_engine" ||
+    value === "direct_bridge" ||
+    value === "local_session_command"
+    ? value
+    : undefined;
+}
+
 function normalizeContextDiagnostics(value: unknown): CMOContextDiagnostics | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -1139,6 +1151,8 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     runtimeMode: "hermes_cmo",
     runtimeStatus: "live",
     calledHermesCmo: true,
+    ...(value.hermesRequestSent === true ? { hermesRequestSent: true } : {}),
+    ...(value.productRenderSource === "hermes_cmo" ? { productRenderSource: "hermes_cmo" } : {}),
     delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode) ?? HERMES_CMO_PROPOSALS_ONLY,
     counters,
     forbiddenCounters,
@@ -1361,6 +1375,9 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             runtimeProvider: normalizeRuntimeProvider(message.runtimeProvider),
             runtimeAgent: normalizeRuntimeProvider(message.runtimeAgent),
             runtimeErrorReason: normalizeRuntimeErrorReason(message.runtimeErrorReason),
+            productRenderSource: normalizeProductRenderSource(message.productRenderSource),
+            productFallbackReason: normalizeOptionalString(message.productFallbackReason),
+            hermesRequestSent: message.hermesRequestSent === true ? true : undefined,
             calledHermesCmo: message.calledHermesCmo === true ? true : undefined,
             hermesCmoStatus: normalizeHermesCmoChatStatus(message.hermesCmoStatus),
             hermesCmoErrorReason: normalizeOptionalString(message.hermesCmoErrorReason),
@@ -1451,6 +1468,9 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     runtimeErrorReason: normalizeRuntimeErrorReason(value.runtimeErrorReason),
     runtimeProvider: normalizeRuntimeProvider(value.runtimeProvider),
     runtimeAgent: normalizeRuntimeProvider(value.runtimeAgent),
+    productRenderSource: normalizeProductRenderSource(value.productRenderSource),
+    productFallbackReason: normalizeOptionalString(value.productFallbackReason),
+    hermesRequestSent: value.hermesRequestSent === true ? true : undefined,
     calledHermesCmo: value.calledHermesCmo === true ? true : undefined,
     hermesCmoStatus: normalizeHermesCmoChatStatus(value.hermesCmoStatus),
     hermesCmoErrorReason: normalizeOptionalString(value.hermesCmoErrorReason),
@@ -1697,8 +1717,12 @@ export async function createAppChatSession(
   let forbiddenCounters: HermesCmoForbiddenCounters | undefined;
   let delegationsMode: HermesCmoDelegationsMode | undefined;
   let usedHermesCmoChat = false;
+  const hermesCmoChatRequested = !request.forceFallback && shouldUseHermesCmoChat(request.appId);
+  let hermesRequestSent = false;
+  let productRenderSource: CmoProductRenderSource | undefined;
+  let productFallbackReason: string | undefined;
 
-  if (!request.forceFallback && shouldUseHermesCmoChat(request.appId)) {
+  if (hermesCmoChatRequested) {
     const hermesStartedAt = new Date().toISOString();
     const hermesStartedMs = Date.now();
 
@@ -1716,6 +1740,7 @@ export async function createAppChatSession(
         createdAt: now,
         userIdentity,
       });
+      hermesRequestSent = true;
       const hermesResult = await runHermesCmoRuntime(hermesRequest);
       const counterValidation = validateHermesCmoChatCounters(hermesResult);
 
@@ -1757,6 +1782,7 @@ export async function createAppChatSession(
       echoCalls = hermesCmoMetadata.echoCalls;
       forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
       delegationsMode = mappedHermesResult.delegationsMode;
+      productRenderSource = "hermes_cmo";
       usedHermesCmoChat = true;
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Hermes CMO chat runtime failed.";
@@ -1772,11 +1798,18 @@ export async function createAppChatSession(
         ? "guardrail_violation_then_existing_fallback"
         : "failed_then_existing_fallback";
       hermesCmoErrorReason = reason;
+      productFallbackReason = reason;
       delegationsMode = HERMES_CMO_PROPOSALS_ONLY;
     }
   }
 
   if (!usedHermesCmoChat) {
+  productRenderSource = hermesCmoChatRequested ? "fallback_after_hermes_failure" : undefined;
+  productFallbackReason = hermesCmoChatRequested
+    ? productFallbackReason ?? "Hermes CMO was unavailable or invalid; CMO Engine used explicit fallback."
+    : request.forceFallback
+      ? "Live app-chat intentionally bypassed for fallback smoke."
+      : undefined;
   const routeIntent = routeIntentForMessage(request.message);
   const hasSourceReviewContext = Boolean(activeSourceReviewContext);
   const allowDirectSurfBridge = routeIntent === "surf_x" || routeIntent === "surf_trend" || routeIntent === "surf_research";
@@ -1807,6 +1840,7 @@ export async function createAppChatSession(
       runtimeErrorReason = bridgeResponse.runtimeError ? "execution_error" : undefined;
       runtimeProvider = bridgeResponse.runtimeProvider;
       runtimeAgent = bridgeResponse.runtimeAgent;
+      productRenderSource = hermesCmoChatRequested ? "fallback_after_hermes_failure" : "direct_bridge";
       status = "completed";
     } else {
     const fallbackContextPackage = sourceReviewContext
@@ -1848,6 +1882,11 @@ export async function createAppChatSession(
     runtimeErrorReason = runtimeResult.runtimeErrorReason;
     runtimeProvider = runtimeResult.runtimeProvider;
     runtimeAgent = runtimeResult.runtimeAgent;
+    productRenderSource = hermesCmoChatRequested
+      ? "fallback_after_hermes_failure"
+      : runtimeResult.isRuntimeFallback
+        ? "local_runtime_fallback"
+        : "legacy_cmo_engine";
     liveAttemptStartedAt = runtimeResult.liveAttemptStartedAt;
     liveAttemptDurationMs = runtimeResult.liveAttemptDurationMs;
     fallbackDurationMs = runtimeResult.fallbackDurationMs;
@@ -1864,6 +1903,7 @@ export async function createAppChatSession(
       suggestedActions = [{ type: "clarification", label: "Provide decision-critical context before CMO calls Surf." }];
       runtimeProvider = "dashboard";
       runtimeAgent = "cmo";
+      productRenderSource = hermesCmoChatRequested ? "fallback_after_hermes_failure" : "legacy_cmo_engine";
       isRuntimeFallback = false;
       runtimeError = "";
       runtimeErrorReason = undefined;
@@ -1879,6 +1919,7 @@ export async function createAppChatSession(
       suggestedActions = [{ type: "clarification", label: "Provide the missing context before CMO orchestrates Echo." }];
       runtimeProvider = "dashboard";
       runtimeAgent = "cmo";
+      productRenderSource = hermesCmoChatRequested ? "fallback_after_hermes_failure" : "legacy_cmo_engine";
       isRuntimeFallback = false;
       runtimeError = "";
       runtimeErrorReason = undefined;
@@ -1908,6 +1949,7 @@ export async function createAppChatSession(
       runtimeErrorReason = mixedEchoResult.runtimeError ? "execution_error" : runtimeErrorReason;
       runtimeProvider = mixedEchoResult.runtimeProvider;
       runtimeAgent = mixedEchoResult.runtimeAgent;
+      productRenderSource = hermesCmoChatRequested ? "fallback_after_hermes_failure" : "direct_bridge";
     }
     if (request.forceFallback) {
       attemptedRuntimeMode = "live";
@@ -1921,6 +1963,8 @@ export async function createAppChatSession(
     runtimeStatus = "runtime_error";
     runtimeMode = "configured_but_unreachable";
     runtimeError = error instanceof Error ? error.message : "OpenClaw CMO runtime failed";
+    productRenderSource = hermesCmoChatRequested ? "fallback_after_hermes_failure" : "local_runtime_fallback";
+    productFallbackReason = productFallbackReason ?? runtimeError;
     answer = [
       "Runtime boundary error: CMO runtime registry could not produce a usable answer.",
       runtimeError,
@@ -1984,6 +2028,9 @@ export async function createAppChatSession(
     ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
     ...(runtimeProvider ? { runtimeProvider } : {}),
     ...(runtimeAgent ? { runtimeAgent } : {}),
+    ...(productRenderSource ? { productRenderSource } : {}),
+    ...(productFallbackReason ? { productFallbackReason } : {}),
+    ...(hermesRequestSent ? { hermesRequestSent } : {}),
     ...(calledHermesCmo ? { calledHermesCmo } : {}),
     ...(hermesCmoStatus ? { hermesCmoStatus } : {}),
     ...(hermesCmoErrorReason ? { hermesCmoErrorReason } : {}),
@@ -2039,6 +2086,9 @@ export async function createAppChatSession(
         ...(runtimeProvider ? { runtimeProvider } : {}),
         ...(runtimeAgent ? { runtimeAgent } : {}),
         ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
+        ...(productRenderSource ? { productRenderSource } : {}),
+        ...(productFallbackReason ? { productFallbackReason } : {}),
+        ...(hermesRequestSent ? { hermesRequestSent } : {}),
         ...(calledHermesCmo ? { calledHermesCmo } : {}),
         ...(hermesCmoStatus ? { hermesCmoStatus } : {}),
         ...(hermesCmoErrorReason ? { hermesCmoErrorReason } : {}),
@@ -2172,6 +2222,9 @@ export async function createAppChatSession(
     ...(runtimeErrorReason ? { runtimeErrorReason } : {}),
     ...(runtimeProvider ? { runtimeProvider } : {}),
     ...(runtimeAgent ? { runtimeAgent } : {}),
+    ...(productRenderSource ? { productRenderSource } : {}),
+    ...(productFallbackReason ? { productFallbackReason } : {}),
+    ...(hermesRequestSent ? { hermesRequestSent } : {}),
     ...(calledHermesCmo ? { calledHermesCmo } : {}),
     ...(hermesCmoStatus ? { hermesCmoStatus } : {}),
     ...(hermesCmoErrorReason ? { hermesCmoErrorReason } : {}),

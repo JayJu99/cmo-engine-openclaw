@@ -25,6 +25,14 @@ cancelled
 fully_grounded
 assumption_based
 needs_user_input
+native_conversation
+source_answer
+source_translate
+source_transform
+structured_review
+external_research
+save_to_vault
+clarify
 ```
 
 CMO must use `assumption_based` whenever it continues despite missing non-blocking inputs. CMO must use `needs_user_input` when missing inputs block a reliable answer.
@@ -161,4 +169,6 @@ Suggested shape:
 - `answer_basis.assumptions_used` must not be empty when `answer_basis.mode` is `assumption_based`.
 - Delegations must respect the request constraints.
 - Any Vault write must be represented as Vault Agent delegation, never direct CMO write.
-
+- `classification` and `structured_output.classification` must be one of the known safe classifications. Unknown classifications are rejected. `clarify` is allowed as a classification for `needs_user_input` responses.
+- `save_to_vault` is an intent/classification only; it must not perform a Vault write from the CMO response.
+- Direct mutation flags such as `direct_vault_write`, `direct_memory_mutation`, `direct_supabase_write`, `gbrain_mutation`, `knowledge_promotion_performed`, `auto_promote`, `direct_session_write`, `direct_raw_capture_write`, and `openclaw_call` are rejected.

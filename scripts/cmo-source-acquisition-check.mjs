@@ -729,12 +729,20 @@ try {
   assert.match(appChatStoreSource, /activeSourceId/);
   assert.match(appChatStoreSource, /sessionLocalSourceFromReviewContext/);
   assert.match(appChatStoreSource, /sourceReviewContextFromSessionLocalSource/);
+  assert.match(appChatStoreSource, /const hermesCmoChatRequested = !request\.forceFallback && shouldUseHermesCmoChat\(request\.appId\)/);
+  assert.match(appChatStoreSource, /productRenderSource = "hermes_cmo"/);
+  assert.match(appChatStoreSource, /productRenderSource = hermesCmoChatRequested \? "fallback_after_hermes_failure"/);
+  assert.match(appChatStoreSource, /productFallbackReason = hermesCmoChatRequested/);
   assert.match(appChatStoreSource, /fallbackContextPackage/);
   assert.match(appChatStoreSource, /hasSourceReviewContext/);
   assert.match(appChatStoreSource, /!hasSourceReviewContext[\s\S]*executeCmoSurfEvidence/);
   assert.match(appChatStoreSource, /status === "completed" \? await runVaultAgentDryRunHandoff/);
+  assert.match(appChatStoreSource, /await writeJsonFile\(sessionPath\(sessionId\), session\)/);
   assert.doesNotMatch(appChatStoreSource, /skipped_vault_mutation_for_source_review_only/);
   assert.doesNotMatch(appChatStoreSource, /run.*GBrain.*source/i);
+  assert.doesNotMatch(appChatStoreSource, /buildVaultIngestionPackage|callHermesVaultAgentIngestSource|ingest-source/i);
+  assert.doesNotMatch(appChatStoreSource, /13 Sources/);
+  assert.doesNotMatch(appChatStoreSource, /Source Review:|What I Read|CMO Read/);
 
   const hermesMapperSource = readFileSync("src/lib/cmo/hermes-cmo-chat-mapper.ts", "utf8");
   assert.match(hermesMapperSource, /source_review_context/);
@@ -742,9 +750,18 @@ try {
   assert.match(hermesMapperSource, /session_local_source/);
   assert.match(hermesMapperSource, /active_source_id/);
   assert.match(hermesMapperSource, /runtime_context/);
+  assert.match(hermesMapperSource, /product_gateway_boundary/);
+  assert.match(hermesMapperSource, /read_web_allowed/);
+  assert.match(hermesMapperSource, /allowed_toolsets/);
+  assert.match(hermesMapperSource, /disabled_toolsets: \["messaging", "cronjob", "kanban"\]/);
+  assert.match(hermesMapperSource, /durable_writes_require_confirmation/);
+  assert.match(hermesMapperSource, /no_auto_save_13_sources/);
+  assert.match(hermesMapperSource, /official_ingestion_role: "inputs_priorities_sources_ui"/);
+  assert.match(hermesMapperSource, /productRenderSource: "hermes_cmo"/);
 
   const runtimeSource = readFileSync("src/lib/cmo/runtime.ts", "utf8");
   assert.match(runtimeSource, /reviewContext\.mode !== "review_only"/);
+  assert.match(runtimeSource, /I did not save anything to Vault/);
 
   console.log("CMO source acquisition checks passed");
 } finally {

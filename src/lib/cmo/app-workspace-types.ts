@@ -602,6 +602,13 @@ export type CmoRuntimeErrorReason =
   | "execution_error";
 export type HermesCmoChatStatus = "live" | "failed_then_existing_fallback" | "guardrail_violation_then_existing_fallback";
 export type HermesCmoDelegationsMode = "proposals_only" | "echo_surf_bounded";
+export type CmoProductRenderSource =
+  | "hermes_cmo"
+  | "fallback_after_hermes_failure"
+  | "local_runtime_fallback"
+  | "legacy_cmo_engine"
+  | "direct_bridge"
+  | "local_session_command";
 export type CmoStrategyMode = "DIAGNOSE" | "FOCUS" | "PRIORITIZE" | "REVIEW" | "RESET";
 export type CmoDecisionLabel = "KEEP" | "CUT" | "TEST" | "SCALE" | "WAIT";
 export type HermesCmoAgentUsed = "cmo" | "echo" | "surf";
@@ -752,6 +759,8 @@ export interface HermesCmoChatMetadata {
   runtimeMode: "hermes_cmo";
   runtimeStatus: "live";
   calledHermesCmo: true;
+  hermesRequestSent?: true;
+  productRenderSource?: "hermes_cmo";
   delegationsMode: HermesCmoDelegationsMode;
   counters: HermesCmoSafetyCounters;
   forbiddenCounters: HermesCmoForbiddenCounters;
@@ -991,6 +1000,9 @@ export interface CMOChatMessage {
   runtimeProvider?: string;
   runtimeAgent?: string;
   runtimeErrorReason?: CmoRuntimeErrorReason;
+  productRenderSource?: CmoProductRenderSource;
+  productFallbackReason?: string;
+  hermesRequestSent?: boolean;
   calledHermesCmo?: boolean;
   hermesCmoStatus?: HermesCmoChatStatus;
   hermesCmoErrorReason?: string;
@@ -1061,6 +1073,9 @@ export interface CMOChatSession {
   runtimeErrorReason?: CmoRuntimeErrorReason;
   runtimeProvider?: string;
   runtimeAgent?: string;
+  productRenderSource?: CmoProductRenderSource;
+  productFallbackReason?: string;
+  hermesRequestSent?: boolean;
   calledHermesCmo?: boolean;
   hermesCmoStatus?: HermesCmoChatStatus;
   hermesCmoErrorReason?: string;
@@ -1157,6 +1172,9 @@ export interface CMOAppChatResponse {
   runtimeErrorReason?: CmoRuntimeErrorReason;
   runtimeProvider?: string;
   runtimeAgent?: string;
+  productRenderSource?: CmoProductRenderSource;
+  productFallbackReason?: string;
+  hermesRequestSent?: boolean;
   calledHermesCmo?: boolean;
   hermesCmoStatus?: HermesCmoChatStatus;
   hermesCmoErrorReason?: string;
