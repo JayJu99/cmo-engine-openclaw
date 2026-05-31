@@ -37,6 +37,12 @@ try {
       .replace(/@\/lib\/cmo\/vault-agent-contracts/g, "../vault-agent-contracts"),
   );
   writeFileSync(
+    join(temp, "source-acquisition", "source-reader.ts"),
+    readFileSync("src/lib/cmo/source-acquisition/source-reader.ts", "utf8")
+      .replace(/@\/lib\/cmo\/app-workspace-types/g, "../app-workspace-types")
+      .replace(/@\/lib\/cmo\/source-acquisition/g, "./index"),
+  );
+  writeFileSync(
     join(temp, "runtime.ts"),
     readFileSync("src/lib/cmo/runtime.ts", "utf8")
       .replace(/@\/lib\/cmo\/app-workspace-types/g, "./app-workspace-types")
@@ -106,6 +112,7 @@ try {
     join(temp, "workspace-registry.ts"),
     join(temp, "vault-agent-source-ingestion.ts"),
     join(temp, "source-acquisition", "index.ts"),
+    join(temp, "source-acquisition", "source-reader.ts"),
     join(temp, "runtime.ts"),
   ], { stdio: "inherit" });
 
@@ -118,6 +125,11 @@ try {
     extractPdf,
     fetchPublicUrl,
   } = requireFromScript(join(dist, "source-acquisition", "index.js"));
+  const {
+    buildSourceAnswerContext,
+    buildSourceQualityReport,
+    querySessionLocalSource,
+  } = requireFromScript(join(dist, "source-acquisition", "source-reader.js"));
   const {
     FallbackRuntime,
   } = requireFromScript(join(dist, "runtime.js"));
@@ -170,6 +182,87 @@ try {
   assert.equal(textContext.safety.no_promotion, true);
   assert.equal(textContext.extraction.status, "completed");
   assert.match(textContext.extraction.source_text, /prioritize retention/);
+  assert.ok(["good", "partial", "low"].includes(textContext.extraction.main_content_quality));
+  assert.ok(["static_html", "rendered_dom", "deep_crawl", "partial"].includes(textContext.extraction.extraction_coverage));
+
+  const readableSessionSource = {
+    type: "session_local_source",
+    schema_version: "cmo.session_local_source.v1",
+    workspace_id: "feeback",
+    session_id: "session_feeback_reader",
+    turn_id: "msg_source_reader",
+    source_id: "source_reader_fixture",
+    source_type: "url",
+    source_title: "Feeback",
+    original_url: "https://feeback.org/",
+    canonical_url: "https://feeback.org/",
+    extracted_summary: "Feeback source summary.",
+    source_text_excerpt: "Feeback supports campaign analytics for CEX launch teams.",
+    source_text_cache: "Feeback applies to CEX launch teams, trading venues, and market operators that need campaign feedback loops.",
+    extraction_status: "completed",
+    content_hash: "sha256:reader_fixture",
+    saved_to_vault: false,
+    official_project_source: false,
+    truth_status: "session_only",
+    review_status: "temporary",
+    no_auto_promote: true,
+    safety: {
+      read_only: true,
+      vault_mutation: false,
+      gbrain_mutation: false,
+      promotion_performed: false,
+    },
+  };
+  const answerableContext = querySessionLocalSource(readableSessionSource, "Which venues does Feeback apply to?");
+  assert.equal(answerableContext.schema_version, "cmo.source_answer_context.v1");
+  assert.equal(answerableContext.workspace_id, "feeback");
+  assert.equal(answerableContext.answerable, true);
+  assert.match(answerableContext.relevant_snippets.join("\n"), /trading venues|market operators/i);
+  assert.equal(answerableContext.saved_to_vault, false);
+  assert.equal(answerableContext.no_auto_promote, true);
+
+  const missingAnswerContext = querySessionLocalSource(readableSessionSource, "What is the tokenomics vesting schedule?");
+  assert.equal(missingAnswerContext.answerable, false);
+  assert.match(missingAnswerContext.reason, /not_found|partial/);
+  assert.equal(missingAnswerContext.relevant_snippets.length, 0);
+
+  const lowQualitySource = {
+    ...readableSessionSource,
+    source_id: "source_low_quality_fixture",
+    source_text_cache: "Home Menu Login Docs Blog Contact Terms Privacy",
+    source_text_excerpt: "Home Menu Login",
+    extraction_status: "partial",
+  };
+  const lowQuality = buildSourceQualityReport(lowQualitySource);
+  assert.equal(lowQuality.main_content_quality, "low");
+  assert.match(lowQuality.warnings.join("\n"), /nav_heavy/);
+
+  const builtAnswerContext = await buildSourceAnswerContext({
+    source: readableSessionSource,
+    query: "market operators",
+    workspaceId: "feeback",
+    sessionId: "session_feeback_reader",
+    allowRefetch: false,
+  });
+  assert.equal(builtAnswerContext?.type, "source_answer_context");
+  assert.equal(builtAnswerContext?.answerable, true);
+
+  const leakedAnswerContext = await buildSourceAnswerContext({
+    source: readableSessionSource,
+    query: "market operators",
+    workspaceId: "aion",
+    sessionId: "session_feeback_reader",
+    allowRefetch: false,
+  });
+  assert.equal(leakedAnswerContext, undefined);
+  const acknowledgementAnswerContext = await buildSourceAnswerContext({
+    source: readableSessionSource,
+    query: "Ok thanks bro",
+    workspaceId: "feeback",
+    sessionId: "session_feeback_reader",
+    allowRefetch: false,
+  });
+  assert.equal(acknowledgementAnswerContext, undefined);
 
   for (const workspace of [
     ["holdstation-mini-app", "Holdstation Mini App"],
@@ -602,6 +695,7 @@ try {
 
   const appChatStoreSource = readFileSync("src/lib/cmo/app-chat-store.ts", "utf8");
   assert.match(appChatStoreSource, /buildSourceReviewContextFromMessage/);
+  assert.match(appChatStoreSource, /buildSourceAnswerContext/);
   assert.match(appChatStoreSource, /runtimeContext/);
   assert.match(appChatStoreSource, /sessionLocalSources/);
   assert.match(appChatStoreSource, /activeSourceId/);
@@ -616,6 +710,7 @@ try {
 
   const hermesMapperSource = readFileSync("src/lib/cmo/hermes-cmo-chat-mapper.ts", "utf8");
   assert.match(hermesMapperSource, /source_review_context/);
+  assert.match(hermesMapperSource, /source_answer_context/);
   assert.match(hermesMapperSource, /session_local_source/);
   assert.match(hermesMapperSource, /active_source_id/);
   assert.match(hermesMapperSource, /runtime_context/);

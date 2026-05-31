@@ -16,6 +16,7 @@ import type {
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
   CmoSessionLocalSource,
+  CmoSourceAnswerContext,
   CmoSourceReviewContext,
   CmoStrategyMode,
   CmoAssumptionReviewStatus,
@@ -67,6 +68,7 @@ import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/
 import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { buildRuntimeContext, buildSourceReviewContextFromMessage } from "@/lib/cmo/source-acquisition";
+import { buildSourceAnswerContext, buildSourceQualityReport } from "@/lib/cmo/source-acquisition/source-reader";
 import { autoCaptureTurnOnce, type AutoCaptureResult } from "@/lib/cmo/vault-auto-capture";
 import { applyVaultAgentContextPackToCmoContextPackage, runVaultAgentContextPackHandoff } from "@/lib/cmo/vault-agent-context-pack-handoff";
 import { runVaultAgentDryRunHandoff } from "@/lib/cmo/vault-agent-handoff-builder";
@@ -130,6 +132,9 @@ function sessionLocalSourceFromReviewContext(reviewContext: CmoSourceReviewConte
   const summary = sourceRecordString(extraction, "extracted_summary");
   const sourceText = sourceRecordString(extraction, "source_text") ?? sourceRecordString(extraction, "source_text_excerpt");
   const contentHash = sourceRecordString(extraction, "content_hash");
+  const warnings = Array.isArray(extraction.warnings) ? extraction.warnings.filter((item): item is string => typeof item === "string") : [];
+  const mainContentQuality = sourceRecordString(extraction, "main_content_quality");
+  const extractionCoverage = sourceRecordString(extraction, "extraction_coverage");
 
   if (!sourceId) {
     return undefined;
@@ -149,7 +154,11 @@ function sessionLocalSourceFromReviewContext(reviewContext: CmoSourceReviewConte
     ...(sourceRecordString(source, "original_filename") ? { original_filename: sourceRecordString(source, "original_filename") } : {}),
     ...(summary ? { extracted_summary: compactSessionSourceText(summary, 1000) } : {}),
     ...(sourceText ? { source_text_excerpt: compactSessionSourceText(sourceText, 1200) } : {}),
+    ...(sourceText ? { source_text_cache: compactSessionSourceText(sourceText, 16000) } : {}),
     extraction_status: status,
+    ...(mainContentQuality === "good" || mainContentQuality === "partial" || mainContentQuality === "low" ? { main_content_quality: mainContentQuality } : {}),
+    ...(extractionCoverage === "static_html" || extractionCoverage === "rendered_dom" || extractionCoverage === "deep_crawl" || extractionCoverage === "partial" ? { extraction_coverage: extractionCoverage } : {}),
+    ...(warnings.length ? { warnings } : {}),
     ...(contentHash ? { content_hash: prefixedContentHash(contentHash) } : {}),
     saved_to_vault: false,
     official_project_source: false,
@@ -207,6 +216,9 @@ function sourceReviewContextFromSessionLocalSource(
       status: source.extraction_status,
       ...(source.extracted_summary ? { extracted_summary: source.extracted_summary } : {}),
       ...(source.source_text_excerpt ? { source_text_excerpt: source.source_text_excerpt } : {}),
+      ...(source.main_content_quality ? { main_content_quality: source.main_content_quality } : {}),
+      ...(source.extraction_coverage ? { extraction_coverage: source.extraction_coverage } : {}),
+      ...(source.warnings ? { warnings: source.warnings } : {}),
       ...(source.content_hash ? { content_hash: source.content_hash } : {}),
     },
     safety: {
@@ -776,6 +788,42 @@ function normalizeSourceReviewContext(value: unknown): CmoSourceReviewContext | 
   };
 }
 
+function normalizeSourceAnswerContext(value: unknown): CmoSourceAnswerContext | undefined {
+  if (!isRecord(value) || value.type !== "source_answer_context" || value.schema_version !== "cmo.source_answer_context.v1") {
+    return undefined;
+  }
+
+  const workspaceId = normalizeOptionalString(value.workspace_id);
+  const sessionId = normalizeOptionalString(value.session_id);
+  const sourceId = normalizeOptionalString(value.source_id);
+  const query = normalizeOptionalString(value.query);
+
+  if (!workspaceId || !sessionId || !sourceId || !query || typeof value.answerable !== "boolean") {
+    return undefined;
+  }
+
+  return {
+    type: "source_answer_context",
+    schema_version: "cmo.source_answer_context.v1",
+    workspace_id: workspaceId,
+    session_id: sessionId,
+    source_id: sourceId,
+    query,
+    answerable: value.answerable,
+    relevant_snippets: Array.isArray(value.relevant_snippets) ? value.relevant_snippets.filter((item): item is string => typeof item === "string") : [],
+    ...(normalizeOptionalString(value.source_title) ? { source_title: normalizeOptionalString(value.source_title) } : {}),
+    ...(normalizeOptionalString(value.original_url) ? { original_url: normalizeOptionalString(value.original_url) } : {}),
+    ...(normalizeOptionalString(value.canonical_url) ? { canonical_url: normalizeOptionalString(value.canonical_url) } : {}),
+    ...(normalizeOptionalString(value.content_hash) ? { content_hash: normalizeOptionalString(value.content_hash) } : {}),
+    truth_status: "session_only",
+    saved_to_vault: false,
+    no_auto_promote: true,
+    ...(value.reason === "not_found_in_current_extraction" || value.reason === "extraction_partial" || value.reason === "no_active_source" ? { reason: value.reason } : {}),
+    ...(value.extraction_quality === "good" || value.extraction_quality === "partial" || value.extraction_quality === "low" ? { extraction_quality: value.extraction_quality } : {}),
+    ...(value.suggested_next_step === "deep_read_or_rendered_fetch" ? { suggested_next_step: "deep_read_or_rendered_fetch" } : {}),
+  };
+}
+
 function normalizeSessionLocalSource(value: unknown): CmoSessionLocalSource | undefined {
   if (!isRecord(value) || value.type !== "session_local_source" || value.schema_version !== "cmo.session_local_source.v1") {
     return undefined;
@@ -806,7 +854,12 @@ function normalizeSessionLocalSource(value: unknown): CmoSessionLocalSource | un
     ...(normalizeOptionalString(value.original_filename) ? { original_filename: normalizeOptionalString(value.original_filename) } : {}),
     ...(normalizeOptionalString(value.extracted_summary) ? { extracted_summary: normalizeOptionalString(value.extracted_summary) } : {}),
     ...(normalizeOptionalString(value.source_text_excerpt) ? { source_text_excerpt: normalizeOptionalString(value.source_text_excerpt) } : {}),
+    ...(normalizeOptionalString(value.source_text_cache) ? { source_text_cache: normalizeOptionalString(value.source_text_cache) } : {}),
     extraction_status: extractionStatus,
+    ...(value.main_content_quality === "good" || value.main_content_quality === "partial" || value.main_content_quality === "low" ? { main_content_quality: value.main_content_quality } : {}),
+    ...(value.extraction_coverage === "static_html" || value.extraction_coverage === "rendered_dom" || value.extraction_coverage === "deep_crawl" || value.extraction_coverage === "partial" ? { extraction_coverage: value.extraction_coverage } : {}),
+    ...(Array.isArray(value.warnings) ? { warnings: value.warnings.filter((item): item is string => typeof item === "string") } : {}),
+    ...(normalizeOptionalString(value.full_artifact_ref) ? { full_artifact_ref: normalizeOptionalString(value.full_artifact_ref) } : {}),
     ...(normalizeOptionalString(value.content_hash) ? { content_hash: normalizeOptionalString(value.content_hash) } : {}),
     saved_to_vault: false,
     official_project_source: false,
@@ -1326,6 +1379,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             indexedContextBuildDurationMs: normalizeOptionalNonNegativeNumber(message.indexedContextBuildDurationMs),
             runtimeContext: isRecord(message.runtimeContext) ? message.runtimeContext as unknown as CMOChatMessage["runtimeContext"] : undefined,
             sourceReviewContext: normalizeSourceReviewContext(message.sourceReviewContext),
+            sourceAnswerContext: normalizeSourceAnswerContext(message.sourceAnswerContext),
           };
         })
         .filter((message): message is CMOChatMessage => Boolean(message))
@@ -1419,6 +1473,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     indexedContextBuildDurationMs: normalizeOptionalNonNegativeNumber(value.indexedContextBuildDurationMs),
     runtimeContext: isRecord(value.runtimeContext) ? value.runtimeContext as unknown as CMOChatSession["runtimeContext"] : undefined,
     sourceReviewContext: normalizeSourceReviewContext(value.sourceReviewContext),
+    sourceAnswerContext: normalizeSourceAnswerContext(value.sourceAnswerContext),
     sessionLocalSources,
     ...(normalizedActiveSourceId ? { activeSourceId: normalizedActiveSourceId } : {}),
     decisionLayer,
@@ -1517,7 +1572,13 @@ export async function createAppChatSession(
     nowIso: now,
     timezone: runtimeContext.timezone,
   });
-  const newSessionLocalSource = sourceReviewContext ? sessionLocalSourceFromReviewContext(sourceReviewContext) : undefined;
+  const rawNewSessionLocalSource = sourceReviewContext ? sessionLocalSourceFromReviewContext(sourceReviewContext) : undefined;
+  const newSessionLocalSource = rawNewSessionLocalSource
+    ? {
+        ...rawNewSessionLocalSource,
+        ...buildSourceQualityReport(rawNewSessionLocalSource),
+      }
+    : undefined;
   const sessionLocalSources = mergeSessionLocalSources(
     continuedSession?.sessionLocalSources?.filter((source) => source.workspace_id === request.workspaceId && source.session_id === sessionId),
     newSessionLocalSource,
@@ -1535,15 +1596,25 @@ export async function createAppChatSession(
         tenantId: request.tenantId ?? "holdstation",
         userId: sourceReviewUserId(userIdentity),
       });
+  const sourceAnswerContext = await buildSourceAnswerContext({
+    source: activeSessionLocalSource,
+    query: request.message,
+    workspaceId: request.workspaceId,
+    sessionId,
+    nowIso: now,
+    allowRefetch: true,
+  });
   contextPackage = {
     ...contextPackage,
     runtimeContext,
     ...(activeSourceReviewContext ? { sourceReviewContext: activeSourceReviewContext } : {}),
+    ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
     sessionLocalSources,
     ...(activeSourceId ? { activeSourceId } : {}),
     contextPack: {
       ...contextPackage.contextPack,
       ...(activeSourceReviewContext ? { sourceReviewContext: activeSourceReviewContext } : {}),
+      ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
     },
   };
   const contextSourceCount = contextPackage.contextPack.items.filter((item) => item.exists).length;
@@ -1909,6 +1980,7 @@ export async function createAppChatSession(
     ...(vaultAgentContextPackMetadata ? { vaultAgentContextPack: vaultAgentContextPackMetadata } : {}),
     runtimeContext,
     ...(sourceReviewContext ? { sourceReviewContext } : {}),
+    ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
     sessionLocalSources,
     ...(activeSourceId ? { activeSourceId } : {}),
     contextDiagnostics,
@@ -1931,6 +2003,7 @@ export async function createAppChatSession(
         ...messageUserMetadata(userIdentity),
         runtimeContext,
         ...(sourceReviewContext ? { sourceReviewContext } : {}),
+        ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
       },
       {
         id: assistantId,
@@ -1962,6 +2035,7 @@ export async function createAppChatSession(
         ...(vaultAgentContextPackMetadata ? { vaultAgentContextPack: vaultAgentContextPackMetadata } : {}),
         runtimeContext,
         ...(sourceReviewContext ? { sourceReviewContext } : {}),
+        ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
         sessionLocalSources,
         ...(activeSourceId ? { activeSourceId } : {}),
         contextUsedCount: contextUsed.length,
@@ -2094,6 +2168,7 @@ export async function createAppChatSession(
     ...(delegationsMode ? { delegationsMode } : {}),
     runtimeContext,
     ...(sourceReviewContext ? { sourceReviewContext } : {}),
+    ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
     sessionLocalSources,
     ...(activeSourceId ? { activeSourceId } : {}),
     contextDiagnostics,

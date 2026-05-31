@@ -598,6 +598,36 @@ function fallbackTitle(input: SourceAcquisitionInput, detected: DetectedSourceIn
     "Pasted source";
 }
 
+function extractionQuality(extraction: ExtractedSource, metadata: { originalUrl?: string; mimeType?: string }) {
+  const warnings = new Set([...extraction.warnings]);
+  const textLength = extraction.source_text.length;
+  const isHtml = metadata.mimeType?.includes("html") || Boolean(metadata.originalUrl);
+
+  if (extraction.source_text.includes("[truncated]")) {
+    warnings.add("truncated");
+  }
+  if (isHtml && textLength < 900) {
+    warnings.add("nav_heavy");
+  }
+  if (isHtml) {
+    warnings.add("dynamic_content_possible");
+    warnings.add("lazy_content_possible");
+  }
+
+  const mainContentQuality =
+    extraction.status !== "completed" || textLength < 250
+      ? "low"
+      : warnings.has("nav_heavy") || warnings.has("truncated")
+        ? "partial"
+        : "good";
+
+  return {
+    main_content_quality: mainContentQuality,
+    extraction_coverage: isHtml ? "static_html" : "partial",
+    warnings: [...warnings],
+  };
+}
+
 function reviewContextFromExtraction(
   input: SourceAcquisitionInput,
   detected: DetectedSourceInput,
@@ -614,6 +644,8 @@ function reviewContextFromExtraction(
     permissionStatus?: SourcePermissionStatus;
   } = {},
 ): CmoSourceReviewContext {
+  const quality = extractionQuality(extraction, metadata);
+
   return {
     schema_version: SOURCE_REVIEW_CONTEXT_SCHEMA_VERSION,
     mode: "review_only",
@@ -649,7 +681,9 @@ function reviewContextFromExtraction(
       visual_summary: extraction.visual_summary ?? null,
       table_summary: extraction.table_summary ?? null,
       detected_language: extraction.detected_language,
-      warnings: [...detected.warnings, ...extraction.warnings],
+      main_content_quality: quality.main_content_quality,
+      extraction_coverage: quality.extraction_coverage,
+      warnings: [...detected.warnings, ...quality.warnings],
       errors: [...detected.errors, ...extraction.errors],
     },
     safety: {

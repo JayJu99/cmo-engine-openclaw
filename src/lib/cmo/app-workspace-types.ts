@@ -655,6 +655,34 @@ export interface CmoSourceReviewContext {
   };
 }
 
+export interface CmoSourceQualityReport {
+  extraction_status: "completed" | "partial" | "failed";
+  main_content_quality: "good" | "partial" | "low";
+  extraction_coverage: "static_html" | "rendered_dom" | "deep_crawl" | "partial";
+  warnings: string[];
+}
+
+export interface CmoSourceAnswerContext {
+  type: "source_answer_context";
+  schema_version: "cmo.source_answer_context.v1";
+  workspace_id: string;
+  session_id: string;
+  source_id: string;
+  query: string;
+  answerable: boolean;
+  relevant_snippets: string[];
+  source_title?: string;
+  original_url?: string;
+  canonical_url?: string;
+  content_hash?: string;
+  truth_status: "session_only";
+  saved_to_vault: false;
+  no_auto_promote: true;
+  reason?: "not_found_in_current_extraction" | "extraction_partial" | "no_active_source";
+  extraction_quality?: "good" | "partial" | "low";
+  suggested_next_step?: "deep_read_or_rendered_fetch";
+}
+
 export interface CmoSessionLocalSource {
   type: "session_local_source";
   schema_version: "cmo.session_local_source.v1";
@@ -669,7 +697,12 @@ export interface CmoSessionLocalSource {
   original_filename?: string;
   extracted_summary?: string;
   source_text_excerpt?: string;
+  source_text_cache?: string;
   extraction_status: "completed" | "partial" | "failed";
+  main_content_quality?: "good" | "partial" | "low";
+  extraction_coverage?: "static_html" | "rendered_dom" | "deep_crawl" | "partial";
+  warnings?: string[];
+  full_artifact_ref?: string;
   content_hash?: string;
   saved_to_vault: false;
   official_project_source: false;
@@ -844,6 +877,7 @@ export interface ContextPack {
   contextQualitySummary: CMOContextQualitySummary;
   vaultAgentContextPack?: VaultAgentRuntimeContextPack;
   sourceReviewContext?: CmoSourceReviewContext;
+  sourceAnswerContext?: CmoSourceAnswerContext;
 }
 
 export interface CMOContextBriefSection {
@@ -884,6 +918,7 @@ export interface CMOContextPackage {
   runtimeWorkspaceId?: string;
   runtimeContext?: CmoRuntimeContext;
   sourceReviewContext?: CmoSourceReviewContext;
+  sourceAnswerContext?: CmoSourceAnswerContext;
   sessionLocalSources?: CmoSessionLocalSource[];
   activeSourceId?: string;
   mode: "app_context";
@@ -991,6 +1026,7 @@ export interface CMOChatMessage {
   indexedContextBuildDurationMs?: number;
   runtimeContext?: CmoRuntimeContext;
   sourceReviewContext?: CmoSourceReviewContext;
+  sourceAnswerContext?: CmoSourceAnswerContext;
   sessionLocalSources?: CmoSessionLocalSource[];
   activeSourceId?: string;
 }
@@ -1064,6 +1100,7 @@ export interface CMOChatSession {
   indexedContextBuildDurationMs?: number;
   runtimeContext?: CmoRuntimeContext;
   sourceReviewContext?: CmoSourceReviewContext;
+  sourceAnswerContext?: CmoSourceAnswerContext;
   sessionLocalSources?: CmoSessionLocalSource[];
   activeSourceId?: string;
   decisionLayer?: CmoDecisionLayer;
@@ -1156,6 +1193,7 @@ export interface CMOAppChatResponse {
   indexedContextBuildDurationMs?: number;
   runtimeContext?: CmoRuntimeContext;
   sourceReviewContext?: CmoSourceReviewContext;
+  sourceAnswerContext?: CmoSourceAnswerContext;
   sessionLocalSources?: CmoSessionLocalSource[];
   activeSourceId?: string;
   decisionLayer?: CmoDecisionLayer;

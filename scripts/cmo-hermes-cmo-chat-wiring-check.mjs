@@ -316,6 +316,24 @@ sampleTurnInput.contextPackage.sessionLocalSources = [
 ];
 sampleTurnInput.contextPackage.activeSourceId = "source_review_fixture";
 sampleTurnInput.contextPack.sourceReviewContext = sampleTurnInput.contextPackage.sourceReviewContext;
+sampleTurnInput.contextPackage.sourceAnswerContext = {
+  type: "source_answer_context",
+  schema_version: "cmo.source_answer_context.v1",
+  workspace_id: "holdstation-mini-app",
+  session_id: "session_h6",
+  source_id: "source_review_fixture",
+  query: "Which venues does this apply to?",
+  answerable: true,
+  relevant_snippets: ["Fixture source text says this applies to supported trading venues."],
+  source_title: "Fixture source",
+  original_url: "https://example.test/source",
+  canonical_url: "https://example.test/source",
+  content_hash: "sha256:hash_fixture",
+  truth_status: "session_only",
+  saved_to_vault: false,
+  no_auto_promote: true,
+};
+sampleTurnInput.contextPack.sourceAnswerContext = sampleTurnInput.contextPackage.sourceAnswerContext;
 
 const makeRuntimeResult = (overrides = {}) => {
   const response = {
@@ -479,9 +497,14 @@ try {
     assert.equal(hermesRequest.context_pack.source_review_context.persistence.saved_to_vault, false);
     assert.equal(hermesRequest.context_pack.source_review_context.safety.vault_mutation, false);
     assert.equal(hermesRequest.context_pack.source_review_context.safety.gbrain_mutation, false);
+    assert.equal(hermesRequest.context_pack.source_answer_context.schema_version, "cmo.source_answer_context.v1");
+    assert.equal(hermesRequest.context_pack.source_answer_context.answerable, true);
+    assert.equal(hermesRequest.context_pack.source_answer_context.saved_to_vault, false);
     assert.equal(hermesRequest.context_pack.active_source_id, "source_review_fixture");
     const sessionLocalSource = hermesRequest.context_pack.artifacts_in.find((artifact) => artifact.type === "session_local_source");
+    const sourceAnswerContext = hermesRequest.context_pack.artifacts_in.find((artifact) => artifact.type === "source_answer_context");
     assert.ok(sessionLocalSource, "session local source must be passed as a read-only artifact");
+    assert.ok(sourceAnswerContext, "source answer context must be passed as a read-only artifact");
     assert.equal(sessionLocalSource.workspace_id, "holdstation-mini-app");
     assert.equal(sessionLocalSource.saved_to_vault, false);
     assert.equal(sessionLocalSource.official_project_source, false);
@@ -508,6 +531,8 @@ try {
       workspaceInput.contextPackage.sourceReviewContext.workspace_id = workspaceId;
       workspaceInput.contextPackage.sourceReviewContext.source.workspace_id = workspaceId;
       workspaceInput.contextPackage.sourceReviewContext.session_id = `session_${workspaceId}`;
+      workspaceInput.contextPackage.sourceAnswerContext.workspace_id = workspaceId;
+      workspaceInput.contextPackage.sourceAnswerContext.session_id = `session_${workspaceId}`;
       workspaceInput.contextPackage.sessionLocalSources[0].workspace_id = workspaceId;
       workspaceInput.contextPackage.sessionLocalSources[0].session_id = `session_${workspaceId}`;
       workspaceInput.contextPackage.sessionLocalSources.push({
@@ -530,8 +555,11 @@ try {
         },
       });
       const workspaceArtifacts = workspaceRequest.context_pack.artifacts_in.filter((artifact) => artifact.type === "session_local_source");
+      const workspaceSourceAnswerContext = workspaceRequest.context_pack.artifacts_in.find((artifact) => artifact.type === "source_answer_context");
       assert.equal(workspaceRequest.workspace.workspace_id, workspaceId);
       assert.equal(workspaceRequest.context_pack.source_review_context.workspace_id, workspaceId);
+      assert.equal(workspaceRequest.context_pack.source_answer_context.workspace_id, workspaceId);
+      assert.equal(workspaceSourceAnswerContext.workspace_id, workspaceId);
       assert.equal(workspaceArtifacts.length, 1, `${workspaceId} should receive only its own session-local source`);
       assert.equal(workspaceArtifacts[0].workspace_id, workspaceId);
       assert.equal(workspaceArtifacts[0].session_id, `session_${workspaceId}`);
