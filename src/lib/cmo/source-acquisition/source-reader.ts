@@ -1,4 +1,10 @@
-import type { CmoSessionLocalSource, CmoSourceAnswerContext, CmoSourceQualityReport } from "@/lib/cmo/app-workspace-types";
+import type {
+  CmoSessionLocalSource,
+  CmoSessionSourceCacheRole,
+  CmoSessionSourceReadDepth,
+  CmoSourceAnswerContext,
+  CmoSourceQualityReport,
+} from "@/lib/cmo/app-workspace-types";
 import { extractText, fetchPublicUrl } from "@/lib/cmo/source-acquisition";
 
 const MAX_QUERY_SNIPPETS = 5;
@@ -162,6 +168,10 @@ function hasEnoughBroadSourceContent(source: CmoSessionLocalSource): boolean {
   return summaryLength >= 40 || textLength >= 80;
 }
 
+function isGenericSourceReadIntent(intent: { query_type: SourceReaderQueryType }): boolean {
+  return intent.query_type === "summarize" || intent.query_type === "review" || intent.query_type === "can_read";
+}
+
 function extractionStatus(source: CmoSessionLocalSource): CmoSourceQualityReport["extraction_status"] {
   return source.extraction_status === "completed" || source.extraction_status === "partial" ? source.extraction_status : "failed";
 }
@@ -210,6 +220,63 @@ export function buildSourceQualityReport(source: CmoSessionLocalSource): CmoSour
   };
 }
 
+function sourceIsNavHeavy(quality: CmoSourceQualityReport): boolean {
+  return quality.warnings.includes("nav_heavy");
+}
+
+export function sourceReadDepth(source: CmoSessionLocalSource, quality = buildSourceQualityReport(source)): CmoSessionSourceReadDepth {
+  if (sourceIsNavHeavy(quality) || quality.main_content_quality === "low" || quality.extraction_status === "partial") {
+    return "partial";
+  }
+
+  if (quality.extraction_coverage === "rendered_dom") {
+    return "browser_rendered";
+  }
+
+  if (quality.extraction_coverage === "deep_crawl") {
+    return "full_doc";
+  }
+
+  if (source.source_text_cache || source.extracted_summary) {
+    return "extracted_text";
+  }
+
+  return "snippet";
+}
+
+export function sourceCacheRole(source: CmoSessionLocalSource, quality = buildSourceQualityReport(source)): CmoSessionSourceCacheRole {
+  const navHeavy = sourceIsNavHeavy(quality);
+
+  if (quality.extraction_status === "completed" && quality.main_content_quality === "good" && !navHeavy) {
+    return "high_quality_evidence";
+  }
+
+  if (source.original_url && (navHeavy || quality.main_content_quality === "low" || quality.extraction_status === "partial")) {
+    return "fallback_only";
+  }
+
+  return "context_hint";
+}
+
+export function sourceToolReadRecommended(
+  source: CmoSessionLocalSource,
+  intent: { query_type: SourceReaderQueryType } = { query_type: "unknown" },
+  quality = buildSourceQualityReport(source),
+): boolean {
+  if (!source.original_url && !source.canonical_url) {
+    return false;
+  }
+
+  const role = sourceCacheRole(source, quality);
+
+  return (
+    sourceIsNavHeavy(quality) ||
+    quality.main_content_quality !== "good" ||
+    quality.extraction_status !== "completed" ||
+    (isGenericSourceReadIntent(intent) && role !== "high_quality_evidence")
+  );
+}
+
 export function readSessionLocalSource(source: CmoSessionLocalSource): string {
   return [source.source_text_cache, source.source_text_excerpt, source.extracted_summary].filter(Boolean).join("\n\n").slice(0, MAX_CACHE_CHARS);
 }
@@ -218,26 +285,31 @@ export function querySessionLocalSource(source: CmoSessionLocalSource, query: st
   const quality = buildSourceQualityReport(source);
   const text = readSessionLocalSource(source);
   const intent = detectSourceReaderAction(query);
+  const cacheRole = sourceCacheRole(source, quality);
+  const readDepth = sourceReadDepth(source, quality);
+  const navHeavy = sourceIsNavHeavy(quality);
+  const toolReadRecommended = sourceToolReadRecommended(source, intent, quality);
+  const cacheCanAnswer = cacheRole === "high_quality_evidence";
   const fields = usedSourceFields(source);
   let relevantSnippets: string[] = [];
   let answerable = false;
   let reason: CmoSourceAnswerContext["reason"];
 
   if (intent.query_type === "summarize" || intent.query_type === "review") {
-    answerable = hasEnoughBroadSourceContent(source);
+    answerable = cacheCanAnswer && hasEnoughBroadSourceContent(source);
     relevantSnippets = answerable ? representativeSnippets(source, SUMMARY_SNIPPET_CHARS) : [];
     reason = answerable ? undefined : "extraction_partial";
   } else if (intent.query_type === "translate") {
-    answerable = Boolean(compact(source.source_text_cache ?? source.source_text_excerpt ?? source.extracted_summary ?? ""));
+    answerable = cacheCanAnswer && Boolean(compact(source.source_text_cache ?? source.source_text_excerpt ?? source.extracted_summary ?? ""));
     relevantSnippets = answerable ? representativeSnippets(source, TRANSLATE_SNIPPET_CHARS) : [];
     reason = answerable ? undefined : "extraction_partial";
   } else if (intent.query_type === "can_read") {
-    answerable = quality.extraction_status === "completed" || quality.extraction_status === "partial";
+    answerable = cacheCanAnswer && (quality.extraction_status === "completed" || quality.extraction_status === "partial");
     relevantSnippets = answerable ? representativeSnippets(source, SUMMARY_SNIPPET_CHARS) : [];
     reason = answerable ? undefined : "extraction_partial";
   } else {
     relevantSnippets = scoredSnippets(text, query);
-    answerable = relevantSnippets.length > 0;
+    answerable = cacheCanAnswer && relevantSnippets.length > 0;
     reason = answerable ? undefined : "not_found_in_current_extraction";
   }
 
@@ -261,6 +333,11 @@ export function querySessionLocalSource(source: CmoSessionLocalSource, query: st
     saved_to_vault: false,
     no_auto_promote: true,
     extraction_quality: quality.main_content_quality,
+    extraction_coverage: quality.extraction_coverage,
+    read_depth: readDepth,
+    cache_role: cacheRole,
+    nav_heavy: navHeavy,
+    tool_read_recommended: toolReadRecommended,
     warnings: quality.warnings,
     ...(!answerable
       ? {

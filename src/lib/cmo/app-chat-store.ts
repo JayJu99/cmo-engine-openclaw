@@ -69,7 +69,13 @@ import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/
 import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { buildRuntimeContext, buildSourceReviewContextFromMessage } from "@/lib/cmo/source-acquisition";
-import { buildSourceAnswerContext, buildSourceQualityReport } from "@/lib/cmo/source-acquisition/source-reader";
+import {
+  buildSourceAnswerContext,
+  buildSourceQualityReport,
+  sourceCacheRole,
+  sourceReadDepth,
+  sourceToolReadRecommended,
+} from "@/lib/cmo/source-acquisition/source-reader";
 import { autoCaptureTurnOnce, type AutoCaptureResult } from "@/lib/cmo/vault-auto-capture";
 import { applyVaultAgentContextPackToCmoContextPackage, runVaultAgentContextPackHandoff } from "@/lib/cmo/vault-agent-context-pack-handoff";
 import { runVaultAgentDryRunHandoff } from "@/lib/cmo/vault-agent-handoff-builder";
@@ -175,6 +181,19 @@ function sessionLocalSourceFromReviewContext(reviewContext: CmoSourceReviewConte
   };
 }
 
+function withSessionSourceRoutingMetadata(source: CmoSessionLocalSource): CmoSessionLocalSource {
+  const quality = buildSourceQualityReport(source);
+
+  return {
+    ...source,
+    ...quality,
+    read_depth: sourceReadDepth(source, quality),
+    cache_role: sourceCacheRole(source, quality),
+    nav_heavy: quality.warnings.includes("nav_heavy"),
+    tool_read_recommended: sourceToolReadRecommended(source, { query_type: "unknown" }, quality),
+  };
+}
+
 function mergeSessionLocalSources(existing: CmoSessionLocalSource[] | undefined, next: CmoSessionLocalSource | undefined): CmoSessionLocalSource[] {
   const scopedExisting = existing ?? [];
 
@@ -219,6 +238,10 @@ function sourceReviewContextFromSessionLocalSource(
       ...(source.source_text_excerpt ? { source_text_excerpt: source.source_text_excerpt } : {}),
       ...(source.main_content_quality ? { main_content_quality: source.main_content_quality } : {}),
       ...(source.extraction_coverage ? { extraction_coverage: source.extraction_coverage } : {}),
+      ...(source.read_depth ? { read_depth: source.read_depth } : {}),
+      ...(source.cache_role ? { cache_role: source.cache_role } : {}),
+      ...(typeof source.nav_heavy === "boolean" ? { nav_heavy: source.nav_heavy } : {}),
+      ...(typeof source.tool_read_recommended === "boolean" ? { tool_read_recommended: source.tool_read_recommended } : {}),
       ...(source.warnings ? { warnings: source.warnings } : {}),
       ...(source.content_hash ? { content_hash: source.content_hash } : {}),
     },
@@ -800,6 +823,16 @@ function normalizeSourceReviewContext(value: unknown): CmoSourceReviewContext | 
   };
 }
 
+function normalizeSourceReadDepth(value: unknown): CmoSessionLocalSource["read_depth"] {
+  return value === "snippet" || value === "extracted_text" || value === "browser_rendered" || value === "full_doc" || value === "partial"
+    ? value
+    : undefined;
+}
+
+function normalizeSourceCacheRole(value: unknown): CmoSessionLocalSource["cache_role"] {
+  return value === "context_hint" || value === "fallback_only" || value === "high_quality_evidence" ? value : undefined;
+}
+
 function normalizeSourceAnswerContext(value: unknown): CmoSourceAnswerContext | undefined {
   if (!isRecord(value) || value.type !== "source_answer_context" || value.schema_version !== "cmo.source_answer_context.v1") {
     return undefined;
@@ -854,6 +887,11 @@ function normalizeSourceAnswerContext(value: unknown): CmoSourceAnswerContext | 
     no_auto_promote: true,
     ...(value.reason === "not_found_in_current_extraction" || value.reason === "extraction_partial" || value.reason === "no_active_source" ? { reason: value.reason } : {}),
     ...(value.extraction_quality === "good" || value.extraction_quality === "partial" || value.extraction_quality === "low" ? { extraction_quality: value.extraction_quality } : {}),
+    ...(value.extraction_coverage === "static_html" || value.extraction_coverage === "rendered_dom" || value.extraction_coverage === "deep_crawl" || value.extraction_coverage === "partial" ? { extraction_coverage: value.extraction_coverage } : {}),
+    ...(normalizeSourceReadDepth(value.read_depth) ? { read_depth: normalizeSourceReadDepth(value.read_depth) } : {}),
+    ...(normalizeSourceCacheRole(value.cache_role) ? { cache_role: normalizeSourceCacheRole(value.cache_role) } : {}),
+    ...(typeof value.nav_heavy === "boolean" ? { nav_heavy: value.nav_heavy } : {}),
+    ...(typeof value.tool_read_recommended === "boolean" ? { tool_read_recommended: value.tool_read_recommended } : {}),
     ...(Array.isArray(value.warnings) ? { warnings: value.warnings.filter((item): item is string => typeof item === "string") } : {}),
     ...(value.suggested_next_step === "deep_read_or_rendered_fetch" ? { suggested_next_step: "deep_read_or_rendered_fetch" } : {}),
   };
@@ -893,6 +931,10 @@ function normalizeSessionLocalSource(value: unknown): CmoSessionLocalSource | un
     extraction_status: extractionStatus,
     ...(value.main_content_quality === "good" || value.main_content_quality === "partial" || value.main_content_quality === "low" ? { main_content_quality: value.main_content_quality } : {}),
     ...(value.extraction_coverage === "static_html" || value.extraction_coverage === "rendered_dom" || value.extraction_coverage === "deep_crawl" || value.extraction_coverage === "partial" ? { extraction_coverage: value.extraction_coverage } : {}),
+    ...(normalizeSourceReadDepth(value.read_depth) ? { read_depth: normalizeSourceReadDepth(value.read_depth) } : {}),
+    ...(normalizeSourceCacheRole(value.cache_role) ? { cache_role: normalizeSourceCacheRole(value.cache_role) } : {}),
+    ...(typeof value.nav_heavy === "boolean" ? { nav_heavy: value.nav_heavy } : {}),
+    ...(typeof value.tool_read_recommended === "boolean" ? { tool_read_recommended: value.tool_read_recommended } : {}),
     ...(Array.isArray(value.warnings) ? { warnings: value.warnings.filter((item): item is string => typeof item === "string") } : {}),
     ...(normalizeOptionalString(value.full_artifact_ref) ? { full_artifact_ref: normalizeOptionalString(value.full_artifact_ref) } : {}),
     ...(normalizeOptionalString(value.content_hash) ? { content_hash: normalizeOptionalString(value.content_hash) } : {}),
@@ -1616,12 +1658,7 @@ export async function createAppChatSession(
     timezone: runtimeContext.timezone,
   });
   const rawNewSessionLocalSource = sourceReviewContext ? sessionLocalSourceFromReviewContext(sourceReviewContext) : undefined;
-  const newSessionLocalSource = rawNewSessionLocalSource
-    ? {
-        ...rawNewSessionLocalSource,
-        ...buildSourceQualityReport(rawNewSessionLocalSource),
-      }
-    : undefined;
+  const newSessionLocalSource = rawNewSessionLocalSource ? withSessionSourceRoutingMetadata(rawNewSessionLocalSource) : undefined;
   const sessionLocalSources = mergeSessionLocalSources(
     continuedSession?.sessionLocalSources?.filter((source) => source.workspace_id === request.workspaceId && source.session_id === sessionId),
     newSessionLocalSource,
@@ -1639,13 +1676,14 @@ export async function createAppChatSession(
         tenantId: request.tenantId ?? "holdstation",
         userId: sourceReviewUserId(userIdentity),
       });
+  const hermesCmoChatRequested = !request.forceFallback && shouldUseHermesCmoChat(request.appId);
   const sourceAnswerContext = await buildSourceAnswerContext({
     source: activeSessionLocalSource,
     query: request.message,
     workspaceId: request.workspaceId,
     sessionId,
     nowIso: now,
-    allowRefetch: true,
+    allowRefetch: !hermesCmoChatRequested,
   });
   contextPackage = {
     ...contextPackage,
@@ -1717,7 +1755,6 @@ export async function createAppChatSession(
   let forbiddenCounters: HermesCmoForbiddenCounters | undefined;
   let delegationsMode: HermesCmoDelegationsMode | undefined;
   let usedHermesCmoChat = false;
-  const hermesCmoChatRequested = !request.forceFallback && shouldUseHermesCmoChat(request.appId);
   let hermesRequestSent = false;
   let productRenderSource: CmoProductRenderSource | undefined;
   let productFallbackReason: string | undefined;

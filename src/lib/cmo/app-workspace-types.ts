@@ -669,6 +669,9 @@ export interface CmoSourceQualityReport {
   warnings: string[];
 }
 
+export type CmoSessionSourceReadDepth = "snippet" | "extracted_text" | "browser_rendered" | "full_doc" | "partial";
+export type CmoSessionSourceCacheRole = "context_hint" | "fallback_only" | "high_quality_evidence";
+
 export interface CmoSourceAnswerContext {
   type: "source_answer_context";
   schema_version: "cmo.source_answer_context.v1";
@@ -690,6 +693,11 @@ export interface CmoSourceAnswerContext {
   no_auto_promote: true;
   reason?: "not_found_in_current_extraction" | "extraction_partial" | "no_active_source";
   extraction_quality?: "good" | "partial" | "low";
+  extraction_coverage?: "static_html" | "rendered_dom" | "deep_crawl" | "partial";
+  read_depth?: CmoSessionSourceReadDepth;
+  cache_role?: CmoSessionSourceCacheRole;
+  nav_heavy?: boolean;
+  tool_read_recommended?: boolean;
   warnings?: string[];
   suggested_next_step?: "deep_read_or_rendered_fetch";
 }
@@ -712,6 +720,10 @@ export interface CmoSessionLocalSource {
   extraction_status: "completed" | "partial" | "failed";
   main_content_quality?: "good" | "partial" | "low";
   extraction_coverage?: "static_html" | "rendered_dom" | "deep_crawl" | "partial";
+  read_depth?: CmoSessionSourceReadDepth;
+  cache_role?: CmoSessionSourceCacheRole;
+  nav_heavy?: boolean;
+  tool_read_recommended?: boolean;
   warnings?: string[];
   full_artifact_ref?: string;
   content_hash?: string;

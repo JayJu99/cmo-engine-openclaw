@@ -3,6 +3,7 @@ import type {
   CMOChatMessage,
   CMOContextNote,
   ContextItem,
+  CmoSessionLocalSource,
   HermesCmoAgentUsed,
   HermesCmoActivityEventSummary,
   HermesCmoChatMetadata,
@@ -182,42 +183,105 @@ function sourceAnswerContextArtifact(input: HermesCmoChatRequestInput): Record<s
   return answerContext as unknown as Record<string, unknown>;
 }
 
+function sessionLocalSourceNavHeavy(source: CmoSessionLocalSource): boolean {
+  return source.nav_heavy === true || (Array.isArray(source.warnings) && source.warnings.includes("nav_heavy"));
+}
+
+function sessionLocalSourceReadDepth(source: CmoSessionLocalSource): string {
+  if (source.read_depth) {
+    return source.read_depth;
+  }
+
+  if (sessionLocalSourceNavHeavy(source) || source.main_content_quality === "low" || source.extraction_status === "partial") {
+    return "partial";
+  }
+
+  if (source.extraction_coverage === "rendered_dom") {
+    return "browser_rendered";
+  }
+
+  if (source.extraction_coverage === "deep_crawl") {
+    return "full_doc";
+  }
+
+  if (source.source_text_cache || source.extracted_summary) {
+    return "extracted_text";
+  }
+
+  return "snippet";
+}
+
+function sessionLocalSourceCacheRole(source: CmoSessionLocalSource): string {
+  if (source.cache_role) {
+    return source.cache_role;
+  }
+
+  if (source.extraction_status === "completed" && source.main_content_quality === "good" && !sessionLocalSourceNavHeavy(source)) {
+    return "high_quality_evidence";
+  }
+
+  if (source.original_url && (sessionLocalSourceNavHeavy(source) || source.main_content_quality === "low" || source.extraction_status === "partial")) {
+    return "fallback_only";
+  }
+
+  return "context_hint";
+}
+
+function sessionLocalSourceToolReadRecommended(source: CmoSessionLocalSource): boolean {
+  return (
+    source.tool_read_recommended === true ||
+    Boolean(source.original_url || source.canonical_url) &&
+      (sessionLocalSourceNavHeavy(source) || source.main_content_quality !== "good" || source.extraction_status !== "completed")
+  );
+}
+
 function sessionLocalSourceArtifacts(input: HermesCmoChatRequestInput): Record<string, unknown>[] {
   return (input.contextPackage.sessionLocalSources ?? [])
     .filter((source) => source.workspace_id === input.request.workspaceId)
     .filter((source) => source.session_id === input.sessionId)
-    .map((source) => ({
-      type: "session_local_source",
-      schema_version: "cmo.session_local_source.v1",
-      workspace_id: source.workspace_id,
-      session_id: source.session_id,
-      turn_id: source.turn_id,
-      source_id: source.source_id,
-      source_type: source.source_type,
-      source_title: source.source_title,
-      ...(source.original_url ? { original_url: source.original_url } : {}),
-      ...(source.canonical_url ? { canonical_url: source.canonical_url } : {}),
-      ...(source.original_filename ? { original_filename: source.original_filename } : {}),
-      ...(source.extracted_summary ? { extracted_summary: source.extracted_summary } : {}),
-      ...(source.source_text_excerpt ? { source_text_excerpt: source.source_text_excerpt } : {}),
-      extraction_status: source.extraction_status,
-      ...(source.main_content_quality ? { main_content_quality: source.main_content_quality } : {}),
-      ...(source.extraction_coverage ? { extraction_coverage: source.extraction_coverage } : {}),
-      ...(source.warnings ? { warnings: source.warnings } : {}),
-      ...(source.full_artifact_ref ? { full_artifact_ref: source.full_artifact_ref } : {}),
-      ...(source.content_hash ? { content_hash: source.content_hash } : {}),
-      saved_to_vault: false,
-      official_project_source: false,
-      truth_status: "session_only",
-      review_status: "temporary",
-      no_auto_promote: true,
-      safety: {
-        read_only: true,
-        vault_mutation: false,
-        gbrain_mutation: false,
-        promotion_performed: false,
-      },
-    }));
+    .map((source) => {
+      const navHeavy = sessionLocalSourceNavHeavy(source);
+      const readDepth = sessionLocalSourceReadDepth(source);
+      const cacheRole = sessionLocalSourceCacheRole(source);
+      const toolReadRecommended = sessionLocalSourceToolReadRecommended(source);
+
+      return {
+        type: "session_local_source",
+        schema_version: "cmo.session_local_source.v1",
+        workspace_id: source.workspace_id,
+        session_id: source.session_id,
+        turn_id: source.turn_id,
+        source_id: source.source_id,
+        source_type: source.source_type,
+        source_title: source.source_title,
+        ...(source.original_url ? { original_url: source.original_url } : {}),
+        ...(source.canonical_url ? { canonical_url: source.canonical_url } : {}),
+        ...(source.original_filename ? { original_filename: source.original_filename } : {}),
+        ...(source.extracted_summary ? { extracted_summary: source.extracted_summary } : {}),
+        ...(source.source_text_excerpt ? { source_text_excerpt: source.source_text_excerpt } : {}),
+        extraction_status: source.extraction_status,
+        ...(source.main_content_quality ? { main_content_quality: source.main_content_quality, extraction_quality: source.main_content_quality } : {}),
+        ...(source.extraction_coverage ? { extraction_coverage: source.extraction_coverage } : {}),
+        read_depth: readDepth,
+        cache_role: cacheRole,
+        nav_heavy: navHeavy,
+        tool_read_recommended: toolReadRecommended,
+        ...(source.warnings ? { warnings: source.warnings } : {}),
+        ...(source.full_artifact_ref ? { full_artifact_ref: source.full_artifact_ref } : {}),
+        ...(source.content_hash ? { content_hash: source.content_hash } : {}),
+        saved_to_vault: false,
+        official_project_source: false,
+        truth_status: "session_only",
+        review_status: "temporary",
+        no_auto_promote: true,
+        safety: {
+          read_only: true,
+          vault_mutation: false,
+          gbrain_mutation: false,
+          promotion_performed: false,
+        },
+      };
+    });
 }
 
 function userId(input: HermesCmoChatRequestInput): string {
@@ -239,6 +303,14 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const sourceReviewContext = sourceReviewContextArtifact(input);
   const sourceAnswerContext = sourceAnswerContextArtifact(input);
   const sessionLocalSources = sessionLocalSourceArtifacts(input);
+  const toolReadRecommended =
+    sourceAnswerContext?.tool_read_recommended === true ||
+    sessionLocalSources.some((source) => source.tool_read_recommended === true);
+  const navHeavySourceCount = sessionLocalSources.filter((source) => source.nav_heavy === true).length;
+  const activeSessionLocalSource =
+    (input.contextPackage.activeSourceId
+      ? sessionLocalSources.find((source) => source.source_id === input.contextPackage.activeSourceId)
+      : undefined) ?? sessionLocalSources[0];
   const currentPriority = contextItems
     .filter((item) => item.exists && item.kind === "current_priority")
     .map(contextItemSnapshot);
@@ -401,6 +473,15 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       session_local_sources_count: sessionLocalSources.length,
       source_answer_context_available: Boolean(sourceAnswerContext),
       source_review_context_available: Boolean(sourceReviewContext),
+      tool_read_recommended: toolReadRecommended,
+      nav_heavy_source_count: navHeavySourceCount,
+      ...(activeSessionLocalSource?.original_url ? { original_url: activeSessionLocalSource.original_url } : {}),
+      ...(activeSessionLocalSource?.canonical_url ? { canonical_url: activeSessionLocalSource.canonical_url } : {}),
+      ...(activeSessionLocalSource?.extraction_quality ? { extraction_quality: activeSessionLocalSource.extraction_quality } : {}),
+      ...(activeSessionLocalSource?.extraction_coverage ? { extraction_coverage: activeSessionLocalSource.extraction_coverage } : {}),
+      ...(activeSessionLocalSource?.read_depth ? { read_depth: activeSessionLocalSource.read_depth } : {}),
+      ...(activeSessionLocalSource?.cache_role ? { cache_role: activeSessionLocalSource.cache_role } : {}),
+      ...(typeof activeSessionLocalSource?.nav_heavy === "boolean" ? { nav_heavy: activeSessionLocalSource.nav_heavy } : {}),
       no_auto_save_13_sources: true,
       no_auto_promote_12_knowledge: true,
     },

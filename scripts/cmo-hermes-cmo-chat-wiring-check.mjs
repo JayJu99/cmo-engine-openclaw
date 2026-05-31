@@ -271,6 +271,8 @@ sampleTurnInput.contextPackage.sourceReviewContext = {
     content_hash: "sha256:hash_fixture",
     source_text_excerpt: "Fixture source text",
     extracted_summary: "Fixture source summary",
+    main_content_quality: "good",
+    extraction_coverage: "rendered_dom",
   },
   persistence: {
     saved_to_vault: false,
@@ -300,6 +302,12 @@ sampleTurnInput.contextPackage.sessionLocalSources = [
     extracted_summary: "Fixture source summary",
     source_text_excerpt: "Fixture source text",
     extraction_status: "completed",
+    main_content_quality: "good",
+    extraction_coverage: "rendered_dom",
+    read_depth: "browser_rendered",
+    cache_role: "high_quality_evidence",
+    nav_heavy: false,
+    tool_read_recommended: false,
     content_hash: "sha256:hash_fixture",
     saved_to_vault: false,
     official_project_source: false,
@@ -336,6 +344,11 @@ sampleTurnInput.contextPackage.sourceAnswerContext = {
   saved_to_vault: false,
   no_auto_promote: true,
   extraction_quality: "good",
+  extraction_coverage: "rendered_dom",
+  read_depth: "browser_rendered",
+  cache_role: "high_quality_evidence",
+  nav_heavy: false,
+  tool_read_recommended: false,
   warnings: [],
 };
 sampleTurnInput.contextPack.sourceAnswerContext = sampleTurnInput.contextPackage.sourceAnswerContext;
@@ -507,6 +520,9 @@ try {
     assert.equal(hermesRequest.context_pack.source_answer_context.query_type, "specific_question");
     assert.deepEqual(hermesRequest.context_pack.source_answer_context.used_source_fields, ["source_text_cache"]);
     assert.equal(hermesRequest.context_pack.source_answer_context.saved_to_vault, false);
+    assert.equal(hermesRequest.context_pack.source_answer_context.cache_role, "high_quality_evidence");
+    assert.equal(hermesRequest.context_pack.source_answer_context.read_depth, "browser_rendered");
+    assert.equal(hermesRequest.context_pack.source_answer_context.tool_read_recommended, false);
     assert.equal(hermesRequest.context_pack.active_source_id, "source_review_fixture");
     const sessionLocalSource = hermesRequest.context_pack.artifacts_in.find((artifact) => artifact.type === "session_local_source");
     const sourceAnswerContext = hermesRequest.context_pack.artifacts_in.find((artifact) => artifact.type === "source_answer_context");
@@ -518,6 +534,12 @@ try {
     assert.equal(sessionLocalSource.truth_status, "session_only");
     assert.equal(sessionLocalSource.review_status, "temporary");
     assert.equal(sessionLocalSource.no_auto_promote, true);
+    assert.equal(sessionLocalSource.extraction_quality, "good");
+    assert.equal(sessionLocalSource.extraction_coverage, "rendered_dom");
+    assert.equal(sessionLocalSource.read_depth, "browser_rendered");
+    assert.equal(sessionLocalSource.cache_role, "high_quality_evidence");
+    assert.equal(sessionLocalSource.nav_heavy, false);
+    assert.equal(sessionLocalSource.tool_read_recommended, false);
     for (const workspace of [
       ["aion", "AION"],
       ["feeback", "Feeback"],
@@ -620,8 +642,78 @@ try {
     assert.equal(hermesRequest.product_boundary.cmo_engine_must_not_synthesize_source_answer_when_live, true);
     assert.equal(hermesRequest.source_acquisition.chat_role, "cache_fallback_context_provider");
     assert.equal(hermesRequest.source_acquisition.official_ingestion_role, "inputs_priorities_sources_ui");
+    assert.equal(hermesRequest.source_acquisition.tool_read_recommended, false);
+    assert.equal(hermesRequest.source_acquisition.nav_heavy_source_count, 0);
+    assert.equal(hermesRequest.source_acquisition.original_url, "https://example.test/source");
+    assert.equal(hermesRequest.source_acquisition.extraction_quality, "good");
+    assert.equal(hermesRequest.source_acquisition.read_depth, "browser_rendered");
+    assert.equal(hermesRequest.source_acquisition.cache_role, "high_quality_evidence");
     assert.equal(hermesRequest.source_acquisition.no_auto_save_13_sources, true);
     assert.equal(hermesRequest.session_context_pack, null);
+
+    const navHeavyInput = JSON.parse(JSON.stringify(sampleTurnInput));
+    navHeavyInput.message = "Tóm tắt link đó";
+    navHeavyInput.request.message = "Tóm tắt link đó";
+    navHeavyInput.contextPackage.userMessage = "Tóm tắt link đó";
+    navHeavyInput.contextPackage.sessionLocalSources[0] = {
+      ...navHeavyInput.contextPackage.sessionLocalSources[0],
+      extracted_summary: "Home Menu Docs Blog Contact Privacy Terms Login",
+      source_text_excerpt: "Home Menu Docs Blog Contact Privacy Terms Login",
+      extraction_status: "partial",
+      main_content_quality: "low",
+      extraction_coverage: "static_html",
+      read_depth: "partial",
+      cache_role: "fallback_only",
+      nav_heavy: true,
+      tool_read_recommended: true,
+      warnings: ["nav_heavy"],
+    };
+    navHeavyInput.contextPackage.sourceAnswerContext = {
+      ...navHeavyInput.contextPackage.sourceAnswerContext,
+      query: "Tóm tắt link đó",
+      query_type: "summarize",
+      action: "summarize",
+      answerable: false,
+      relevant_snippets: [],
+      extraction_quality: "low",
+      extraction_coverage: "static_html",
+      read_depth: "partial",
+      cache_role: "fallback_only",
+      nav_heavy: true,
+      tool_read_recommended: true,
+      reason: "extraction_partial",
+      suggested_next_step: "deep_read_or_rendered_fetch",
+      warnings: ["nav_heavy"],
+    };
+    navHeavyInput.contextPack.sourceAnswerContext = navHeavyInput.contextPackage.sourceAnswerContext;
+    const navHeavyHermesRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...navHeavyInput,
+      sessionId: "session_h6",
+      userMessageId: "msg_nav_heavy_001",
+      createdAt: "2026-05-28T11:05:00.000Z",
+      userIdentity: {
+        userId: "user_h6",
+        userEmail: "jay@example.com",
+      },
+    });
+    assert.equal(navHeavyHermesRequest.context_pack.source_answer_context.answerable, false);
+    assert.equal(navHeavyHermesRequest.context_pack.source_answer_context.cache_role, "fallback_only");
+    assert.equal(navHeavyHermesRequest.context_pack.source_answer_context.nav_heavy, true);
+    assert.equal(navHeavyHermesRequest.context_pack.source_answer_context.tool_read_recommended, true);
+    assert.equal(navHeavyHermesRequest.source_acquisition.chat_role, "cache_fallback_context_provider");
+    assert.equal(navHeavyHermesRequest.source_acquisition.tool_read_recommended, true);
+    assert.equal(navHeavyHermesRequest.source_acquisition.nav_heavy_source_count, 1);
+    assert.equal(navHeavyHermesRequest.source_acquisition.original_url, "https://example.test/source");
+    assert.equal(navHeavyHermesRequest.source_acquisition.extraction_quality, "low");
+    assert.equal(navHeavyHermesRequest.source_acquisition.read_depth, "partial");
+    assert.equal(navHeavyHermesRequest.source_acquisition.cache_role, "fallback_only");
+    assert.equal(navHeavyHermesRequest.source_acquisition.nav_heavy, true);
+    const navHeavyArtifact = navHeavyHermesRequest.context_pack.artifacts_in.find((artifact) => artifact.type === "session_local_source");
+    assert.equal(navHeavyArtifact.original_url, "https://example.test/source");
+    assert.equal(navHeavyArtifact.cache_role, "fallback_only");
+    assert.equal(navHeavyArtifact.read_depth, "partial");
+    assert.equal(navHeavyArtifact.nav_heavy, true);
+    assert.equal(navHeavyArtifact.tool_read_recommended, true);
 
     const mapped = mapper.mapHermesCmoResponseToChatResult(makeRuntimeResult());
     assert.equal(mapped.runtimeStatus, "live");
@@ -1137,6 +1229,7 @@ try {
     assert.match(source, /if \(!usedHermesCmoChat\)/);
     assert.match(source, /productRenderSource = hermesCmoChatRequested \? "fallback_after_hermes_failure"/);
     assert.match(source, /productFallbackReason = hermesCmoChatRequested/);
+    assert.match(source, /withSessionSourceRoutingMetadata/);
     assert.match(source, /fallbackContextPackage/);
     assert.match(source, /failed_then_existing_fallback/);
     assert.match(source, /guardrail_violation_then_existing_fallback/);
@@ -1161,6 +1254,8 @@ try {
     assert.match(replaySource, /request_present/);
     assert.match(replaySource, /productRenderSource/);
     assert.match(replaySource, /productFallbackReason/);
+    assert.match(replaySource, /findSessionPathByRequest/);
+    assert.match(replaySource, /sessionTraceMatch/);
     assert.match(replaySource, /D_validator_rejected_valid_or_new_shape/);
     assert.match(replaySource, /A_request_context_missing/);
     assert.match(replaySource, /B_hermes_classification_or_answer_mismatch/);

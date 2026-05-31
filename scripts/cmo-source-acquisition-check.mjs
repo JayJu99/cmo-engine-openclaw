@@ -198,8 +198,14 @@ try {
     canonical_url: "https://feeback.org/",
     extracted_summary: "Feeback source summary.",
     source_text_excerpt: "Feeback supports campaign analytics for CEX launch teams.",
-    source_text_cache: "Feeback applies to CEX launch teams, trading venues, and market operators that need campaign feedback loops.",
+    source_text_cache: [
+      "Feeback applies to CEX launch teams, trading venues, and market operators that need campaign feedback loops.",
+      "The source explains activation workflows, partner onboarding, reporting rituals, campaign analysis, audience signals, conversion tracking, retention reviews, and launch team operating cadence.",
+      "It focuses on source-specific evidence for marketing teams that compare channels, prioritize campaigns, coordinate exchange partners, and evaluate market operator feedback before scaling distribution.",
+    ].join(" ").repeat(4),
     extraction_status: "completed",
+    main_content_quality: "good",
+    extraction_coverage: "rendered_dom",
     content_hash: "sha256:reader_fixture",
     saved_to_vault: false,
     official_project_source: false,
@@ -223,6 +229,10 @@ try {
   assert.ok(answerableContext.used_source_fields.includes("source_text_cache"));
   assert.equal(answerableContext.saved_to_vault, false);
   assert.equal(answerableContext.no_auto_promote, true);
+  assert.equal(answerableContext.cache_role, "high_quality_evidence");
+  assert.equal(answerableContext.read_depth, "browser_rendered");
+  assert.equal(answerableContext.nav_heavy, false);
+  assert.equal(answerableContext.tool_read_recommended, false);
 
   const missingAnswerContext = querySessionLocalSource(readableSessionSource, "What is the tokenomics vesting schedule?");
   assert.equal(missingAnswerContext.query_type, "specific_question");
@@ -260,10 +270,19 @@ try {
     source_text_cache: "Home Menu Login Docs Blog Contact Terms Privacy",
     source_text_excerpt: "Home Menu Login",
     extraction_status: "partial",
+    main_content_quality: undefined,
+    extraction_coverage: "partial",
   };
   const lowQuality = buildSourceQualityReport(lowQualitySource);
   assert.equal(lowQuality.main_content_quality, "low");
   assert.match(lowQuality.warnings.join("\n"), /nav_heavy/);
+  const lowQualitySummaryContext = querySessionLocalSource(lowQualitySource, "Tóm tắt link đó");
+  assert.equal(lowQualitySummaryContext.query_type, "summarize");
+  assert.equal(lowQualitySummaryContext.answerable, false);
+  assert.equal(lowQualitySummaryContext.cache_role, "fallback_only");
+  assert.equal(lowQualitySummaryContext.read_depth, "partial");
+  assert.equal(lowQualitySummaryContext.nav_heavy, true);
+  assert.equal(lowQualitySummaryContext.tool_read_recommended, true);
 
   const builtAnswerContext = await buildSourceAnswerContext({
     source: readableSessionSource,
@@ -724,6 +743,8 @@ try {
   const appChatStoreSource = readFileSync("src/lib/cmo/app-chat-store.ts", "utf8");
   assert.match(appChatStoreSource, /buildSourceReviewContextFromMessage/);
   assert.match(appChatStoreSource, /buildSourceAnswerContext/);
+  assert.match(appChatStoreSource, /withSessionSourceRoutingMetadata/);
+  assert.match(appChatStoreSource, /sourceToolReadRecommended/);
   assert.match(appChatStoreSource, /runtimeContext/);
   assert.match(appChatStoreSource, /sessionLocalSources/);
   assert.match(appChatStoreSource, /activeSourceId/);
@@ -748,6 +769,10 @@ try {
   assert.match(hermesMapperSource, /source_review_context/);
   assert.match(hermesMapperSource, /source_answer_context/);
   assert.match(hermesMapperSource, /session_local_source/);
+  assert.match(hermesMapperSource, /tool_read_recommended/);
+  assert.match(hermesMapperSource, /cache_role/);
+  assert.match(hermesMapperSource, /read_depth/);
+  assert.match(hermesMapperSource, /nav_heavy/);
   assert.match(hermesMapperSource, /active_source_id/);
   assert.match(hermesMapperSource, /runtime_context/);
   assert.match(hermesMapperSource, /product_gateway_boundary/);

@@ -37,10 +37,50 @@ const latestFile = (dir, predicate) => {
     .sort((left, right) => right.mtimeMs - left.mtimeMs)[0]?.filePath ?? null;
 };
 
-const sessionPath = () => {
+const latestSessionPath = () => latestFile(appChatDir, (filePath) => path.basename(filePath).startsWith("session_") && filePath.endsWith(".json"));
+
+const findSessionPathByRequest = (request) => {
+  if (!isRecord(request)) return null;
+  const sessionId = typeof request.session_id === "string" && request.session_id.trim() ? request.session_id.trim() : null;
+  const appId = typeof request.workspace?.app_id === "string" && request.workspace.app_id.trim() ? request.workspace.app_id.trim() : null;
+  const exactSessionPath = sessionId ? path.join(appChatDir, `${sessionId}.json`) : null;
+
+  if (exactSessionPath && existsSync(exactSessionPath)) {
+    return exactSessionPath;
+  }
+
+  if (!existsSync(appChatDir)) return null;
+
+  const candidates = readdirSync(appChatDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.startsWith("session_") && entry.name.endsWith(".json"))
+    .map((entry) => path.join(appChatDir, entry.name))
+    .map((filePath) => {
+      try {
+        const session = readJson(filePath);
+        return { filePath, session, mtimeMs: statSync(filePath).mtimeMs };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+
+  const matchingSessionId = sessionId ? candidates.filter((candidate) => candidate.session?.id === sessionId) : [];
+  if (matchingSessionId.length) {
+    return matchingSessionId.sort((left, right) => right.mtimeMs - left.mtimeMs)[0].filePath;
+  }
+
+  const matchingApp = appId ? candidates.filter((candidate) => candidate.session?.appId === appId) : [];
+  if (matchingApp.length) {
+    return matchingApp.sort((left, right) => right.mtimeMs - left.mtimeMs)[0].filePath;
+  }
+
+  return null;
+};
+
+const sessionPath = (request) => {
   if (process.env.SESSION_JSON) return path.resolve(process.env.SESSION_JSON);
   if (process.env.SESSION_ID) return path.join(appChatDir, `${process.env.SESSION_ID}.json`);
-  return latestFile(appChatDir, (filePath) => path.basename(filePath).startsWith("session_feeback_") && filePath.endsWith(".json"));
+  return findSessionPathByRequest(request) ?? latestSessionPath();
 };
 
 const tracePath = () => {
@@ -56,7 +96,14 @@ const sourceSummary = (source) => ({
   source_id: source?.source_id,
   source_title: source?.source_title,
   original_url: source?.original_url,
+  canonical_url: source?.canonical_url,
   extraction_status: source?.extraction_status,
+  main_content_quality: source?.main_content_quality,
+  extraction_coverage: source?.extraction_coverage,
+  read_depth: source?.read_depth,
+  cache_role: source?.cache_role,
+  nav_heavy: source?.nav_heavy,
+  tool_read_recommended: source?.tool_read_recommended,
   saved_to_vault: source?.saved_to_vault,
   truth_status: source?.truth_status,
 });
@@ -140,11 +187,35 @@ const summarizeHermesRequest = (request) => ({
         source_id: artifact?.source_id,
         source_title: artifact?.source_title,
         original_url: artifact?.original_url,
+        canonical_url: artifact?.canonical_url,
         extraction_status: artifact?.extraction_status,
+        extraction_quality: artifact?.extraction_quality,
+        extraction_coverage: artifact?.extraction_coverage,
+        read_depth: artifact?.read_depth,
+        cache_role: artifact?.cache_role,
+        nav_heavy: artifact?.nav_heavy,
+        tool_read_recommended: artifact?.tool_read_recommended,
         saved_to_vault: artifact?.saved_to_vault,
         truth_status: artifact?.truth_status,
       }))
     : [],
+  source_answer_context: request.context_pack?.source_answer_context
+    ? {
+        schema_version: request.context_pack.source_answer_context.schema_version,
+        workspace_id: request.context_pack.source_answer_context.workspace_id,
+        session_id: request.context_pack.source_answer_context.session_id,
+        source_id: request.context_pack.source_answer_context.source_id,
+        query_type: request.context_pack.source_answer_context.query_type,
+        action: request.context_pack.source_answer_context.action,
+        answerable: request.context_pack.source_answer_context.answerable,
+        extraction_quality: request.context_pack.source_answer_context.extraction_quality,
+        extraction_coverage: request.context_pack.source_answer_context.extraction_coverage,
+        read_depth: request.context_pack.source_answer_context.read_depth,
+        cache_role: request.context_pack.source_answer_context.cache_role,
+        nav_heavy: request.context_pack.source_answer_context.nav_heavy,
+        tool_read_recommended: request.context_pack.source_answer_context.tool_read_recommended,
+      }
+    : null,
   source_review_context: request.context_pack?.source_review_context
     ? {
         mode: request.context_pack.source_review_context.mode,
@@ -310,11 +381,23 @@ const rootCauseClassification = ({ request, replay, session }) => {
 };
 
 const run = async () => {
-  const foundSessionPath = sessionPath();
   const foundTracePath = tracePath();
+  let request = null;
+
+  if (foundTracePath && existsSync(foundTracePath)) {
+    const trace = readJson(foundTracePath);
+    request = trace.request ?? trace;
+  }
+
+  const foundSessionPath = sessionPath(request);
   const output = {
     sessionPath: foundSessionPath,
     tracePath: foundTracePath,
+    sessionTraceMatch: {
+      request_session_id: request?.session_id ?? null,
+      request_app_id: request?.workspace?.app_id ?? null,
+      matched_session_file: foundSessionPath ? path.basename(foundSessionPath) : null,
+    },
     session: foundSessionPath && existsSync(foundSessionPath) ? summarizeSession(readJson(foundSessionPath)) : null,
     request: null,
     replay: null,
@@ -323,9 +406,7 @@ const run = async () => {
     rootCauseClassification: null,
   };
 
-  if (foundTracePath && existsSync(foundTracePath)) {
-    const trace = readJson(foundTracePath);
-    const request = trace.request ?? trace;
+  if (request) {
     output.request = summarizeHermesRequest(request);
 
     if (process.env.CMO_HERMES_BASE_URL && process.env.CMO_HERMES_API_KEY) {
