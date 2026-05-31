@@ -674,9 +674,13 @@ const m44aActivityEventDataRejection = (eventType: HermesActivityType, data: unk
 const HERMES_ORIGINAL_SCHEMA_VERSION = "__hermes_original_schema_version";
 const HERMES_ORIGINAL_MODE = "__hermes_original_mode";
 
+interface HermesCmoResponseNormalizeOptions {
+  activityEventsCandidate?: unknown[];
+}
+
 const isToolCapableResponseCandidate = (response: Record<string, unknown>): boolean =>
-  response[HERMES_ORIGINAL_SCHEMA_VERSION] === "hermes.cmo.tool_response.v1" &&
-  response[HERMES_ORIGINAL_MODE] === "cmo.tool_capable";
+  (response[HERMES_ORIGINAL_SCHEMA_VERSION] ?? response.schema_version) === "hermes.cmo.tool_response.v1" &&
+  (response[HERMES_ORIGINAL_MODE] ?? response.mode) === "cmo.tool_capable";
 
 const answerBasisModeIsAllowed = (mode: unknown, allowToolRead: boolean): mode is HermesCmoRuntimeAnswerBasis["mode"] =>
   answerBasisModes.has(mode as HermesCmoRuntimeAnswerBasis["mode"]) || (allowToolRead && mode === "tool_read");
@@ -738,7 +742,41 @@ const normalizeHermesCmoRuntimeAnswer = (
   };
 };
 
-const normalizeHermesCmoResponseCandidate = (response: Record<string, unknown>): Record<string, unknown> => {
+const toolReadActivityCount = (events: unknown[]): number =>
+  events.filter((event) => isRecord(event) && (event.type === "cmo.tool_read.started" || event.type === "cmo.tool_read.completed")).length;
+
+const normalizeToolResponseActivitySummary = (
+  response: Record<string, unknown>,
+  activityEventsCandidate: unknown[] | undefined,
+): unknown => {
+  if (isRecord(response.activity_summary)) {
+    return response.activity_summary;
+  }
+
+  if (!isToolCapableResponseCandidate(response) || !Array.isArray(activityEventsCandidate) || activityEventsCandidate.length === 0) {
+    return response.activity_summary;
+  }
+
+  const toolTraceSummary = isRecord(response.tool_trace_summary) ? response.tool_trace_summary : {};
+
+  return {
+    events_count: activityEventsCandidate.length,
+    final_state: response.status === "completed" ? "completed" : String(response.status ?? "completed"),
+    derived_from_activity_events: true,
+    tool_reads_count:
+      typeof toolTraceSummary.tool_reads_count === "number"
+        ? toolTraceSummary.tool_reads_count
+        : typeof toolTraceSummary.tool_read_count === "number"
+          ? toolTraceSummary.tool_read_count
+          : toolReadActivityCount(activityEventsCandidate),
+    side_effects_safe: true,
+  };
+};
+
+const normalizeHermesCmoResponseCandidate = (
+  response: Record<string, unknown>,
+  options: HermesCmoResponseNormalizeOptions = {},
+): Record<string, unknown> => {
   const originalSchemaVersion = response[HERMES_ORIGINAL_SCHEMA_VERSION] ?? response.schema_version;
   const originalMode = response[HERMES_ORIGINAL_MODE] ?? response.mode;
   const toolCapableResponse = originalSchemaVersion === "hermes.cmo.tool_response.v1" && originalMode === "cmo.tool_capable";
@@ -755,6 +793,7 @@ const normalizeHermesCmoResponseCandidate = (response: Record<string, unknown>):
     [HERMES_ORIGINAL_SCHEMA_VERSION]: originalSchemaVersion,
     [HERMES_ORIGINAL_MODE]: originalMode,
     answer: normalizeHermesCmoRuntimeAnswer(response.answer, answerMode),
+    activity_summary: normalizeToolResponseActivitySummary(response, options.activityEventsCandidate),
     ...(canNormalizeAnswerBasis
       ? {
           answer_basis: {
@@ -800,6 +839,86 @@ const safeSideEffects = (value: unknown): false | Record<string, false> | null =
 const sideEffectsFromPayload = (payload: Record<string, unknown>, response: Record<string, unknown>): false | Record<string, false> | null =>
   safeSideEffects(payload.side_effects ?? response.side_effects);
 
+const safeToolTraceSummaryDiagnostic = (value: unknown): M44aActivityDataDiagnostic => {
+  if (value === undefined || value === null) {
+    return { ok: true };
+  }
+
+  if (!isRecord(value)) {
+    return {
+      ok: false,
+      keyPath: "tool_trace_summary",
+      valueType: valueTypeLabel(value),
+      reason: "nested_object_not_allowed",
+    };
+  }
+
+  for (const [key, item] of Object.entries(value)) {
+    const keyPath = `tool_trace_summary.${key}`;
+
+    if (m44aUnsafeActivityDataKeyPattern.test(key)) {
+      return {
+        ok: false,
+        keyPath,
+        valueType: valueTypeLabel(item),
+        reason: "unsafe_key_name",
+      };
+    }
+
+    if (Array.isArray(item)) {
+      if (item.length > 20 || !item.every((entry) => typeof entry === "string" && entry.length <= 120 && !m44aUnsafeActivityDataTextPattern.test(entry))) {
+        return {
+          ok: false,
+          keyPath,
+          valueType: "array",
+          reason: "unbounded_array",
+        };
+      }
+
+      continue;
+    }
+
+    if (!m44aSafeScalarActivityValue(item)) {
+      return {
+        ok: false,
+        keyPath,
+        valueType: valueTypeLabel(item),
+        reason: isRecord(item) ? "nested_object_not_allowed" : "raw_content_like_value",
+      };
+    }
+  }
+
+  return { ok: true };
+};
+
+const safeToolTraceSummaryRejection = (value: unknown): string | null => {
+  const diagnostic = safeToolTraceSummaryDiagnostic(value);
+
+  if (diagnostic.ok) {
+    return null;
+  }
+
+  return `unsafe_tool_trace_summary key=${safeDiagnosticKey(diagnostic.keyPath ?? "tool_trace_summary")} type=${diagnostic.valueType ?? "unknown"} reason=${diagnostic.reason ?? "unknown_key"}`;
+};
+
+const activitySummaryFailureReason = (activitySummary: unknown, response: Record<string, unknown>): string | null => {
+  if (!isRecord(activitySummary)) {
+    return isToolCapableResponseCandidate(response)
+      ? "activity_summary_invalid:missing_activity_events"
+      : "activity_summary_invalid:legacy_summary_required";
+  }
+
+  if (typeof activitySummary.events_count !== "number" || !Number.isInteger(activitySummary.events_count) || activitySummary.events_count < 0) {
+    return `activity_summary_invalid:events_count=${String(activitySummary.events_count)}`;
+  }
+
+  if (!isNonEmptyString(activitySummary.final_state)) {
+    return `activity_summary_invalid:final_state=${String(activitySummary.final_state)}`;
+  }
+
+  return null;
+};
+
 const responseValidationFailureReason = (
   response: Record<string, unknown>,
   request: HermesCmoRuntimeRequest,
@@ -808,6 +927,8 @@ const responseValidationFailureReason = (
   response = normalizeHermesCmoResponseCandidate(response);
   const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
   const activitySummary = response.activity_summary;
+  const activitySummaryFailure = activitySummaryFailureReason(activitySummary, response);
+  const toolTraceSummaryRejection = safeToolTraceSummaryRejection(response.tool_trace_summary);
 
   if (response.direct_vault_write === true) return "direct_vault_write=true";
   if (response.direct_memory_mutation === true) return "direct_memory_mutation=true";
@@ -835,11 +956,8 @@ const responseValidationFailureReason = (
   if (!validateDelegations(response.delegations, options)) return "delegations_invalid";
   if (!Array.isArray(response.artifacts)) return "artifacts_invalid";
   if (!Array.isArray(response.memory_suggestions) || !response.memory_suggestions.every(isRecord)) return "memory_suggestions_invalid";
-  if (!isRecord(activitySummary)) return "activity_summary_invalid";
-  if (typeof activitySummary.events_count !== "number" || !Number.isInteger(activitySummary.events_count) || activitySummary.events_count < 0) {
-    return `activity_summary.events_count=${String(activitySummary.events_count)}`;
-  }
-  if (!isNonEmptyString(activitySummary.final_state)) return `activity_summary.final_state=${String(activitySummary.final_state)}`;
+  if (activitySummaryFailure) return activitySummaryFailure;
+  if (toolTraceSummaryRejection) return `activity_summary_invalid:${toolTraceSummaryRejection}`;
   if (!optionalClassificationIsAllowed(response.classification)) return `classification=${String(response.classification)}`;
   if (!optionalClassificationIsAllowed(structuredOutput.classification)) return `structured_output.classification=${String(structuredOutput.classification)}`;
   if (!optionalResponseStyleIsAllowed(response.response_style)) return `response_style=${String(response.response_style)}`;
@@ -1820,6 +1938,7 @@ export const validateHermesCmoRuntimeResponse = (
   const structuredOutput = isRecord(responseCandidate.structured_output) ? responseCandidate.structured_output : {};
   const answerBasis = responseCandidate.answer_basis;
   const clarifyingQuestion = responseCandidate.clarifying_question;
+  const activitySummaryFailure = activitySummaryFailureReason(activitySummary, responseCandidate);
 
   if (
     responseCandidate.schema_version !== "hermes.cmo.response.v1" ||
@@ -1835,11 +1954,8 @@ export const validateHermesCmoRuntimeResponse = (
     !Array.isArray(responseCandidate.artifacts) ||
     !Array.isArray(responseCandidate.memory_suggestions) ||
     !responseCandidate.memory_suggestions.every(isRecord) ||
-    !isRecord(activitySummary) ||
-    typeof activitySummary.events_count !== "number" ||
-    !Number.isInteger(activitySummary.events_count) ||
-    activitySummary.events_count < 0 ||
-    !isNonEmptyString(activitySummary.final_state) ||
+    Boolean(activitySummaryFailure) ||
+    Boolean(safeToolTraceSummaryRejection(responseCandidate.tool_trace_summary)) ||
     !optionalClassificationIsAllowed(responseCandidate.classification) ||
     !optionalClassificationIsAllowed(structuredOutput.classification) ||
     !optionalResponseStyleIsAllowed(responseCandidate.response_style) ||
@@ -1986,9 +2102,9 @@ const extractLiveResponsePayload = (
   }
 
   const rawResponseCandidate = isRecord(payload.response) ? payload.response : payload;
-  const responseCandidate = normalizeHermesCmoResponseCandidate(rawResponseCandidate);
   const sideEffects = sideEffectsFromPayload(payload, rawResponseCandidate);
   const activityEventsCandidate = Array.isArray(payload.activity_events) ? payload.activity_events : [];
+  const responseCandidate = normalizeHermesCmoResponseCandidate(rawResponseCandidate, { activityEventsCandidate });
   const activityEvents = activityEventsCandidate
     .map((event, index) => normalizedActivityEvent(event, request, index + 1))
     .filter((event): event is HermesCmoRuntimeActivityEvent => Boolean(event));

@@ -1252,6 +1252,9 @@ try {
     assert.match(hermesRuntimeSource, /tool_name/);
     assert.match(hermesRuntimeSource, /tool_result/);
     assert.match(hermesRuntimeSource, /used_live_tool_read/);
+    assert.match(hermesRuntimeSource, /normalizeToolResponseActivitySummary/);
+    assert.match(hermesRuntimeSource, /activity_summary_invalid:missing_activity_events/);
+    assert.match(hermesRuntimeSource, /unsafe_tool_trace_summary/);
     assert.match(hermesRuntimeSource, /side_effects/);
     assert.match(hermesRuntimeSource, /data_unsafe:\$\{String\(eventType\)\} key=/);
     assert.match(hermesRuntimeSource, /context_pack_present/);

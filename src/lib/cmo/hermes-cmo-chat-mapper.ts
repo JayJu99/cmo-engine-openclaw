@@ -610,6 +610,28 @@ function classificationFromResponse(response: HermesCmoRuntimeResponse): string 
   return typeof value === "string" ? value : "";
 }
 
+function toolsUsedFromResponse(response: HermesCmoRuntimeResponse): string[] {
+  return Array.isArray(response.tools_used)
+    ? response.tools_used.filter((tool): tool is string => typeof tool === "string" && tool.trim().length > 0)
+    : [];
+}
+
+function toolReadsCountFromResponse(response: HermesCmoRuntimeResponse, activityEvents: HermesCmoActivityEventSummary[]): number | undefined {
+  const traceSummary = isRecord(response.tool_trace_summary) ? response.tool_trace_summary : {};
+
+  if (typeof traceSummary.tool_reads_count === "number" && Number.isFinite(traceSummary.tool_reads_count)) {
+    return traceSummary.tool_reads_count;
+  }
+
+  if (typeof traceSummary.tool_read_count === "number" && Number.isFinite(traceSummary.tool_read_count)) {
+    return traceSummary.tool_read_count;
+  }
+
+  const count = activityEvents.filter((event) => event.type === "cmo.tool_read.started" || event.type === "cmo.tool_read.completed").length;
+
+  return count > 0 ? count : undefined;
+}
+
 function echoOutputText(value: unknown): string | null {
   if (!isRecord(value)) {
     return null;
@@ -801,6 +823,8 @@ function metadataFromHermes(
   const delegationSummary = delegationSummaryFromHermes(result);
   const activityEvents = activityEventsFromHermes(result, delegationSummary);
   const executedCounts = executedAgentCounts(delegationSummary);
+  const toolsUsed = toolsUsedFromResponse(result.response);
+  const toolReadsCount = toolReadsCountFromResponse(result.response, activityEvents);
 
   return {
     runtimeMode: "hermes_cmo",
@@ -818,6 +842,8 @@ function metadataFromHermes(
     forbiddenCounters,
     requestId: result.response.request_id,
     responseStatus: result.response.status,
+    ...(toolsUsed.length > 0 ? { toolsUsed, tools_used: toolsUsed } : {}),
+    ...(toolReadsCount !== undefined ? { toolReadsCount } : {}),
     ...(result.strategyMode ? { strategyMode: result.strategyMode } : {}),
     ...(result.mainBottleneck ? { mainBottleneck: result.mainBottleneck } : {}),
     ...(result.decisionLabel ? { decisionLabel: result.decisionLabel } : {}),

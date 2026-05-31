@@ -392,6 +392,7 @@ const startServer = async () => {
           const m44d2ToolEndpointFixture = body.request_id === "req_m44d2_tool_endpoint";
           const m44dToolEndpointSideEffectsFixture = body.request_id === "req_m44d_tool_endpoint_side_effects_true";
           const m44dToolEndpointUnsafeToolResultFixture = body.request_id === "req_m44d_tool_endpoint_unsafe_tool_result";
+          const m44dToolEndpointUnsafeTraceFixture = body.request_id === "req_m44d_tool_endpoint_unsafe_trace";
           const m44dUnknownAnswerBasisFixture = body.request_id === "req_m44d_unknown_answer_basis";
           const m44d2NativeExecuteFixture = body.request_id === "req_m44d2_native_execute";
           const m44aToolReadCompletedHtmlFixture = body.request_id === "req_m44a_tool_read_completed_html";
@@ -638,6 +639,7 @@ const startServer = async () => {
                   response: {
                     schema_version: "hermes.cmo.tool_response.v1",
                     mode: "cmo.tool_capable",
+                    activity_summary: undefined,
                     answer_basis: {
                       mode: "tool_read",
                     },
@@ -711,6 +713,10 @@ const startServer = async () => {
                         saved_to_vault: false,
                         no_auto_promote: true,
                       },
+                    },
+                    {
+                      ...activity(body, 4, "cmo.run.completed", "CMO completed the tool-capable run."),
+                      status: "completed",
                     },
                   ],
                 }),
@@ -805,6 +811,54 @@ const startServer = async () => {
                         status: "completed",
                         success: true,
                         tool_result: "<html><body>raw page body</body></html>",
+                      },
+                    },
+                  ],
+                }),
+                side_effects: false,
+              },
+            );
+            return;
+          }
+
+          if (m44dToolEndpointUnsafeTraceFixture) {
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
+            writeJson(
+              response,
+              200,
+              {
+                ...cmoResponse(body, {
+                  response: {
+                    schema_version: "hermes.cmo.tool_response.v1",
+                    mode: "cmo.tool_capable",
+                    activity_summary: undefined,
+                    answer_basis: {
+                      mode: "tool_read",
+                    },
+                    structured_output: {
+                      classification: "native_conversation",
+                      response_style: "native_conversation",
+                      tool_policy: "none",
+                    },
+                    answer: {
+                      body: "This response must be rejected because tool_trace_summary contains raw HTML.",
+                    },
+                    tool_trace_summary: {
+                      tool_read_count: 1,
+                      html: "<html><body>raw page body</body></html>",
+                    },
+                  },
+                  activity_events: [
+                    {
+                      ...activity(body, 1, "cmo.tool_read.completed", "CMO completed browser source read."),
+                      status: "completed",
+                      data: {
+                        tool_family: "browser",
+                        tool_name: "browser_snapshot",
+                        read_only: true,
+                        source_type: "url",
+                        status: "completed",
+                        success: true,
                       },
                     },
                   ],
@@ -3393,6 +3447,9 @@ try {
     assert.equal(m44d2ToolEndpointResult.response.answer?.body, "Holdstation Pay FAQ summary from a tool-capable CMO read.");
     assert.deepEqual(m44d2ToolEndpointResult.response.tools_used, ["browser_navigate", "browser_snapshot", "browser_console"]);
     assert.equal(m44d2ToolEndpointResult.response.tool_trace_summary?.tool_read_count, 3);
+    assert.equal(m44d2ToolEndpointResult.response.activity_summary.events_count, 4);
+    assert.equal(m44d2ToolEndpointResult.response.activity_summary.derived_from_activity_events, true);
+    assert.equal(m44d2ToolEndpointResult.response.activity_summary.tool_reads_count, 3);
     assert.equal(
       m44d2ToolEndpointResult.activity_events.some((event) => event.type === "cmo.tool_read.completed"),
       true,
@@ -3414,6 +3471,12 @@ try {
       () => runHermesCmoRuntime(m44dToolEndpointRequest("req_m44d_tool_endpoint_unsafe_tool_result")),
       /Rejected field: data_unsafe:cmo\.tool_read\.completed key=data\.tool_result type=string reason=unsafe_key_name/,
       "tool endpoint activity data must reject raw tool_result",
+    );
+
+    await assert.rejects(
+      () => runHermesCmoRuntime(m44dToolEndpointRequest("req_m44d_tool_endpoint_unsafe_trace")),
+      /Rejected field: activity_summary_invalid:unsafe_tool_trace_summary key=tool_trace_summary\.html type=string reason=unsafe_key_name/,
+      "tool endpoint response must reject unsafe tool_trace_summary metadata",
     );
 
     await assert.rejects(

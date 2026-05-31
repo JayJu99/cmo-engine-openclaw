@@ -783,6 +783,9 @@ export interface HermesCmoChatMetadata {
   forbiddenCounters: HermesCmoForbiddenCounters;
   requestId: string;
   responseStatus: string;
+  toolsUsed?: string[];
+  tools_used?: string[];
+  toolReadsCount?: number;
   strategyMode?: CmoStrategyMode;
   mainBottleneck?: string;
   decisionLabel?: CmoDecisionLabel;
