@@ -15,6 +15,17 @@ const isRecord = (value) => typeof value === "object" && value !== null && !Arra
 
 const readJson = (filePath) => JSON.parse(readFileSync(filePath, "utf8"));
 
+const safeSourceClassifications = new Set([
+  "native_conversation",
+  "source_answer",
+  "structured_review",
+  "strategy_only",
+  "external_research",
+  "source_translate",
+  "source_transform",
+  "save_to_vault",
+]);
+
 const latestFile = (dir, predicate) => {
   if (!existsSync(dir)) return null;
   return readdirSync(dir, { withFileTypes: true })
@@ -177,6 +188,95 @@ const summarizeHermesResponse = (payload, httpStatus) => {
   };
 };
 
+const requestHasSourceContext = (request) => {
+  const contextPack = isRecord(request?.context_pack) ? request.context_pack : {};
+  const artifacts = Array.isArray(contextPack.artifacts_in) ? contextPack.artifacts_in : [];
+
+  return Boolean(
+    contextPack.active_source_id ||
+      contextPack.source_review_context ||
+      contextPack.source_answer_context ||
+      artifacts.some((artifact) =>
+        artifact?.type === "session_local_source" ||
+        artifact?.type === "source_answer_context" ||
+        artifact?.type === "vault_context_pack",
+      ),
+  );
+};
+
+const replayHasBoundaryFailure = (replay) => {
+  if (!isRecord(replay) || replay.skipped) return false;
+  if (typeof replay.httpStatus === "number" && (replay.httpStatus < 200 || replay.httpStatus >= 300)) return true;
+  if (replay.status === "failed" || replay.status === "cancelled") return true;
+
+  const flags = isRecord(replay.mutation_flags) ? replay.mutation_flags : {};
+  return Object.values(flags).some((value) => value === true);
+};
+
+const sessionShowsFallbackOrLocalSourceReview = (session) => {
+  if (!isRecord(session)) return false;
+  const fallbackStatus = typeof session.hermesCmoStatus === "string" && session.hermesCmoStatus !== "live";
+  const fallbackRuntime = session.isRuntimeFallback === true || session.runtimeProvider === "fallback";
+  const localSourceReview = Array.isArray(session.messages) && session.messages.some((message) =>
+    message?.role === "assistant" &&
+      /Source Review:|This source is available as temporary review-only context|No Vault save, GBrain indexing, or knowledge promotion was performed/i.test(message.content ?? ""),
+  );
+
+  return Boolean(fallbackStatus || fallbackRuntime || localSourceReview);
+};
+
+const rootCauseClassification = ({ request, replay, session }) => {
+  if (!request) {
+    return {
+      case_id: "no_trace_available",
+      summary: "No Hermes request trace was found to classify.",
+    };
+  }
+
+  const hasSourceContext = requestHasSourceContext(request);
+
+  if (!hasSourceContext) {
+    return {
+      case_id: "A_request_context_missing",
+      summary: "CMO Engine did not include active source/cache context in the Hermes request.",
+    };
+  }
+
+  if (replayHasBoundaryFailure(replay)) {
+    return {
+      case_id: "C_hermes_invalid_or_boundary_rejected",
+      summary: "Hermes replay failed, returned an unsafe mutation signal, or violated the response boundary.",
+    };
+  }
+
+  if (sessionShowsFallbackOrLocalSourceReview(session)) {
+    return {
+      case_id: "D_cmo_engine_mapping_or_fallback",
+      summary: "CMO Engine session output indicates fallback/local Source Review rendering after Hermes was expected.",
+    };
+  }
+
+  const classification = replay?.classification ?? replay?.answer_basis_mode;
+  if (classification && !safeSourceClassifications.has(classification)) {
+    return {
+      case_id: "B_hermes_classification_or_answer_mismatch",
+      summary: `Hermes replay used unexpected classification ${classification}.`,
+    };
+  }
+
+  if (replay && replay.skipped) {
+    return {
+      case_id: "replay_skipped",
+      summary: "Request/session context was available, but live replay credentials were not configured.",
+    };
+  }
+
+  return {
+    case_id: "no_root_cause_detected",
+    summary: "Request, replay, and session summaries do not show the known A/B/C/D failure signatures.",
+  };
+};
+
 const run = async () => {
   const foundSessionPath = sessionPath();
   const foundTracePath = tracePath();
@@ -186,6 +286,7 @@ const run = async () => {
     session: foundSessionPath && existsSync(foundSessionPath) ? summarizeSession(readJson(foundSessionPath)) : null,
     request: null,
     replay: null,
+    rootCauseClassification: null,
   };
 
   if (foundTracePath && existsSync(foundTracePath)) {
@@ -216,6 +317,12 @@ const run = async () => {
       };
     }
   }
+
+  output.rootCauseClassification = rootCauseClassification({
+    request: output.request,
+    replay: output.replay,
+    session: output.session,
+  });
 
   console.log(JSON.stringify(output, null, 2));
 };

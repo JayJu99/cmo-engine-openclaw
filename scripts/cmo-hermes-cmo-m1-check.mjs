@@ -1715,6 +1715,30 @@ try {
       validateHermesCmoRuntimeResponse(
         {
           ...cmoResponse(sampleRequest).response,
+          gbrain_mutation: true,
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      false,
+      "GBrain mutation must remain rejected",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          knowledge_promotion_performed: true,
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      false,
+      "knowledge promotion must remain rejected",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
           structured_output: {
             classification: "arbitrary_new_classification",
           },
@@ -1818,6 +1842,30 @@ try {
       ),
       true,
       "known source_answer simple body answer must validate",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          answer_basis: {
+            mode: "save_to_vault",
+          },
+          structured_output: {
+            classification: "save_to_vault",
+            response_style: "save_to_vault",
+            tool_policy: "vault_agent",
+            save_requires_explicit_user_confirmation: true,
+            no_auto_save_13_sources: true,
+          },
+          answer: {
+            body: "Prepare the explicit Save Source flow; do not write 13 Sources from chat.",
+          },
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      true,
+      "known save_to_vault intent body answer must validate without performing writes",
     );
     assert.equal(
       validateHermesCmoRuntimeResponse(

@@ -324,6 +324,51 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       heartbeat_required: true,
       existing_cmo_chat_response_shape_required: true,
     },
+    tool_policy: {
+      schema_version: "cmo.hermes.tool_policy.v1",
+      role: "product_shell_context_provider",
+      allowed_agents: ["echo", "surf"],
+      allowed_surf_modes: ["surf.default", "surf.x", "surf.trend", "surf.pulse"],
+      delegations_mode: HERMES_CMO_PROPOSALS_ONLY,
+      allow_sub_agent_execution: false,
+      allow_vault_agent_execution: false,
+      allow_vault_writes: false,
+      allow_supabase_writes: false,
+      allow_session_writes: false,
+      allow_raw_capture_writes: false,
+      allow_openclaw_calls: false,
+      durable_writes: {
+        session_log_owned_by_cmo_engine: true,
+        vault_writes_require_explicit_save_flow: true,
+        source_ingestion_requires_inputs_priorities_or_explicit_save: true,
+        no_auto_save_13_sources: true,
+        no_auto_promote_12_knowledge: true,
+        no_gbrain_mutation: true,
+      },
+    },
+    product_boundary: {
+      schema_version: "cmo.product_gateway_boundary.v1",
+      cmo_engine_role: "product_shell_session_owner_permission_boundary",
+      hermes_cmo_role: "source_gathering_reasoning_agent",
+      vault_agent_role: "safe_durable_memory_boundary",
+      final_answer_owner_when_live: "hermes_cmo",
+      cmo_engine_may_cache_source_artifacts: true,
+      cmo_engine_must_not_synthesize_source_review_when_live: true,
+      cmo_engine_must_not_synthesize_source_answer_when_live: true,
+      fallback_requires_disabled_unavailable_or_invalid_hermes: true,
+    },
+    source_acquisition: {
+      schema_version: "cmo.source_acquisition_role.v1",
+      chat_role: "cache_fallback_context_provider",
+      official_ingestion_role: "inputs_priorities_sources_ui",
+      active_source_id: input.contextPackage.activeSourceId ?? null,
+      session_local_sources_count: sessionLocalSources.length,
+      source_answer_context_available: Boolean(sourceAnswerContext),
+      source_review_context_available: Boolean(sourceReviewContext),
+      no_auto_save_13_sources: true,
+      no_auto_promote_12_knowledge: true,
+    },
+    session_context_pack: null,
     runtime_context: input.contextPackage.runtimeContext ?? {
       now_iso: input.createdAt,
       timezone: "Asia/Ho_Chi_Minh",
@@ -489,7 +534,8 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
     classification === "native_conversation" ||
     classification === "source_acknowledgement" ||
     classification === "source_can_read" ||
-    classification === "source_answer";
+    classification === "source_answer" ||
+    classification === "save_to_vault";
   const transformed = isSourceTransform && result ? sourceTransformAnswerFromDelegations(result) : null;
 
   if (transformed) {

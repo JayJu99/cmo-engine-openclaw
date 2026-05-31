@@ -592,6 +592,18 @@ try {
     assert.equal(hermesRequest.constraints.allowOpenClawCalls, false);
     assert.equal(hermesRequest.constraints.delegations_mode, "proposals_only");
     assert.deepEqual(hermesRequest.constraints.allowed_agents, ["echo", "surf"]);
+    assert.equal(hermesRequest.tool_policy.schema_version, "cmo.hermes.tool_policy.v1");
+    assert.equal(hermesRequest.tool_policy.role, "product_shell_context_provider");
+    assert.equal(hermesRequest.tool_policy.durable_writes.no_auto_save_13_sources, true);
+    assert.equal(hermesRequest.tool_policy.durable_writes.no_auto_promote_12_knowledge, true);
+    assert.equal(hermesRequest.tool_policy.durable_writes.no_gbrain_mutation, true);
+    assert.equal(hermesRequest.product_boundary.final_answer_owner_when_live, "hermes_cmo");
+    assert.equal(hermesRequest.product_boundary.cmo_engine_must_not_synthesize_source_review_when_live, true);
+    assert.equal(hermesRequest.product_boundary.cmo_engine_must_not_synthesize_source_answer_when_live, true);
+    assert.equal(hermesRequest.source_acquisition.chat_role, "cache_fallback_context_provider");
+    assert.equal(hermesRequest.source_acquisition.official_ingestion_role, "inputs_priorities_sources_ui");
+    assert.equal(hermesRequest.source_acquisition.no_auto_save_13_sources, true);
+    assert.equal(hermesRequest.session_context_pack, null);
 
     const mapped = mapper.mapHermesCmoResponseToChatResult(makeRuntimeResult());
     assert.equal(mapped.runtimeStatus, "live");
@@ -727,6 +739,34 @@ try {
     });
     assert.equal(nativeAcknowledgementMapped.answer, "Ok bro, rõ rồi.");
     assert.doesNotMatch(nativeAcknowledgementMapped.answer, /CMO strategic response|Decision:|REVIEW/);
+
+    const saveToVaultIntentBase = makeRuntimeResult();
+    const saveToVaultIntentMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...saveToVaultIntentBase,
+      response: {
+        ...saveToVaultIntentBase.response,
+        answer_basis: {
+          ...saveToVaultIntentBase.response.answer_basis,
+          mode: "save_to_vault",
+        },
+        answer: {
+          format: "markdown",
+          title: "CMO strategic response",
+          summary: "REVIEW",
+          decision: "WAIT",
+          body: "I can prepare this for the explicit Save Source flow, but I will not write 13 Sources from chat.",
+        },
+        structured_output: {
+          classification: "save_to_vault",
+          response_style: "save_to_vault",
+          tool_policy: "vault_agent",
+          save_requires_explicit_user_confirmation: true,
+          no_auto_save_13_sources: true,
+        },
+      },
+    });
+    assert.equal(saveToVaultIntentMapped.answer, "I can prepare this for the explicit Save Source flow, but I will not write 13 Sources from chat.");
+    assert.doesNotMatch(saveToVaultIntentMapped.answer, /CMO strategic response|Decision:|REVIEW/);
 
     const structuredReviewBase = makeRuntimeResult();
     const structuredReviewMapped = mapper.mapHermesCmoResponseToChatResult({
@@ -1000,9 +1040,22 @@ try {
     const source = await readFile(path.join(cmoDir, "app-chat-store.ts"), "utf8");
     assert.match(source, /shouldUseHermesCmoChat\(request\.appId\)/);
     assert.match(source, /runHermesCmoRuntime\(hermesRequest\)/);
+    assert.match(source, /answer = mappedHermesResult\.answer/);
+    assert.match(source, /if \(!usedHermesCmoChat\)/);
     assert.match(source, /fallbackContextPackage/);
     assert.match(source, /failed_then_existing_fallback/);
     assert.match(source, /guardrail_violation_then_existing_fallback/);
+
+    const runtimeSource = await readFile(path.join(cmoDir, "runtime.ts"), "utf8");
+    assert.match(runtimeSource, /function sourceReviewFallbackAnswer/);
+    assert.match(runtimeSource, /reviewContext\.mode !== "review_only"/);
+
+    const replaySource = await readFile(path.join(rootDir, "scripts", "cmo-hermes-cmo-replay-trace.mjs"), "utf8");
+    assert.match(replaySource, /rootCauseClassification/);
+    assert.match(replaySource, /A_request_context_missing/);
+    assert.match(replaySource, /B_hermes_classification_or_answer_mismatch/);
+    assert.match(replaySource, /C_hermes_invalid_or_boundary_rejected/);
+    assert.match(replaySource, /D_cmo_engine_mapping_or_fallback/);
 
     console.log(
       JSON.stringify(

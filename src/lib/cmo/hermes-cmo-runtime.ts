@@ -39,6 +39,7 @@ export type HermesCmoClassification =
   | "structured_review"
   | "strategy_only"
   | "external_research"
+  | "save_to_vault"
   | "needs_surf"
   | "needs_echo_retry";
 export type HermesActivityStatus = "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled";
@@ -178,7 +179,8 @@ export interface HermesCmoRuntimeAnswerBasis {
     | "source_translate"
     | "source_transform"
     | "structured_review"
-    | "external_research";
+    | "external_research"
+    | "save_to_vault";
   missing_inputs: string[];
   assumptions_used: Array<string | Record<string, unknown>>;
   user_can_override: boolean;
@@ -300,6 +302,7 @@ const answerBasisModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "source_transform",
   "structured_review",
   "external_research",
+  "save_to_vault",
 ]);
 const answerFormats = new Set<HermesCmoRuntimeAnswer["format"]>(["markdown", "plain_text", "json"]);
 const simpleAnswerModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
@@ -309,6 +312,7 @@ const simpleAnswerModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "source_answer",
   "source_translate",
   "source_transform",
+  "save_to_vault",
 ]);
 const classifications = new Set<HermesCmoClassification>([
   "native_conversation",
@@ -320,6 +324,7 @@ const classifications = new Set<HermesCmoClassification>([
   "structured_review",
   "strategy_only",
   "external_research",
+  "save_to_vault",
   "needs_surf",
   "needs_echo_retry",
 ]);
@@ -373,6 +378,7 @@ const responseStyles = new Set([
   "source_transform",
   "structured_review",
   "external_research",
+  "save_to_vault",
 ]);
 const toolPolicies = new Set(["none", "echo", "surf", "vault_agent"]);
 const executableDelegationEventTypes = new Set<HermesActivityType>([
@@ -515,6 +521,11 @@ const responseValidationFailureReason = (
   if (response.direct_memory_mutation === true) return "direct_memory_mutation=true";
   if (response.direct_supabase_mutation === true) return "direct_supabase_mutation=true";
   if (response.direct_supabase_write === true) return "direct_supabase_write=true";
+  if (response.gbrain_mutation === true) return "gbrain_mutation=true";
+  if (response.knowledge_promotion_performed === true) return "knowledge_promotion_performed=true";
+  if (response.auto_promote === true) return "auto_promote=true";
+  if (response.direct_session_write === true) return "direct_session_write=true";
+  if (response.direct_raw_capture_write === true) return "direct_raw_capture_write=true";
   if (response.openclaw_call === true) return "openclaw_call=true";
   if (response.schema_version !== "hermes.cmo.response.v1") return `schema_version=${String(response.schema_version)}`;
   if (response.request_id !== request.request_id) return `request_id_mismatch:${String(response.request_id)}`;
@@ -1194,6 +1205,11 @@ export const validateHermesCmoRuntimeResponse = (
     responseCandidate.direct_memory_mutation === true ||
     responseCandidate.direct_supabase_mutation === true ||
     responseCandidate.direct_supabase_write === true ||
+    responseCandidate.gbrain_mutation === true ||
+    responseCandidate.knowledge_promotion_performed === true ||
+    responseCandidate.auto_promote === true ||
+    responseCandidate.direct_session_write === true ||
+    responseCandidate.direct_raw_capture_write === true ||
     responseCandidate.openclaw_call === true
   ) {
     return false;
