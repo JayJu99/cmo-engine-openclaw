@@ -2,7 +2,7 @@ export interface HermesEchoBrief {
   handoff_id: string;
   source_agent: "cmo" | "jay";
   target_agent: "echo";
-  mode?: "direct_jay" | "echo.default";
+  mode?: "direct_jay" | "echo.default" | "echo.source_translate";
   workspace: string;
   task_type: string;
   objective: string;
@@ -163,7 +163,7 @@ export interface HermesEchoResponse {
   schema_version?: "echo.response.v1";
   handoff_id: string;
   agent: "echo";
-  mode?: "echo.default";
+  mode?: "echo.default" | "echo.source_translate";
   status: "completed";
   outputs: HermesEchoOutput[];
   notes: string[];
@@ -280,7 +280,7 @@ function validateHermesEchoResponse(value: unknown): HermesEchoResponse | null {
     return null;
   }
 
-  if (value.mode !== undefined && value.mode !== "echo.default") {
+  if (value.mode !== undefined && value.mode !== "echo.default" && value.mode !== "echo.source_translate") {
     return null;
   }
 
@@ -312,7 +312,7 @@ function validateHermesEchoResponse(value: unknown): HermesEchoResponse | null {
     ...(value.schema_version === "echo.response.v1" ? { schema_version: "echo.response.v1" } : {}),
     handoff_id: handoffId,
     agent: "echo",
-    ...(value.mode === "echo.default" ? { mode: "echo.default" } : {}),
+    ...(value.mode === "echo.default" || value.mode === "echo.source_translate" ? { mode: value.mode } : {}),
     status: "completed",
     outputs,
     notes,

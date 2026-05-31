@@ -577,6 +577,62 @@ try {
       "delegations must map as reviewable proposals only",
     );
 
+    const sourceTranslateBase = makeRuntimeResult();
+    const sourceTranslateMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...sourceTranslateBase,
+      response: {
+        ...sourceTranslateBase.response,
+        answer_basis: {
+          ...sourceTranslateBase.response.answer_basis,
+          mode: "source_translate",
+        },
+        answer: {
+          format: "markdown",
+          title: "CMO strategic response",
+          summary: "REVIEW",
+          decision: "KEEP",
+          body: "This CMO synthesis wrapper should not be visible for source translation.",
+        },
+        structured_output: {
+          ...sourceTranslateBase.response.structured_output,
+          classification: "source_translate",
+        },
+      },
+      delegationSummary: [
+        {
+          delegationKey: "echo:source_translate",
+          delegationId: "del_source_translate",
+          targetAgent: "echo",
+          mode: "echo.source_translate",
+          objective: "Translate the active source.",
+          status: "completed",
+          summary: "Echo returned 1 output(s).",
+          response: {
+            schema_version: "echo.response.v1",
+            handoff_id: "del_source_translate",
+            agent: "echo",
+            mode: "echo.source_translate",
+            status: "completed",
+            outputs: [
+              {
+                label: "translation",
+                copy: "Bản dịch tự nhiên của nguồn đang hoạt động.",
+              },
+            ],
+            notes: [],
+          },
+        },
+      ],
+      safety_counters: {
+        ...sourceTranslateBase.safety_counters,
+        echoCalls: 1,
+      },
+      echoCalls: 1,
+      agentsUsed: ["cmo", "echo"],
+    });
+    assert.equal(sourceTranslateMapped.answer, "Bản dịch tự nhiên của nguồn đang hoạt động.");
+    assert.doesNotMatch(sourceTranslateMapped.answer, /CMO strategic response|Decision:|REVIEW/);
+
     const noDelegationNeedsSurfBase = makeRuntimeResult();
     const noDelegationNeedsSurfMapped = mapper.mapHermesCmoResponseToChatResult({
       ...noDelegationNeedsSurfBase,

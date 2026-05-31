@@ -45,6 +45,7 @@ export type HermesActivityType =
   | "context.loaded"
   | "cmo.intent.classified"
   | "cmo.source_context.loaded"
+  | "cmo.response_style.selected"
   | "cmo.mode.selected"
   | "cmo.bottleneck.identified"
   | "cmo.decision.selected"
@@ -313,6 +314,7 @@ const activityTypes = new Set<HermesActivityType>([
   "context.loaded",
   "cmo.intent.classified",
   "cmo.source_context.loaded",
+  "cmo.response_style.selected",
   "cmo.mode.selected",
   "cmo.bottleneck.identified",
   "cmo.decision.selected",
@@ -375,6 +377,132 @@ const hasOnlyAllowedValues = <T extends string>(values: unknown, allowedValues: 
 
 const optionalClassificationIsAllowed = (value: unknown) =>
   value === undefined || (typeof value === "string" && classifications.has(value as HermesCmoClassification));
+
+const normalizeHermesCmoResponseCandidate = (response: Record<string, unknown>): Record<string, unknown> => {
+  const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
+  const answerBasisMode = typeof answerBasis.mode === "string" ? answerBasis.mode : undefined;
+  const canNormalizeAnswerBasis = answerBasisMode !== undefined && answerBasisModes.has(answerBasisMode as HermesCmoRuntimeAnswerBasis["mode"]);
+  const clarifyingQuestion = isRecord(response.clarifying_question) ? response.clarifying_question : {};
+
+  return {
+    ...response,
+    ...(canNormalizeAnswerBasis
+      ? {
+          answer_basis: {
+            ...answerBasis,
+            missing_inputs: Array.isArray(answerBasis.missing_inputs) ? answerBasis.missing_inputs : [],
+            assumptions_used: Array.isArray(answerBasis.assumptions_used) ? answerBasis.assumptions_used : [],
+            user_can_override: typeof answerBasis.user_can_override === "boolean" ? answerBasis.user_can_override : true,
+            suggested_user_inputs: Array.isArray(answerBasis.suggested_user_inputs) ? answerBasis.suggested_user_inputs : [],
+          },
+        }
+      : {}),
+    clarifying_question: {
+      required: typeof clarifyingQuestion.required === "boolean" ? clarifyingQuestion.required : false,
+      question: typeof clarifyingQuestion.question === "string" || clarifyingQuestion.question === null ? clarifyingQuestion.question : null,
+      reason: typeof clarifyingQuestion.reason === "string" || clarifyingQuestion.reason === null ? clarifyingQuestion.reason : null,
+      missing_inputs: Array.isArray(clarifyingQuestion.missing_inputs) ? clarifyingQuestion.missing_inputs : [],
+    },
+    structured_output: response.structured_output === undefined ? null : response.structured_output,
+    delegations: response.delegations === undefined ? [] : response.delegations,
+    artifacts: response.artifacts === undefined ? [] : response.artifacts,
+    memory_suggestions: response.memory_suggestions === undefined ? [] : response.memory_suggestions,
+  };
+};
+
+const responseValidationFailureReason = (
+  response: Record<string, unknown>,
+  request: HermesCmoRuntimeRequest,
+  options: HermesCmoResponseValidationOptions,
+): string => {
+  const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
+  const activitySummary = response.activity_summary;
+
+  if (response.direct_vault_write === true) return "direct_vault_write=true";
+  if (response.direct_memory_mutation === true) return "direct_memory_mutation=true";
+  if (response.direct_supabase_mutation === true) return "direct_supabase_mutation=true";
+  if (response.direct_supabase_write === true) return "direct_supabase_write=true";
+  if (response.openclaw_call === true) return "openclaw_call=true";
+  if (response.schema_version !== "hermes.cmo.response.v1") return `schema_version=${String(response.schema_version)}`;
+  if (response.request_id !== request.request_id) return `request_id_mismatch:${String(response.request_id)}`;
+  if (response.session_id !== request.session_id) return `session_id_mismatch:${String(response.session_id)}`;
+  if (response.turn_id !== request.turn_id) return `turn_id_mismatch:${String(response.turn_id)}`;
+  if (!responseStatuses.has(response.status as HermesCmoRuntimeResponse["status"])) return `status=${String(response.status)}`;
+  if (!validateAnswerBasis(response.answer_basis)) {
+    const basis = isRecord(response.answer_basis) ? response.answer_basis : {};
+
+    return `answer_basis_invalid:mode=${String(basis.mode)}`;
+  }
+  if (!validateClarifyingQuestion(response.clarifying_question)) return "clarifying_question_invalid";
+  if (!validateHermesCmoRuntimeAnswer(response.answer)) return "answer_invalid";
+  if (!(isRecord(response.structured_output) || response.structured_output === null)) return "structured_output_invalid";
+  if (!validateDelegations(response.delegations, options)) return "delegations_invalid";
+  if (!Array.isArray(response.artifacts)) return "artifacts_invalid";
+  if (!Array.isArray(response.memory_suggestions) || !response.memory_suggestions.every(isRecord)) return "memory_suggestions_invalid";
+  if (!isRecord(activitySummary)) return "activity_summary_invalid";
+  if (typeof activitySummary.events_count !== "number" || !Number.isInteger(activitySummary.events_count) || activitySummary.events_count < 0) {
+    return `activity_summary.events_count=${String(activitySummary.events_count)}`;
+  }
+  if (!isNonEmptyString(activitySummary.final_state)) return `activity_summary.final_state=${String(activitySummary.final_state)}`;
+  if (!optionalClassificationIsAllowed(response.classification)) return `classification=${String(response.classification)}`;
+  if (!optionalClassificationIsAllowed(structuredOutput.classification)) return `structured_output.classification=${String(structuredOutput.classification)}`;
+
+  if (
+    response.status === "needs_user_input" &&
+    (response.answer !== null ||
+      response.structured_output !== null ||
+      isRecord(response.answer_basis) && response.answer_basis.mode !== "needs_user_input" ||
+      isRecord(response.clarifying_question) && response.clarifying_question.required !== true)
+  ) {
+    return "needs_user_input_shape_invalid";
+  }
+
+  if (
+    isRecord(response.answer_basis) &&
+    response.answer_basis.mode === "assumption_based" &&
+    (Array.isArray(response.answer_basis.missing_inputs) && response.answer_basis.missing_inputs.length === 0 ||
+      Array.isArray(response.answer_basis.assumptions_used) && response.answer_basis.assumptions_used.length === 0)
+  ) {
+    return "assumption_based_requires_missing_inputs_and_assumptions";
+  }
+
+  return "unknown_response_validation_failure";
+};
+
+const activityValidationFailureReason = (
+  event: unknown,
+  request: HermesCmoRuntimeRequest,
+  options: HermesCmoActivityValidationOptions,
+): string => {
+  if (!isRecord(event)) return "event_not_object";
+
+  const source = isRecord(event.source) ? event.source : {};
+  const sourceAgent = source.agent ?? event.sourceAgent;
+  const sourceMode = source.mode ?? event.sourceMode;
+  const eventType = event.type;
+  const status = event.status;
+
+  if (event.schema_version !== undefined && event.schema_version !== "hermes.activity.event.v1") return `schema_version=${String(event.schema_version)}`;
+  if (!isNonEmptyString(event.event_id ?? event.eventId)) return "event_id_missing";
+  if ((event.request_id ?? event.requestId ?? request.request_id) !== request.request_id) return `request_id_mismatch:${String(event.request_id ?? event.requestId)}`;
+  if ((event.session_id ?? event.sessionId ?? request.session_id) !== request.session_id) return `session_id_mismatch:${String(event.session_id ?? event.sessionId)}`;
+  if ((event.turn_id ?? event.turnId ?? request.turn_id) !== request.turn_id) return `turn_id_mismatch:${String(event.turn_id ?? event.turnId)}`;
+  if (forbiddenDelegationEventTypes.has(eventType as HermesActivityType) || forbiddenActivityTypePattern.test(String(eventType))) return `forbidden_type=${String(eventType)}`;
+  if (!activityTypes.has(eventType as HermesActivityType)) return `type=${String(eventType)}`;
+  if (!activityStatuses.has(status as HermesActivityStatus)) return `status=${String(status)}`;
+  if (sourceAgent !== "cmo" && sourceAgent !== "echo" && sourceAgent !== "surf") return `source.agent=${String(sourceAgent)}`;
+  if (sourceAgent === "cmo" && sourceMode !== "cmo.default") return `source.mode=${String(sourceMode)}`;
+  if (sourceAgent === "echo" && sourceMode !== "echo.default" && sourceMode !== "echo.source_translate") return `source.mode=${String(sourceMode)}`;
+  if (sourceAgent === "surf" && !allowedSurfModes.has(sourceMode as HermesSurfMode)) return `source.mode=${String(sourceMode)}`;
+  if ((sourceAgent === "echo" || sourceAgent === "surf") && (!options.allowExecutableDelegationActivity || !executableDelegationEventTypes.has(eventType as HermesActivityType))) {
+    return `delegation_activity_not_allowed:${String(eventType)}`;
+  }
+  if (!options.allowExecutableDelegationActivity && executableDelegationEventTypes.has(eventType as HermesActivityType)) return `executable_activity_not_allowed:${String(eventType)}`;
+  if (typeof event.user_visible !== "boolean" && typeof event.userVisible !== "boolean") return "user_visible_invalid";
+  if (!isNonEmptyString(event.message)) return "message_missing";
+
+  return "unknown_activity_validation_failure";
+};
 
 const makeSafetyCounters = (surfCalls = 0, echoCalls = 0): HermesCmoRuntimeSafetyCounters => ({
   surfCalls,
@@ -1006,14 +1134,15 @@ const extractLiveResponsePayload = (
     throw new Error("Hermes CMO Agent response payload was not an object.");
   }
 
-  const responseCandidate = isRecord(payload.response) ? payload.response : payload;
+  const rawResponseCandidate = isRecord(payload.response) ? payload.response : payload;
+  const responseCandidate = normalizeHermesCmoResponseCandidate(rawResponseCandidate);
   const activityEventsCandidate = Array.isArray(payload.activity_events) ? payload.activity_events : [];
   const activityEvents = activityEventsCandidate
     .map((event, index) => normalizedActivityEvent(event, request, index + 1))
     .filter((event): event is HermesCmoRuntimeActivityEvent => Boolean(event));
 
   if (!validateHermesCmoRuntimeResponse(responseCandidate, request, responseValidation)) {
-    throw new Error("Hermes CMO Agent response did not match hermes.cmo.response.v1 or violated M1 execution boundaries.");
+    throw new Error(`Hermes CMO Agent response did not match hermes.cmo.response.v1 or violated M1 execution boundaries. Rejected field: ${responseValidationFailureReason(responseCandidate, request, responseValidation)}.`);
   }
 
   if (responseCandidate.activity_summary.events_count !== activityEventsCandidate.length) {
@@ -1024,7 +1153,13 @@ const extractLiveResponsePayload = (
     activityEvents.length !== activityEventsCandidate.length ||
     !activityEvents.every((event) => validateHermesCmoRuntimeActivityEvent(event, request, activityValidation))
   ) {
-    throw new Error("Hermes CMO Agent activity_events did not match hermes.activity.event.v1 or included forbidden delegation events.");
+    const failedEvent = activityEventsCandidate.find((event, index) => {
+      const normalized = normalizedActivityEvent(event, request, index + 1);
+
+      return !normalized || !validateHermesCmoRuntimeActivityEvent(normalized, request, activityValidation);
+    });
+
+    throw new Error(`Hermes CMO Agent activity_events did not match hermes.activity.event.v1 or included forbidden delegation events. Rejected field: ${activityValidationFailureReason(failedEvent, request, activityValidation)}.`);
   }
 
   return {

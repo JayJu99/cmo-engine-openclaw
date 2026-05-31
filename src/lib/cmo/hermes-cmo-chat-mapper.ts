@@ -425,15 +425,66 @@ function assumptionText(value: string | Record<string, unknown>): string {
     .join(" ");
 }
 
-function answerFromHermes(response: HermesCmoRuntimeResponse): string {
+function classificationFromResponse(response: HermesCmoRuntimeResponse): string {
+  const structured = isRecord(response.structured_output) ? response.structured_output : {};
+  const value = response.classification ?? structured.classification ?? response.answer_basis.mode;
+
+  return typeof value === "string" ? value : "";
+}
+
+function echoOutputText(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const copy = typeof value.copy === "string" ? value.copy.trim() : "";
+  const text = typeof value.text === "string" ? value.text.trim() : "";
+  const content = typeof value.content === "string" ? value.content.trim() : "";
+
+  return copy || text || content || null;
+}
+
+function sourceTransformAnswerFromDelegations(result: HermesCmoRuntimeResult): string | null {
+  const completedSourceTransform = result.delegationSummary.find((delegation) =>
+    delegation.targetAgent === "echo" &&
+    delegation.status === "completed" &&
+    (delegation.mode === "echo.source_translate" || delegation.mode === "echo.default") &&
+    isRecord(delegation.response) &&
+    Array.isArray(delegation.response.outputs),
+  );
+  const response = isRecord(completedSourceTransform?.response) ? completedSourceTransform.response : null;
+  const outputs = Array.isArray(response?.outputs)
+    ? response.outputs.map(echoOutputText).filter((output): output is string => Boolean(output))
+    : [];
+
+  return outputs.length ? outputs.join("\n\n") : null;
+}
+
+function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmoRuntimeResult): string {
   if (!response.answer) {
     const question = response.clarifying_question.question ?? "Please provide the missing context before CMO continues.";
 
     return ["## Need Clarification", "", question].join("\n");
   }
 
+  const classification = classificationFromResponse(response);
+  const isSourceTransform = classification === "source_translate" || classification === "source_transform";
+  const isNativeConversation =
+    classification === "native_conversation" ||
+    classification === "source_acknowledgement" ||
+    classification === "source_can_read";
+  const transformed = isSourceTransform && result ? sourceTransformAnswerFromDelegations(result) : null;
+
+  if (transformed) {
+    return transformed;
+  }
+
   const answer = response.answer;
   const body = answer.body.trim();
+
+  if (isSourceTransform || isNativeConversation) {
+    return body || answer.summary.trim();
+  }
 
   if (body.startsWith("#")) {
     return body;
@@ -640,7 +691,7 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
   const counters = countersFromExecutedDelegations(validation.counters, delegationSummary);
 
   return sanitizeHermesCmoMappedChatResult({
-    answer: answerFromHermes(result.response),
+    answer: answerFromHermes(result.response, result),
     assumptions: result.response.answer_basis.assumptions_used.map(assumptionText),
     suggestedActions: suggestedActionsFromHermes(result.response),
     runtimeStatus: "live",

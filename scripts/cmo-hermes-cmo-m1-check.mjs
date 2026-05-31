@@ -189,7 +189,15 @@ const cmoM43SourceActivityEvents = (requestBody, classification) => [
     },
   },
   {
-    ...activity(requestBody, 4, "cmo.run.completed", "CMO run completed."),
+    ...activity(requestBody, 4, "cmo.response_style.selected", `CMO selected response style for ${classification}.`),
+    status: "completed",
+    data: {
+      classification,
+      response_style: classification === "source_translate" ? "source_transform" : "native_conversation",
+    },
+  },
+  {
+    ...activity(requestBody, 5, "cmo.run.completed", "CMO run completed."),
     status: "completed",
   },
 ];
@@ -334,12 +342,9 @@ const startServer = async () => {
               cmoResponse(body, {
                 activity_events: cmoM43SourceActivityEvents(body, "native_conversation"),
                 response: {
+                  clarifying_question: undefined,
                   answer_basis: {
                     mode: "native_conversation",
-                    missing_inputs: [],
-                    assumptions_used: [],
-                    user_can_override: true,
-                    suggested_user_inputs: [],
                   },
                   structured_output: {
                     strategyMode: "REVIEW",
@@ -1336,6 +1341,30 @@ const startServer = async () => {
             status: "completed",
             outputs: [{ label: "post_1", copy: "POST 1: Xay bang chung kich hoat dau tien truoc khi scale campaign." }],
             notes: ["Fixture intentionally translated only one post."],
+            safety: {
+              published: false,
+              vault_write: false,
+              supabase_mutation: false,
+              session_mutation: false,
+              raw_capture: false,
+              kanban: false,
+              openclaw_call: false,
+            },
+          });
+          return;
+        }
+
+        if (body.handoff_id === "del_source_translate") {
+          writeJson(response, 200, {
+            schema_version: "echo.response.v1",
+            handoff_id: body.handoff_id,
+            agent: "echo",
+            mode: "echo.source_translate",
+            status: "completed",
+            outputs: [
+              { label: "translation", copy: "Bản dịch tiếng Việt của nguồn đang hoạt động trong phiên." },
+            ],
+            notes: ["Translated the active session-local source excerpt only."],
             safety: {
               published: false,
               vault_write: false,
