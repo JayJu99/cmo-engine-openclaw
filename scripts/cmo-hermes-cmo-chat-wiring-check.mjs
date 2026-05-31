@@ -633,6 +633,92 @@ try {
     assert.equal(sourceTranslateMapped.answer, "Bản dịch tự nhiên của nguồn đang hoạt động.");
     assert.doesNotMatch(sourceTranslateMapped.answer, /CMO strategic response|Decision:|REVIEW/);
 
+    const sourceAnswerBase = makeRuntimeResult();
+    const sourceAnswerMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...sourceAnswerBase,
+      response: {
+        ...sourceAnswerBase.response,
+        answer_basis: {
+          ...sourceAnswerBase.response.answer_basis,
+          mode: "source_answer",
+        },
+        answer: {
+          format: "markdown",
+          title: "CMO strategic response",
+          summary: "REVIEW",
+          decision: "KEEP",
+          body: "Feeback applies where the active source says the campaign surface is supported.",
+        },
+        structured_output: {
+          classification: "source_answer",
+          response_style: "source_answer",
+          tool_policy: "none",
+          speech_act: "answer",
+          target_type: "session_local_source",
+          target_ref: "source_review_fixture",
+          action: "answer_from_source",
+          confidence: 0.94,
+          negated_intents: [],
+          uses_session_local_source: true,
+          uses_vault_context_pack: false,
+        },
+      },
+    });
+    assert.equal(sourceAnswerMapped.answer, "Feeback applies where the active source says the campaign surface is supported.");
+    assert.doesNotMatch(sourceAnswerMapped.answer, /CMO strategic response|Decision:|REVIEW/);
+
+    const nativeAcknowledgementBase = makeRuntimeResult();
+    const nativeAcknowledgementMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...nativeAcknowledgementBase,
+      response: {
+        ...nativeAcknowledgementBase.response,
+        answer_basis: {
+          ...nativeAcknowledgementBase.response.answer_basis,
+          mode: "native_conversation",
+        },
+        answer: {
+          format: "markdown",
+          title: "CMO strategic response",
+          summary: "REVIEW",
+          decision: "KEEP",
+          body: "Ok bro, rõ rồi.",
+        },
+        structured_output: {
+          classification: "native_conversation",
+          response_style: "native_conversation",
+          tool_policy: "none",
+        },
+      },
+    });
+    assert.equal(nativeAcknowledgementMapped.answer, "Ok bro, rõ rồi.");
+    assert.doesNotMatch(nativeAcknowledgementMapped.answer, /CMO strategic response|Decision:|REVIEW/);
+
+    const structuredReviewBase = makeRuntimeResult();
+    const structuredReviewMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...structuredReviewBase,
+      response: {
+        ...structuredReviewBase.response,
+        answer_basis: {
+          ...structuredReviewBase.response.answer_basis,
+          mode: "structured_review",
+        },
+        answer: {
+          format: "markdown",
+          title: "CMO strategic response",
+          summary: "REVIEW",
+          decision: "KEEP",
+          body: "Review body stays structured for explicit review requests.",
+        },
+        structured_output: {
+          classification: "structured_review",
+          response_style: "structured_review",
+          tool_policy: "none",
+        },
+      },
+    });
+    assert.match(structuredReviewMapped.answer, /## CMO strategic response/);
+    assert.match(structuredReviewMapped.answer, /Decision: KEEP/);
+
     const noDelegationNeedsSurfBase = makeRuntimeResult();
     const noDelegationNeedsSurfMapped = mapper.mapHermesCmoResponseToChatResult({
       ...noDelegationNeedsSurfBase,

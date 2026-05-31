@@ -176,6 +176,14 @@ const cmoM43SourceActivityEvents = (requestBody, classification) => [
       uses_session_local_source: true,
       source_context_type: "session_local_source",
       active_source_id: "source_review_fixture",
+      speech_act: classification === "source_answer" ? "answer" : "acknowledge",
+      target_type: "session_local_source",
+      target_ref: "source_review_fixture",
+      action: classification === "source_answer" ? "answer_from_source" : classification,
+      confidence: 0.94,
+      negated_intents: [],
+      uses_vault_context_pack: false,
+      tool_policy: classification === "source_translate" ? "echo" : "none",
     },
   },
   {
@@ -193,7 +201,13 @@ const cmoM43SourceActivityEvents = (requestBody, classification) => [
     status: "completed",
     data: {
       classification,
-      response_style: classification === "source_translate" ? "source_transform" : "native_conversation",
+      response_style:
+        classification === "source_answer"
+          ? "source_answer"
+          : classification === "source_translate"
+            ? "source_transform"
+            : "native_conversation",
+      tool_policy: classification === "source_translate" ? "echo" : "none",
     },
   },
   {
@@ -310,6 +324,7 @@ const startServer = async () => {
           const echoCompletedUnresolvedFixture = body.request_id === "req_m1_echo_completed_unresolved";
           const translationFollowupFixture = body.request_id === "req_m1_translation_followup";
           const m43NativeConversationFixture = body.request_id === "req_m43_native_conversation";
+          const m43SourceAnswerFixture = body.request_id.startsWith("req_m43c3_source_answer_");
           const m43SourceTranslateFixture = body.request_id === "req_m43_source_translate";
           const m43UnknownActivityFixture = body.request_id === "req_m43_unknown_activity";
           const echoRetryFixture =
@@ -357,6 +372,46 @@ const startServer = async () => {
                   },
                   answer: {
                     body: "Ok bro, rõ rồi.",
+                  },
+                },
+              }),
+            );
+            return;
+          }
+
+          if (m43SourceAnswerFixture) {
+            const answerBody =
+              body.request_id === "req_m43c3_source_answer_summarize"
+                ? "Feeback source summary: it describes the project website and current positioning from the session-local source."
+                : body.request_id === "req_m43c3_source_answer_translate_direct"
+                  ? "Bản dịch trực tiếp từ nguồn Feeback trong phiên làm việc."
+                  : "Feeback applies to venues that can support the source-described campaign or product surface; this answer uses only the active session-local source.";
+
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: cmoM43SourceActivityEvents(body, "source_answer"),
+                response: {
+                  answer_basis: {
+                    mode: "source_answer",
+                  },
+                  structured_output: {
+                    classification: "source_answer",
+                    response_style: "source_answer",
+                    tool_policy: "none",
+                    speech_act: body.request_id === "req_m43c3_source_answer_summarize" ? "summarize" : "answer",
+                    target_type: "session_local_source",
+                    target_ref: "source_review_fixture",
+                    action: body.request_id === "req_m43c3_source_answer_translate_direct" ? "translate_direct" : "answer_from_source",
+                    confidence: 0.93,
+                    negated_intents: [],
+                    uses_session_local_source: true,
+                    uses_vault_context_pack: false,
+                    active_source_id: "source_review_fixture",
+                  },
+                  answer: {
+                    body: answerBody,
                   },
                 },
               }),
@@ -1653,6 +1708,58 @@ try {
         {
           ...cmoResponse(sampleRequest).response,
           answer_basis: {
+            mode: "source_answer",
+          },
+          structured_output: {
+            classification: "source_answer",
+            response_style: "source_answer",
+            tool_policy: "none",
+            speech_act: "answer",
+            target_type: "session_local_source",
+            target_ref: "source_review_fixture",
+            action: "answer_from_source",
+            confidence: 0.94,
+            negated_intents: [],
+            uses_session_local_source: true,
+            uses_vault_context_pack: false,
+          },
+          answer: {
+            body: "This answers directly from the active session-local source.",
+          },
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      true,
+      "known source_answer simple body answer must validate",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          answer_basis: {
+            mode: "source_answer",
+          },
+          structured_output: {
+            classification: "source_answer",
+            response_style: "source_answer",
+            tool_policy: "publish",
+          },
+          answer: {
+            body: "This invalid tool policy should not validate.",
+          },
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      false,
+      "unknown source_answer tool_policy must remain rejected",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          answer_basis: {
             mode: "native_conversation",
           },
           structured_output: {
@@ -1685,6 +1792,26 @@ try {
       ),
       false,
       "native_conversation without body/text must remain rejected",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          answer_basis: {
+            mode: "source_answer",
+          },
+          structured_output: {
+            classification: "source_answer",
+            response_style: "source_answer",
+            tool_policy: "none",
+          },
+          answer: {},
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      false,
+      "source_answer without body/text must remain rejected",
     );
 
     result = await runHermesCmoRuntime(sampleRequest);
@@ -2151,6 +2278,73 @@ try {
       true,
       "M4.3C session-local source activity should pass validation",
     );
+
+    const sourceAnswerRequest = {
+      ...sampleRequest,
+      session_id: "session_m43c3_source_answer",
+      turn_id: "turn_m43c3_source_answer_001",
+      context_pack: {
+        ...sampleRequest.context_pack,
+        active_source_id: "source_review_fixture",
+        artifacts_in: [
+          {
+            type: "session_local_source",
+            schema_version: "cmo.session_local_source.v1",
+            workspace_id: "feeback",
+            session_id: "session_m43c3_source_answer",
+            turn_id: "turn_source_001",
+            source_id: "source_review_fixture",
+            source_type: "url",
+            source_title: "Feeback",
+            source_text_excerpt: "Feeback project source excerpt.",
+            extraction_status: "completed",
+            saved_to_vault: false,
+            official_project_source: false,
+            truth_status: "session_only",
+            review_status: "temporary",
+            no_auto_promote: true,
+          },
+        ],
+      },
+    };
+    const sourceAnswerSummarizeResult = await runHermesCmoRuntime({
+      ...sourceAnswerRequest,
+      request_id: "req_m43c3_source_answer_summarize",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Tóm tắt nguồn này giúp mình.",
+      },
+    });
+    const sourceAnswerQuestionResult = await runHermesCmoRuntime({
+      ...sourceAnswerRequest,
+      request_id: "req_m43c3_source_answer_question",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Feeback này áp dụng được cho sàn nào?",
+      },
+    });
+    const sourceAnswerTranslateDirectResult = await runHermesCmoRuntime({
+      ...sourceAnswerRequest,
+      request_id: "req_m43c3_source_answer_translate_direct",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Dịch trực tiếp đoạn nguồn đang active.",
+      },
+    });
+
+    for (const sourceAnswerResult of [sourceAnswerSummarizeResult, sourceAnswerQuestionResult, sourceAnswerTranslateDirectResult]) {
+      assert.equal(sourceAnswerResult.response.answer_basis.mode, "source_answer");
+      assert.equal(sourceAnswerResult.response.structured_output?.classification, "source_answer");
+      assert.equal(sourceAnswerResult.response.structured_output?.response_style, "source_answer");
+      assert.equal(sourceAnswerResult.response.structured_output?.tool_policy, "none");
+      assert.equal(sourceAnswerResult.response.structured_output?.uses_session_local_source, true);
+      assert.equal(sourceAnswerResult.response.answer?.format, "markdown");
+      assert.equal(sourceAnswerResult.surfCalls, 0);
+      assert.equal(sourceAnswerResult.echoCalls, 0);
+    }
+    assert.match(sourceAnswerSummarizeResult.response.answer?.body ?? "", /summary/i);
+    assert.match(sourceAnswerQuestionResult.response.answer?.body ?? "", /session-local source/i);
+    assert.match(sourceAnswerTranslateDirectResult.response.answer?.body ?? "", /Bản dịch trực tiếp/);
 
     m43SourceTranslateResult = await runHermesCmoRuntime({
       ...sampleRequest,

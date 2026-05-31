@@ -472,7 +472,8 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
   const isNativeConversation =
     classification === "native_conversation" ||
     classification === "source_acknowledgement" ||
-    classification === "source_can_read";
+    classification === "source_can_read" ||
+    classification === "source_answer";
   const transformed = isSourceTransform && result ? sourceTransformAnswerFromDelegations(result) : null;
 
   if (transformed) {

@@ -33,6 +33,7 @@ export type HermesCmoClassification =
   | "native_conversation"
   | "source_acknowledgement"
   | "source_can_read"
+  | "source_answer"
   | "source_translate"
   | "source_transform"
   | "structured_review"
@@ -172,6 +173,7 @@ export interface HermesCmoRuntimeAnswerBasis {
     | "native_conversation"
     | "source_acknowledgement"
     | "source_can_read"
+    | "source_answer"
     | "source_translate"
     | "source_transform"
     | "structured_review"
@@ -292,6 +294,7 @@ const answerBasisModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "native_conversation",
   "source_acknowledgement",
   "source_can_read",
+  "source_answer",
   "source_translate",
   "source_transform",
   "structured_review",
@@ -302,6 +305,7 @@ const simpleAnswerModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "native_conversation",
   "source_acknowledgement",
   "source_can_read",
+  "source_answer",
   "source_translate",
   "source_transform",
 ]);
@@ -309,6 +313,7 @@ const classifications = new Set<HermesCmoClassification>([
   "native_conversation",
   "source_acknowledgement",
   "source_can_read",
+  "source_answer",
   "source_translate",
   "source_transform",
   "structured_review",
@@ -357,6 +362,17 @@ const activityStatuses = new Set<HermesActivityStatus>([
 ]);
 const strategicModes = new Set<CmoStrategicMode>(CMO_STRATEGIC_MODES);
 const decisionLabels = new Set<CmoDecisionLabel>(CMO_DECISION_LABELS);
+const responseStyles = new Set([
+  "native_conversation",
+  "source_acknowledgement",
+  "source_can_read",
+  "source_answer",
+  "source_translate",
+  "source_transform",
+  "structured_review",
+  "external_research",
+]);
+const toolPolicies = new Set(["none", "echo", "surf", "vault_agent"]);
 const executableDelegationEventTypes = new Set<HermesActivityType>([
   "delegation.started",
   "delegation.waiting",
@@ -387,6 +403,12 @@ const hasOnlyAllowedValues = <T extends string>(values: unknown, allowedValues: 
 
 const optionalClassificationIsAllowed = (value: unknown) =>
   value === undefined || (typeof value === "string" && classifications.has(value as HermesCmoClassification));
+
+const optionalResponseStyleIsAllowed = (value: unknown) =>
+  value === undefined || (typeof value === "string" && responseStyles.has(value));
+
+const optionalToolPolicyIsAllowed = (value: unknown) =>
+  value === undefined || (typeof value === "string" && toolPolicies.has(value));
 
 const answerTextFromKnownSimpleShape = (answer: unknown): string | null => {
   if (!isRecord(answer)) {
@@ -515,6 +537,10 @@ const responseValidationFailureReason = (
   if (!isNonEmptyString(activitySummary.final_state)) return `activity_summary.final_state=${String(activitySummary.final_state)}`;
   if (!optionalClassificationIsAllowed(response.classification)) return `classification=${String(response.classification)}`;
   if (!optionalClassificationIsAllowed(structuredOutput.classification)) return `structured_output.classification=${String(structuredOutput.classification)}`;
+  if (!optionalResponseStyleIsAllowed(response.response_style)) return `response_style=${String(response.response_style)}`;
+  if (!optionalResponseStyleIsAllowed(structuredOutput.response_style)) return `structured_output.response_style=${String(structuredOutput.response_style)}`;
+  if (!optionalToolPolicyIsAllowed(response.tool_policy)) return `tool_policy=${String(response.tool_policy)}`;
+  if (!optionalToolPolicyIsAllowed(structuredOutput.tool_policy)) return `structured_output.tool_policy=${String(structuredOutput.tool_policy)}`;
 
   if (
     response.status === "needs_user_input" &&
@@ -1196,7 +1222,11 @@ export const validateHermesCmoRuntimeResponse = (
     activitySummary.events_count < 0 ||
     !isNonEmptyString(activitySummary.final_state) ||
     !optionalClassificationIsAllowed(responseCandidate.classification) ||
-    !optionalClassificationIsAllowed(structuredOutput.classification)
+    !optionalClassificationIsAllowed(structuredOutput.classification) ||
+    !optionalResponseStyleIsAllowed(responseCandidate.response_style) ||
+    !optionalResponseStyleIsAllowed(structuredOutput.response_style) ||
+    !optionalToolPolicyIsAllowed(responseCandidate.tool_policy) ||
+    !optionalToolPolicyIsAllowed(structuredOutput.tool_policy)
   ) {
     return false;
   }
