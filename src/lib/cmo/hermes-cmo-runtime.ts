@@ -37,6 +37,7 @@ export type HermesCmoClassification =
   | "source_translate"
   | "source_transform"
   | "structured_review"
+  | "strategy_only"
   | "external_research"
   | "needs_surf"
   | "needs_echo_retry";
@@ -317,6 +318,7 @@ const classifications = new Set<HermesCmoClassification>([
   "source_translate",
   "source_transform",
   "structured_review",
+  "strategy_only",
   "external_research",
   "needs_surf",
   "needs_echo_retry",

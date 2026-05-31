@@ -325,6 +325,7 @@ const startServer = async () => {
           const translationFollowupFixture = body.request_id === "req_m1_translation_followup";
           const m43NativeConversationFixture = body.request_id === "req_m43_native_conversation";
           const m43SourceAnswerFixture = body.request_id.startsWith("req_m43c3_source_answer_");
+          const m43StrategyOnlyFixture = body.request_id === "req_m43_strategy_only_review";
           const m43SourceTranslateFixture = body.request_id === "req_m43_source_translate";
           const m43UnknownActivityFixture = body.request_id === "req_m43_unknown_activity";
           const echoRetryFixture =
@@ -412,6 +413,91 @@ const startServer = async () => {
                   },
                   answer: {
                     body: answerBody,
+                  },
+                },
+              }),
+            );
+            return;
+          }
+
+          if (m43StrategyOnlyFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "run.started", "CMO run started."),
+                    status: "completed",
+                  },
+                  {
+                    ...activity(body, 2, "cmo.source_context.loaded", "CMO loaded active session-local source context."),
+                    status: "completed",
+                    data: {
+                      uses_session_local_source: true,
+                      source_context_type: "session_local_source",
+                      active_source_id: "source_review_fixture",
+                    },
+                  },
+                  {
+                    ...activity(body, 3, "cmo.intent.classified", "CMO classified intent: strategy_only."),
+                    status: "completed",
+                    data: {
+                      classification: "strategy_only",
+                      speech_act: "review",
+                      target_type: "session_local_source",
+                      target_ref: "source_review_fixture",
+                      action: "structured_review",
+                      confidence: 0.92,
+                      negated_intents: [],
+                      uses_session_local_source: true,
+                      uses_vault_context_pack: false,
+                    },
+                  },
+                  {
+                    ...activity(body, 4, "cmo.mode.selected", "Mode selected: REVIEW."),
+                    status: "completed",
+                  },
+                  {
+                    ...activity(body, 5, "cmo.bottleneck.identified", "Main bottleneck identified: source proof gap."),
+                    status: "completed",
+                  },
+                  {
+                    ...activity(body, 6, "cmo.decision.selected", "Decision selected: KEEP."),
+                    status: "completed",
+                  },
+                  {
+                    ...activity(body, 7, "cmo.next_step.selected", "Next step selected: confirm project source fit."),
+                    status: "completed",
+                  },
+                  {
+                    ...activity(body, 8, "plan.created", "CMO created the source review plan."),
+                    status: "completed",
+                  },
+                  {
+                    ...activity(body, 9, "cmo.run.completed", "CMO run completed."),
+                    status: "completed",
+                  },
+                ],
+                response: {
+                  answer_basis: {
+                    mode: "fully_grounded",
+                  },
+                  structured_output: {
+                    classification: "strategy_only",
+                    strategyMode: "REVIEW",
+                    mainBottleneck: "source proof gap",
+                    decisionLabel: "KEEP",
+                    currentStep: "Confirm project source fit.",
+                    uses_session_local_source: true,
+                    active_source_id: "source_review_fixture",
+                  },
+                  answer: {
+                    format: "markdown",
+                    title: "CMO strategic response",
+                    summary: "REVIEW",
+                    decision: "KEEP",
+                    body: "Structured review body from the active session-local source.",
                   },
                 },
               }),
@@ -2345,6 +2431,33 @@ try {
     assert.match(sourceAnswerSummarizeResult.response.answer?.body ?? "", /summary/i);
     assert.match(sourceAnswerQuestionResult.response.answer?.body ?? "", /session-local source/i);
     assert.match(sourceAnswerTranslateDirectResult.response.answer?.body ?? "", /Bản dịch trực tiếp/);
+
+    const strategyOnlyReviewResult = await runHermesCmoRuntime({
+      ...sourceAnswerRequest,
+      request_id: "req_m43_strategy_only_review",
+      session_id: "session_m43_strategy_only_review",
+      turn_id: "turn_m43_strategy_only_review_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "review giúp mình nhé",
+      },
+    });
+    assert.equal(strategyOnlyReviewResult.response.answer_basis.mode, "fully_grounded");
+    assert.equal(strategyOnlyReviewResult.response.structured_output?.classification, "strategy_only");
+    assert.equal(strategyOnlyReviewResult.response.answer?.body, "Structured review body from the active session-local source.");
+    assert.equal(strategyOnlyReviewResult.response.structured_output?.uses_session_local_source, true);
+    assert.equal(strategyOnlyReviewResult.surfCalls, 0);
+    assert.equal(strategyOnlyReviewResult.echoCalls, 0);
+    assert.equal(
+      strategyOnlyReviewResult.activity_events.some((event) => event.type === "cmo.source_context.loaded"),
+      true,
+      "legacy strategy_only review should accept source context activity",
+    );
+    assert.equal(
+      strategyOnlyReviewResult.activity_events.some((event) => event.type === "plan.created"),
+      true,
+      "legacy strategy_only review should accept structured review activity",
+    );
 
     m43SourceTranslateResult = await runHermesCmoRuntime({
       ...sampleRequest,

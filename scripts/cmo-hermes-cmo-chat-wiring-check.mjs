@@ -719,6 +719,37 @@ try {
     assert.match(structuredReviewMapped.answer, /## CMO strategic response/);
     assert.match(structuredReviewMapped.answer, /Decision: KEEP/);
 
+    const strategyOnlyReviewBase = makeRuntimeResult();
+    const strategyOnlyReviewMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...strategyOnlyReviewBase,
+      response: {
+        ...strategyOnlyReviewBase.response,
+        answer_basis: {
+          ...strategyOnlyReviewBase.response.answer_basis,
+          mode: "fully_grounded",
+        },
+        answer: {
+          format: "markdown",
+          title: "CMO strategic response",
+          summary: "REVIEW",
+          decision: "KEEP",
+          body: "Legacy strategy_only review body stays structured.",
+        },
+        structured_output: {
+          classification: "strategy_only",
+          strategyMode: "REVIEW",
+          mainBottleneck: "source proof gap",
+          decisionLabel: "KEEP",
+          currentStep: "Confirm project source fit.",
+          uses_session_local_source: true,
+          active_source_id: "source_review_fixture",
+        },
+      },
+    });
+    assert.match(strategyOnlyReviewMapped.answer, /## CMO strategic response/);
+    assert.match(strategyOnlyReviewMapped.answer, /Decision: KEEP/);
+    assert.match(strategyOnlyReviewMapped.answer, /Legacy strategy_only review body stays structured/);
+
     const noDelegationNeedsSurfBase = makeRuntimeResult();
     const noDelegationNeedsSurfMapped = mapper.mapHermesCmoResponseToChatResult({
       ...noDelegationNeedsSurfBase,
