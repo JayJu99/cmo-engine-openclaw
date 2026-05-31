@@ -298,6 +298,13 @@ const answerBasisModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "external_research",
 ]);
 const answerFormats = new Set<HermesCmoRuntimeAnswer["format"]>(["markdown", "plain_text", "json"]);
+const simpleAnswerModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
+  "native_conversation",
+  "source_acknowledgement",
+  "source_can_read",
+  "source_translate",
+  "source_transform",
+]);
 const classifications = new Set<HermesCmoClassification>([
   "native_conversation",
   "source_acknowledgement",
@@ -381,14 +388,72 @@ const hasOnlyAllowedValues = <T extends string>(values: unknown, allowedValues: 
 const optionalClassificationIsAllowed = (value: unknown) =>
   value === undefined || (typeof value === "string" && classifications.has(value as HermesCmoClassification));
 
+const answerTextFromKnownSimpleShape = (answer: unknown): string | null => {
+  if (!isRecord(answer)) {
+    return null;
+  }
+
+  for (const key of ["body", "text"]) {
+    const value = answer[key];
+
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return null;
+};
+
+const answerModeFromResponse = (
+  response: Record<string, unknown>,
+  answerBasis: Record<string, unknown>,
+): HermesCmoRuntimeAnswerBasis["mode"] | null => {
+  const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
+  const candidates = [response.classification, structuredOutput.classification, answerBasis.mode];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && answerBasisModes.has(candidate as HermesCmoRuntimeAnswerBasis["mode"])) {
+      return candidate as HermesCmoRuntimeAnswerBasis["mode"];
+    }
+  }
+
+  return null;
+};
+
+const normalizeHermesCmoRuntimeAnswer = (
+  answer: unknown,
+  mode: HermesCmoRuntimeAnswerBasis["mode"] | null,
+): unknown => {
+  if (answer === null || !mode || !simpleAnswerModes.has(mode) || validateHermesCmoRuntimeAnswer(answer)) {
+    return answer;
+  }
+
+  const body = answerTextFromKnownSimpleShape(answer);
+
+  if (!body) {
+    return answer;
+  }
+
+  return {
+    ...(isRecord(answer) ? answer : {}),
+    format: isRecord(answer) && answerFormats.has(answer.format as HermesCmoRuntimeAnswer["format"]) ? answer.format : "markdown",
+    title: isRecord(answer) && isNonEmptyString(answer.title) ? answer.title : "Native conversation",
+    summary: isRecord(answer) && typeof answer.summary === "string" ? answer.summary : "",
+    decision: isRecord(answer) && typeof answer.decision === "string" ? answer.decision : "",
+    body,
+  };
+};
+
 const normalizeHermesCmoResponseCandidate = (response: Record<string, unknown>): Record<string, unknown> => {
   const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
   const answerBasisMode = typeof answerBasis.mode === "string" ? answerBasis.mode : undefined;
   const canNormalizeAnswerBasis = answerBasisMode !== undefined && answerBasisModes.has(answerBasisMode as HermesCmoRuntimeAnswerBasis["mode"]);
   const clarifyingQuestion = isRecord(response.clarifying_question) ? response.clarifying_question : {};
+  const answerMode = answerModeFromResponse(response, answerBasis);
 
   return {
     ...response,
+    answer: normalizeHermesCmoRuntimeAnswer(response.answer, answerMode),
     ...(canNormalizeAnswerBasis
       ? {
           answer_basis: {
@@ -418,6 +483,7 @@ const responseValidationFailureReason = (
   request: HermesCmoRuntimeRequest,
   options: HermesCmoResponseValidationOptions,
 ): string => {
+  response = normalizeHermesCmoResponseCandidate(response);
   const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
   const activitySummary = response.activity_summary;
 
@@ -653,12 +719,23 @@ const responseTraceSummary = (payload: unknown): Record<string, unknown> => {
   const response = isRecord(root.response) ? root.response : root;
   const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
   const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
-  const answer = isRecord(response.answer) ? response.answer : {};
+  const answer = response.answer;
+  const answerRecord = isRecord(answer) ? answer : {};
   const responseSafety = isRecord(response.safety) ? response.safety : {};
   const rootSafety = isRecord(root.safety) ? root.safety : {};
+  const answerPreview =
+    typeof answerRecord.body === "string"
+      ? answerRecord.body
+      : typeof answerRecord.text === "string"
+        ? answerRecord.text
+        : undefined;
 
   return {
     http_payload_shape: isRecord(root.response) ? "wrapped_response" : "response",
+    top_level_response_keys: Object.keys(response).sort(),
+    answer_keys: Object.keys(answerRecord).sort(),
+    answer_shape: answer === null ? "null" : Array.isArray(answer) ? "array" : typeof answer,
+    answer_basis_keys: Object.keys(answerBasis).sort(),
     schema_version: response.schema_version,
     status: response.status,
     classification: response.classification ?? structuredOutput.classification,
@@ -690,7 +767,7 @@ const responseTraceSummary = (payload: unknown): Record<string, unknown> => {
       openclaw_call: response.openclaw_call,
       gbrain_mutation: response.gbrain_mutation,
     },
-    answer_body_preview: typeof answer.body === "string" ? traceString(answer.body, 1000) : undefined,
+    answer_body_preview: typeof answerPreview === "string" ? traceString(answerPreview, 1000) : undefined,
   };
 };
 
@@ -1082,57 +1159,61 @@ export const validateHermesCmoRuntimeResponse = (
     return false;
   }
 
+  const responseCandidate = normalizeHermesCmoResponseCandidate(response);
+
   if (
-    response.direct_vault_write === true ||
-    response.direct_memory_mutation === true ||
-    response.direct_supabase_mutation === true ||
-    response.direct_supabase_write === true ||
-    response.openclaw_call === true
+    responseCandidate.direct_vault_write === true ||
+    responseCandidate.direct_memory_mutation === true ||
+    responseCandidate.direct_supabase_mutation === true ||
+    responseCandidate.direct_supabase_write === true ||
+    responseCandidate.openclaw_call === true
   ) {
     return false;
   }
 
-  const activitySummary = response.activity_summary;
-  const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
+  const activitySummary = responseCandidate.activity_summary;
+  const structuredOutput = isRecord(responseCandidate.structured_output) ? responseCandidate.structured_output : {};
+  const answerBasis = responseCandidate.answer_basis;
+  const clarifyingQuestion = responseCandidate.clarifying_question;
 
   if (
-    response.schema_version !== "hermes.cmo.response.v1" ||
-    response.request_id !== request.request_id ||
-    response.session_id !== request.session_id ||
-    response.turn_id !== request.turn_id ||
-    !responseStatuses.has(response.status as HermesCmoRuntimeResponse["status"]) ||
-    !validateAnswerBasis(response.answer_basis) ||
-    !validateClarifyingQuestion(response.clarifying_question) ||
-    !validateHermesCmoRuntimeAnswer(response.answer) ||
-    !(isRecord(response.structured_output) || response.structured_output === null) ||
-    !validateDelegations(response.delegations, options) ||
-    !Array.isArray(response.artifacts) ||
-    !Array.isArray(response.memory_suggestions) ||
-    !response.memory_suggestions.every(isRecord) ||
+    responseCandidate.schema_version !== "hermes.cmo.response.v1" ||
+    responseCandidate.request_id !== request.request_id ||
+    responseCandidate.session_id !== request.session_id ||
+    responseCandidate.turn_id !== request.turn_id ||
+    !responseStatuses.has(responseCandidate.status as HermesCmoRuntimeResponse["status"]) ||
+    !validateAnswerBasis(answerBasis) ||
+    !validateClarifyingQuestion(clarifyingQuestion) ||
+    !validateHermesCmoRuntimeAnswer(responseCandidate.answer) ||
+    !(isRecord(responseCandidate.structured_output) || responseCandidate.structured_output === null) ||
+    !validateDelegations(responseCandidate.delegations, options) ||
+    !Array.isArray(responseCandidate.artifacts) ||
+    !Array.isArray(responseCandidate.memory_suggestions) ||
+    !responseCandidate.memory_suggestions.every(isRecord) ||
     !isRecord(activitySummary) ||
     typeof activitySummary.events_count !== "number" ||
     !Number.isInteger(activitySummary.events_count) ||
     activitySummary.events_count < 0 ||
     !isNonEmptyString(activitySummary.final_state) ||
-    !optionalClassificationIsAllowed(response.classification) ||
+    !optionalClassificationIsAllowed(responseCandidate.classification) ||
     !optionalClassificationIsAllowed(structuredOutput.classification)
   ) {
     return false;
   }
 
   if (
-    response.status === "needs_user_input" &&
-    (response.answer !== null ||
-      response.structured_output !== null ||
-      response.answer_basis.mode !== "needs_user_input" ||
-      response.clarifying_question.required !== true)
+    responseCandidate.status === "needs_user_input" &&
+    (responseCandidate.answer !== null ||
+      responseCandidate.structured_output !== null ||
+      answerBasis.mode !== "needs_user_input" ||
+      clarifyingQuestion.required !== true)
   ) {
     return false;
   }
 
   if (
-    response.answer_basis.mode === "assumption_based" &&
-    (response.answer_basis.missing_inputs.length === 0 || response.answer_basis.assumptions_used.length === 0)
+    answerBasis.mode === "assumption_based" &&
+    (answerBasis.missing_inputs.length === 0 || answerBasis.assumptions_used.length === 0)
   ) {
     return false;
   }

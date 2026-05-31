@@ -356,11 +356,7 @@ const startServer = async () => {
                     active_source_id: "source_review_fixture",
                   },
                   answer: {
-                    format: "markdown",
-                    title: "Native conversation",
-                    summary: "CMO responded naturally with session-local source context loaded.",
-                    decision: "KEEP",
-                    body: "Yep, I can read the active source in this session. I did not save it to Vault.",
+                    body: "Ok bro, rõ rồi.",
                   },
                 },
               }),
@@ -1612,6 +1608,84 @@ try {
       false,
       "unknown Echo delegation modes must remain rejected",
     );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          answer_basis: {
+            mode: "native_conversation",
+          },
+          structured_output: {
+            classification: "native_conversation",
+          },
+          answer: {
+            body: "Ok bro, rõ rồi.",
+          },
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      true,
+      "known native_conversation simple body answer must validate",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          answer_basis: {
+            mode: "source_translate",
+          },
+          structured_output: {
+            classification: "source_translate",
+          },
+          answer: {
+            text: "Bản dịch nguồn phiên làm việc.",
+          },
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      true,
+      "known source_translate simple text answer must validate",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          answer_basis: {
+            mode: "native_conversation",
+          },
+          structured_output: {
+            classification: "native_conversation",
+          },
+          answer: {
+            response: "Ok bro, rõ rồi.",
+          },
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      false,
+      "unknown simple native answer object shape must remain rejected",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          answer_basis: {
+            mode: "native_conversation",
+          },
+          structured_output: {
+            classification: "native_conversation",
+          },
+          answer: {},
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      false,
+      "native_conversation without body/text must remain rejected",
+    );
 
     result = await runHermesCmoRuntime(sampleRequest);
 
@@ -2061,6 +2135,8 @@ try {
     });
 
     assert.equal(m43NativeConversationResult.response.answer_basis.mode, "native_conversation");
+    assert.equal(m43NativeConversationResult.response.answer?.body, "Ok bro, rõ rồi.");
+    assert.equal(m43NativeConversationResult.response.answer?.format, "markdown");
     assert.equal(m43NativeConversationResult.surfCalls, 0);
     assert.equal(m43NativeConversationResult.echoCalls, 0);
     assert.equal(m43NativeConversationResult.response.structured_output?.uses_session_local_source, true);
