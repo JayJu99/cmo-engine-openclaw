@@ -216,7 +216,7 @@ function compactSourceReviewText(value: string, maxChars = 1300): string {
 function sourceReviewFallbackAnswer(input: CmoRuntimeTurnInput): FallbackComposition | undefined {
   const reviewContext = sourceReviewContext(input);
 
-  if (!reviewContext) {
+  if (!reviewContext || reviewContext.mode !== "review_only") {
     return undefined;
   }
 

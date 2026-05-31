@@ -438,6 +438,18 @@ try {
     await withEnv(
       {
         CMO_HERMES_CMO_CHAT_ENABLED: "true",
+        CMO_HERMES_CMO_CANARY_APPS: "*",
+      },
+      async () => {
+        for (const appId of ["holdstation-mini-app", "aion", "feeback", "winance", "hold-pay", "holdstation-wallet"]) {
+          assert.equal(router.shouldUseHermesCmoChat(appId), true, `wildcard canary must select Hermes CMO for ${appId}`);
+        }
+      },
+    );
+
+    await withEnv(
+      {
+        CMO_HERMES_CMO_CHAT_ENABLED: "true",
         CMO_HERMES_CMO_CANARY_APPS: "holdstation-mini-app",
       },
       async () => {
@@ -780,6 +792,7 @@ try {
     const source = await readFile(path.join(cmoDir, "app-chat-store.ts"), "utf8");
     assert.match(source, /shouldUseHermesCmoChat\(request\.appId\)/);
     assert.match(source, /runHermesCmoRuntime\(hermesRequest\)/);
+    assert.match(source, /fallbackContextPackage/);
     assert.match(source, /failed_then_existing_fallback/);
     assert.match(source, /guardrail_violation_then_existing_fallback/);
 

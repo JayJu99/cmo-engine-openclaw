@@ -7,5 +7,7 @@ export function shouldUseHermesCmoChat(appId: string): boolean {
     return false;
   }
 
-  return getCmoHermesCmoCanaryApps().includes(normalizedAppId);
+  const canaryApps = getCmoHermesCmoCanaryApps();
+
+  return canaryApps.includes("*") || canaryApps.includes(normalizedAppId);
 }

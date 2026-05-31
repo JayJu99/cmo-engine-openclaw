@@ -282,6 +282,113 @@ try {
     assert.doesNotMatch(runtimeResult.answer, /When Source UI is available/);
   }
 
+  const sessionLocalContext = JSON.parse(JSON.stringify(textContext));
+  sessionLocalContext.mode = "session_local";
+  sessionLocalContext.persistence = {
+    saved_to_vault: false,
+    truth_status: "session_only",
+    review_status: "temporary",
+    no_auto_promote: true,
+  };
+  sessionLocalContext.extraction.source_text_excerpt = sessionLocalContext.extraction.source_text;
+  delete sessionLocalContext.extraction.source_text;
+
+  for (const followUpMessage of [
+    "Ok thanks bro",
+    "Mình hiểu rồi",
+    "Bạn dịch phần này sang tiếng Việt",
+    "Tóm tắt lại bằng tiếng Việt",
+    "Link đó là website của project",
+  ]) {
+    const sessionLocalRuntimeResult = await new FallbackRuntime({
+      status: "live_failed_then_fallback",
+      mode: "fallback",
+      label: "Fixture fallback",
+      reason: "Fixture fallback.",
+    }).runTurn({
+      contextPack: {
+        policyVersion: "context-pack-v1",
+        workspaceId: "aion",
+        appId: "aion",
+        sourceId: "aion__aion",
+        logicalAppPath: "Apps/AION",
+        physicalAppVaultPath: "02 Apps/World Mini App/AION",
+        appVaultPath: "Apps/AION",
+        physicalVaultPath: "knowledge/holdstation",
+        runtimeMode: "fallback",
+        tokenBudget: { maxInputTokens: 12000, estimatedTokens: 0, maxItemChars: 6000 },
+        items: [],
+        exclusions: [],
+        contextQualitySummary: {
+          selectedCount: 0,
+          existingCount: 0,
+          missingCount: 0,
+          confirmedCount: 0,
+          draftCount: 0,
+          placeholderCount: 0,
+          placeholderOrDraftCount: 0,
+        },
+        sourceReviewContext: sessionLocalContext,
+      },
+      contextPackage: {
+        workspaceId: "aion",
+        sourceId: "aion__aion",
+        mode: "app_context",
+        contextPack: null,
+        sourceReviewContext: sessionLocalContext,
+        app: {
+          id: "aion",
+          name: "AION",
+          vaultPath: "Apps/AION",
+          logicalAppPath: "Apps/AION",
+          physicalAppVaultPath: "02 Apps/World Mini App/AION",
+          appVaultPath: "Apps/AION",
+        },
+        userMessage: followUpMessage,
+        selectedContext: [],
+        missingContext: [],
+        contextQualitySummary: {
+          selectedCount: 0,
+          existingCount: 0,
+          missingCount: 0,
+          confirmedCount: 0,
+          draftCount: 0,
+          placeholderCount: 0,
+          placeholderOrDraftCount: 0,
+        },
+        instructions: {
+          role: "strategic CMO",
+          doNotOverpromise: true,
+          answerStyle: "operator-grade, concise, decision-oriented",
+          mustStateAssumptions: true,
+          mustReferenceContextUsed: true,
+          useSelectedNotesOnly: true,
+          doNotClaimAllVaultRag: true,
+          doNotPretendDurableMemoryComplete: true,
+          mustStatePlaceholderLimitations: true,
+          askForConfirmationWhenContextIsDraft: true,
+          suggestFillingAppMemoryWhenRelevant: true,
+        },
+      },
+      vaultAgentContextPackStatus: "empty",
+      message: followUpMessage,
+      history: [],
+      request: {
+        tenantId: "holdstation",
+        workspaceId: "aion",
+        appId: "aion",
+        appName: "AION",
+        message: followUpMessage,
+        context: { selectedNotes: [], mode: "app_context" },
+      },
+      contextUsed: [],
+      missingContext: [],
+    });
+    assert.doesNotMatch(sessionLocalRuntimeResult.answer, /Source Review:/);
+    assert.doesNotMatch(sessionLocalRuntimeResult.answer, /What I Read/);
+    assert.doesNotMatch(sessionLocalRuntimeResult.answer, /This source is available as temporary review-only context/);
+  }
+
   const emptyContextRuntimeResult = await new FallbackRuntime({
     status: "live_failed_then_fallback",
     mode: "fallback",
@@ -500,6 +607,7 @@ try {
   assert.match(appChatStoreSource, /activeSourceId/);
   assert.match(appChatStoreSource, /sessionLocalSourceFromReviewContext/);
   assert.match(appChatStoreSource, /sourceReviewContextFromSessionLocalSource/);
+  assert.match(appChatStoreSource, /fallbackContextPackage/);
   assert.match(appChatStoreSource, /hasSourceReviewContext/);
   assert.match(appChatStoreSource, /!hasSourceReviewContext[\s\S]*executeCmoSurfEvidence/);
   assert.match(appChatStoreSource, /status === "completed" \? await runVaultAgentDryRunHandoff/);
@@ -511,6 +619,9 @@ try {
   assert.match(hermesMapperSource, /session_local_source/);
   assert.match(hermesMapperSource, /active_source_id/);
   assert.match(hermesMapperSource, /runtime_context/);
+
+  const runtimeSource = readFileSync("src/lib/cmo/runtime.ts", "utf8");
+  assert.match(runtimeSource, /reviewContext\.mode !== "review_only"/);
 
   console.log("CMO source acquisition checks passed");
 } finally {

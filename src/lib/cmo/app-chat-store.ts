@@ -1715,9 +1715,19 @@ export async function createAppChatSession(
       runtimeAgent = bridgeResponse.runtimeAgent;
       status = "completed";
     } else {
+    const fallbackContextPackage = sourceReviewContext
+      ? {
+          ...contextPackage,
+          sourceReviewContext,
+          contextPack: {
+            ...contextPackage.contextPack,
+            sourceReviewContext,
+          },
+        }
+      : contextPackage;
     const runtimeResult = await runtime.runTurn({
-      contextPack: contextPackage.contextPack,
-      contextPackage,
+      contextPack: fallbackContextPackage.contextPack,
+      contextPackage: fallbackContextPackage,
       message: mixedCmoEchoRequest && !mixedCmoEchoClarification
         ? buildMixedCmoEchoRuntimeMessage(request.message)
         : cmoSurfEvidence && (cmoSurfEvidence.plan.action === "call_surf" || cmoSurfEvidence.plan.action === "call_surf_x")
