@@ -393,6 +393,8 @@ const startServer = async () => {
           const m44dToolEndpointSideEffectsFixture = body.request_id === "req_m44d_tool_endpoint_side_effects_true";
           const m44dToolEndpointUnsafeToolResultFixture = body.request_id === "req_m44d_tool_endpoint_unsafe_tool_result";
           const m44dToolEndpointUnsafeTraceFixture = body.request_id === "req_m44d_tool_endpoint_unsafe_trace";
+          const m44dToolEndpointVaultAgentSourceFixture = body.request_id === "req_m44d_tool_endpoint_vault_agent_source";
+          const m44dToolEndpointArbitraryModeFixture = body.request_id === "req_m44d_tool_endpoint_arbitrary_mode";
           const m44dUnknownAnswerBasisFixture = body.request_id === "req_m44d_unknown_answer_basis";
           const m44d2NativeExecuteFixture = body.request_id === "req_m44d2_native_execute";
           const m44aToolReadCompletedHtmlFixture = body.request_id === "req_m44a_tool_read_completed_html";
@@ -661,6 +663,7 @@ const startServer = async () => {
                   activity_events: [
                     {
                       ...activity(body, 1, "cmo.tool_read.started", "CMO started browser source read."),
+                      sourceMode: "cmo.tool_capable",
                       status: "completed",
                       data: {
                         tool_family: "browser",
@@ -680,6 +683,7 @@ const startServer = async () => {
                     },
                     {
                       ...activity(body, 2, "cmo.tool_read.completed", "CMO completed browser source read."),
+                      sourceMode: "cmo.tool_capable",
                       status: "completed",
                       data: {
                         tool_family: "browser",
@@ -700,6 +704,7 @@ const startServer = async () => {
                     },
                     {
                       ...activity(body, 3, "cmo.answer.grounded", "CMO grounded the answer in a live read-only source tool read."),
+                      sourceMode: "cmo.tool_capable",
                       status: "completed",
                       data: {
                         answer_basis_mode: "tool_read",
@@ -716,6 +721,7 @@ const startServer = async () => {
                     },
                     {
                       ...activity(body, 4, "cmo.run.completed", "CMO completed the tool-capable run."),
+                      sourceMode: "cmo.tool_capable",
                       status: "completed",
                     },
                   ],
@@ -851,6 +857,97 @@ const startServer = async () => {
                   activity_events: [
                     {
                       ...activity(body, 1, "cmo.tool_read.completed", "CMO completed browser source read."),
+                      status: "completed",
+                      data: {
+                        tool_family: "browser",
+                        tool_name: "browser_snapshot",
+                        read_only: true,
+                        source_type: "url",
+                        status: "completed",
+                        success: true,
+                      },
+                    },
+                  ],
+                }),
+                side_effects: false,
+              },
+            );
+            return;
+          }
+
+          if (m44dToolEndpointVaultAgentSourceFixture) {
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
+            writeJson(
+              response,
+              200,
+              {
+                ...cmoResponse(body, {
+                  response: {
+                    schema_version: "hermes.cmo.tool_response.v1",
+                    mode: "cmo.tool_capable",
+                    activity_summary: undefined,
+                    answer_basis: {
+                      mode: "tool_read",
+                    },
+                    structured_output: {
+                      classification: "native_conversation",
+                      response_style: "native_conversation",
+                      tool_policy: "none",
+                    },
+                    answer: {
+                      body: "This response must be rejected because Vault Agent cannot be a direct tool event source.",
+                    },
+                  },
+                  activity_events: [
+                    {
+                      ...activity(body, 1, "cmo.tool_read.completed", "CMO completed browser source read."),
+                      sourceAgent: "vault_agent",
+                      sourceMode: "vault_agent.default",
+                      status: "completed",
+                      data: {
+                        tool_family: "browser",
+                        tool_name: "browser_snapshot",
+                        read_only: true,
+                        source_type: "url",
+                        status: "completed",
+                        success: true,
+                      },
+                    },
+                  ],
+                }),
+                side_effects: false,
+              },
+            );
+            return;
+          }
+
+          if (m44dToolEndpointArbitraryModeFixture) {
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
+            writeJson(
+              response,
+              200,
+              {
+                ...cmoResponse(body, {
+                  response: {
+                    schema_version: "hermes.cmo.tool_response.v1",
+                    mode: "cmo.tool_capable",
+                    activity_summary: undefined,
+                    answer_basis: {
+                      mode: "tool_read",
+                    },
+                    structured_output: {
+                      classification: "native_conversation",
+                      response_style: "native_conversation",
+                      tool_policy: "none",
+                    },
+                    answer: {
+                      body: "This response must be rejected because the CMO source mode is arbitrary.",
+                    },
+                  },
+                  activity_events: [
+                    {
+                      ...activity(body, 1, "cmo.tool_read.completed", "CMO completed browser source read."),
+                      sourceMode: "arbitrary_tool",
                       status: "completed",
                       data: {
                         tool_family: "browser",
@@ -3456,6 +3553,11 @@ try {
       "tool endpoint must preserve safe CMO tool-read activity",
     );
     assert.equal(
+      m44d2ToolEndpointResult.activity_events.every((event) => event.source.mode === "cmo.tool_capable"),
+      true,
+      "tool endpoint must accept cmo.tool_capable activity source mode",
+    );
+    assert.equal(
       m44d2ToolEndpointResult.activity_events.some((event) => event.type === "cmo.answer.grounded" && event.data.used_live_tool_read === true),
       true,
       "tool endpoint must accept grounded live tool-read metadata",
@@ -3477,6 +3579,18 @@ try {
       () => runHermesCmoRuntime(m44dToolEndpointRequest("req_m44d_tool_endpoint_unsafe_trace")),
       /Rejected field: activity_summary_invalid:unsafe_tool_trace_summary key=tool_trace_summary\.html type=string reason=unsafe_key_name/,
       "tool endpoint response must reject unsafe tool_trace_summary metadata",
+    );
+
+    await assert.rejects(
+      () => runHermesCmoRuntime(m44dToolEndpointRequest("req_m44d_tool_endpoint_vault_agent_source")),
+      /Rejected field: source_invalid:agent=vault_agent/,
+      "tool endpoint activity source must reject direct Vault Agent source",
+    );
+
+    await assert.rejects(
+      () => runHermesCmoRuntime(m44dToolEndpointRequest("req_m44d_tool_endpoint_arbitrary_mode")),
+      /Rejected field: source_invalid:mode=arbitrary_tool/,
+      "tool endpoint activity source must reject arbitrary CMO source modes",
     );
 
     await assert.rejects(

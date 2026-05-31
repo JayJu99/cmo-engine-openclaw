@@ -171,7 +171,7 @@ export interface HermesCmoRuntimeActivityEvent {
   created_at: string;
   source: {
     agent: "cmo" | "echo" | "surf";
-    mode: "cmo.default" | HermesEchoMode | HermesSurfMode;
+    mode: "cmo.default" | "cmo.tool_capable" | HermesEchoMode | HermesSurfMode;
   };
   type: HermesActivityType;
   status: HermesActivityStatus;
@@ -298,6 +298,7 @@ interface HermesCmoResponseValidationOptions {
 
 interface HermesCmoActivityValidationOptions {
   allowExecutableDelegationActivity: boolean;
+  allowToolCapableCmoSource?: boolean;
 }
 
 const allowedAgents = new Set<HermesAllowedAgent>(["echo", "surf", "vault_agent"]);
@@ -1008,10 +1009,12 @@ const activityValidationFailureReason = (
   if (forbiddenDelegationEventTypes.has(eventType as HermesActivityType) || forbiddenActivityTypePattern.test(String(eventType))) return `forbidden_type=${String(eventType)}`;
   if (!activityTypes.has(eventType as HermesActivityType)) return `type=${String(eventType)}`;
   if (!activityStatuses.has(status as HermesActivityStatus)) return `status=${String(status)}`;
-  if (sourceAgent !== "cmo" && sourceAgent !== "echo" && sourceAgent !== "surf") return `source.agent=${String(sourceAgent)}`;
-  if (sourceAgent === "cmo" && sourceMode !== "cmo.default") return `source.mode=${String(sourceMode)}`;
-  if (sourceAgent === "echo" && sourceMode !== "echo.default" && sourceMode !== "echo.source_translate") return `source.mode=${String(sourceMode)}`;
-  if (sourceAgent === "surf" && !allowedSurfModes.has(sourceMode as HermesSurfMode)) return `source.mode=${String(sourceMode)}`;
+  if (sourceAgent !== "cmo" && sourceAgent !== "echo" && sourceAgent !== "surf") return `source_invalid:agent=${String(sourceAgent)}`;
+  if (sourceAgent === "cmo" && sourceMode !== "cmo.default" && !(options.allowToolCapableCmoSource === true && sourceMode === "cmo.tool_capable")) {
+    return `source_invalid:mode=${String(sourceMode)}`;
+  }
+  if (sourceAgent === "echo" && sourceMode !== "echo.default" && sourceMode !== "echo.source_translate") return `source_invalid:mode=${String(sourceMode)}`;
+  if (sourceAgent === "surf" && !allowedSurfModes.has(sourceMode as HermesSurfMode)) return `source_invalid:mode=${String(sourceMode)}`;
   if (!isRecord(event.data)) return "data_invalid";
   const dataRejection = m44aActivityEventDataRejection(eventType as HermesActivityType, event.data);
   if (dataRejection) return dataRejection;
@@ -2001,7 +2004,7 @@ const validateHermesCmoRuntimeActivityEvent = (
   const sourceMode = source?.mode;
   const eventType = event.type as HermesActivityType;
   const sourceMatches =
-    (sourceAgent === "cmo" && sourceMode === "cmo.default") ||
+    (sourceAgent === "cmo" && (sourceMode === "cmo.default" || options.allowToolCapableCmoSource === true && sourceMode === "cmo.tool_capable")) ||
     (sourceAgent === "echo" && (sourceMode === "echo.default" || sourceMode === "echo.source_translate")) ||
     (sourceAgent === "surf" && allowedSurfModes.has(sourceMode as HermesSurfMode));
 
@@ -2105,6 +2108,10 @@ const extractLiveResponsePayload = (
   const sideEffects = sideEffectsFromPayload(payload, rawResponseCandidate);
   const activityEventsCandidate = Array.isArray(payload.activity_events) ? payload.activity_events : [];
   const responseCandidate = normalizeHermesCmoResponseCandidate(rawResponseCandidate, { activityEventsCandidate });
+  const effectiveActivityValidation: HermesCmoActivityValidationOptions = {
+    ...activityValidation,
+    allowToolCapableCmoSource: isToolCapableResponseCandidate(responseCandidate),
+  };
   const activityEvents = activityEventsCandidate
     .map((event, index) => normalizedActivityEvent(event, request, index + 1))
     .filter((event): event is HermesCmoRuntimeActivityEvent => Boolean(event));
@@ -2123,15 +2130,15 @@ const extractLiveResponsePayload = (
 
   if (
     activityEvents.length !== activityEventsCandidate.length ||
-    !activityEvents.every((event) => validateHermesCmoRuntimeActivityEvent(event, request, activityValidation))
+    !activityEvents.every((event) => validateHermesCmoRuntimeActivityEvent(event, request, effectiveActivityValidation))
   ) {
     const failedEvent = activityEventsCandidate.find((event, index) => {
       const normalized = normalizedActivityEvent(event, request, index + 1);
 
-      return !normalized || !validateHermesCmoRuntimeActivityEvent(normalized, request, activityValidation);
+      return !normalized || !validateHermesCmoRuntimeActivityEvent(normalized, request, effectiveActivityValidation);
     });
 
-    throw new Error(`Hermes CMO Agent activity_events did not match hermes.activity.event.v1 or included forbidden delegation events. Rejected field: ${activityValidationFailureReason(failedEvent, request, activityValidation)}.`);
+    throw new Error(`Hermes CMO Agent activity_events did not match hermes.activity.event.v1 or included forbidden delegation events. Rejected field: ${activityValidationFailureReason(failedEvent, request, effectiveActivityValidation)}.`);
   }
 
   return {
