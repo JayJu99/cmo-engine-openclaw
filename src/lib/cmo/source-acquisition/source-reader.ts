@@ -4,8 +4,14 @@ import { extractText, fetchPublicUrl } from "@/lib/cmo/source-acquisition";
 const MAX_QUERY_SNIPPETS = 5;
 const MAX_SNIPPET_CHARS = 700;
 const MAX_CACHE_CHARS = 16_000;
+const SUMMARY_SNIPPET_CHARS = 900;
+const TRANSLATE_SNIPPET_CHARS = 1_800;
 
-const STOPWORDS = new Set([
+type SourceReaderQueryType = CmoSourceAnswerContext["query_type"];
+type SourceReaderAction = CmoSourceAnswerContext["action"];
+type UsedSourceField = CmoSourceAnswerContext["used_source_fields"][number];
+
+const STOPWORDS = new Set<string>([
   "a",
   "an",
   "and",
@@ -69,9 +75,40 @@ function normalizeForSearch(value: string): string {
 
 function queryTokens(query: string): string[] {
   const normalized = normalizeForSearch(query);
-  const tokens = normalized.match(/[\p{Letter}\p{Number}]{3,}/gu) ?? [];
+  const tokens: string[] = normalized.match(/[\p{Letter}\p{Number}]{3,}/gu) ?? [];
 
   return [...new Set(tokens.filter((token) => !STOPWORDS.has(token)))].slice(0, 12);
+}
+
+function hasAnyToken(query: string, values: string[]): boolean {
+  const normalized = normalizeForSearch(query);
+  const tokens: string[] = normalized.match(/[\p{Letter}\p{Number}]{2,}/gu) ?? [];
+
+  return values.some((value) => tokens.includes(value) || normalized.includes(value));
+}
+
+export function detectSourceReaderAction(query: string): { query_type: SourceReaderQueryType; action: SourceReaderAction } {
+  if (hasAnyToken(query, ["translate", "translation", "dich"])) {
+    return { query_type: "translate", action: "translate" };
+  }
+
+  if (hasAnyToken(query, ["summary", "summarize", "summarise", "recap", "brief", "tom", "tat"])) {
+    return { query_type: "summarize", action: "summarize" };
+  }
+
+  if (hasAnyToken(query, ["review", "audit", "analyze", "analyse", "check", "danh", "gia"])) {
+    return { query_type: "review", action: "review" };
+  }
+
+  if (hasAnyToken(query, ["read", "doc", "access", "open", "fetch", "load"])) {
+    return { query_type: "can_read", action: "can_read" };
+  }
+
+  if (query.includes("?") || hasAnyToken(query, ["what", "which", "where", "when", "who", "why", "how", "gi", "nao", "dau", "bao", "khong"])) {
+    return { query_type: "specific_question", action: "answer_question" };
+  }
+
+  return { query_type: "unknown", action: "unknown" };
 }
 
 function candidatePassages(text: string): string[] {
@@ -100,6 +137,29 @@ function scoredSnippets(text: string, query: string): string[] {
     .sort((left, right) => right.score - left.score || left.passage.length - right.passage.length)
     .slice(0, MAX_QUERY_SNIPPETS)
     .map((item) => bounded(item.passage, MAX_SNIPPET_CHARS));
+}
+
+function usedSourceFields(source: CmoSessionLocalSource): UsedSourceField[] {
+  return [
+    source.extracted_summary ? "extracted_summary" : null,
+    source.source_text_cache ? "source_text_cache" : null,
+    source.source_text_excerpt ? "source_text_excerpt" : null,
+  ].filter((field): field is UsedSourceField => Boolean(field));
+}
+
+function representativeSnippets(source: CmoSessionLocalSource, maxChars: number): string[] {
+  return [
+    source.extracted_summary ? bounded(source.extracted_summary, Math.min(500, maxChars)) : "",
+    source.source_text_cache ? bounded(source.source_text_cache, maxChars) : "",
+    !source.source_text_cache && source.source_text_excerpt ? bounded(source.source_text_excerpt, maxChars) : "",
+  ].filter(Boolean).slice(0, MAX_QUERY_SNIPPETS);
+}
+
+function hasEnoughBroadSourceContent(source: CmoSessionLocalSource): boolean {
+  const summaryLength = compact(source.extracted_summary ?? "").length;
+  const textLength = compact(source.source_text_cache ?? source.source_text_excerpt ?? "").length;
+
+  return summaryLength >= 40 || textLength >= 80;
 }
 
 function extractionStatus(source: CmoSessionLocalSource): CmoSourceQualityReport["extraction_status"] {
@@ -157,8 +217,29 @@ export function readSessionLocalSource(source: CmoSessionLocalSource): string {
 export function querySessionLocalSource(source: CmoSessionLocalSource, query: string): CmoSourceAnswerContext {
   const quality = buildSourceQualityReport(source);
   const text = readSessionLocalSource(source);
-  const relevantSnippets = scoredSnippets(text, query);
-  const answerable = relevantSnippets.length > 0;
+  const intent = detectSourceReaderAction(query);
+  const fields = usedSourceFields(source);
+  let relevantSnippets: string[] = [];
+  let answerable = false;
+  let reason: CmoSourceAnswerContext["reason"];
+
+  if (intent.query_type === "summarize" || intent.query_type === "review") {
+    answerable = hasEnoughBroadSourceContent(source);
+    relevantSnippets = answerable ? representativeSnippets(source, SUMMARY_SNIPPET_CHARS) : [];
+    reason = answerable ? undefined : "extraction_partial";
+  } else if (intent.query_type === "translate") {
+    answerable = Boolean(compact(source.source_text_cache ?? source.source_text_excerpt ?? source.extracted_summary ?? ""));
+    relevantSnippets = answerable ? representativeSnippets(source, TRANSLATE_SNIPPET_CHARS) : [];
+    reason = answerable ? undefined : "extraction_partial";
+  } else if (intent.query_type === "can_read") {
+    answerable = quality.extraction_status === "completed" || quality.extraction_status === "partial";
+    relevantSnippets = answerable ? representativeSnippets(source, SUMMARY_SNIPPET_CHARS) : [];
+    reason = answerable ? undefined : "extraction_partial";
+  } else {
+    relevantSnippets = scoredSnippets(text, query);
+    answerable = relevantSnippets.length > 0;
+    reason = answerable ? undefined : "not_found_in_current_extraction";
+  }
 
   return {
     type: "source_answer_context",
@@ -167,8 +248,11 @@ export function querySessionLocalSource(source: CmoSessionLocalSource, query: st
     session_id: source.session_id,
     source_id: source.source_id,
     query,
+    query_type: intent.query_type,
+    action: intent.action,
     answerable,
     relevant_snippets: relevantSnippets,
+    used_source_fields: fields,
     source_title: source.source_title,
     ...(source.original_url ? { original_url: source.original_url } : {}),
     ...(source.canonical_url ? { canonical_url: source.canonical_url } : {}),
@@ -176,12 +260,13 @@ export function querySessionLocalSource(source: CmoSessionLocalSource, query: st
     truth_status: "session_only",
     saved_to_vault: false,
     no_auto_promote: true,
+    extraction_quality: quality.main_content_quality,
+    warnings: quality.warnings,
     ...(!answerable
       ? {
-          reason: quality.main_content_quality === "low" || quality.main_content_quality === "partial"
+          reason: reason ?? (quality.main_content_quality === "low" || quality.main_content_quality === "partial"
             ? "extraction_partial" as const
-            : "not_found_in_current_extraction" as const,
-          extraction_quality: quality.main_content_quality,
+            : "not_found_in_current_extraction" as const),
           suggested_next_step: "deep_read_or_rendered_fetch" as const,
         }
       : {}),
@@ -256,6 +341,7 @@ export async function buildSourceAnswerContext(input: {
   }
 
   const next = querySessionLocalSource(refreshed, input.query);
+  next.used_source_fields = [...new Set([...next.used_source_fields, "refetch" as const])];
 
   return next.answerable ? next : initial;
 }

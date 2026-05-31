@@ -216,15 +216,43 @@ try {
   const answerableContext = querySessionLocalSource(readableSessionSource, "Which venues does Feeback apply to?");
   assert.equal(answerableContext.schema_version, "cmo.source_answer_context.v1");
   assert.equal(answerableContext.workspace_id, "feeback");
+  assert.equal(answerableContext.query_type, "specific_question");
+  assert.equal(answerableContext.action, "answer_question");
   assert.equal(answerableContext.answerable, true);
   assert.match(answerableContext.relevant_snippets.join("\n"), /trading venues|market operators/i);
+  assert.ok(answerableContext.used_source_fields.includes("source_text_cache"));
   assert.equal(answerableContext.saved_to_vault, false);
   assert.equal(answerableContext.no_auto_promote, true);
 
   const missingAnswerContext = querySessionLocalSource(readableSessionSource, "What is the tokenomics vesting schedule?");
+  assert.equal(missingAnswerContext.query_type, "specific_question");
   assert.equal(missingAnswerContext.answerable, false);
-  assert.match(missingAnswerContext.reason, /not_found|partial/);
+  assert.equal(missingAnswerContext.reason, "not_found_in_current_extraction");
   assert.equal(missingAnswerContext.relevant_snippets.length, 0);
+  assert.match(missingAnswerContext.used_source_fields.join("\n"), /source_text_cache/);
+
+  const summaryContext = querySessionLocalSource(readableSessionSource, "Summary web đó giúp mình nhé");
+  assert.equal(summaryContext.query_type, "summarize");
+  assert.equal(summaryContext.action, "summarize");
+  assert.equal(summaryContext.answerable, true);
+  assert.match(summaryContext.relevant_snippets.join("\n"), /Feeback source summary|campaign feedback loops/i);
+  assert.ok(summaryContext.used_source_fields.includes("extracted_summary"));
+
+  const summaryWithoutKeywordMatch = querySessionLocalSource(readableSessionSource, "Summarize the website");
+  assert.equal(summaryWithoutKeywordMatch.answerable, true);
+  assert.match(summaryWithoutKeywordMatch.relevant_snippets.join("\n"), /Feeback source summary|campaign feedback loops/i);
+
+  const translateContext = querySessionLocalSource(readableSessionSource, "Translate source to Vietnamese");
+  assert.equal(translateContext.query_type, "translate");
+  assert.equal(translateContext.action, "translate");
+  assert.equal(translateContext.answerable, true);
+  assert.match(translateContext.relevant_snippets.join("\n"), /campaign feedback loops/i);
+
+  const canReadContext = querySessionLocalSource(readableSessionSource, "Can you read this source?");
+  assert.equal(canReadContext.query_type, "can_read");
+  assert.equal(canReadContext.action, "can_read");
+  assert.equal(canReadContext.answerable, true);
+  assert.ok(canReadContext.relevant_snippets.length > 0);
 
   const lowQualitySource = {
     ...readableSessionSource,

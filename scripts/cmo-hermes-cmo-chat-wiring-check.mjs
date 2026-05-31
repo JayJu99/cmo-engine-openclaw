@@ -323,8 +323,11 @@ sampleTurnInput.contextPackage.sourceAnswerContext = {
   session_id: "session_h6",
   source_id: "source_review_fixture",
   query: "Which venues does this apply to?",
+  query_type: "specific_question",
+  action: "answer_question",
   answerable: true,
   relevant_snippets: ["Fixture source text says this applies to supported trading venues."],
+  used_source_fields: ["source_text_cache"],
   source_title: "Fixture source",
   original_url: "https://example.test/source",
   canonical_url: "https://example.test/source",
@@ -332,6 +335,8 @@ sampleTurnInput.contextPackage.sourceAnswerContext = {
   truth_status: "session_only",
   saved_to_vault: false,
   no_auto_promote: true,
+  extraction_quality: "good",
+  warnings: [],
 };
 sampleTurnInput.contextPack.sourceAnswerContext = sampleTurnInput.contextPackage.sourceAnswerContext;
 
@@ -499,6 +504,8 @@ try {
     assert.equal(hermesRequest.context_pack.source_review_context.safety.gbrain_mutation, false);
     assert.equal(hermesRequest.context_pack.source_answer_context.schema_version, "cmo.source_answer_context.v1");
     assert.equal(hermesRequest.context_pack.source_answer_context.answerable, true);
+    assert.equal(hermesRequest.context_pack.source_answer_context.query_type, "specific_question");
+    assert.deepEqual(hermesRequest.context_pack.source_answer_context.used_source_fields, ["source_text_cache"]);
     assert.equal(hermesRequest.context_pack.source_answer_context.saved_to_vault, false);
     assert.equal(hermesRequest.context_pack.active_source_id, "source_review_fixture");
     const sessionLocalSource = hermesRequest.context_pack.artifacts_in.find((artifact) => artifact.type === "session_local_source");

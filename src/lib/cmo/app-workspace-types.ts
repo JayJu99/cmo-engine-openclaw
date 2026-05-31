@@ -669,8 +669,11 @@ export interface CmoSourceAnswerContext {
   session_id: string;
   source_id: string;
   query: string;
+  query_type: "can_read" | "summarize" | "translate" | "specific_question" | "review" | "unknown";
+  action: "can_read" | "summarize" | "translate" | "answer_question" | "review" | "unknown";
   answerable: boolean;
   relevant_snippets: string[];
+  used_source_fields: Array<"extracted_summary" | "source_text_cache" | "source_text_excerpt" | "refetch">;
   source_title?: string;
   original_url?: string;
   canonical_url?: string;
@@ -680,6 +683,7 @@ export interface CmoSourceAnswerContext {
   no_auto_promote: true;
   reason?: "not_found_in_current_extraction" | "extraction_partial" | "no_active_source";
   extraction_quality?: "good" | "partial" | "low";
+  warnings?: string[];
   suggested_next_step?: "deep_read_or_rendered_fetch";
 }
 

@@ -809,8 +809,30 @@ function normalizeSourceAnswerContext(value: unknown): CmoSourceAnswerContext | 
     session_id: sessionId,
     source_id: sourceId,
     query,
+    query_type:
+      value.query_type === "can_read" ||
+      value.query_type === "summarize" ||
+      value.query_type === "translate" ||
+      value.query_type === "specific_question" ||
+      value.query_type === "review" ||
+      value.query_type === "unknown"
+        ? value.query_type
+        : "unknown",
+    action:
+      value.action === "can_read" ||
+      value.action === "summarize" ||
+      value.action === "translate" ||
+      value.action === "answer_question" ||
+      value.action === "review" ||
+      value.action === "unknown"
+        ? value.action
+        : "unknown",
     answerable: value.answerable,
     relevant_snippets: Array.isArray(value.relevant_snippets) ? value.relevant_snippets.filter((item): item is string => typeof item === "string") : [],
+    used_source_fields: Array.isArray(value.used_source_fields)
+      ? value.used_source_fields.filter((item): item is CmoSourceAnswerContext["used_source_fields"][number] =>
+          item === "extracted_summary" || item === "source_text_cache" || item === "source_text_excerpt" || item === "refetch")
+      : [],
     ...(normalizeOptionalString(value.source_title) ? { source_title: normalizeOptionalString(value.source_title) } : {}),
     ...(normalizeOptionalString(value.original_url) ? { original_url: normalizeOptionalString(value.original_url) } : {}),
     ...(normalizeOptionalString(value.canonical_url) ? { canonical_url: normalizeOptionalString(value.canonical_url) } : {}),
@@ -820,6 +842,7 @@ function normalizeSourceAnswerContext(value: unknown): CmoSourceAnswerContext | 
     no_auto_promote: true,
     ...(value.reason === "not_found_in_current_extraction" || value.reason === "extraction_partial" || value.reason === "no_active_source" ? { reason: value.reason } : {}),
     ...(value.extraction_quality === "good" || value.extraction_quality === "partial" || value.extraction_quality === "low" ? { extraction_quality: value.extraction_quality } : {}),
+    ...(Array.isArray(value.warnings) ? { warnings: value.warnings.filter((item): item is string => typeof item === "string") } : {}),
     ...(value.suggested_next_step === "deep_read_or_rendered_fetch" ? { suggested_next_step: "deep_read_or_rendered_fetch" } : {}),
   };
 }
