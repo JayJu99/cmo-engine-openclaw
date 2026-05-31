@@ -172,19 +172,41 @@ const summarizeSession = (session) => {
   };
 };
 
+const stringOrNull = (value) => (typeof value === "string" && value.trim() ? value : null);
+
+const requestUserMessage = (request) =>
+  stringOrNull(request?.user_message) ??
+  stringOrNull(request?.message) ??
+  stringOrNull(request?.input?.user_message) ??
+  stringOrNull(request?.input?.message) ??
+  stringOrNull(request?.intent?.user_message);
+
+const requestActiveSourceId = (request) =>
+  stringOrNull(request?.active_source_id) ??
+  stringOrNull(request?.context_pack?.active_source_id) ??
+  stringOrNull(request?.source_acquisition?.active_source_id);
+
 const summarizeHermesRequest = (request) => ({
   request_present: true,
   request_id: request.request_id,
   session_id: request.session_id,
   turn_id: request.turn_id,
   workspace: request.workspace,
-  user_message: request.intent?.user_message,
+  user_message: stringOrNull(request.user_message),
+  message: stringOrNull(request.message),
+  input_user_message: stringOrNull(request.input?.user_message),
+  input_message: stringOrNull(request.input?.message),
+  nested_user_message: stringOrNull(request.intent?.user_message),
+  resolved_user_message_present: Boolean(requestUserMessage(request)),
   tool_policy: request.tool_policy,
   product_boundary: request.product_boundary,
   source_acquisition: request.source_acquisition,
   tool_endpoint: request.tool_endpoint,
   context_pack_keys: Object.keys(request.context_pack ?? {}),
-  active_source_id: request.context_pack?.active_source_id,
+  active_source_id: requestActiveSourceId(request),
+  top_active_source_id: stringOrNull(request.active_source_id),
+  context_pack_active_source_id: stringOrNull(request.context_pack?.active_source_id),
+  source_acquisition_active_source_id: stringOrNull(request.source_acquisition?.active_source_id),
   artifacts_in: Array.isArray(request.context_pack?.artifacts_in)
     ? request.context_pack.artifacts_in.map((artifact) => ({
         type: artifact?.type,
@@ -430,6 +452,12 @@ const run = async () => {
   };
 
   if (request) {
+    if (request.schema_version === "hermes.cmo.request.v1" && !requestUserMessage(request)) {
+      throw new Error(
+        "Hermes CMO trace request is missing user_message/message/input.user_message/intent.user_message for a user turn.",
+      );
+    }
+
     output.request = summarizeHermesRequest(request);
 
     if (process.env.CMO_HERMES_BASE_URL && process.env.CMO_HERMES_API_KEY) {

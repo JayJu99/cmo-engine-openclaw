@@ -550,16 +550,29 @@ const startServer = async () => {
 
           if (m44d2ToolEndpointFixture) {
             assert.equal(url.pathname, "/agents/cmo/tool-execute");
+            assert.equal(body.user_message, body.intent?.user_message);
+            assert.equal(body.message, body.intent?.user_message);
+            assert.equal(body.input?.user_message, body.intent?.user_message);
+            assert.equal(body.active_source_id, "source_hold_pay_faq");
+            assert.equal(body.context_pack?.active_source_id, "source_hold_pay_faq");
+            assert.equal(body.workspace?.app_id, "hold-pay");
+            assert.equal(body.workspace?.workspace_id, "hold-pay");
+            assert.equal(body.session_id, "session_m44d2_tool_endpoint");
+            assert.equal(body.turn_id, "turn_m44d2_tool_endpoint_001");
+            assert.ok(body.context_pack, "tool-execute request must include context_pack");
+            assert.ok(body.tool_policy, "tool-execute request must include tool_policy");
             assert.equal(body.tool_endpoint?.enabled, true);
             assert.equal(body.constraints?.allowCmoReadTools, true);
             assert.equal(body.constraints?.execution_boundary?.browser_read_allowed, true);
             assert.equal(body.constraints?.execution_boundary?.durable_side_effects_allowed, false);
             assert.equal(body.source_acquisition?.tool_read_recommended, true);
             assert.equal(body.source_acquisition?.original_url, "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq");
+            assert.equal(body.source_acquisition?.canonical_url, "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq");
             assert.equal(body.context_pack?.source_answer_context?.answerable, false);
             assert.deepEqual(body.context_pack?.source_answer_context?.relevant_snippets, []);
             const sourceArtifact = body.context_pack?.artifacts_in?.find((artifact) => artifact?.type === "session_local_source");
             assert.equal(sourceArtifact?.original_url, "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq");
+            assert.equal(sourceArtifact?.canonical_url, "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq");
             assert.equal(sourceArtifact?.source_text_excerpt, undefined);
             assert.equal(sourceArtifact?.extracted_summary, undefined);
             writeJson(

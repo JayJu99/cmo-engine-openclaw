@@ -1244,6 +1244,9 @@ try {
     assert.match(hermesRuntimeSource, /selectedHermesCmoConfig/);
     assert.match(hermesRuntimeSource, /requestIsSourceBackedOrSeeking/);
     assert.match(hermesRuntimeSource, /toolEndpointRequest/);
+    assert.match(hermesRuntimeSource, /user_message: userMessage/);
+    assert.match(hermesRuntimeSource, /message: userMessage/);
+    assert.match(hermesRuntimeSource, /active_source_id: activeSourceId/);
     assert.match(hermesRuntimeSource, /hermes\.cmo\.tool_response\.v1/);
     assert.match(hermesRuntimeSource, /side_effects/);
     assert.match(hermesRuntimeSource, /data_unsafe:\$\{String\(eventType\)\} key=/);
@@ -1263,6 +1266,9 @@ try {
     assert.match(replaySource, /findSessionPathByRequest/);
     assert.match(replaySource, /sessionTraceMatch/);
     assert.match(replaySource, /selectedHermesEndpoint/);
+    assert.match(replaySource, /requestUserMessage/);
+    assert.match(replaySource, /resolved_user_message_present/);
+    assert.match(replaySource, /missing user_message\/message\/input\.user_message\/intent\.user_message/);
     assert.match(replaySource, /tool_read_events/);
     assert.match(replaySource, /side_effects/);
     assert.match(replaySource, /D_validator_rejected_valid_or_new_shape/);

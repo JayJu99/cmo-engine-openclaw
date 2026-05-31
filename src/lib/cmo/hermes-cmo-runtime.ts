@@ -983,6 +983,29 @@ const sourceArtifactRecords = (request: HermesCmoRuntimeRequest): Record<string,
 const sourceHasUrl = (record: Record<string, unknown>): boolean =>
   Boolean(recordString(record, "original_url") || recordString(record, "canonical_url") || recordString(record, "url"));
 
+const sourceIdFromRecord = (record: Record<string, unknown>): string | null =>
+  recordString(record, "source_id") ?? recordString(record, "id");
+
+const activeSourceIdForToolEndpoint = (request: HermesCmoRuntimeRequest): string | null =>
+  typeof request.context_pack.active_source_id === "string" && request.context_pack.active_source_id.trim()
+    ? request.context_pack.active_source_id.trim()
+    : sourceArtifactRecords(request).map(sourceIdFromRecord).find(Boolean) ?? null;
+
+const sourceUrlForToolEndpoint = (request: HermesCmoRuntimeRequest): { originalUrl: string | null; canonicalUrl: string | null } => {
+  const sourceAcquisition = isRecord(request.source_acquisition) ? request.source_acquisition : null;
+  const records = sourceArtifactRecords(request);
+  const originalUrl =
+    (sourceAcquisition ? recordString(sourceAcquisition, "original_url") ?? recordString(sourceAcquisition, "url") : null) ??
+    records.map((record) => recordString(record, "original_url") ?? recordString(record, "url")).find(Boolean) ??
+    null;
+  const canonicalUrl =
+    (sourceAcquisition ? recordString(sourceAcquisition, "canonical_url") : null) ??
+    records.map((record) => recordString(record, "canonical_url")).find(Boolean) ??
+    originalUrl;
+
+  return { originalUrl, canonicalUrl };
+};
+
 const requestHasSourceUrl = (request: HermesCmoRuntimeRequest): boolean =>
   sourceArtifactRecords(request).some(sourceHasUrl) ||
   (isRecord(request.source_acquisition) && (typeof request.source_acquisition.original_url === "string" || typeof request.source_acquisition.canonical_url === "string"));
@@ -1113,20 +1136,88 @@ const toolEndpointSourceReviewContext = (value: unknown): unknown => {
   };
 };
 
+const toolEndpointArtifactWithSourceUrl = (
+  artifact: unknown,
+  sourceUrl: { originalUrl: string | null; canonicalUrl: string | null },
+): unknown => {
+  const sanitized = toolEndpointArtifact(artifact);
+
+  if (!isRecord(sanitized) || !sourceIdFromRecord(sanitized)) {
+    return sanitized;
+  }
+
+  return {
+    ...sanitized,
+    ...(sourceUrl.originalUrl && !recordString(sanitized, "original_url") ? { original_url: sourceUrl.originalUrl } : {}),
+    ...(sourceUrl.canonicalUrl && !recordString(sanitized, "canonical_url") ? { canonical_url: sourceUrl.canonicalUrl } : {}),
+  };
+};
+
+const toolPolicyForToolEndpoint = (request: HermesCmoRuntimeRequest): Record<string, unknown> =>
+  isRecord(request.tool_policy)
+    ? request.tool_policy
+    : {
+        schema_version: "cmo.hermes.tool_policy.v1",
+        role: "product_shell_context_provider",
+        allowed_agents: request.constraints.allowed_agents,
+        allowed_surf_modes: request.constraints.allowed_surf_modes,
+        delegations_mode: request.constraints.delegations_mode,
+        read_web_allowed: true,
+        read_browser_allowed: true,
+        read_file_allowed: true,
+        terminal_read_only_allowed: true,
+        durable_writes_require_confirmation: true,
+        allowed_toolsets: ["web", "browser", "file", "terminal_read_only"],
+        disabled_toolsets: ["messaging", "cronjob", "kanban"],
+        durable_writes: {
+          session_log_owned_by_cmo_engine: true,
+          vault_writes_require_explicit_save_flow: true,
+          source_ingestion_requires_inputs_priorities_or_explicit_save: true,
+          no_auto_save_13_sources: true,
+          no_auto_promote_12_knowledge: true,
+          no_gbrain_mutation: true,
+        },
+      };
+
 const toolEndpointRequest = (request: HermesCmoRuntimeRequest): HermesCmoRuntimeRequest => {
+  const userMessage = request.intent.user_message;
+  const activeSourceId = activeSourceIdForToolEndpoint(request);
+  const sourceUrl = sourceUrlForToolEndpoint(request);
+  const toolPolicy = toolPolicyForToolEndpoint(request);
   const sourceAcquisition = isRecord(request.source_acquisition)
     ? {
         ...request.source_acquisition,
+        ...(activeSourceId ? { active_source_id: activeSourceId } : {}),
+        ...(sourceUrl.originalUrl && !recordString(request.source_acquisition, "original_url") ? { original_url: sourceUrl.originalUrl } : {}),
+        ...(sourceUrl.canonicalUrl && !recordString(request.source_acquisition, "canonical_url") ? { canonical_url: sourceUrl.canonicalUrl } : {}),
         tool_read_recommended: true,
         endpoint_role: "tool_capable_source_reader",
       }
-    : request.source_acquisition;
+    : sourceUrl.originalUrl || sourceUrl.canonicalUrl
+      ? {
+          ...(activeSourceId ? { active_source_id: activeSourceId } : {}),
+          ...(sourceUrl.originalUrl ? { original_url: sourceUrl.originalUrl } : {}),
+          ...(sourceUrl.canonicalUrl ? { canonical_url: sourceUrl.canonicalUrl } : {}),
+          tool_read_recommended: true,
+          endpoint_role: "tool_capable_source_reader",
+        }
+      : request.source_acquisition;
 
   return {
     ...request,
+    user_message: userMessage,
+    message: userMessage,
+    input: {
+      ...(isRecord(request.input) ? request.input : {}),
+      user_message: userMessage,
+      message: userMessage,
+    },
+    tool_policy: toolPolicy,
+    ...(activeSourceId ? { active_source_id: activeSourceId } : {}),
     context_pack: {
       ...request.context_pack,
-      artifacts_in: request.context_pack.artifacts_in.map(toolEndpointArtifact),
+      ...(activeSourceId ? { active_source_id: activeSourceId } : {}),
+      artifacts_in: request.context_pack.artifacts_in.map((artifact) => toolEndpointArtifactWithSourceUrl(artifact, sourceUrl)),
       ...(request.context_pack.source_answer_context
         ? { source_answer_context: toolEndpointSourceAnswerContext(request.context_pack.source_answer_context) }
         : {}),
