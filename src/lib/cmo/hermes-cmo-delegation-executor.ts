@@ -6,7 +6,7 @@ import {
 } from "./hermes-client";
 
 export type HermesCmoExecutableAgent = "echo" | "surf";
-export type HermesCmoExecutableMode = "echo.default" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
+export type HermesCmoExecutableMode = "echo.default" | "echo.source_translate" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
 
 export interface HermesCmoForbiddenCounters {
   vaultAgentCalls: number;
@@ -160,7 +160,11 @@ function targetMode(delegation: Record<string, unknown>, agent: HermesCmoExecuta
   const rawMode = text(target.mode ?? delegation.mode);
 
   if (agent === "echo") {
-    return rawMode === "echo.default" || !rawMode ? "echo.default" : null;
+    return rawMode === "echo.default" || !rawMode
+      ? "echo.default"
+      : rawMode === "source_translate" || rawMode === "echo.source_translate"
+        ? "echo.source_translate"
+        : null;
   }
 
   if (SURF_MODES.has(rawMode)) {
@@ -417,11 +421,15 @@ function echoBrief(input: ExecutorInput, delegation: NormalizedDelegation, previ
 }
 
 function defaultSurfBrief(input: ExecutorInput, delegation: NormalizedDelegation, overrides: Partial<HermesSurfBrief> = {}): HermesSurfBrief {
+  const surfMode = delegation.mode === "surf.x" || delegation.mode === "surf.trend" || delegation.mode === "surf.pulse"
+    ? delegation.mode
+    : "surf.default";
+
   return {
     handoff_id: delegation.delegationId,
     source_agent: "cmo",
     target_agent: "surf",
-    mode: delegation.mode === "echo.default" ? "surf.default" : delegation.mode,
+    mode: surfMode,
     workspace: cleanWorkspaceSlug(input.workspaceSlug),
     task_type: delegation.taskType,
     objective: delegation.objective,
@@ -565,7 +573,7 @@ async function executeOne(
       delegationKey: stableDelegationKey(delegation.raw),
       delegationId: delegation.delegationId,
       targetAgent: "echo",
-      mode: "echo.default",
+      mode: delegation.mode,
       objective: delegation.objective,
       status: result.ok && result.response ? "completed" : "failed",
       summary: result.ok && result.response ? `Echo returned ${result.response.outputs.length} output(s).` : result.failureReason ?? "Echo failed.",
@@ -576,7 +584,7 @@ async function executeOne(
       event(input, delegation, "delegation.completed", execution.status === "completed" ? "completed" : "failed", execution.summary, {
         delegation_id: delegation.delegationId,
         target_agent: "echo",
-        mode: "echo.default",
+        mode: delegation.mode,
         status: execution.status,
       }),
     );

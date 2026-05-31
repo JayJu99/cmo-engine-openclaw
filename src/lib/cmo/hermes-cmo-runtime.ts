@@ -24,7 +24,18 @@ const HERMES_CMO_AGENT_PATH = "/agents/cmo/execute" as const;
 
 export type HermesCmoRuntimeMode = typeof HERMES_CMO_RUNTIME_MODE;
 export type HermesAllowedAgent = "echo" | "surf" | "vault_agent";
+export type HermesEchoMode = "echo.default" | "echo.source_translate";
 export type HermesSurfMode = "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
+export type HermesCmoClassification =
+  | "native_conversation"
+  | "source_acknowledgement"
+  | "source_can_read"
+  | "source_translate"
+  | "source_transform"
+  | "structured_review"
+  | "external_research"
+  | "needs_surf"
+  | "needs_echo_retry";
 export type HermesActivityStatus = "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled";
 export type HermesActivityType =
   | "run.started"
@@ -32,6 +43,8 @@ export type HermesActivityType =
   | "stage.started"
   | "stage.completed"
   | "context.loaded"
+  | "cmo.intent.classified"
+  | "cmo.source_context.loaded"
   | "cmo.mode.selected"
   | "cmo.bottleneck.identified"
   | "cmo.decision.selected"
@@ -138,7 +151,7 @@ export interface HermesCmoRuntimeActivityEvent {
   created_at: string;
   source: {
     agent: "cmo" | "echo" | "surf";
-    mode: "cmo.default" | "echo.default" | HermesSurfMode;
+    mode: "cmo.default" | HermesEchoMode | HermesSurfMode;
   };
   type: HermesActivityType;
   status: HermesActivityStatus;
@@ -148,7 +161,17 @@ export interface HermesCmoRuntimeActivityEvent {
 }
 
 export interface HermesCmoRuntimeAnswerBasis {
-  mode: "fully_grounded" | "assumption_based" | "needs_user_input";
+  mode:
+    | "fully_grounded"
+    | "assumption_based"
+    | "needs_user_input"
+    | "native_conversation"
+    | "source_acknowledgement"
+    | "source_can_read"
+    | "source_translate"
+    | "source_transform"
+    | "structured_review"
+    | "external_research";
   missing_inputs: string[];
   assumptions_used: Array<string | Record<string, unknown>>;
   user_can_override: boolean;
@@ -262,14 +285,34 @@ const answerBasisModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "fully_grounded",
   "assumption_based",
   "needs_user_input",
+  "native_conversation",
+  "source_acknowledgement",
+  "source_can_read",
+  "source_translate",
+  "source_transform",
+  "structured_review",
+  "external_research",
 ]);
 const answerFormats = new Set<HermesCmoRuntimeAnswer["format"]>(["markdown", "plain_text", "json"]);
+const classifications = new Set<HermesCmoClassification>([
+  "native_conversation",
+  "source_acknowledgement",
+  "source_can_read",
+  "source_translate",
+  "source_transform",
+  "structured_review",
+  "external_research",
+  "needs_surf",
+  "needs_echo_retry",
+]);
 const activityTypes = new Set<HermesActivityType>([
   "run.started",
   "run.heartbeat",
   "stage.started",
   "stage.completed",
   "context.loaded",
+  "cmo.intent.classified",
+  "cmo.source_context.loaded",
   "cmo.mode.selected",
   "cmo.bottleneck.identified",
   "cmo.decision.selected",
@@ -329,6 +372,9 @@ const hasOnlyAllowedValues = <T extends string>(values: unknown, allowedValues: 
   Array.isArray(values) &&
   values.every((value): value is T => typeof value === "string" && allowedValues.has(value as T)) &&
   new Set(values).size === values.length;
+
+const optionalClassificationIsAllowed = (value: unknown) =>
+  value === undefined || (typeof value === "string" && classifications.has(value as HermesCmoClassification));
 
 const makeSafetyCounters = (surfCalls = 0, echoCalls = 0): HermesCmoRuntimeSafetyCounters => ({
   surfCalls,
@@ -729,6 +775,12 @@ const isEchoRetryDelegation = (delegation: Record<string, unknown>) => {
   return normalized.length === 1 && normalized[0]?.targetAgent === "echo" && normalized[0]?.mode === "echo.default";
 };
 
+const isAllowedEchoSourceTranslationDelegation = (delegation: Record<string, unknown>) => {
+  const normalized = executableDelegations([delegation], 1);
+
+  return normalized.length === 1 && normalized[0]?.targetAgent === "echo" && normalized[0]?.mode === "echo.source_translate";
+};
+
 const validateDelegations = (
   delegations: unknown,
   options: HermesCmoResponseValidationOptions,
@@ -759,7 +811,15 @@ const validateDelegations = (
 
   const normalizedDelegations = executableDelegations(delegations, Number.MAX_SAFE_INTEGER);
 
-  return normalizedDelegations.length === delegations.length && delegations.length <= options.maxDelegations;
+  return (
+    normalizedDelegations.length === delegations.length &&
+    delegations.length <= options.maxDelegations &&
+    delegations.every((delegation) => {
+      const normalized = executableDelegations([delegation], 1)[0];
+
+      return normalized?.mode !== "echo.source_translate" || isAllowedEchoSourceTranslationDelegation(delegation);
+    })
+  );
 };
 
 export const validateHermesCmoRuntimeResponse = (
@@ -785,6 +845,7 @@ export const validateHermesCmoRuntimeResponse = (
   }
 
   const activitySummary = response.activity_summary;
+  const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
 
   if (
     response.schema_version !== "hermes.cmo.response.v1" ||
@@ -804,7 +865,9 @@ export const validateHermesCmoRuntimeResponse = (
     typeof activitySummary.events_count !== "number" ||
     !Number.isInteger(activitySummary.events_count) ||
     activitySummary.events_count < 0 ||
-    !isNonEmptyString(activitySummary.final_state)
+    !isNonEmptyString(activitySummary.final_state) ||
+    !optionalClassificationIsAllowed(response.classification) ||
+    !optionalClassificationIsAllowed(structuredOutput.classification)
   ) {
     return false;
   }
@@ -845,7 +908,7 @@ const validateHermesCmoRuntimeActivityEvent = (
   const eventType = event.type as HermesActivityType;
   const sourceMatches =
     (sourceAgent === "cmo" && sourceMode === "cmo.default") ||
-    (sourceAgent === "echo" && sourceMode === "echo.default") ||
+    (sourceAgent === "echo" && (sourceMode === "echo.default" || sourceMode === "echo.source_translate")) ||
     (sourceAgent === "surf" && allowedSurfModes.has(sourceMode as HermesSurfMode));
 
   if (forbiddenDelegationEventTypes.has(eventType) || forbiddenActivityTypePattern.test(String(eventType))) {

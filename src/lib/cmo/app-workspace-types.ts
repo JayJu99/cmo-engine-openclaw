@@ -605,7 +605,7 @@ export type HermesCmoDelegationsMode = "proposals_only" | "echo_surf_bounded";
 export type CmoStrategyMode = "DIAGNOSE" | "FOCUS" | "PRIORITIZE" | "REVIEW" | "RESET";
 export type CmoDecisionLabel = "KEEP" | "CUT" | "TEST" | "SCALE" | "WAIT";
 export type HermesCmoAgentUsed = "cmo" | "echo" | "surf";
-export type HermesCmoExecutableMode = "echo.default" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
+export type HermesCmoExecutableMode = "echo.default" | "echo.source_translate" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
 
 export interface HermesCmoSafetyCounters {
   surfCalls: number;

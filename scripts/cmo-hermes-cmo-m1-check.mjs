@@ -163,6 +163,37 @@ const cmoPolishActivityEvents = (requestBody) => [
   activity(requestBody, 8, "cmo.run.completed", "CMO run completed."),
 ];
 
+const cmoM43SourceActivityEvents = (requestBody, classification) => [
+  {
+    ...activity(requestBody, 1, "run.started", "CMO run started."),
+    status: "completed",
+  },
+  {
+    ...activity(requestBody, 2, "cmo.intent.classified", `CMO classified intent: ${classification}.`),
+    status: "completed",
+    data: {
+      classification,
+      uses_session_local_source: true,
+      source_context_type: "session_local_source",
+      active_source_id: "source_review_fixture",
+    },
+  },
+  {
+    ...activity(requestBody, 3, "cmo.source_context.loaded", "CMO loaded active session-local source context."),
+    status: "completed",
+    data: {
+      uses_session_local_source: true,
+      source_context_type: "session_local_source",
+      active_source_id: "source_review_fixture",
+      schema_version: "cmo.session_local_source.v1",
+    },
+  },
+  {
+    ...activity(requestBody, 4, "cmo.run.completed", "CMO run completed."),
+    status: "completed",
+  },
+];
+
 const cmoResponse = (requestBody, overrides = {}) => {
   const events = overrides.activity_events ?? cmoPolishActivityEvents(requestBody);
 
@@ -270,6 +301,9 @@ const startServer = async () => {
           const worldAppSignalFixture = body.request_id === "req_m1_world_app_signal";
           const echoCompletedUnresolvedFixture = body.request_id === "req_m1_echo_completed_unresolved";
           const translationFollowupFixture = body.request_id === "req_m1_translation_followup";
+          const m43NativeConversationFixture = body.request_id === "req_m43_native_conversation";
+          const m43SourceTranslateFixture = body.request_id === "req_m43_source_translate";
+          const m43UnknownActivityFixture = body.request_id === "req_m43_unknown_activity";
           const echoRetryFixture =
             body.request_id === "req_m1_echo_retry_good" ||
             body.request_id === "req_m1_echo_retry_fail" ||
@@ -277,7 +311,85 @@ const startServer = async () => {
 
           let delegations;
 
-          if (latestPostFixture) {
+          if (m43UnknownActivityFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "cmo.unknown_event", "Unknown CMO event."),
+                    status: "completed",
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+
+          if (m43NativeConversationFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: cmoM43SourceActivityEvents(body, "native_conversation"),
+                response: {
+                  answer_basis: {
+                    mode: "native_conversation",
+                    missing_inputs: [],
+                    assumptions_used: [],
+                    user_can_override: true,
+                    suggested_user_inputs: [],
+                  },
+                  structured_output: {
+                    strategyMode: "REVIEW",
+                    mainBottleneck: "none",
+                    decisionLabel: "KEEP",
+                    classification: "native_conversation",
+                    uses_session_local_source: true,
+                    source_context_type: "session_local_source",
+                    active_source_id: "source_review_fixture",
+                  },
+                  answer: {
+                    format: "markdown",
+                    title: "Native conversation",
+                    summary: "CMO responded naturally with session-local source context loaded.",
+                    decision: "KEEP",
+                    body: "Yep, I can read the active source in this session. I did not save it to Vault.",
+                  },
+                },
+              }),
+            );
+            return;
+          }
+
+          if (m43SourceTranslateFixture) {
+            delegations = [
+              {
+                id: "del_source_translate",
+                target_agent: "echo",
+                mode: "source_translate",
+                task_type: "source_translate",
+                objective: "Translate the active session-local source excerpt into Vietnamese.",
+                input: {
+                  brief: "Translate the active session-local source excerpt into Vietnamese.",
+                  input_material: translationSourceMaterial,
+                  source_material: translationSourceMaterial,
+                  context: {
+                    active_source_id: "source_review_fixture",
+                    source_context_type: "session_local_source",
+                  },
+                },
+                input_material: translationSourceMaterial,
+                source_material: translationSourceMaterial,
+                output_contract: {
+                  schema_version: "echo.response.v1",
+                  task_type: "source_translate",
+                  source_material: translationSourceMaterial,
+                },
+              },
+            ];
+          } else if (latestPostFixture) {
             delegations = [
               {
                 id: "del_latest_post",
@@ -502,12 +614,32 @@ const startServer = async () => {
             response,
             200,
             cmoResponse(body, {
+              ...(m43SourceTranslateFixture ? { activity_events: cmoM43SourceActivityEvents(body, "source_translate") } : {}),
               response: {
                 status: "delegated",
+                ...(m43SourceTranslateFixture
+                  ? {
+                      answer_basis: {
+                        mode: "source_translate",
+                        missing_inputs: [],
+                        assumptions_used: [],
+                        user_can_override: true,
+                        suggested_user_inputs: [],
+                      },
+                    }
+                  : {}),
                 structured_output: {
                   strategyMode: "DIAGNOSE",
                   mainBottleneck: "activation proof gap",
                   decisionLabel: "TEST",
+                  ...(m43SourceTranslateFixture
+                    ? {
+                        classification: "source_translate",
+                        uses_session_local_source: true,
+                        source_context_type: "session_local_source",
+                        active_source_id: "source_review_fixture",
+                      }
+                    : {}),
                 },
                 answer: {
                   format: "markdown",
@@ -1099,7 +1231,7 @@ const startServer = async () => {
         calls.echoRequests.push(body);
         assert.equal(body.source_agent, "cmo");
         assert.equal(body.target_agent, "echo");
-        assert.ok(["cmo_orchestrated_final_copy", "translation_followup"].includes(body.task_type));
+        assert.ok(["cmo_orchestrated_final_copy", "translation_followup", "source_translate"].includes(body.task_type));
         assert.ok(
           [
             "Create 3 short X posts from the safest angle.",
@@ -1107,14 +1239,17 @@ const startServer = async () => {
             "Create one more test post.",
             "Translate all 3 prior X posts into Vietnamese.",
             "Retry Vietnamese translation for all 3 prior X posts.",
+            "Translate the active session-local source excerpt into Vietnamese.",
           ].includes(body.objective),
           `unexpected Echo objective ${body.objective}`,
         );
-        if (body.handoff_id !== "del_max_rounds_echo_2" && body.handoff_id !== "del_max_rounds_echo_3") {
+        if (body.handoff_id !== "del_max_rounds_echo_2" && body.handoff_id !== "del_max_rounds_echo_3" && body.handoff_id !== "del_source_translate") {
           assert.equal(body.platform, "x");
         }
         const expectedEchoAngle = body.handoff_id === "del_echo_fail"
           ? "Use evidence boundaries and produce final copy only through Echo."
+          : body.handoff_id === "del_source_translate"
+            ? "Translate the active session-local source excerpt into Vietnamese."
           : String(body.handoff_id).includes("translation_followup")
             ? "Translate all three source posts to Vietnamese."
           : body.handoff_id === "del_x_posts_echo_only" ||
@@ -1133,13 +1268,15 @@ const startServer = async () => {
           expectedEchoAngle,
         );
         assert.ok(Array.isArray(body.claim_boundaries));
-        if (body.task_type === "translation_followup") {
+        if (body.task_type === "translation_followup" || body.task_type === "source_translate") {
           assert.deepEqual(body.input_material, translationSourceMaterial);
           assert.deepEqual(body.source_material, translationSourceMaterial);
-          assert.deepEqual(body.output_contract?.translation_source_material, translationSourceMaterial);
           assert.deepEqual(body.output_contract?.source_material, translationSourceMaterial);
           assert.deepEqual(body.raw_delegation?.source_material, translationSourceMaterial);
           assert.deepEqual(body.delegation?.source_material, translationSourceMaterial);
+          if (body.task_type === "translation_followup") {
+            assert.deepEqual(body.output_contract?.translation_source_material, translationSourceMaterial);
+          }
         } else {
           assert.equal(body.output_contract, "echo.response.v1");
         }
@@ -1355,7 +1492,7 @@ try {
 
   const { tmpDir, runtimePath } = await compileRuntimeModule();
   const requireFromCheck = createRequire(import.meta.url);
-  const { runHermesCmoRuntime } = requireFromCheck(runtimePath);
+  const { runHermesCmoRuntime, validateHermesCmoRuntimeResponse } = requireFromCheck(runtimePath);
   const server = await startServer();
   const previousEnv = {
     CMO_HERMES_EXECUTION_ENABLED: process.env.CMO_HERMES_EXECUTION_ENABLED,
@@ -1384,6 +1521,8 @@ try {
   let worldAppSignalResult;
   let echoCompletedUnresolvedResult;
   let translationFollowupResult;
+  let m43NativeConversationResult;
+  let m43SourceTranslateResult;
 
   try {
     process.env.CMO_HERMES_EXECUTION_ENABLED = "true";
@@ -1393,6 +1532,57 @@ try {
     process.env.CMO_HERMES_LAST30DAYS_TIMEOUT_MS = "5000";
     process.env.CMO_HERMES_CMO_ORCHESTRATION_ENABLED = "true";
     process.env.CMO_HERMES_CMO_MAX_DELEGATIONS = "3";
+
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          direct_vault_write: true,
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      false,
+      "direct Vault mutation must remain rejected",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          structured_output: {
+            classification: "arbitrary_new_classification",
+          },
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      false,
+      "unknown CMO classification must remain rejected",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          delegations: [{ target_agent: "vault_agent", mode: "vault_agent.write", objective: "Write source to Vault" }],
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      false,
+      "unknown/forbidden agents must remain rejected",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          delegations: [{ target_agent: "echo", mode: "echo.publish", objective: "Publish content" }],
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      false,
+      "unknown Echo delegation modes must remain rejected",
+    );
 
     result = await runHermesCmoRuntime(sampleRequest);
 
@@ -1806,6 +1996,113 @@ try {
     assert.match(translationFollowupResult.response.answer?.body ?? "", /POST 2:/);
     assert.match(translationFollowupResult.response.answer?.body ?? "", /POST 3:/);
     assert.doesNotMatch(translationFollowupResult.response.answer?.body ?? "", /Caller should retry Echo/);
+
+    m43NativeConversationResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m43_native_conversation",
+      session_id: "session_m43_native_conversation",
+      turn_id: "turn_m43_native_conversation_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Ok thanks bro",
+      },
+      context_pack: {
+        ...sampleRequest.context_pack,
+        active_source_id: "source_review_fixture",
+        artifacts_in: [
+          {
+            type: "session_local_source",
+            schema_version: "cmo.session_local_source.v1",
+            workspace_id: "feeback",
+            session_id: "session_m43_native_conversation",
+            turn_id: "turn_source_001",
+            source_id: "source_review_fixture",
+            source_type: "url",
+            source_title: "Feeback",
+            source_text_excerpt: "Feeback project source excerpt.",
+            extraction_status: "completed",
+            saved_to_vault: false,
+            official_project_source: false,
+            truth_status: "session_only",
+            review_status: "temporary",
+            no_auto_promote: true,
+          },
+        ],
+      },
+    });
+
+    assert.equal(m43NativeConversationResult.response.answer_basis.mode, "native_conversation");
+    assert.equal(m43NativeConversationResult.surfCalls, 0);
+    assert.equal(m43NativeConversationResult.echoCalls, 0);
+    assert.equal(m43NativeConversationResult.response.structured_output?.uses_session_local_source, true);
+    assert.equal(m43NativeConversationResult.response.structured_output?.active_source_id, "source_review_fixture");
+    assert.equal(
+      m43NativeConversationResult.activity_events.some((event) => event.type === "cmo.intent.classified"),
+      true,
+      "M4.3C native conversation intent activity should pass validation",
+    );
+    assert.equal(
+      m43NativeConversationResult.activity_events.some((event) => event.type === "cmo.source_context.loaded"),
+      true,
+      "M4.3C session-local source activity should pass validation",
+    );
+
+    m43SourceTranslateResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m43_source_translate",
+      session_id: "session_m43_source_translate",
+      turn_id: "turn_m43_source_translate_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Bạn dịch phần này sang tiếng Việt",
+      },
+      context_pack: {
+        ...sampleRequest.context_pack,
+        active_source_id: "source_review_fixture",
+        artifacts_in: [
+          {
+            type: "session_local_source",
+            schema_version: "cmo.session_local_source.v1",
+            workspace_id: "feeback",
+            session_id: "session_m43_source_translate",
+            turn_id: "turn_source_001",
+            source_id: "source_review_fixture",
+            source_type: "url",
+            source_title: "Feeback",
+            source_text_excerpt: translationSourceMaterial.join("\n"),
+            extraction_status: "completed",
+            saved_to_vault: false,
+            official_project_source: false,
+            truth_status: "session_only",
+            review_status: "temporary",
+            no_auto_promote: true,
+          },
+        ],
+      },
+    });
+
+    assert.equal(m43SourceTranslateResult.surfCalls, 0);
+    assert.equal(m43SourceTranslateResult.echoCalls, 1);
+    assert.deepEqual(m43SourceTranslateResult.agentsUsed, ["cmo", "echo"]);
+    assert.equal(m43SourceTranslateResult.delegationSummary[0].targetAgent, "echo");
+    assert.equal(m43SourceTranslateResult.delegationSummary[0].mode, "echo.source_translate");
+    assert.equal(m43SourceTranslateResult.delegationSummary[0].status, "completed");
+
+    await assert.rejects(
+      () =>
+        runHermesCmoRuntime({
+          ...sampleRequest,
+          request_id: "req_m43_unknown_activity",
+          session_id: "session_m43_unknown_activity",
+          turn_id: "turn_m43_unknown_activity_001",
+          intent: {
+            ...sampleRequest.intent,
+            user_message: "Fixture with unknown activity event.",
+          },
+        }),
+      /activity_events did not match hermes\.activity\.event\.v1/,
+      "unknown activity events must still be rejected",
+    );
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
       restoreEnvValue(key, value);
