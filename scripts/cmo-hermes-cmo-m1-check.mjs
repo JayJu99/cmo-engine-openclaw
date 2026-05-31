@@ -32,6 +32,7 @@ const translationSourceMaterial = [
   "POST 2: Show the Mini App action that creates value in one step.",
   "POST 3: Keep claims tight until the activation evidence is visible.",
 ];
+const holdPayFaqUrl = "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq";
 
 const sampleRequest = {
   schema_version: "hermes.cmo.request.v1",
@@ -76,6 +77,57 @@ const sampleRequest = {
     heartbeat_required: true,
   },
 };
+
+const m44dToolEndpointRequest = (requestId) => ({
+  ...sampleRequest,
+  request_id: requestId,
+  session_id: requestId.replace(/^req_/, "session_"),
+  turn_id: `${requestId.replace(/^req_/, "turn_")}_001`,
+  workspace: {
+    ...sampleRequest.workspace,
+    workspace_id: "hold-pay",
+    app_id: "hold-pay",
+    app_name: "Hold Pay",
+  },
+  intent: {
+    ...sampleRequest.intent,
+    user_message: `Summarize this source: ${holdPayFaqUrl}`,
+  },
+  context_pack: {
+    ...sampleRequest.context_pack,
+    active_source_id: "source_hold_pay_faq",
+    artifacts_in: [
+      {
+        type: "session_local_source",
+        schema_version: "cmo.session_local_source.v1",
+        workspace_id: "hold-pay",
+        source_id: "source_hold_pay_faq",
+        source_type: "url",
+        source_title: "Holdstation Pay FAQ",
+        original_url: holdPayFaqUrl,
+        canonical_url: holdPayFaqUrl,
+        read_depth: "partial",
+        cache_role: "fallback_only",
+        nav_heavy: true,
+        tool_read_recommended: true,
+        saved_to_vault: false,
+        no_auto_promote: true,
+      },
+    ],
+  },
+  source_acquisition: {
+    schema_version: "cmo.source_acquisition_role.v1",
+    chat_role: "cache_fallback_context_provider",
+    original_url: holdPayFaqUrl,
+    canonical_url: holdPayFaqUrl,
+    tool_read_recommended: true,
+    read_depth: "partial",
+    cache_role: "fallback_only",
+    nav_heavy: true,
+    saved_to_vault: false,
+    no_auto_promote: true,
+  },
+});
 
 const compileRuntimeModule = async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "hermes-cmo-m1-"));
@@ -338,6 +390,9 @@ const startServer = async () => {
           const m44aDurableActionFixture = body.request_id === "req_m44a_durable_action_proposed";
           const m44aToolReadFixture = body.request_id === "req_m44a_tool_read";
           const m44d2ToolEndpointFixture = body.request_id === "req_m44d2_tool_endpoint";
+          const m44dToolEndpointSideEffectsFixture = body.request_id === "req_m44d_tool_endpoint_side_effects_true";
+          const m44dToolEndpointUnsafeToolResultFixture = body.request_id === "req_m44d_tool_endpoint_unsafe_tool_result";
+          const m44dUnknownAnswerBasisFixture = body.request_id === "req_m44d_unknown_answer_basis";
           const m44d2NativeExecuteFixture = body.request_id === "req_m44d2_native_execute";
           const m44aToolReadCompletedHtmlFixture = body.request_id === "req_m44a_tool_read_completed_html";
           const m44aDurableActionUnsafeWriteFixture = body.request_id === "req_m44a_durable_action_unsafe_write";
@@ -566,13 +621,13 @@ const startServer = async () => {
             assert.equal(body.constraints?.execution_boundary?.browser_read_allowed, true);
             assert.equal(body.constraints?.execution_boundary?.durable_side_effects_allowed, false);
             assert.equal(body.source_acquisition?.tool_read_recommended, true);
-            assert.equal(body.source_acquisition?.original_url, "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq");
-            assert.equal(body.source_acquisition?.canonical_url, "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq");
+            assert.equal(body.source_acquisition?.original_url, holdPayFaqUrl);
+            assert.equal(body.source_acquisition?.canonical_url, holdPayFaqUrl);
             assert.equal(body.context_pack?.source_answer_context?.answerable, false);
             assert.deepEqual(body.context_pack?.source_answer_context?.relevant_snippets, []);
             const sourceArtifact = body.context_pack?.artifacts_in?.find((artifact) => artifact?.type === "session_local_source");
-            assert.equal(sourceArtifact?.original_url, "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq");
-            assert.equal(sourceArtifact?.canonical_url, "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq");
+            assert.equal(sourceArtifact?.original_url, holdPayFaqUrl);
+            assert.equal(sourceArtifact?.canonical_url, holdPayFaqUrl);
             assert.equal(sourceArtifact?.source_text_excerpt, undefined);
             assert.equal(sourceArtifact?.extracted_summary, undefined);
             writeJson(
@@ -582,16 +637,23 @@ const startServer = async () => {
                 ...cmoResponse(body, {
                   response: {
                     schema_version: "hermes.cmo.tool_response.v1",
+                    mode: "cmo.tool_capable",
                     answer_basis: {
-                      mode: "source_answer",
+                      mode: "tool_read",
                     },
                     structured_output: {
-                      classification: "source_answer",
-                      response_style: "source_answer",
+                      classification: "native_conversation",
+                      response_style: "native_conversation",
                       tool_policy: "none",
                     },
                     answer: {
                       body: "Holdstation Pay FAQ summary from a tool-capable CMO read.",
+                    },
+                    tools_used: ["browser_navigate", "browser_snapshot", "browser_console"],
+                    tool_trace_summary: {
+                      tool_read_count: 3,
+                      read_only: true,
+                      source_type: "url",
                     },
                   },
                   activity_events: [
@@ -600,8 +662,12 @@ const startServer = async () => {
                       status: "completed",
                       data: {
                         tool_family: "browser",
+                        tool_name: "browser_navigate",
+                        tool_category: "browser",
                         read_only: true,
                         source_type: "url",
+                        status: "started",
+                        success: true,
                         workspace_id: "hold-pay",
                         session_id: "session_m44d2_tool_endpoint",
                         source_id: "source_hold_pay_faq",
@@ -615,9 +681,12 @@ const startServer = async () => {
                       status: "completed",
                       data: {
                         tool_family: "browser",
+                        tool_name: "browser_snapshot",
+                        tool_category: "browser",
                         read_only: true,
                         source_type: "url",
                         status: "completed",
+                        success: true,
                         workspace_id: "hold-pay",
                         session_id: "session_m44d2_tool_endpoint",
                         source_id: "source_hold_pay_faq",
@@ -627,10 +696,139 @@ const startServer = async () => {
                         canonical_url_present: true,
                       },
                     },
+                    {
+                      ...activity(body, 3, "cmo.answer.grounded", "CMO grounded the answer in a live read-only source tool read."),
+                      status: "completed",
+                      data: {
+                        answer_basis_mode: "tool_read",
+                        classification: "native_conversation",
+                        safe_metadata_only: true,
+                        grounded: true,
+                        source_count: 1,
+                        used_live_tool_read: true,
+                        source_answerable: true,
+                        truth_status: "session_only",
+                        saved_to_vault: false,
+                        no_auto_promote: true,
+                      },
+                    },
+                  ],
+                }),
+                side_effects: {
+                  vault_write: false,
+                  memory_mutation: false,
+                  gbrain_mutation: false,
+                  source_auto_save: false,
+                  knowledge_promotion: false,
+                  supabase_mutation: false,
+                  session_mutation: false,
+                  raw_capture: false,
+                  repo_mutation: false,
+                  publishing: false,
+                },
+              },
+            );
+            return;
+          }
+
+          if (m44dToolEndpointSideEffectsFixture) {
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
+            writeJson(
+              response,
+              200,
+              {
+                ...cmoResponse(body, {
+                  response: {
+                    schema_version: "hermes.cmo.tool_response.v1",
+                    mode: "cmo.tool_capable",
+                    answer_basis: {
+                      mode: "tool_read",
+                    },
+                    structured_output: {
+                      classification: "native_conversation",
+                      response_style: "native_conversation",
+                      tool_policy: "none",
+                    },
+                    answer: {
+                      body: "This response must be rejected because it reports a side effect.",
+                    },
+                  },
+                }),
+                side_effects: {
+                  vault_write: true,
+                  memory_mutation: false,
+                  gbrain_mutation: false,
+                  source_auto_save: false,
+                  knowledge_promotion: false,
+                  supabase_mutation: false,
+                  session_mutation: false,
+                  raw_capture: false,
+                  repo_mutation: false,
+                  publishing: false,
+                },
+              },
+            );
+            return;
+          }
+
+          if (m44dToolEndpointUnsafeToolResultFixture) {
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
+            writeJson(
+              response,
+              200,
+              {
+                ...cmoResponse(body, {
+                  response: {
+                    schema_version: "hermes.cmo.tool_response.v1",
+                    mode: "cmo.tool_capable",
+                    answer_basis: {
+                      mode: "tool_read",
+                    },
+                    structured_output: {
+                      classification: "native_conversation",
+                      response_style: "native_conversation",
+                      tool_policy: "none",
+                    },
+                    answer: {
+                      body: "This response must be rejected because activity data contains raw tool result.",
+                    },
+                  },
+                  activity_events: [
+                    {
+                      ...activity(body, 1, "cmo.tool_read.completed", "CMO completed browser source read."),
+                      status: "completed",
+                      data: {
+                        tool_family: "browser",
+                        tool_name: "browser_snapshot",
+                        read_only: true,
+                        source_type: "url",
+                        status: "completed",
+                        success: true,
+                        tool_result: "<html><body>raw page body</body></html>",
+                      },
+                    },
                   ],
                 }),
                 side_effects: false,
               },
+            );
+            return;
+          }
+
+          if (m44dUnknownAnswerBasisFixture) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                response: {
+                  answer_basis: {
+                    mode: "tool_read",
+                  },
+                  answer: {
+                    body: "Legacy response with tool_read answer basis must still be rejected.",
+                  },
+                },
+              }),
             );
             return;
           }
@@ -3179,13 +3377,55 @@ try {
     assert.equal(m44d2ToolEndpointResult.hermesCmoAgentPath, "/agents/cmo/tool-execute");
     assert.equal(m44d2ToolEndpointResult.hermesCmoEndpointKind, "tool_execute");
     assert.equal(m44d2ToolEndpointResult.hermesCmoEndpointTimeoutMs, 90000);
-    assert.equal(m44d2ToolEndpointResult.sideEffects, false);
-    assert.equal(m44d2ToolEndpointResult.response.answer_basis.mode, "source_answer");
+    assert.deepEqual(m44d2ToolEndpointResult.sideEffects, {
+      vault_write: false,
+      memory_mutation: false,
+      gbrain_mutation: false,
+      source_auto_save: false,
+      knowledge_promotion: false,
+      supabase_mutation: false,
+      session_mutation: false,
+      raw_capture: false,
+      repo_mutation: false,
+      publishing: false,
+    });
+    assert.equal(m44d2ToolEndpointResult.response.answer_basis.mode, "tool_read");
     assert.equal(m44d2ToolEndpointResult.response.answer?.body, "Holdstation Pay FAQ summary from a tool-capable CMO read.");
+    assert.deepEqual(m44d2ToolEndpointResult.response.tools_used, ["browser_navigate", "browser_snapshot", "browser_console"]);
+    assert.equal(m44d2ToolEndpointResult.response.tool_trace_summary?.tool_read_count, 3);
     assert.equal(
       m44d2ToolEndpointResult.activity_events.some((event) => event.type === "cmo.tool_read.completed"),
       true,
       "tool endpoint must preserve safe CMO tool-read activity",
+    );
+    assert.equal(
+      m44d2ToolEndpointResult.activity_events.some((event) => event.type === "cmo.answer.grounded" && event.data.used_live_tool_read === true),
+      true,
+      "tool endpoint must accept grounded live tool-read metadata",
+    );
+
+    await assert.rejects(
+      () => runHermesCmoRuntime(m44dToolEndpointRequest("req_m44d_tool_endpoint_side_effects_true")),
+      /Hermes CMO Agent response included unsafe side_effects/,
+      "tool endpoint response with any side effect=true must reject",
+    );
+
+    await assert.rejects(
+      () => runHermesCmoRuntime(m44dToolEndpointRequest("req_m44d_tool_endpoint_unsafe_tool_result")),
+      /Rejected field: data_unsafe:cmo\.tool_read\.completed key=data\.tool_result type=string reason=unsafe_key_name/,
+      "tool endpoint activity data must reject raw tool_result",
+    );
+
+    await assert.rejects(
+      () =>
+        runHermesCmoRuntime({
+          ...sampleRequest,
+          request_id: "req_m44d_unknown_answer_basis",
+          session_id: "session_m44d_unknown_answer_basis",
+          turn_id: "turn_m44d_unknown_answer_basis_001",
+        }),
+      /Rejected field: answer_basis_invalid:mode=tool_read/,
+      "legacy hermes.cmo.response.v1 must still reject tool_read answer_basis mode",
     );
 
     const m44d2NativeExecuteResult = await runHermesCmoRuntime({

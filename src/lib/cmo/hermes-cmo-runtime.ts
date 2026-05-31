@@ -193,7 +193,8 @@ export interface HermesCmoRuntimeAnswerBasis {
     | "source_transform"
     | "structured_review"
     | "external_research"
-    | "save_to_vault";
+    | "save_to_vault"
+    | "tool_read";
   missing_inputs: string[];
   assumptions_used: Array<string | Record<string, unknown>>;
   user_can_override: boolean;
@@ -335,6 +336,7 @@ const simpleAnswerModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "source_translate",
   "source_transform",
   "save_to_vault",
+  "tool_read",
 ]);
 const classifications = new Set<HermesCmoClassification>([
   "native_conversation",
@@ -436,7 +438,14 @@ const m44bActivityDataKeysByType: Partial<Record<HermesActivityType, Set<string>
     "answer_basis_mode",
     "classification",
     "delegations_count",
+    "grounded",
+    "no_auto_promote",
     "safe_metadata_only",
+    "saved_to_vault",
+    "source_answerable",
+    "source_count",
+    "truth_status",
+    "used_live_tool_read",
   ]),
   "cmo.tool_read.started": new Set([
     "read_only",
@@ -444,7 +453,11 @@ const m44bActivityDataKeysByType: Partial<Record<HermesActivityType, Set<string>
     "session_id",
     "source_id",
     "source_type",
+    "status",
+    "success",
+    "tool_category",
     "tool_family",
+    "tool_name",
     "tool_policy",
     "url_present",
     "workspace_id",
@@ -456,11 +469,17 @@ const m44bActivityDataKeysByType: Partial<Record<HermesActivityType, Set<string>
     "error_code",
     "http_status",
     "read_only",
+    "request_id",
     "session_id",
     "source_id",
     "source_type",
     "status",
+    "success",
+    "tool_category",
     "tool_family",
+    "tool_name",
+    "tool_policy",
+    "url_present",
     "workspace_id",
   ]),
   "cmo.durable_action.proposed": new Set([
@@ -477,7 +496,7 @@ const m44bActivityDataKeysByType: Partial<Record<HermesActivityType, Set<string>
   ]),
 };
 const m44aUnsafeActivityDataKeyPattern =
-  /^(api_key|artifacts_in|authorization|body|content|context_pack|cookie|cookies|credential|credentials|env|file_body|file_content|file_contents|full_content|full_source|full_text|html|markdown|password|private_key|raw|raw_.*|relevant_snippets|secret|secrets|source_text.*|text|token|vault_write_path)$/i;
+  /^(api_key|artifacts_in|authorization|body|content|context_pack|cookie|cookies|credential|credentials|env|file_body|file_content|file_contents|full_content|full_source|full_text|headers|html|markdown|password|private_key|raw|raw_.*|relevant_snippets|secret|secrets|source_text.*|text|token|tool_args|tool_result|vault_write_path)$/i;
 const m44aUnsafeActivityDataTextPattern =
   /(Bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|AKIA[0-9A-Z]{12,}|BEGIN (?:RSA |OPENSSH |EC |PRIVATE )?PRIVATE KEY|api[_-]?key\s*[:=]|password\s*[:=])/i;
 const executableDelegationEventTypes = new Set<HermesActivityType>([
@@ -652,6 +671,16 @@ const m44aActivityEventDataRejection = (eventType: HermesActivityType, data: unk
   return `data_unsafe:${String(eventType)} key=${safeDiagnosticKey(diagnostic.keyPath ?? "data")} type=${diagnostic.valueType ?? "unknown"} reason=${diagnostic.reason ?? "unknown_key"}`;
 };
 
+const HERMES_ORIGINAL_SCHEMA_VERSION = "__hermes_original_schema_version";
+const HERMES_ORIGINAL_MODE = "__hermes_original_mode";
+
+const isToolCapableResponseCandidate = (response: Record<string, unknown>): boolean =>
+  response[HERMES_ORIGINAL_SCHEMA_VERSION] === "hermes.cmo.tool_response.v1" &&
+  response[HERMES_ORIGINAL_MODE] === "cmo.tool_capable";
+
+const answerBasisModeIsAllowed = (mode: unknown, allowToolRead: boolean): mode is HermesCmoRuntimeAnswerBasis["mode"] =>
+  answerBasisModes.has(mode as HermesCmoRuntimeAnswerBasis["mode"]) || (allowToolRead && mode === "tool_read");
+
 const answerTextFromKnownSimpleShape = (answer: unknown): string | null => {
   if (!isRecord(answer)) {
     return null;
@@ -671,12 +700,13 @@ const answerTextFromKnownSimpleShape = (answer: unknown): string | null => {
 const answerModeFromResponse = (
   response: Record<string, unknown>,
   answerBasis: Record<string, unknown>,
+  allowToolRead = false,
 ): HermesCmoRuntimeAnswerBasis["mode"] | null => {
   const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
   const candidates = [response.classification, structuredOutput.classification, answerBasis.mode];
 
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && answerBasisModes.has(candidate as HermesCmoRuntimeAnswerBasis["mode"])) {
+    if (typeof candidate === "string" && answerBasisModeIsAllowed(candidate, allowToolRead)) {
       return candidate as HermesCmoRuntimeAnswerBasis["mode"];
     }
   }
@@ -709,16 +739,21 @@ const normalizeHermesCmoRuntimeAnswer = (
 };
 
 const normalizeHermesCmoResponseCandidate = (response: Record<string, unknown>): Record<string, unknown> => {
-  const schemaVersion = response.schema_version === "hermes.cmo.tool_response.v1" ? "hermes.cmo.response.v1" : response.schema_version;
+  const originalSchemaVersion = response[HERMES_ORIGINAL_SCHEMA_VERSION] ?? response.schema_version;
+  const originalMode = response[HERMES_ORIGINAL_MODE] ?? response.mode;
+  const toolCapableResponse = originalSchemaVersion === "hermes.cmo.tool_response.v1" && originalMode === "cmo.tool_capable";
+  const schemaVersion = originalSchemaVersion === "hermes.cmo.tool_response.v1" ? "hermes.cmo.response.v1" : originalSchemaVersion;
   const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
   const answerBasisMode = typeof answerBasis.mode === "string" ? answerBasis.mode : undefined;
-  const canNormalizeAnswerBasis = answerBasisMode !== undefined && answerBasisModes.has(answerBasisMode as HermesCmoRuntimeAnswerBasis["mode"]);
+  const canNormalizeAnswerBasis = answerBasisMode !== undefined && answerBasisModeIsAllowed(answerBasisMode, toolCapableResponse);
   const clarifyingQuestion = isRecord(response.clarifying_question) ? response.clarifying_question : {};
-  const answerMode = answerModeFromResponse(response, answerBasis);
+  const answerMode = answerModeFromResponse(response, answerBasis, toolCapableResponse);
 
   return {
     ...response,
     schema_version: schemaVersion,
+    [HERMES_ORIGINAL_SCHEMA_VERSION]: originalSchemaVersion,
+    [HERMES_ORIGINAL_MODE]: originalMode,
     answer: normalizeHermesCmoRuntimeAnswer(response.answer, answerMode),
     ...(canNormalizeAnswerBasis
       ? {
@@ -789,7 +824,7 @@ const responseValidationFailureReason = (
   if (response.session_id !== request.session_id) return `session_id_mismatch:${String(response.session_id)}`;
   if (response.turn_id !== request.turn_id) return `turn_id_mismatch:${String(response.turn_id)}`;
   if (!responseStatuses.has(response.status as HermesCmoRuntimeResponse["status"])) return `status=${String(response.status)}`;
-  if (!validateAnswerBasis(response.answer_basis)) {
+  if (!validateAnswerBasis(response.answer_basis, { allowToolRead: isToolCapableResponseCandidate(response) })) {
     const basis = isRecord(response.answer_basis) ? response.answer_basis : {};
 
     return `answer_basis_invalid:mode=${String(basis.mode)}`;
@@ -1655,9 +1690,12 @@ const validateHermesCmoRuntimeAnswer = (answer: unknown): answer is HermesCmoRun
   );
 };
 
-const validateAnswerBasis = (answerBasis: unknown): answerBasis is HermesCmoRuntimeAnswerBasis =>
+const validateAnswerBasis = (
+  answerBasis: unknown,
+  options: { allowToolRead?: boolean } = {},
+): answerBasis is HermesCmoRuntimeAnswerBasis =>
   isRecord(answerBasis) &&
-  answerBasisModes.has(answerBasis.mode as HermesCmoRuntimeAnswerBasis["mode"]) &&
+  answerBasisModeIsAllowed(answerBasis.mode, options.allowToolRead === true) &&
   isStringList(answerBasis.missing_inputs) &&
   Array.isArray(answerBasis.assumptions_used) &&
   answerBasis.assumptions_used.every((item) => typeof item === "string" || isRecord(item)) &&
@@ -1789,7 +1827,7 @@ export const validateHermesCmoRuntimeResponse = (
     responseCandidate.session_id !== request.session_id ||
     responseCandidate.turn_id !== request.turn_id ||
     !responseStatuses.has(responseCandidate.status as HermesCmoRuntimeResponse["status"]) ||
-    !validateAnswerBasis(answerBasis) ||
+    !validateAnswerBasis(answerBasis, { allowToolRead: isToolCapableResponseCandidate(responseCandidate) }) ||
     !validateClarifyingQuestion(clarifyingQuestion) ||
     !validateHermesCmoRuntimeAnswer(responseCandidate.answer) ||
     !(isRecord(responseCandidate.structured_output) || responseCandidate.structured_output === null) ||
