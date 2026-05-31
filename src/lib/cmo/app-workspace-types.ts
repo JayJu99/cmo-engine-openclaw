@@ -773,6 +773,11 @@ export interface HermesCmoChatMetadata {
   calledHermesCmo: true;
   hermesRequestSent?: true;
   productRenderSource?: "hermes_cmo";
+  selectedHermesEndpoint?: string;
+  hermesEndpointKind?: "execute" | "tool_execute";
+  hermesEndpointTimeoutMs?: number;
+  hermesToolEndpointEnabled?: boolean;
+  sideEffects?: false | Record<string, false>;
   delegationsMode: HermesCmoDelegationsMode;
   counters: HermesCmoSafetyCounters;
   forbiddenCounters: HermesCmoForbiddenCounters;

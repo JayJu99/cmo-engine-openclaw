@@ -142,6 +142,11 @@ const summarizeSession = (session) => {
           ? {
               hermesRequestSent: message.hermesCmoMetadata.hermesRequestSent,
               productRenderSource: message.hermesCmoMetadata.productRenderSource,
+              selectedHermesEndpoint: message.hermesCmoMetadata.selectedHermesEndpoint,
+              hermesEndpointKind: message.hermesCmoMetadata.hermesEndpointKind,
+              hermesEndpointTimeoutMs: message.hermesCmoMetadata.hermesEndpointTimeoutMs,
+              hermesToolEndpointEnabled: message.hermesCmoMetadata.hermesToolEndpointEnabled,
+              sideEffects: message.hermesCmoMetadata.sideEffects,
               responseStatus: message.hermesCmoMetadata.responseStatus,
               strategyMode: message.hermesCmoMetadata.strategyMode,
               decisionLabel: message.hermesCmoMetadata.decisionLabel,
@@ -177,6 +182,7 @@ const summarizeHermesRequest = (request) => ({
   tool_policy: request.tool_policy,
   product_boundary: request.product_boundary,
   source_acquisition: request.source_acquisition,
+  tool_endpoint: request.tool_endpoint,
   context_pack_keys: Object.keys(request.context_pack ?? {}),
   active_source_id: request.context_pack?.active_source_id,
   artifacts_in: Array.isArray(request.context_pack?.artifacts_in)
@@ -258,8 +264,20 @@ const summarizeHermesResponse = (payload, httpStatus) => {
         })
       : response.delegations,
     activity_event_types: Array.isArray(root.activity_events) ? root.activity_events.map((event) => event?.type) : [],
+    tool_read_events: Array.isArray(root.activity_events)
+      ? root.activity_events
+          .filter((event) => event?.type === "cmo.tool_read.started" || event?.type === "cmo.tool_read.completed")
+          .map((event) => ({
+            type: event?.type,
+            status: event?.status,
+            tool_family: event?.data?.tool_family,
+            source_type: event?.data?.source_type,
+            http_status: event?.data?.http_status,
+          }))
+      : [],
     safety_counters: root.safety_counters ?? response.safety_counters ?? response.safety?.counters,
     forbidden_counters: root.forbidden_counters ?? response.forbidden_counters,
+    side_effects: root.side_effects ?? response.side_effects,
     mutation_flags: {
       direct_vault_write: response.direct_vault_write,
       direct_memory_mutation: response.direct_memory_mutation,
@@ -382,17 +400,22 @@ const rootCauseClassification = ({ request, replay, session }) => {
 
 const run = async () => {
   const foundTracePath = tracePath();
+  let traceRoot = null;
   let request = null;
 
   if (foundTracePath && existsSync(foundTracePath)) {
-    const trace = readJson(foundTracePath);
-    request = trace.request ?? trace;
+    traceRoot = readJson(foundTracePath);
+    request = traceRoot.request ?? traceRoot;
   }
 
   const foundSessionPath = sessionPath(request);
   const output = {
     sessionPath: foundSessionPath,
     tracePath: foundTracePath,
+    selectedHermesEndpoint: traceRoot?.endpoint_path ?? null,
+    hermesEndpointKind: traceRoot?.endpoint_kind ?? null,
+    hermesToolEndpointEnabled: traceRoot?.tool_endpoint_enabled ?? null,
+    hermesEndpointTimeoutMs: traceRoot?.timeout_ms ?? null,
     sessionTraceMatch: {
       request_session_id: request?.session_id ?? null,
       request_app_id: request?.workspace?.app_id ?? null,
@@ -410,7 +433,10 @@ const run = async () => {
     output.request = summarizeHermesRequest(request);
 
     if (process.env.CMO_HERMES_BASE_URL && process.env.CMO_HERMES_API_KEY) {
-      const response = await fetch(`${process.env.CMO_HERMES_BASE_URL.replace(/\/+$/, "")}/agents/cmo/execute`, {
+      const replayEndpointPath = typeof traceRoot?.endpoint_path === "string" && traceRoot.endpoint_path.startsWith("/")
+        ? traceRoot.endpoint_path
+        : "/agents/cmo/execute";
+      const response = await fetch(`${process.env.CMO_HERMES_BASE_URL.replace(/\/+$/, "")}${replayEndpointPath}`, {
         method: "POST",
         headers: {
           Accept: "application/json",

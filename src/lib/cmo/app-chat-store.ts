@@ -1188,6 +1188,11 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ? value.agentsUsed.map(normalizeHermesCmoAgentUsed).filter((agent): agent is HermesCmoAgentUsed => Boolean(agent))
     : undefined;
   const platformPersistenceSummary = normalizeHermesCmoPlatformPersistenceSummary(value.platformPersistenceSummary);
+  const sideEffects = value.sideEffects === false
+    ? false
+    : isRecord(value.sideEffects) && Object.values(value.sideEffects).every((item) => item === false)
+      ? Object.fromEntries(Object.entries(value.sideEffects)) as Record<string, false>
+      : undefined;
 
   return {
     runtimeMode: "hermes_cmo",
@@ -1195,6 +1200,13 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     calledHermesCmo: true,
     ...(value.hermesRequestSent === true ? { hermesRequestSent: true } : {}),
     ...(value.productRenderSource === "hermes_cmo" ? { productRenderSource: "hermes_cmo" } : {}),
+    ...(stringValue(value.selectedHermesEndpoint) ? { selectedHermesEndpoint: stringValue(value.selectedHermesEndpoint) } : {}),
+    ...(value.hermesEndpointKind === "execute" || value.hermesEndpointKind === "tool_execute" ? { hermesEndpointKind: value.hermesEndpointKind } : {}),
+    ...(typeof value.hermesEndpointTimeoutMs === "number" && Number.isFinite(value.hermesEndpointTimeoutMs)
+      ? { hermesEndpointTimeoutMs: Math.max(0, Math.floor(value.hermesEndpointTimeoutMs)) }
+      : {}),
+    ...(typeof value.hermesToolEndpointEnabled === "boolean" ? { hermesToolEndpointEnabled: value.hermesToolEndpointEnabled } : {}),
+    ...(sideEffects !== undefined ? { sideEffects } : {}),
     delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode) ?? HERMES_CMO_PROPOSALS_ONLY,
     counters,
     forbiddenCounters,

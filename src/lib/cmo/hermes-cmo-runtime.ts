@@ -1,7 +1,13 @@
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 
-import { getCmoHermesCmoMaxDelegations, isCmoHermesCmoOrchestrationEnabled } from "./config";
+import {
+  getCmoHermesCmoMaxDelegations,
+  getCmoHermesCmoToolEndpoint,
+  getCmoHermesCmoToolTimeoutMs,
+  isCmoHermesCmoOrchestrationEnabled,
+  isCmoHermesCmoToolExecuteEnabled,
+} from "./config";
 import {
   executeHermesCmoDelegations,
   executableDelegations,
@@ -24,6 +30,7 @@ export const H5_LIVE_ADAPTER_BOUNDARY =
   "M1 Hermes CMO runtime: Hermes CMO is the strategic brain; CMO Engine mechanically executes bounded Echo/Surf delegations only when enabled." as const;
 
 const HERMES_CMO_AGENT_PATH = "/agents/cmo/execute" as const;
+const HERMES_CMO_TOOL_AGENT_DEFAULT_PATH = "/agents/cmo/tool-execute" as const;
 
 export type HermesCmoRuntimeMode = typeof HERMES_CMO_RUNTIME_MODE;
 export type HermesAllowedAgent = "echo" | "surf" | "vault_agent";
@@ -236,7 +243,11 @@ export interface HermesCmoRuntimeResult {
   boundary: typeof H5_LIVE_ADAPTER_BOUNDARY;
   runtimeMode: HermesCmoRuntimeMode;
   calledHermesCmo: true;
-  hermesCmoAgentPath: typeof HERMES_CMO_AGENT_PATH;
+  hermesCmoAgentPath: string;
+  hermesCmoEndpointKind: "execute" | "tool_execute";
+  hermesCmoEndpointTimeoutMs: number;
+  hermesCmoToolEndpointEnabled: boolean;
+  sideEffects?: false | Record<string, false>;
   request: HermesCmoRuntimeRequest;
   response: HermesCmoRuntimeResponse;
   activity_events: HermesCmoRuntimeActivityEvent[];
@@ -257,11 +268,16 @@ export interface HermesCmoRuntimeResult {
 interface HermesCmoAgentConfig {
   endpoint: string;
   apiKey: string;
+  endpointPath: string;
+  endpointKind: "execute" | "tool_execute";
+  timeoutMs: number;
+  toolEndpointEnabled: boolean;
 }
 
 interface HermesCmoLivePayload {
   response: HermesCmoRuntimeResponse;
   activityEvents: HermesCmoRuntimeActivityEvent[];
+  sideEffects?: false | Record<string, false>;
 }
 
 interface HermesCmoRuntimeRequestOptions {
@@ -693,6 +709,7 @@ const normalizeHermesCmoRuntimeAnswer = (
 };
 
 const normalizeHermesCmoResponseCandidate = (response: Record<string, unknown>): Record<string, unknown> => {
+  const schemaVersion = response.schema_version === "hermes.cmo.tool_response.v1" ? "hermes.cmo.response.v1" : response.schema_version;
   const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
   const answerBasisMode = typeof answerBasis.mode === "string" ? answerBasis.mode : undefined;
   const canNormalizeAnswerBasis = answerBasisMode !== undefined && answerBasisModes.has(answerBasisMode as HermesCmoRuntimeAnswerBasis["mode"]);
@@ -701,6 +718,7 @@ const normalizeHermesCmoResponseCandidate = (response: Record<string, unknown>):
 
   return {
     ...response,
+    schema_version: schemaVersion,
     answer: normalizeHermesCmoRuntimeAnswer(response.answer, answerMode),
     ...(canNormalizeAnswerBasis
       ? {
@@ -725,6 +743,27 @@ const normalizeHermesCmoResponseCandidate = (response: Record<string, unknown>):
     memory_suggestions: response.memory_suggestions === undefined ? [] : response.memory_suggestions,
   };
 };
+
+const safeSideEffects = (value: unknown): false | Record<string, false> | null => {
+  if (value === undefined || value === false) {
+    return false;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const entries = Object.entries(value);
+
+  if (entries.length === 0 || entries.every(([, item]) => item === false)) {
+    return Object.fromEntries(entries) as Record<string, false>;
+  }
+
+  return null;
+};
+
+const sideEffectsFromPayload = (payload: Record<string, unknown>, response: Record<string, unknown>): false | Record<string, false> | null =>
+  safeSideEffects(payload.side_effects ?? response.side_effects);
 
 const responseValidationFailureReason = (
   response: Record<string, unknown>,
@@ -903,6 +942,239 @@ const hermesTimeoutMs = () => {
   return Number.isFinite(value) && value > 0 ? value : 30000;
 };
 
+const endpointPathFromConfig = (value: string): string => {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return HERMES_CMO_TOOL_AGENT_DEFAULT_PATH;
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    const url = new URL(trimmed);
+
+    return `${url.pathname}${url.search}`;
+  }
+
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+};
+
+const endpointUrl = (baseUrl: string, pathOrUrl: string): string =>
+  /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : `${baseUrl}${pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`}`;
+
+const sourceSeekingTextPattern =
+  /(https?:\/\/|www\.|\b(read|open|fetch|load|summari[sz]e|summary|translate|review|audit|analy[sz]e|source|link|url|docs?|document|faq)\b|\b(t[oó]m\s*t[aắ]t|d[iị]ch|[đd]ọc|link|ngu[oồ]n|t[aà]i\s*li[eệ]u)\b)/i;
+
+const recordString = (record: Record<string, unknown>, key: string): string | null =>
+  typeof record[key] === "string" && record[key].trim() ? record[key].trim() : null;
+
+const sourceArtifactRecords = (request: HermesCmoRuntimeRequest): Record<string, unknown>[] => {
+  const artifacts = Array.isArray(request.context_pack.artifacts_in) ? request.context_pack.artifacts_in : [];
+  const sourceAnswerContext = isRecord(request.context_pack.source_answer_context) ? request.context_pack.source_answer_context : null;
+  const sourceReviewContext = isRecord(request.context_pack.source_review_context) ? request.context_pack.source_review_context : null;
+  const sourceReviewSource = isRecord(sourceReviewContext?.source) ? sourceReviewContext.source : null;
+
+  return [
+    ...artifacts.filter(isRecord),
+    ...(sourceAnswerContext ? [sourceAnswerContext] : []),
+    ...(sourceReviewSource ? [sourceReviewSource] : []),
+  ];
+};
+
+const sourceHasUrl = (record: Record<string, unknown>): boolean =>
+  Boolean(recordString(record, "original_url") || recordString(record, "canonical_url") || recordString(record, "url"));
+
+const requestHasSourceUrl = (request: HermesCmoRuntimeRequest): boolean =>
+  sourceArtifactRecords(request).some(sourceHasUrl) ||
+  (isRecord(request.source_acquisition) && (typeof request.source_acquisition.original_url === "string" || typeof request.source_acquisition.canonical_url === "string"));
+
+const requestIsSourceBackedOrSeeking = (request: HermesCmoRuntimeRequest): boolean => {
+  const sourceAcquisition = isRecord(request.source_acquisition) ? request.source_acquisition : {};
+  const sourceAnswerContext = isRecord(request.context_pack.source_answer_context) ? request.context_pack.source_answer_context : {};
+  const readDepth = recordString(sourceAcquisition, "read_depth") ?? recordString(sourceAnswerContext, "read_depth");
+  const cacheRole = recordString(sourceAcquisition, "cache_role") ?? recordString(sourceAnswerContext, "cache_role");
+  const extractionCoverage = recordString(sourceAcquisition, "extraction_coverage") ?? recordString(sourceAnswerContext, "extraction_coverage");
+  const queryType = recordString(sourceAnswerContext, "query_type");
+  const action = recordString(sourceAnswerContext, "action");
+  const hasUrl = requestHasSourceUrl(request);
+
+  return (
+    sourceSeekingTextPattern.test(request.intent.user_message) ||
+    sourceAcquisition.tool_read_recommended === true ||
+    sourceAnswerContext.tool_read_recommended === true ||
+    cacheRole === "fallback_only" ||
+    cacheRole === "context_hint" ||
+    Boolean(hasUrl && (readDepth === "partial" || readDepth === "snippet" || extractionCoverage === "static_html")) ||
+    Boolean(hasUrl && (queryType === "summarize" || queryType === "translate" || queryType === "specific_question" || queryType === "review" || queryType === "can_read")) ||
+    Boolean(hasUrl && (action === "summarize" || action === "translate" || action === "answer_question" || action === "review" || action === "can_read"))
+  );
+};
+
+const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest): HermesCmoAgentConfig => {
+  const baseUrl = process.env.CMO_HERMES_BASE_URL?.trim().replace(/\/+$/g, "") ?? "";
+  const apiKey = process.env.CMO_HERMES_API_KEY?.trim() ?? "";
+  const toolEndpointEnabled = isCmoHermesCmoToolExecuteEnabled();
+  const useToolEndpoint = toolEndpointEnabled && requestIsSourceBackedOrSeeking(request);
+  const configuredToolEndpoint = getCmoHermesCmoToolEndpoint();
+  const endpointPath = useToolEndpoint ? endpointPathFromConfig(configuredToolEndpoint) : HERMES_CMO_AGENT_PATH;
+  const timeoutMs = useToolEndpoint ? getCmoHermesCmoToolTimeoutMs() : hermesTimeoutMs();
+
+  if (!envEnabled(process.env.CMO_HERMES_EXECUTION_ENABLED)) {
+    throw new Error("CMO_HERMES_EXECUTION_ENABLED must be true for the live-only Hermes CMO runtime.");
+  }
+
+  if (!baseUrl && !/^https?:\/\//i.test(configuredToolEndpoint)) {
+    throw new Error("CMO_HERMES_BASE_URL is required for the live-only Hermes CMO runtime.");
+  }
+
+  if (!apiKey) {
+    throw new Error("CMO_HERMES_API_KEY is required for the live-only Hermes CMO runtime.");
+  }
+
+  return {
+    endpoint: endpointUrl(baseUrl, useToolEndpoint ? configuredToolEndpoint : HERMES_CMO_AGENT_PATH),
+    endpointPath,
+    endpointKind: useToolEndpoint ? "tool_execute" : "execute",
+    apiKey,
+    timeoutMs,
+    toolEndpointEnabled,
+  };
+};
+
+const omitSourceCacheText = (record: Record<string, unknown>): Record<string, unknown> => {
+  const rest = { ...record };
+
+  for (const key of [
+    "source_text_cache",
+    "source_text_excerpt",
+    "source_text",
+    "extracted_summary",
+    "relevant_snippets",
+    "body",
+    "content",
+    "html",
+    "markdown",
+    "file_body",
+    "file_content",
+  ]) {
+    delete rest[key];
+  }
+
+  return rest;
+};
+
+const toolEndpointArtifact = (artifact: unknown): unknown => {
+  if (!isRecord(artifact)) {
+    return artifact;
+  }
+
+  if (artifact.type === "session_local_source" || artifact.type === "source_answer_context") {
+    return {
+      ...omitSourceCacheText(artifact),
+      ...(artifact.type === "source_answer_context" && artifact.cache_role !== "high_quality_evidence"
+        ? {
+            answerable: false,
+            relevant_snippets: [],
+            tool_read_recommended: true,
+          }
+        : {}),
+    };
+  }
+
+  return artifact;
+};
+
+const toolEndpointSourceAnswerContext = (value: unknown): unknown => {
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const sanitized = omitSourceCacheText(value);
+
+  return value.cache_role === "high_quality_evidence" && value.tool_read_recommended !== true
+    ? sanitized
+    : {
+        ...sanitized,
+        answerable: false,
+        relevant_snippets: [],
+        tool_read_recommended: true,
+      };
+};
+
+const toolEndpointSourceReviewContext = (value: unknown): unknown => {
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const extraction = isRecord(value.extraction) ? omitSourceCacheText(value.extraction) : value.extraction;
+
+  return {
+    ...value,
+    extraction,
+  };
+};
+
+const toolEndpointRequest = (request: HermesCmoRuntimeRequest): HermesCmoRuntimeRequest => {
+  const sourceAcquisition = isRecord(request.source_acquisition)
+    ? {
+        ...request.source_acquisition,
+        tool_read_recommended: true,
+        endpoint_role: "tool_capable_source_reader",
+      }
+    : request.source_acquisition;
+
+  return {
+    ...request,
+    context_pack: {
+      ...request.context_pack,
+      artifacts_in: request.context_pack.artifacts_in.map(toolEndpointArtifact),
+      ...(request.context_pack.source_answer_context
+        ? { source_answer_context: toolEndpointSourceAnswerContext(request.context_pack.source_answer_context) }
+        : {}),
+      ...(request.context_pack.source_review_context
+        ? { source_review_context: toolEndpointSourceReviewContext(request.context_pack.source_review_context) }
+        : {}),
+    },
+    ...(sourceAcquisition ? { source_acquisition: sourceAcquisition } : {}),
+    constraints: {
+      ...request.constraints,
+      allowCmoReadTools: true,
+      allowWebReadTools: true,
+      allowBrowserReadTools: true,
+      m1_clean_cmo_skill_kernel: isRecord(request.constraints.m1_clean_cmo_skill_kernel)
+        ? {
+            ...request.constraints.m1_clean_cmo_skill_kernel,
+            cmo_role: "tool_capable_source_gathering_reasoning_agent",
+            forbidden_targets: ["vault_agent", "openclaw", "supabase", "memory", "arbitrary_mutation_tools"],
+            tool_endpoint_final_answer_owner: "hermes_cmo",
+          }
+        : request.constraints.m1_clean_cmo_skill_kernel,
+      h5_live_adapter: isRecord(request.constraints.h5_live_adapter)
+        ? {
+            ...request.constraints.h5_live_adapter,
+            call_only: "hermes_cmo_tool_capable_agent",
+            cmo_read_tools_allowed: true,
+            tool_read_side_effects_allowed: false,
+          }
+        : request.constraints.h5_live_adapter,
+      execution_boundary: isRecord(request.constraints.execution_boundary)
+        ? {
+            ...request.constraints.execution_boundary,
+            cmo_read_tools_allowed: true,
+            web_read_allowed: true,
+            browser_read_allowed: true,
+            durable_side_effects_allowed: false,
+          }
+        : request.constraints.execution_boundary,
+    },
+    tool_endpoint: {
+      enabled: true,
+      endpoint_role: "hermes_cmo_tool_capable_source_reader",
+      cache_is_hint_not_primary_evidence: true,
+      durable_side_effects_allowed: false,
+    },
+  };
+};
+
 const traceEnabled = () =>
   process.env.CMO_HERMES_CMO_TRACE_ENABLED === "true" || Boolean(process.env.CMO_HERMES_CMO_TRACE_DIR?.trim());
 
@@ -1019,6 +1291,7 @@ const responseTraceSummary = (payload: unknown): Record<string, unknown> => {
       : [],
     safety_counters: response.safety_counters ?? root.safety_counters ?? responseSafety.counters ?? rootSafety.counters,
     forbidden_counters: response.forbidden_counters ?? root.forbidden_counters,
+    side_effects: root.side_effects ?? response.side_effects,
     mutation_flags: {
       direct_vault_write: response.direct_vault_write,
       direct_memory_mutation: response.direct_memory_mutation,
@@ -1091,28 +1364,6 @@ const hermesHttpFailureReason = async (response: Response, agentLabel: string): 
           : "";
 
   return detail ? `${base}${category} Detail: ${detail}` : `${base}${category}`;
-};
-
-const getHermesCmoAgentConfig = (): HermesCmoAgentConfig => {
-  const baseUrl = process.env.CMO_HERMES_BASE_URL?.trim().replace(/\/+$/g, "") ?? "";
-  const apiKey = process.env.CMO_HERMES_API_KEY?.trim() ?? "";
-
-  if (!envEnabled(process.env.CMO_HERMES_EXECUTION_ENABLED)) {
-    throw new Error("CMO_HERMES_EXECUTION_ENABLED must be true for the live-only Hermes CMO runtime.");
-  }
-
-  if (!baseUrl) {
-    throw new Error("CMO_HERMES_BASE_URL is required for the live-only Hermes CMO runtime.");
-  }
-
-  if (!apiKey) {
-    throw new Error("CMO_HERMES_API_KEY is required for the live-only Hermes CMO runtime.");
-  }
-
-  return {
-    endpoint: `${baseUrl}${HERMES_CMO_AGENT_PATH}`,
-    apiKey,
-  };
 };
 
 export const validateHermesCmoRuntimeRequest = (request: unknown): request is HermesCmoRuntimeRequest => {
@@ -1607,6 +1858,7 @@ const extractLiveResponsePayload = (
 
   const rawResponseCandidate = isRecord(payload.response) ? payload.response : payload;
   const responseCandidate = normalizeHermesCmoResponseCandidate(rawResponseCandidate);
+  const sideEffects = sideEffectsFromPayload(payload, rawResponseCandidate);
   const activityEventsCandidate = Array.isArray(payload.activity_events) ? payload.activity_events : [];
   const activityEvents = activityEventsCandidate
     .map((event, index) => normalizedActivityEvent(event, request, index + 1))
@@ -1614,6 +1866,10 @@ const extractLiveResponsePayload = (
 
   if (!validateHermesCmoRuntimeResponse(responseCandidate, request, responseValidation)) {
     throw new Error(`Hermes CMO Agent response did not match hermes.cmo.response.v1 or violated M1 execution boundaries. Rejected field: ${responseValidationFailureReason(responseCandidate, request, responseValidation)}.`);
+  }
+
+  if (sideEffects === null) {
+    throw new Error("Hermes CMO Agent response included unsafe side_effects.");
   }
 
   if (responseCandidate.activity_summary.events_count !== activityEventsCandidate.length) {
@@ -1636,6 +1892,7 @@ const extractLiveResponsePayload = (
   return {
     response: responseCandidate,
     activityEvents,
+    sideEffects,
   };
 };
 
@@ -2013,15 +2270,17 @@ const mergeDelegationResults = (
 const agentsUsedFrom = (delegationResult: HermesCmoDelegationExecutionResult): Array<"cmo" | "echo" | "surf"> =>
   Array.from(new Set<"cmo" | "echo" | "surf">(["cmo", ...delegationResult.agentsUsed]));
 
-const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest): Promise<unknown> => {
-  const config = getHermesCmoAgentConfig();
+const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: HermesCmoAgentConfig): Promise<unknown> => {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), hermesTimeoutMs());
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
 
   try {
     await writeHermesTrace(request, "request", {
       kind: "hermes_cmo_request",
-      endpoint_path: HERMES_CMO_AGENT_PATH,
+      endpoint_path: config.endpointPath,
+      endpoint_kind: config.endpointKind,
+      tool_endpoint_enabled: config.toolEndpointEnabled,
+      timeout_ms: config.timeoutMs,
       request,
     });
     const response = await fetch(config.endpoint, {
@@ -2043,7 +2302,10 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest): Promise<unk
     const payload = await parseHermesJson(response, "Hermes CMO Agent");
     await writeHermesTrace(request, "response", {
       kind: "hermes_cmo_response",
-      endpoint_path: HERMES_CMO_AGENT_PATH,
+      endpoint_path: config.endpointPath,
+      endpoint_kind: config.endpointKind,
+      tool_endpoint_enabled: config.toolEndpointEnabled,
+      timeout_ms: config.timeoutMs,
       http_status: response.status,
       summary: responseTraceSummary(payload),
       response: payload,
@@ -2053,7 +2315,10 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest): Promise<unk
   } catch (error) {
     await writeHermesTrace(request, "error", {
       kind: "hermes_cmo_error",
-      endpoint_path: HERMES_CMO_AGENT_PATH,
+      endpoint_path: config.endpointPath,
+      endpoint_kind: config.endpointKind,
+      tool_endpoint_enabled: config.toolEndpointEnabled,
+      timeout_ms: config.timeoutMs,
       error: error instanceof Error ? error.message : String(error),
     });
     if (error instanceof Error && error.name === "AbortError") {
@@ -2073,16 +2338,18 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
 
   const orchestrationEnabled = isCmoHermesCmoOrchestrationEnabled();
   const maxDelegations = getCmoHermesCmoMaxDelegations();
-  const outboundRequest = buildHermesCmoLiveRequest(request, {
+  let outboundRequest = buildHermesCmoLiveRequest(request, {
     orchestrationEnabled,
   });
+  const initialConfig = selectedHermesCmoConfig(outboundRequest);
+  outboundRequest = initialConfig.endpointKind === "tool_execute" ? toolEndpointRequest(outboundRequest) : outboundRequest;
 
   if (!validateHermesCmoRuntimeRequest(outboundRequest)) {
     throw new Error("M1 Hermes CMO runtime produced an invalid outbound hermes.cmo.request.v1 envelope.");
   }
 
   const safetyFlags = makeSafetyFlags(orchestrationEnabled);
-  const livePayload = await callHermesCmoAgent(outboundRequest);
+  const livePayload = await callHermesCmoAgent(outboundRequest, initialConfig);
   const firstResult = extractLiveResponsePayload(
     livePayload,
     outboundRequest,
@@ -2119,10 +2386,12 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
       throw new Error("M1 Hermes CMO runtime produced an invalid synthesis hermes.cmo.request.v1 envelope.");
     }
 
-    const synthesisPayload = await callHermesCmoAgent(synthesisRequest);
+    const synthesisConfig = selectedHermesCmoConfig(synthesisRequest);
+    const outboundSynthesisRequest = synthesisConfig.endpointKind === "tool_execute" ? toolEndpointRequest(synthesisRequest) : synthesisRequest;
+    const synthesisPayload = await callHermesCmoAgent(outboundSynthesisRequest, synthesisConfig);
     return extractLiveResponsePayload(
       synthesisPayload,
-      synthesisRequest,
+      outboundSynthesisRequest,
       {
         allowExecutableDelegations: true,
         allowEchoRetryDelegation: true,
@@ -2258,7 +2527,11 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
     boundary: H5_LIVE_ADAPTER_BOUNDARY,
     runtimeMode: HERMES_CMO_RUNTIME_MODE,
     calledHermesCmo: true,
-    hermesCmoAgentPath: HERMES_CMO_AGENT_PATH,
+    hermesCmoAgentPath: initialConfig.endpointPath,
+    hermesCmoEndpointKind: initialConfig.endpointKind,
+    hermesCmoEndpointTimeoutMs: initialConfig.timeoutMs,
+    hermesCmoToolEndpointEnabled: initialConfig.toolEndpointEnabled,
+    ...(firstResult.sideEffects !== undefined ? { sideEffects: firstResult.sideEffects } : {}),
     request: outboundRequest,
     response,
     activity_events: activityEvents,

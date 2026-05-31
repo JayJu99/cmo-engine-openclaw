@@ -783,6 +783,11 @@ try {
   assert.match(hermesMapperSource, /no_auto_save_13_sources/);
   assert.match(hermesMapperSource, /official_ingestion_role: "inputs_priorities_sources_ui"/);
   assert.match(hermesMapperSource, /productRenderSource: "hermes_cmo"/);
+  const configSource = readFileSync("src/lib/cmo/config.ts", "utf8");
+  assert.match(configSource, /CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED/);
+  assert.match(configSource, /CMO_HERMES_CMO_TOOL_ENDPOINT/);
+  assert.match(configSource, /\/agents\/cmo\/tool-execute/);
+  assert.match(configSource, /CMO_HERMES_CMO_TOOL_TIMEOUT_MS/);
 
   const runtimeSource = readFileSync("src/lib/cmo/runtime.ts", "utf8");
   assert.match(runtimeSource, /reviewContext\.mode !== "review_only"/);

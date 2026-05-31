@@ -1240,6 +1240,12 @@ try {
     assert.match(runtimeSource, /reviewContext\.mode !== "review_only"/);
     assert.match(runtimeSource, /Source Review:/);
     const hermesRuntimeSource = await readFile(path.join(cmoDir, "hermes-cmo-runtime.ts"), "utf8");
+    assert.match(hermesRuntimeSource, /HERMES_CMO_TOOL_AGENT_DEFAULT_PATH = "\/agents\/cmo\/tool-execute"/);
+    assert.match(hermesRuntimeSource, /selectedHermesCmoConfig/);
+    assert.match(hermesRuntimeSource, /requestIsSourceBackedOrSeeking/);
+    assert.match(hermesRuntimeSource, /toolEndpointRequest/);
+    assert.match(hermesRuntimeSource, /hermes\.cmo\.tool_response\.v1/);
+    assert.match(hermesRuntimeSource, /side_effects/);
     assert.match(hermesRuntimeSource, /data_unsafe:\$\{String\(eventType\)\} key=/);
     assert.match(hermesRuntimeSource, /context_pack_present/);
     assert.match(hermesRuntimeSource, /answer_basis_mode/);
@@ -1256,6 +1262,9 @@ try {
     assert.match(replaySource, /productFallbackReason/);
     assert.match(replaySource, /findSessionPathByRequest/);
     assert.match(replaySource, /sessionTraceMatch/);
+    assert.match(replaySource, /selectedHermesEndpoint/);
+    assert.match(replaySource, /tool_read_events/);
+    assert.match(replaySource, /side_effects/);
     assert.match(replaySource, /D_validator_rejected_valid_or_new_shape/);
     assert.match(replaySource, /A_request_context_missing/);
     assert.match(replaySource, /B_hermes_classification_or_answer_mismatch/);

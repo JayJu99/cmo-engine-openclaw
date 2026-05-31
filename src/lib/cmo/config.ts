@@ -102,6 +102,18 @@ export function getCmoHermesCmoMaxDelegations(): number {
   return positiveIntEnv("CMO_HERMES_CMO_MAX_DELEGATIONS", 2);
 }
 
+export function isCmoHermesCmoToolExecuteEnabled(): boolean {
+  return booleanEnv("CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED", false);
+}
+
+export function getCmoHermesCmoToolEndpoint(): string {
+  return (process.env.CMO_HERMES_CMO_TOOL_ENDPOINT?.trim() || "/agents/cmo/tool-execute").replace(/\/+$/g, "") || "/agents/cmo/tool-execute";
+}
+
+export function getCmoHermesCmoToolTimeoutMs(): number {
+  return positiveIntEnv("CMO_HERMES_CMO_TOOL_TIMEOUT_MS", 90_000);
+}
+
 export function getCmoVaultAgentHandoffMode(): CmoVaultAgentHandoffMode {
   const mode = process.env.CMO_VAULT_AGENT_HANDOFF_MODE;
 

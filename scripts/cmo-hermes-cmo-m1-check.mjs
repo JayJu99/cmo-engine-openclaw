@@ -289,15 +289,18 @@ const startServer = async () => {
 
       assert.equal(request.headers.authorization, "Bearer test-m1-key");
 
-      if (url.pathname === "/agents/cmo/execute") {
+      if (url.pathname === "/agents/cmo/execute" || url.pathname === "/agents/cmo/tool-execute") {
         calls.cmo += 1;
         const cmoCallCount = (cmoCallsByRequestId.get(body.request_id) ?? 0) + 1;
         cmoCallsByRequestId.set(body.request_id, cmoCallCount);
         calls.cmoRequests.push({
           requestId: body.request_id,
+          path: url.pathname,
           count: cmoCallCount,
           allowedAgents: body.constraints?.allowed_agents,
           delegationsMode: body.constraints?.delegations_mode,
+          sourceAcquisition: body.source_acquisition,
+          toolEndpoint: body.tool_endpoint,
         });
 
         if (cmoCallCount === 1) {
@@ -334,6 +337,8 @@ const startServer = async () => {
           const m44aAnswerGroundedUnknownKeyFixture = body.request_id === "req_m44a_answer_grounded_unknown_key";
           const m44aDurableActionFixture = body.request_id === "req_m44a_durable_action_proposed";
           const m44aToolReadFixture = body.request_id === "req_m44a_tool_read";
+          const m44d2ToolEndpointFixture = body.request_id === "req_m44d2_tool_endpoint";
+          const m44d2NativeExecuteFixture = body.request_id === "req_m44d2_native_execute";
           const m44aToolReadCompletedHtmlFixture = body.request_id === "req_m44a_tool_read_completed_html";
           const m44aDurableActionUnsafeWriteFixture = body.request_id === "req_m44a_durable_action_unsafe_write";
           const m44aSecretsFixture = body.request_id === "req_m44a_activity_secret_value";
@@ -540,6 +545,86 @@ const startServer = async () => {
                 ],
               }),
             );
+            return;
+          }
+
+          if (m44d2ToolEndpointFixture) {
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
+            assert.equal(body.tool_endpoint?.enabled, true);
+            assert.equal(body.constraints?.allowCmoReadTools, true);
+            assert.equal(body.constraints?.execution_boundary?.browser_read_allowed, true);
+            assert.equal(body.constraints?.execution_boundary?.durable_side_effects_allowed, false);
+            assert.equal(body.source_acquisition?.tool_read_recommended, true);
+            assert.equal(body.source_acquisition?.original_url, "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq");
+            assert.equal(body.context_pack?.source_answer_context?.answerable, false);
+            assert.deepEqual(body.context_pack?.source_answer_context?.relevant_snippets, []);
+            const sourceArtifact = body.context_pack?.artifacts_in?.find((artifact) => artifact?.type === "session_local_source");
+            assert.equal(sourceArtifact?.original_url, "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq");
+            assert.equal(sourceArtifact?.source_text_excerpt, undefined);
+            assert.equal(sourceArtifact?.extracted_summary, undefined);
+            writeJson(
+              response,
+              200,
+              {
+                ...cmoResponse(body, {
+                  response: {
+                    schema_version: "hermes.cmo.tool_response.v1",
+                    answer_basis: {
+                      mode: "source_answer",
+                    },
+                    structured_output: {
+                      classification: "source_answer",
+                      response_style: "source_answer",
+                      tool_policy: "none",
+                    },
+                    answer: {
+                      body: "Holdstation Pay FAQ summary from a tool-capable CMO read.",
+                    },
+                  },
+                  activity_events: [
+                    {
+                      ...activity(body, 1, "cmo.tool_read.started", "CMO started browser source read."),
+                      status: "completed",
+                      data: {
+                        tool_family: "browser",
+                        read_only: true,
+                        source_type: "url",
+                        workspace_id: "hold-pay",
+                        session_id: "session_m44d2_tool_endpoint",
+                        source_id: "source_hold_pay_faq",
+                        url_present: true,
+                        tool_policy: "read_only",
+                        request_id: "req_m44d2_tool_endpoint",
+                      },
+                    },
+                    {
+                      ...activity(body, 2, "cmo.tool_read.completed", "CMO completed browser source read."),
+                      status: "completed",
+                      data: {
+                        tool_family: "browser",
+                        read_only: true,
+                        source_type: "url",
+                        status: "completed",
+                        workspace_id: "hold-pay",
+                        session_id: "session_m44d2_tool_endpoint",
+                        source_id: "source_hold_pay_faq",
+                        http_status: 200,
+                        content_type: "text/html",
+                        bytes_read: 4096,
+                        canonical_url_present: true,
+                      },
+                    },
+                  ],
+                }),
+                side_effects: false,
+              },
+            );
+            return;
+          }
+
+          if (m44d2NativeExecuteFixture) {
+            assert.equal(url.pathname, "/agents/cmo/execute");
+            writeJson(response, 200, cmoResponse(body));
             return;
           }
 
@@ -1192,7 +1277,11 @@ const startServer = async () => {
                   : body.request_id === "req_m1_cmo_001"
                     ? 3
                     : 1;
-        assert.equal(body.context_pack.artifacts_in.at(-1)?.results.length, expectedResultCount);
+        assert.equal(
+          body.context_pack.artifacts_in.at(-1)?.results.length,
+          expectedResultCount,
+          `${body.request_id} #${cmoCallCount} should include expected delegation result count`,
+        );
 
         if (
           body.request_id === "req_m1_duplicate_same_id" ||
@@ -2017,6 +2106,9 @@ try {
     CMO_HERMES_LAST30DAYS_TIMEOUT_MS: process.env.CMO_HERMES_LAST30DAYS_TIMEOUT_MS,
     CMO_HERMES_CMO_ORCHESTRATION_ENABLED: process.env.CMO_HERMES_CMO_ORCHESTRATION_ENABLED,
     CMO_HERMES_CMO_MAX_DELEGATIONS: process.env.CMO_HERMES_CMO_MAX_DELEGATIONS,
+    CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED: process.env.CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED,
+    CMO_HERMES_CMO_TOOL_ENDPOINT: process.env.CMO_HERMES_CMO_TOOL_ENDPOINT,
+    CMO_HERMES_CMO_TOOL_TIMEOUT_MS: process.env.CMO_HERMES_CMO_TOOL_TIMEOUT_MS,
   };
 
   let result;
@@ -2047,6 +2139,9 @@ try {
     process.env.CMO_HERMES_LAST30DAYS_TIMEOUT_MS = "5000";
     process.env.CMO_HERMES_CMO_ORCHESTRATION_ENABLED = "true";
     process.env.CMO_HERMES_CMO_MAX_DELEGATIONS = "3";
+    process.env.CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED = "false";
+    process.env.CMO_HERMES_CMO_TOOL_ENDPOINT = "/agents/cmo/tool-execute";
+    process.env.CMO_HERMES_CMO_TOOL_TIMEOUT_MS = "90000";
 
     assert.equal(
       validateHermesCmoRuntimeResponse(
@@ -2978,6 +3073,121 @@ try {
     assert.equal(m44aToolReadResult.activity_events[0].data.tool_family, "web");
     assert.equal(m44aToolReadResult.activity_events[0].data.read_only, true);
     assert.equal(m44aToolReadResult.activity_events[1].data.http_status, 200);
+
+    process.env.CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED = "true";
+    const m44d2ToolEndpointResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m44d2_tool_endpoint",
+      session_id: "session_m44d2_tool_endpoint",
+      turn_id: "turn_m44d2_tool_endpoint_001",
+      workspace: {
+        ...sampleRequest.workspace,
+        workspace_id: "hold-pay",
+        app_id: "hold-pay",
+        app_name: "Hold Pay",
+      },
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Tóm tắt link đó",
+      },
+      context_pack: {
+        ...sampleRequest.context_pack,
+        active_source_id: "source_hold_pay_faq",
+        source_answer_context: {
+          type: "source_answer_context",
+          schema_version: "cmo.source_answer_context.v1",
+          workspace_id: "hold-pay",
+          session_id: "session_m44d2_tool_endpoint",
+          source_id: "source_hold_pay_faq",
+          query: "Tóm tắt link đó",
+          query_type: "summarize",
+          action: "summarize",
+          answerable: true,
+          relevant_snippets: ["Home Menu Docs Login nav dump should not be primary evidence."],
+          used_source_fields: ["source_text_cache"],
+          source_title: "Holdstation Pay FAQ",
+          original_url: "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq",
+          canonical_url: "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq",
+          truth_status: "session_only",
+          saved_to_vault: false,
+          no_auto_promote: true,
+          extraction_quality: "low",
+          extraction_coverage: "static_html",
+          read_depth: "partial",
+          cache_role: "fallback_only",
+          nav_heavy: true,
+          tool_read_recommended: true,
+          warnings: ["nav_heavy"],
+        },
+        artifacts_in: [
+          {
+            type: "session_local_source",
+            schema_version: "cmo.session_local_source.v1",
+            workspace_id: "hold-pay",
+            session_id: "session_m44d2_tool_endpoint",
+            turn_id: "turn_m44d2_tool_endpoint_001",
+            source_id: "source_hold_pay_faq",
+            source_type: "url",
+            source_title: "Holdstation Pay FAQ",
+            original_url: "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq",
+            canonical_url: "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq",
+            extracted_summary: "Home Menu Docs Login nav dump",
+            source_text_excerpt: "Home Menu Docs Login nav dump",
+            extraction_status: "partial",
+            main_content_quality: "low",
+            extraction_coverage: "static_html",
+            read_depth: "partial",
+            cache_role: "fallback_only",
+            nav_heavy: true,
+            tool_read_recommended: true,
+            saved_to_vault: false,
+            official_project_source: false,
+            truth_status: "session_only",
+            review_status: "temporary",
+            no_auto_promote: true,
+          },
+        ],
+      },
+      source_acquisition: {
+        schema_version: "cmo.source_acquisition_role.v1",
+        chat_role: "cache_fallback_context_provider",
+        original_url: "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq",
+        canonical_url: "https://docs.holdstation.com/holdstation/holdstation-pay/holdstation-pay-faq",
+        tool_read_recommended: true,
+        extraction_quality: "low",
+        extraction_coverage: "static_html",
+        read_depth: "partial",
+        cache_role: "fallback_only",
+        nav_heavy: true,
+        saved_to_vault: false,
+        no_auto_promote: true,
+      },
+    });
+    assert.equal(m44d2ToolEndpointResult.hermesCmoAgentPath, "/agents/cmo/tool-execute");
+    assert.equal(m44d2ToolEndpointResult.hermesCmoEndpointKind, "tool_execute");
+    assert.equal(m44d2ToolEndpointResult.hermesCmoEndpointTimeoutMs, 90000);
+    assert.equal(m44d2ToolEndpointResult.sideEffects, false);
+    assert.equal(m44d2ToolEndpointResult.response.answer_basis.mode, "source_answer");
+    assert.equal(m44d2ToolEndpointResult.response.answer?.body, "Holdstation Pay FAQ summary from a tool-capable CMO read.");
+    assert.equal(
+      m44d2ToolEndpointResult.activity_events.some((event) => event.type === "cmo.tool_read.completed"),
+      true,
+      "tool endpoint must preserve safe CMO tool-read activity",
+    );
+
+    const m44d2NativeExecuteResult = await runHermesCmoRuntime({
+      ...sampleRequest,
+      request_id: "req_m44d2_native_execute",
+      session_id: "session_m44d2_native_execute",
+      turn_id: "turn_m44d2_native_execute_001",
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Thanks, that is clear.",
+      },
+    });
+    assert.equal(m44d2NativeExecuteResult.hermesCmoAgentPath, "/agents/cmo/execute");
+    assert.equal(m44d2NativeExecuteResult.hermesCmoEndpointKind, "execute");
+    process.env.CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED = "false";
 
     await assert.rejects(
       () =>
