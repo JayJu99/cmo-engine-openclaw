@@ -747,7 +747,7 @@ export interface HermesCmoActivityEventSummary {
   message: string;
   userVisible: boolean;
   sourceAgent?: HermesCmoAgentUsed;
-  sourceMode?: "cmo.default" | HermesCmoExecutableMode;
+  sourceMode?: "cmo.default" | "cmo.tool_capable" | HermesCmoExecutableMode;
 }
 
 export interface HermesCmoDelegationSummaryItem {

@@ -1268,6 +1268,9 @@ try {
     assert.match(hermesRuntimeSource, /bytes_read/);
     assert.match(hermesRuntimeSource, /source_text\.\*/);
 
+    const workspaceTypesSource = await readFile(path.join(cmoDir, "app-workspace-types.ts"), "utf8");
+    assert.match(workspaceTypesSource, /sourceMode\?: "cmo\.default" \| "cmo\.tool_capable" \| HermesCmoExecutableMode/);
+
     const replaySource = await readFile(path.join(rootDir, "scripts", "cmo-hermes-cmo-replay-trace.mjs"), "utf8");
     assert.match(replaySource, /rootCauseClassification/);
     assert.match(replaySource, /request_present/);
