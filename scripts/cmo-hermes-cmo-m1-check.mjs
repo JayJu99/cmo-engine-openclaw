@@ -129,6 +129,54 @@ const m44dToolEndpointRequest = (requestId) => ({
   },
 });
 
+const m44eExternalResearchRequest = (requestId, userMessage = "Hiện tại trên thị trường có bên nào làm giống Feeback mình không?") => ({
+  ...m44dToolEndpointRequest(requestId),
+  workspace: {
+    ...sampleRequest.workspace,
+    workspace_id: "feeback",
+    app_id: "feeback",
+    app_name: "Feeback",
+  },
+  intent: {
+    ...sampleRequest.intent,
+    user_message: userMessage,
+  },
+  context_pack: {
+    ...m44dToolEndpointRequest(requestId).context_pack,
+    active_source_id: "source_feeback_home",
+    artifacts_in: [
+      {
+        type: "session_local_source",
+        schema_version: "cmo.session_local_source.v1",
+        workspace_id: "feeback",
+        source_id: "source_feeback_home",
+        source_type: "url",
+        source_title: "Feeback home",
+        original_url: "https://feeback.org",
+        canonical_url: "https://feeback.org",
+        read_depth: "partial",
+        cache_role: "fallback_only",
+        nav_heavy: true,
+        tool_read_recommended: true,
+        saved_to_vault: false,
+        no_auto_promote: true,
+      },
+    ],
+  },
+  source_acquisition: {
+    schema_version: "cmo.source_acquisition_role.v1",
+    chat_role: "cache_fallback_context_provider",
+    original_url: "https://feeback.org",
+    canonical_url: "https://feeback.org",
+    tool_read_recommended: true,
+    read_depth: "partial",
+    cache_role: "fallback_only",
+    nav_heavy: true,
+    saved_to_vault: false,
+    no_auto_promote: true,
+  },
+});
+
 const compileRuntimeModule = async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "hermes-cmo-m1-"));
   const tscPath = path.join(rootDir, "node_modules", "typescript", "bin", "tsc");
@@ -396,6 +444,8 @@ const startServer = async () => {
           const m44dToolEndpointVaultAgentSourceFixture = body.request_id === "req_m44d_tool_endpoint_vault_agent_source";
           const m44dToolEndpointArbitraryModeFixture = body.request_id === "req_m44d_tool_endpoint_arbitrary_mode";
           const m44dUnknownAnswerBasisFixture = body.request_id === "req_m44d_unknown_answer_basis";
+          const m44eExternalResearchFixture = body.request_id === "req_m44e_external_research_active_source";
+          const m44eSourceKycToolEndpointFixture = body.request_id === "req_m44e_source_kyc_tool_endpoint";
           const m44d2NativeExecuteFixture = body.request_id === "req_m44d2_native_execute";
           const m44aToolReadCompletedHtmlFixture = body.request_id === "req_m44a_tool_read_completed_html";
           const m44aDurableActionUnsafeWriteFixture = body.request_id === "req_m44a_durable_action_unsafe_write";
@@ -984,9 +1034,113 @@ const startServer = async () => {
             return;
           }
 
+          if (m44eSourceKycToolEndpointFixture) {
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
+            assert.equal(body.intent?.user_message, "Merchant/Partner có chịu trách nhiệm KYC/AML không?");
+            assert.equal(body.context_pack?.active_source_id, "source_hold_pay_faq");
+            writeJson(
+              response,
+              200,
+              {
+                ...cmoResponse(body, {
+                  response: {
+                    schema_version: "hermes.cmo.tool_response.v1",
+                    mode: "cmo.tool_capable",
+                    activity_summary: undefined,
+                    answer_basis: {
+                      mode: "tool_read",
+                    },
+                    structured_output: {
+                      classification: "source_answer",
+                      response_style: "source_answer",
+                      tool_policy: "none",
+                    },
+                    answer: {
+                      body: "Merchant/Partner KYC/AML answer from the active source.",
+                    },
+                  },
+                  activity_events: [
+                    {
+                      ...activity(body, 1, "cmo.tool_read.completed", "CMO completed browser source read."),
+                      sourceMode: "cmo.tool_capable",
+                      status: "completed",
+                      data: {
+                        tool_family: "browser",
+                        tool_name: "browser_snapshot",
+                        read_only: true,
+                        source_type: "url",
+                        status: "completed",
+                        success: true,
+                      },
+                    },
+                  ],
+                }),
+                side_effects: false,
+              },
+            );
+            return;
+          }
+
           if (m44d2NativeExecuteFixture) {
             assert.equal(url.pathname, "/agents/cmo/execute");
             writeJson(response, 200, cmoResponse(body));
+            return;
+          }
+
+          if (m44eExternalResearchFixture && cmoCallCount === 1) {
+            assert.equal(url.pathname, "/agents/cmo/execute");
+            assert.equal(body.constraints?.allowSurfExecution, true);
+            assert.equal(body.constraints?.delegations_mode, "echo_surf_bounded");
+            assert.equal(body.context_pack?.active_source_id, "source_feeback_home");
+            assert.equal(body.source_acquisition?.original_url, "https://feeback.org");
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                response: {
+                  status: "delegated",
+                  answer_basis: {
+                    mode: "external_research",
+                  },
+                  structured_output: {
+                    classification: "external_research",
+                    response_style: "external_research",
+                    tool_policy: "surf",
+                  },
+                  answer: {
+                    format: "markdown",
+                    title: "External research delegation",
+                    summary: "Delegating competitor landscape research to Surf.",
+                    decision: "WAIT",
+                    body: "Delegating competitor landscape research to Surf.",
+                  },
+                  delegations: [
+                    {
+                      id: "del_m44e_feeback_competitors",
+                      target: { agent: "surf", mode: "surf.default" },
+                      task_type: "competitor_landscape_research",
+                      objective: "Research whether there are current products similar to Feeback.",
+                      input: {
+                        brief: "Research current competitor/alternative products similar to Feeback. Include workspace_id=feeback, app_name=Feeback, user question, active source URL https://feeback.org, and concise cited findings.",
+                        context: {
+                          workspace_id: "feeback",
+                          app_name: "Feeback",
+                          active_source_url: "https://feeback.org",
+                          user_question: body.intent?.user_message,
+                        },
+                      },
+                      output_contract: {
+                        desired_format: "concise market landscape with sources and confidence",
+                        no_auto_save_13_sources: true,
+                        no_auto_promote_12_knowledge: true,
+                        no_gbrain_mutation: true,
+                      },
+                      constraints: ["Read-only external research.", "No Vault write.", "No source auto-save.", "No knowledge promotion."],
+                    },
+                  ],
+                },
+              }),
+            );
             return;
           }
 
@@ -1593,6 +1747,35 @@ const startServer = async () => {
           return;
         }
 
+        if (body.request_id === "req_m44e_external_research_active_source" && cmoCallCount === 2) {
+          assert.equal(url.pathname, "/agents/cmo/execute");
+          assert.equal(body.context_pack?.artifacts_in?.at(-1)?.type, "cmo_engine_delegation_results");
+          writeJson(
+            response,
+            200,
+            cmoResponse(body, {
+              response: {
+                answer_basis: {
+                  mode: "external_research",
+                },
+                structured_output: {
+                  classification: "external_research",
+                  response_style: "external_research",
+                  tool_policy: "surf",
+                },
+                answer: {
+                  format: "markdown",
+                  title: "Feeback competitor landscape",
+                  summary: "Surf-backed competitor landscape.",
+                  decision: "KEEP",
+                  body: "Surf-backed answer: Feeback has adjacent competitors, but positioning depends on feedback-loop workflow depth and campaign proof.",
+                },
+              },
+            }),
+          );
+          return;
+        }
+
         const echoRetryRequest =
           body.request_id === "req_m1_echo_retry_good" ||
           body.request_id === "req_m1_echo_retry_fail" ||
@@ -2088,6 +2271,9 @@ const startServer = async () => {
           handoffId: body.handoff_id,
           mode: body.mode,
           objective: body.objective,
+          brief: body.brief ?? body.input?.brief,
+          input: body.input,
+          outputContract: body.output_contract,
         });
         assert.equal(body.source_agent, "cmo");
         assert.equal(body.target_agent, "surf");
@@ -3604,6 +3790,39 @@ try {
       /Rejected field: answer_basis_invalid:mode=tool_read/,
       "legacy hermes.cmo.response.v1 must still reject tool_read answer_basis mode",
     );
+
+    const surfCallsBeforeExternalResearch = server.calls.surfUnified;
+    const m44eExternalResearchResult = await runHermesCmoRuntime(m44eExternalResearchRequest("req_m44e_external_research_active_source"));
+    assert.equal(m44eExternalResearchResult.hermesCmoAgentPath, "/agents/cmo/execute");
+    assert.equal(m44eExternalResearchResult.hermesCmoEndpointKind, "execute");
+    assert.equal(m44eExternalResearchResult.response.answer_basis.mode, "external_research");
+    assert.equal(m44eExternalResearchResult.response.structured_output?.classification, "external_research");
+    assert.match(m44eExternalResearchResult.response.answer?.body ?? "", /Surf-backed answer/);
+    assert.equal(m44eExternalResearchResult.surfCalls, 1);
+    assert.deepEqual(m44eExternalResearchResult.agentsUsed, ["cmo", "surf"]);
+    assert.equal(server.calls.surfUnified, surfCallsBeforeExternalResearch + 1);
+    const m44eSurfRequest = server.calls.surfRequests.find((request) => request.handoffId === "del_m44e_feeback_competitors");
+    assert.ok(m44eSurfRequest, "external research route must execute Surf delegation");
+    assert.equal(m44eSurfRequest.mode, "surf.default");
+    assert.match(m44eSurfRequest.objective, /current products similar to Feeback/i);
+    assert.match(m44eSurfRequest.brief, /workspace_id=feeback/);
+    assert.match(m44eSurfRequest.brief, /app_name=Feeback/);
+    assert.match(m44eSurfRequest.brief, /https:\/\/feeback\.org/);
+    assert.equal(m44eSurfRequest.outputContract?.no_auto_save_13_sources, true);
+    assert.equal(m44eSurfRequest.outputContract?.no_auto_promote_12_knowledge, true);
+    assert.equal(m44eSurfRequest.outputContract?.no_gbrain_mutation, true);
+
+    const m44eSourceKycResult = await runHermesCmoRuntime({
+      ...m44dToolEndpointRequest("req_m44e_source_kyc_tool_endpoint"),
+      intent: {
+        ...sampleRequest.intent,
+        user_message: "Merchant/Partner có chịu trách nhiệm KYC/AML không?",
+      },
+    });
+    assert.equal(m44eSourceKycResult.hermesCmoAgentPath, "/agents/cmo/tool-execute");
+    assert.equal(m44eSourceKycResult.hermesCmoEndpointKind, "tool_execute");
+    assert.equal(m44eSourceKycResult.response.answer_basis.mode, "tool_read");
+    assert.equal(m44eSourceKycResult.response.answer?.body, "Merchant/Partner KYC/AML answer from the active source.");
 
     const m44d2NativeExecuteResult = await runHermesCmoRuntime({
       ...sampleRequest,

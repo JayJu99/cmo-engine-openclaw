@@ -1243,6 +1243,9 @@ try {
     assert.match(hermesRuntimeSource, /HERMES_CMO_TOOL_AGENT_DEFAULT_PATH = "\/agents\/cmo\/tool-execute"/);
     assert.match(hermesRuntimeSource, /selectedHermesCmoConfig/);
     assert.match(hermesRuntimeSource, /requestIsSourceBackedOrSeeking/);
+    assert.match(hermesRuntimeSource, /requestIsExternalResearch/);
+    assert.match(hermesRuntimeSource, /externalResearchTextPattern/);
+    assert.match(hermesRuntimeSource, /toolEndpointEnabled && !externalResearch && requestIsSourceBackedOrSeeking/);
     assert.match(hermesRuntimeSource, /toolEndpointRequest/);
     assert.match(hermesRuntimeSource, /user_message: userMessage/);
     assert.match(hermesRuntimeSource, /message: userMessage/);

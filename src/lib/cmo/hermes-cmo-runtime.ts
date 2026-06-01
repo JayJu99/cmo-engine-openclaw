@@ -1120,6 +1120,9 @@ const endpointUrl = (baseUrl: string, pathOrUrl: string): string =>
 const sourceSeekingTextPattern =
   /(https?:\/\/|www\.|\b(read|open|fetch|load|summari[sz]e|summary|translate|review|audit|analy[sz]e|source|link|url|docs?|document|faq)\b|\b(t[oó]m\s*t[aắ]t|d[iị]ch|[đd]ọc|link|ngu[oồ]n|t[aà]i\s*li[eệ]u)\b)/i;
 
+const externalResearchTextPattern =
+  /\b(competitor|competitors|market\s+landscape|current\s+market|market\s+scan|trend|trends|current|live|today|compare\s+alternatives?|alternatives?|x\/twitter|twitter|social\s+signals?|social\s+listening)\b|(?:th\u1ecb\s*tr\u01b0\u1eddng|\u0111\u1ed1i\s*th\u1ee7|b\u00ean\s*n\u00e0o\s*gi\u1ed1ng|gi\u1ed1ng\s*m\u00ecnh|h\u00f4m\s*nay|xu\s*h\u01b0\u1edbng)/i;
+
 const recordString = (record: Record<string, unknown>, key: string): string | null =>
   typeof record[key] === "string" && record[key].trim() ? record[key].trim() : null;
 
@@ -1166,6 +1169,9 @@ const requestHasSourceUrl = (request: HermesCmoRuntimeRequest): boolean =>
   sourceArtifactRecords(request).some(sourceHasUrl) ||
   (isRecord(request.source_acquisition) && (typeof request.source_acquisition.original_url === "string" || typeof request.source_acquisition.canonical_url === "string"));
 
+const requestIsExternalResearch = (request: HermesCmoRuntimeRequest): boolean =>
+  externalResearchTextPattern.test(request.intent.user_message);
+
 const requestIsSourceBackedOrSeeking = (request: HermesCmoRuntimeRequest): boolean => {
   const sourceAcquisition = isRecord(request.source_acquisition) ? request.source_acquisition : {};
   const sourceAnswerContext = isRecord(request.context_pack.source_answer_context) ? request.context_pack.source_answer_context : {};
@@ -1192,7 +1198,8 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest): HermesCmoAge
   const baseUrl = process.env.CMO_HERMES_BASE_URL?.trim().replace(/\/+$/g, "") ?? "";
   const apiKey = process.env.CMO_HERMES_API_KEY?.trim() ?? "";
   const toolEndpointEnabled = isCmoHermesCmoToolExecuteEnabled();
-  const useToolEndpoint = toolEndpointEnabled && requestIsSourceBackedOrSeeking(request);
+  const externalResearch = requestIsExternalResearch(request);
+  const useToolEndpoint = toolEndpointEnabled && !externalResearch && requestIsSourceBackedOrSeeking(request);
   const configuredToolEndpoint = getCmoHermesCmoToolEndpoint();
   const endpointPath = useToolEndpoint ? endpointPathFromConfig(configuredToolEndpoint) : HERMES_CMO_AGENT_PATH;
   const timeoutMs = useToolEndpoint ? getCmoHermesCmoToolTimeoutMs() : hermesTimeoutMs();
@@ -2588,7 +2595,8 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
     throw new Error("Invalid hermes.cmo.request.v1 input for M1 Hermes CMO runtime.");
   }
 
-  const orchestrationEnabled = isCmoHermesCmoOrchestrationEnabled();
+  const externalResearchRequested = requestIsExternalResearch(request);
+  const orchestrationEnabled = isCmoHermesCmoOrchestrationEnabled() || externalResearchRequested;
   const maxDelegations = getCmoHermesCmoMaxDelegations();
   let outboundRequest = buildHermesCmoLiveRequest(request, {
     orchestrationEnabled,
