@@ -177,6 +177,66 @@ const m44eExternalResearchRequest = (requestId, userMessage = "Hiện tại trê
   },
 });
 
+const m44e6ResearchFollowupRequest = (requestId, userMessage = "Ok lập bảng so 5 bên cho mình xem thử") => {
+  const base = m44eExternalResearchRequest(requestId, userMessage);
+  const researchArtifact = {
+    type: "session_local_research_result",
+    schema_version: "cmo.session_local_research_result.v1",
+    workspace_id: "feeback",
+    session_id: "session_m44e6_research_followup",
+    turn_id: "msg_m44e6_previous",
+    created_turn_id: "msg_m44e6_previous",
+    research_id: "research_del_m44e_feeback_competitors",
+    source_agent: "surf",
+    research_type: "competitor_landscape",
+    user_question: "Hiện tại trên thị trường có bên nào làm giống Feeback mình không?",
+    competitors: [
+      { name: "Typeform", category: "form_feedback", fit: "medium" },
+      { name: "UserVoice", category: "feedback_management", fit: "high" },
+      { name: "Canny", category: "feedback_roadmap", fit: "high" },
+      { name: "Hotjar", category: "experience_analytics", fit: "medium" },
+      { name: "Survicate", category: "survey_feedback", fit: "medium" },
+    ],
+    sources_used: ["https://www.typeform.com", "https://canny.io"],
+    key_findings: ["Five adjacent products overlap with feedback collection, prioritization, or analytics."],
+    evidence_gaps: ["Need pricing and workflow depth checks before final ranking."],
+    created_at: "2026-06-01T00:00:00.000Z",
+    truth_status: "session_only",
+    saved_to_vault: false,
+    no_auto_promote: true,
+    safety: {
+      read_only: true,
+      vault_mutation: false,
+      gbrain_mutation: false,
+      promotion_performed: false,
+    },
+  };
+
+  return {
+    ...base,
+    session_id: "session_m44e6_research_followup",
+    context_pack: {
+      ...base.context_pack,
+      artifacts_in: [...base.context_pack.artifacts_in, researchArtifact],
+      research_context: {
+        schema_version: "cmo.session_research_context.v1",
+        artifact_count: 1,
+        truth_status: "session_only",
+        saved_to_vault: false,
+        no_auto_promote: true,
+        artifacts: [researchArtifact],
+      },
+    },
+    source_acquisition: {
+      ...base.source_acquisition,
+      session_local_research_results_count: 1,
+      research_followup_requested: true,
+      research_followup_has_session_artifact: true,
+      research_followup_missing_session_artifact: false,
+    },
+  };
+};
+
 const compileRuntimeModule = async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "hermes-cmo-m1-"));
   const tscPath = path.join(rootDir, "node_modules", "typescript", "bin", "tsc");
@@ -404,11 +464,14 @@ const startServer = async () => {
         });
 
         if (cmoCallCount === 1) {
+          const firstCallProposalsOnly =
+            body.request_id === "req_m44e6_research_followup_table" ||
+            body.request_id === "req_m44e6_research_followup_rank";
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
-          assert.deepEqual(body.constraints.allowed_agents, ["echo", "surf"]);
-          assert.deepEqual(body.constraints.allowed_surf_modes, ["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
-          assert.equal(body.constraints.delegations_mode, "echo_surf_bounded");
-          assert.equal(body.constraints.allowSubAgentExecution, true);
+          assert.deepEqual(body.constraints.allowed_agents, firstCallProposalsOnly ? [] : ["echo", "surf"]);
+          assert.deepEqual(body.constraints.allowed_surf_modes, firstCallProposalsOnly ? [] : ["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
+          assert.equal(body.constraints.delegations_mode, firstCallProposalsOnly ? "proposals_only" : "echo_surf_bounded");
+          assert.equal(body.constraints.allowSubAgentExecution, !firstCallProposalsOnly);
           assert.equal(body.constraints.execution_boundary?.vault_agent_execution_allowed, false);
           assert.equal(body.constraints.execution_boundary?.direct_supabase_mutations_allowed, false);
           assert.equal(body.constraints.execution_boundary?.openclaw_calls_allowed, false);
@@ -446,6 +509,7 @@ const startServer = async () => {
           const m44dUnknownAnswerBasisFixture = body.request_id === "req_m44d_unknown_answer_basis";
           const m44eExternalResearchFixture = body.request_id === "req_m44e_external_research_active_source";
           const m44eSurfSafeFailFixture = body.request_id === "req_m44e_surf_safe_failure";
+          const m44e6ResearchFollowupFixture = body.request_id === "req_m44e6_research_followup_table" || body.request_id === "req_m44e6_research_followup_rank";
           const m44eSourceKycToolEndpointFixture = body.request_id === "req_m44e_source_kyc_tool_endpoint";
           const m44d2NativeExecuteFixture = body.request_id === "req_m44d2_native_execute";
           const m44aToolReadCompletedHtmlFixture = body.request_id === "req_m44a_tool_read_completed_html";
@@ -1201,6 +1265,50 @@ const startServer = async () => {
             return;
           }
 
+          if (m44e6ResearchFollowupFixture) {
+            assert.equal(url.pathname, "/agents/cmo/execute");
+            assert.equal(body.constraints?.allowSurfExecution, false);
+            assert.equal(body.constraints?.delegations_mode, "proposals_only");
+            assert.equal(body.source_acquisition?.research_followup_requested, true);
+            assert.equal(body.source_acquisition?.research_followup_has_session_artifact, true);
+            assert.equal(body.source_acquisition?.research_followup_missing_session_artifact, false);
+            const researchArtifact = body.context_pack?.artifacts_in?.find((artifact) => artifact?.type === "session_local_research_result");
+            assert.ok(researchArtifact, "research follow-up request must include session-local research artifact");
+            assert.equal(researchArtifact.schema_version, "cmo.session_local_research_result.v1");
+            assert.equal(researchArtifact.truth_status, "session_only");
+            assert.equal(researchArtifact.saved_to_vault, false);
+            assert.equal(researchArtifact.no_auto_promote, true);
+            assert.equal(body.context_pack?.research_context?.artifact_count, 1);
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                response: {
+                  answer_basis: {
+                    mode: "external_research",
+                  },
+                  structured_output: {
+                    classification: "external_research",
+                    response_style: "research_followup",
+                    tool_policy: "none",
+                    used_session_local_research_result: true,
+                  },
+                  answer: {
+                    format: "markdown",
+                    title: "Feeback competitor comparison",
+                    summary: "Comparison from existing Surf research.",
+                    decision: "KEEP",
+                    body:
+                      body.request_id === "req_m44e6_research_followup_rank"
+                        ? "From the 5 existing Surf results, UserVoice and Canny are closest to Feeback under the requested criteria."
+                        : "| Product | Similarity | Note |\\n| --- | --- | --- |\\n| UserVoice | High | Feedback workflow overlap |\\n| Canny | High | Prioritization workflow overlap |",
+                  },
+                },
+              }),
+            );
+            return;
+          }
+
           if (m44aToolReadCompletedHtmlFixture) {
             writeJson(
               response,
@@ -1850,7 +1958,11 @@ const startServer = async () => {
         if (JSON.stringify(body.constraints.allowed_agents) !== JSON.stringify(expectedAllowedAgents)) {
           throw new Error(`Unexpected allowed_agents for ${body.request_id} #${cmoCallCount}: ${JSON.stringify(body.constraints.allowed_agents)} expected ${JSON.stringify(expectedAllowedAgents)}`);
         }
-        assert.deepEqual(body.constraints.allowed_surf_modes, failedExecutionSynthesis ? [] : ["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
+        assert.deepEqual(
+          body.constraints.allowed_surf_modes,
+          failedExecutionSynthesis ? [] : ["surf.default", "surf.x", "surf.trend", "surf.pulse"],
+          `${body.request_id} #${cmoCallCount} unexpected allowed_surf_modes`,
+        );
         assert.equal(body.constraints.delegations_mode, failedExecutionSynthesis ? "proposals_only" : "echo_surf_bounded");
         assert.equal(body.constraints.m1_clean_cmo_skill_kernel?.final_synthesis, true);
         assert.equal(body.context_pack.artifacts_in.at(-1)?.type, "cmo_engine_delegation_results");
@@ -3930,6 +4042,25 @@ try {
     assert.match(m44eSurfSafeFailResult.delegationSummary[0].failureReason, /safe_reason=Surf needs a bounded research query or objective/);
     assert.match(m44eSurfSafeFailResult.response.answer?.body ?? "", /Surf did not complete/);
     assert.match(m44eSurfSafeFailResult.response.answer?.body ?? "", /surf_contract_missing_query/);
+
+    const m44e6ResearchFollowupTableResult = await runHermesCmoRuntime(m44e6ResearchFollowupRequest("req_m44e6_research_followup_table"));
+    assert.equal(m44e6ResearchFollowupTableResult.hermesCmoAgentPath, "/agents/cmo/execute");
+    assert.equal(m44e6ResearchFollowupTableResult.hermesCmoEndpointKind, "execute");
+    assert.equal(m44e6ResearchFollowupTableResult.surfCalls, 0);
+    assert.equal(m44e6ResearchFollowupTableResult.response.structured_output?.response_style, "research_followup");
+    assert.equal(m44e6ResearchFollowupTableResult.response.structured_output?.used_session_local_research_result, true);
+    assert.match(m44e6ResearchFollowupTableResult.response.answer?.body ?? "", /\| Product \| Similarity \| Note \|/);
+
+    const m44e6ResearchFollowupRankResult = await runHermesCmoRuntime(
+      m44e6ResearchFollowupRequest(
+        "req_m44e6_research_followup_rank",
+        "Trong 5 bên đó, bên nào giống Hold Pay nhất nếu xét merchant payout API + local fiat rail?",
+      ),
+    );
+    assert.equal(m44e6ResearchFollowupRankResult.hermesCmoAgentPath, "/agents/cmo/execute");
+    assert.equal(m44e6ResearchFollowupRankResult.surfCalls, 0);
+    assert.equal(m44e6ResearchFollowupRankResult.response.structured_output?.response_style, "research_followup");
+    assert.match(m44e6ResearchFollowupRankResult.response.answer?.body ?? "", /existing Surf results/);
 
     const m44eSourceKycResult = await runHermesCmoRuntime({
       ...m44dToolEndpointRequest("req_m44e_source_kyc_tool_endpoint"),

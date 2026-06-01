@@ -740,6 +740,34 @@ export interface CmoSessionLocalSource {
   };
 }
 
+export interface CmoSessionLocalResearchResult {
+  type: "session_local_research_result";
+  schema_version: "cmo.session_local_research_result.v1";
+  workspace_id: string;
+  session_id: string;
+  turn_id: string;
+  created_turn_id: string;
+  research_id: string;
+  source_agent: "surf";
+  research_type: "competitor_landscape" | "external_research";
+  user_question: string;
+  competitors?: Array<Record<string, unknown> | string>;
+  adjacent_products?: Array<Record<string, unknown> | string>;
+  sources_used?: Array<Record<string, unknown> | string>;
+  key_findings?: string[];
+  evidence_gaps?: string[];
+  created_at: string;
+  truth_status: "session_only";
+  saved_to_vault: false;
+  no_auto_promote: true;
+  safety: {
+    read_only: true;
+    vault_mutation: false;
+    gbrain_mutation: false;
+    promotion_performed: false;
+  };
+}
+
 export interface HermesCmoActivityEventSummary {
   eventId: string;
   type: string;
@@ -953,6 +981,7 @@ export interface CMOContextPackage {
   sourceReviewContext?: CmoSourceReviewContext;
   sourceAnswerContext?: CmoSourceAnswerContext;
   sessionLocalSources?: CmoSessionLocalSource[];
+  sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
   activeSourceId?: string;
   mode: "app_context";
   contextPack: ContextPack;
@@ -1064,6 +1093,7 @@ export interface CMOChatMessage {
   sourceReviewContext?: CmoSourceReviewContext;
   sourceAnswerContext?: CmoSourceAnswerContext;
   sessionLocalSources?: CmoSessionLocalSource[];
+  sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
   activeSourceId?: string;
 }
 
@@ -1141,6 +1171,7 @@ export interface CMOChatSession {
   sourceReviewContext?: CmoSourceReviewContext;
   sourceAnswerContext?: CmoSourceAnswerContext;
   sessionLocalSources?: CmoSessionLocalSource[];
+  sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
   activeSourceId?: string;
   decisionLayer?: CmoDecisionLayer;
   assumptions?: string[];
@@ -1237,6 +1268,7 @@ export interface CMOAppChatResponse {
   sourceReviewContext?: CmoSourceReviewContext;
   sourceAnswerContext?: CmoSourceAnswerContext;
   sessionLocalSources?: CmoSessionLocalSource[];
+  sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
   activeSourceId?: string;
   decisionLayer?: CmoDecisionLayer;
   rawCapturePath?: string;

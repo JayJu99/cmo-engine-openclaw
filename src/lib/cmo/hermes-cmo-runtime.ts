@@ -409,6 +409,7 @@ const responseStyles = new Set([
   "source_transform",
   "structured_review",
   "external_research",
+  "research_followup",
   "save_to_vault",
   "clarify",
 ]);
@@ -1123,6 +1124,14 @@ const sourceSeekingTextPattern =
 const externalResearchTextPattern =
   /\b(competitor|competitors|market\s+landscape|current\s+market|market\s+scan|trend|trends|current|live|today|compare\s+alternatives?|alternatives?|x\/twitter|twitter|social\s+signals?|social\s+listening)\b|(?:th\u1ecb\s*tr\u01b0\u1eddng|\u0111\u1ed1i\s*th\u1ee7|b\u00ean\s*n\u00e0o\s*gi\u1ed1ng|gi\u1ed1ng\s*m\u00ecnh|h\u00f4m\s*nay|xu\s*h\u01b0\u1edbng)/i;
 
+const researchFollowupTextPattern =
+  /\b(rank|ranking|compare|comparison|table|score|scorecard|criteria)\b|(?:l\u1eadp\s*b\u1ea3ng|so\s*s\u00e1nh|trong\s*5\s*b\u00ean\s*\u0111\u00f3|b\u00ean\s*n\u00e0o\s*gi\u1ed1ng\s*nh\u1ea5t|x\u1ebfp\s*h\u1ea1ng|theo\s*ti\u00eau\s*ch\u00ed|so\s*v\u1edbi\s*hold\s*pay|gi\u1ed1ng\s*hold\s*pay\s*nh\u1ea5t)/i;
+
+const stripAcknowledgementPrefix = (value: string): string =>
+  value
+    .replace(/^\s*(?:ok(?:ay)?|r\u1ed3i|\u1eeb|uh|thanks?|thank you|c\u1ea3m \u01a1n|cam on|r\u00f5 r\u1ed3i|ro roi)[,.\s:;-]+/i, "")
+    .trim();
+
 const recordString = (record: Record<string, unknown>, key: string): string | null =>
   typeof record[key] === "string" && record[key].trim() ? record[key].trim() : null;
 
@@ -1169,8 +1178,12 @@ const requestHasSourceUrl = (request: HermesCmoRuntimeRequest): boolean =>
   sourceArtifactRecords(request).some(sourceHasUrl) ||
   (isRecord(request.source_acquisition) && (typeof request.source_acquisition.original_url === "string" || typeof request.source_acquisition.canonical_url === "string"));
 
+const requestIsResearchFollowup = (request: HermesCmoRuntimeRequest): boolean =>
+  researchFollowupTextPattern.test(stripAcknowledgementPrefix(request.intent.user_message));
+
 const requestIsExternalResearch = (request: HermesCmoRuntimeRequest): boolean =>
-  externalResearchTextPattern.test(request.intent.user_message);
+  externalResearchTextPattern.test(stripAcknowledgementPrefix(request.intent.user_message)) ||
+  requestIsResearchFollowup(request);
 
 const requestIsSourceBackedOrSeeking = (request: HermesCmoRuntimeRequest): boolean => {
   const sourceAcquisition = isRecord(request.source_acquisition) ? request.source_acquisition : {};
@@ -2596,7 +2609,10 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
   }
 
   const externalResearchRequested = requestIsExternalResearch(request);
-  const orchestrationEnabled = isCmoHermesCmoOrchestrationEnabled() || externalResearchRequested;
+  const researchFollowupRequested = requestIsResearchFollowup(request);
+  const orchestrationEnabled = researchFollowupRequested
+    ? false
+    : isCmoHermesCmoOrchestrationEnabled() || externalResearchRequested;
   const maxDelegations = getCmoHermesCmoMaxDelegations();
   let outboundRequest = buildHermesCmoLiveRequest(request, {
     orchestrationEnabled,

@@ -3,6 +3,7 @@ import type {
   CMOChatMessage,
   CMOContextNote,
   ContextItem,
+  CmoSessionLocalResearchResult,
   CmoSessionLocalSource,
   HermesCmoAgentUsed,
   HermesCmoActivityEventSummary,
@@ -284,6 +285,52 @@ function sessionLocalSourceArtifacts(input: HermesCmoChatRequestInput): Record<s
     });
 }
 
+function sessionLocalResearchResultArtifacts(input: HermesCmoChatRequestInput): Record<string, unknown>[] {
+  return (input.contextPackage.sessionLocalResearchResults ?? [])
+    .filter((result) => result.workspace_id === input.request.workspaceId)
+    .filter((result) => result.session_id === input.sessionId)
+    .slice(0, 3)
+    .map((result: CmoSessionLocalResearchResult) => ({
+      type: "session_local_research_result",
+      schema_version: "cmo.session_local_research_result.v1",
+      workspace_id: result.workspace_id,
+      session_id: result.session_id,
+      turn_id: result.turn_id,
+      created_turn_id: result.created_turn_id,
+      research_id: result.research_id,
+      source_agent: result.source_agent,
+      research_type: result.research_type,
+      user_question: result.user_question,
+      ...(result.competitors ? { competitors: result.competitors.slice(0, 8) } : {}),
+      ...(result.adjacent_products ? { adjacent_products: result.adjacent_products.slice(0, 8) } : {}),
+      ...(result.sources_used ? { sources_used: result.sources_used.slice(0, 12) } : {}),
+      ...(result.key_findings ? { key_findings: result.key_findings.slice(0, 12) } : {}),
+      ...(result.evidence_gaps ? { evidence_gaps: result.evidence_gaps.slice(0, 8) } : {}),
+      created_at: result.created_at,
+      truth_status: "session_only",
+      saved_to_vault: false,
+      no_auto_promote: true,
+      safety: {
+        read_only: true,
+        vault_mutation: false,
+        gbrain_mutation: false,
+        promotion_performed: false,
+      },
+    }));
+}
+
+const researchFollowupTextPattern =
+  /\b(rank|ranking|compare|comparison|table|score|scorecard|criteria)\b|(?:l\u1eadp\s*b\u1ea3ng|so\s*s\u00e1nh|trong\s*5\s*b\u00ean\s*\u0111\u00f3|b\u00ean\s*n\u00e0o\s*gi\u1ed1ng\s*nh\u1ea5t|x\u1ebfp\s*h\u1ea1ng|theo\s*ti\u00eau\s*ch\u00ed|so\s*v\u1edbi\s*hold\s*pay|gi\u1ed1ng\s*hold\s*pay\s*nh\u1ea5t)/i;
+
+const stripAcknowledgementPrefix = (value: string): string =>
+  value
+    .replace(/^\s*(?:ok(?:ay)?|r\u1ed3i|\u1eeb|uh|thanks?|thank you|c\u1ea3m \u01a1n|cam on|r\u00f5 r\u1ed3i|ro roi)[,.\s:;-]+/i, "")
+    .trim();
+
+function researchFollowupRequested(message: string): boolean {
+  return researchFollowupTextPattern.test(stripAcknowledgementPrefix(message));
+}
+
 function userId(input: HermesCmoChatRequestInput): string {
   return (
     input.userIdentity?.userId?.trim() ||
@@ -303,6 +350,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const sourceReviewContext = sourceReviewContextArtifact(input);
   const sourceAnswerContext = sourceAnswerContextArtifact(input);
   const sessionLocalSources = sessionLocalSourceArtifacts(input);
+  const sessionLocalResearchResults = sessionLocalResearchResultArtifacts(input);
+  const researchFollowup = researchFollowupRequested(input.message);
   const toolReadRecommended =
     sourceAnswerContext?.tool_read_recommended === true ||
     sessionLocalSources.some((source) => source.tool_read_recommended === true);
@@ -345,10 +394,22 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       selected_context: [...input.contextPackage.selectedContext.map(noteSnapshot), ...recentChatContext(input.history)],
       recent_session_summary: recentSessionSummary(input.history),
       indexed_context_supplement: indexedContextSupplement,
-      artifacts_in: [vaultContextPack, ...sessionLocalSources, sourceAnswerContext].filter((artifact): artifact is Record<string, unknown> => Boolean(artifact)),
+      artifacts_in: [vaultContextPack, ...sessionLocalSources, ...sessionLocalResearchResults, sourceAnswerContext].filter((artifact): artifact is Record<string, unknown> => Boolean(artifact)),
       ...(input.contextPackage.activeSourceId ? { active_source_id: input.contextPackage.activeSourceId } : {}),
       ...(sourceReviewContext ? { source_review_context: sourceReviewContext } : {}),
       ...(sourceAnswerContext ? { source_answer_context: sourceAnswerContext } : {}),
+      ...(sessionLocalResearchResults.length > 0
+        ? {
+            research_context: {
+              schema_version: "cmo.session_research_context.v1",
+              artifact_count: sessionLocalResearchResults.length,
+              truth_status: "session_only",
+              saved_to_vault: false,
+              no_auto_promote: true,
+              artifacts: sessionLocalResearchResults,
+            },
+          }
+        : {}),
       read_only_snapshot: true,
       context_quality_summary: input.contextPackage.contextQualitySummary,
       context_graph: {
@@ -473,6 +534,10 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       session_local_sources_count: sessionLocalSources.length,
       source_answer_context_available: Boolean(sourceAnswerContext),
       source_review_context_available: Boolean(sourceReviewContext),
+      session_local_research_results_count: sessionLocalResearchResults.length,
+      research_followup_requested: researchFollowup,
+      research_followup_has_session_artifact: researchFollowup && sessionLocalResearchResults.length > 0,
+      research_followup_missing_session_artifact: researchFollowup && sessionLocalResearchResults.length === 0,
       tool_read_recommended: toolReadRecommended,
       nav_heavy_source_count: navHeavySourceCount,
       ...(activeSessionLocalSource?.original_url ? { original_url: activeSessionLocalSource.original_url } : {}),

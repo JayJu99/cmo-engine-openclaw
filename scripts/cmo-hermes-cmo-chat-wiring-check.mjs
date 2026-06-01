@@ -540,6 +540,72 @@ try {
     assert.equal(sessionLocalSource.cache_role, "high_quality_evidence");
     assert.equal(sessionLocalSource.nav_heavy, false);
     assert.equal(sessionLocalSource.tool_read_recommended, false);
+
+    const researchFollowupInput = JSON.parse(JSON.stringify(sampleTurnInput));
+    researchFollowupInput.message = "Ok lập bảng so 5 bên cho mình xem thử";
+    researchFollowupInput.contextPackage.userMessage = researchFollowupInput.message;
+    researchFollowupInput.contextPackage.sessionLocalResearchResults = [
+      {
+        type: "session_local_research_result",
+        schema_version: "cmo.session_local_research_result.v1",
+        workspace_id: "holdstation-mini-app",
+        session_id: "session_h6",
+        turn_id: "msg_prior_surf",
+        created_turn_id: "msg_prior_surf",
+        research_id: "research_surf_competitors",
+        source_agent: "surf",
+        research_type: "competitor_landscape",
+        user_question: "Find competitors similar to Hold Pay.",
+        competitors: [
+          { name: "PayPal Payouts", fit: "high" },
+          { name: "Stripe Connect", fit: "high" },
+        ],
+        sources_used: ["https://paypal.com", "https://stripe.com"],
+        key_findings: ["Two products overlap with payout APIs."],
+        evidence_gaps: ["Need local fiat rail depth."],
+        created_at: "2026-06-01T00:00:00.000Z",
+        truth_status: "session_only",
+        saved_to_vault: false,
+        no_auto_promote: true,
+        safety: {
+          read_only: true,
+          vault_mutation: false,
+          gbrain_mutation: false,
+          promotion_performed: false,
+        },
+      },
+    ];
+    const researchFollowupRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...researchFollowupInput,
+      sessionId: "session_h6",
+      userMessageId: "msg_research_followup",
+      createdAt: "2026-06-01T00:00:00.000Z",
+    });
+    const researchArtifact = researchFollowupRequest.context_pack.artifacts_in.find((artifact) => artifact.type === "session_local_research_result");
+    assert.ok(researchArtifact, "research follow-up must pass completed Surf result as session-local research artifact");
+    assert.equal(researchArtifact.schema_version, "cmo.session_local_research_result.v1");
+    assert.equal(researchArtifact.truth_status, "session_only");
+    assert.equal(researchArtifact.saved_to_vault, false);
+    assert.equal(researchArtifact.no_auto_promote, true);
+    assert.equal(researchFollowupRequest.context_pack.research_context.artifact_count, 1);
+    assert.equal(researchFollowupRequest.source_acquisition.research_followup_requested, true);
+    assert.equal(researchFollowupRequest.source_acquisition.research_followup_has_session_artifact, true);
+    assert.equal(researchFollowupRequest.source_acquisition.research_followup_missing_session_artifact, false);
+
+    const missingResearchInput = JSON.parse(JSON.stringify(sampleTurnInput));
+    missingResearchInput.message = "Trong 5 bên đó, bên nào giống Hold Pay nhất nếu xét merchant payout API + local fiat rail?";
+    missingResearchInput.contextPackage.userMessage = missingResearchInput.message;
+    missingResearchInput.contextPackage.sessionLocalResearchResults = [];
+    const missingResearchRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...missingResearchInput,
+      sessionId: "session_h6",
+      userMessageId: "msg_research_followup_missing",
+      createdAt: "2026-06-01T00:01:00.000Z",
+    });
+    assert.equal(missingResearchRequest.source_acquisition.research_followup_requested, true);
+    assert.equal(missingResearchRequest.source_acquisition.research_followup_has_session_artifact, false);
+    assert.equal(missingResearchRequest.source_acquisition.research_followup_missing_session_artifact, true);
+
     for (const workspace of [
       ["aion", "AION"],
       ["feeback", "Feeback"],
@@ -1244,6 +1310,10 @@ try {
     assert.match(hermesRuntimeSource, /selectedHermesCmoConfig/);
     assert.match(hermesRuntimeSource, /requestIsSourceBackedOrSeeking/);
     assert.match(hermesRuntimeSource, /requestIsExternalResearch/);
+    assert.match(hermesRuntimeSource, /researchFollowupTextPattern/);
+    assert.match(hermesRuntimeSource, /stripAcknowledgementPrefix/);
+    assert.match(hermesRuntimeSource, /requestIsResearchFollowup/);
+    assert.match(hermesRuntimeSource, /researchFollowupRequested\s*\?\s*false/);
     assert.match(hermesRuntimeSource, /externalResearchTextPattern/);
     assert.match(hermesRuntimeSource, /toolEndpointEnabled && !externalResearch && requestIsSourceBackedOrSeeking/);
     assert.match(hermesRuntimeSource, /toolEndpointRequest/);
@@ -1290,8 +1360,20 @@ try {
     assert.match(delegationExecutorSource, /no_knowledge_promotion: true/);
     assert.match(delegationExecutorSource, /no_gbrain_mutation: true/);
 
+    const appChatStoreSource = await readFile(path.join(cmoDir, "app-chat-store.ts"), "utf8");
+    assert.match(appChatStoreSource, /cmo\.session_local_research_result\.v1/);
+    assert.match(appChatStoreSource, /sessionLocalResearchResultFromHermesResult/);
+    assert.match(appChatStoreSource, /mergeSessionLocalResearchResults/);
+    assert.match(appChatStoreSource, /sessionLocalResearchResults/);
+
+    const mapperSource = await readFile(path.join(cmoDir, "hermes-cmo-chat-mapper.ts"), "utf8");
+    assert.match(mapperSource, /sessionLocalResearchResultArtifacts/);
+    assert.match(mapperSource, /research_context/);
+    assert.match(mapperSource, /research_followup_requested/);
+
     const workspaceTypesSource = await readFile(path.join(cmoDir, "app-workspace-types.ts"), "utf8");
     assert.match(workspaceTypesSource, /sourceMode\?: "cmo\.default" \| "cmo\.tool_capable" \| HermesCmoExecutableMode/);
+    assert.match(workspaceTypesSource, /CmoSessionLocalResearchResult/);
 
     const replaySource = await readFile(path.join(rootDir, "scripts", "cmo-hermes-cmo-replay-trace.mjs"), "utf8");
     assert.match(replaySource, /rootCauseClassification/);

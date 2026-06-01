@@ -36,6 +36,7 @@ import type {
   VaultAgentDryRunMetadata,
   VaultAgentContextPackMetadata,
   CmoMemoryCandidateReviewStatus,
+  CmoSessionLocalResearchResult,
   CmoSuggestedActionReviewStatus,
   CmoTaskCandidateReviewStatus,
   ContextGraphHint,
@@ -60,7 +61,7 @@ import {
   validateHermesCmoChatCounters,
 } from "@/lib/cmo/hermes-cmo-chat-mapper";
 import { shouldUseHermesCmoChat } from "@/lib/cmo/hermes-cmo-chat-router";
-import { runHermesCmoRuntime } from "@/lib/cmo/hermes-cmo-runtime";
+import { runHermesCmoRuntime, type HermesCmoRuntimeResult } from "@/lib/cmo/hermes-cmo-runtime";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
 import { getCmoVaultAgentHandoffMode } from "@/lib/cmo/config";
@@ -202,6 +203,209 @@ function mergeSessionLocalSources(existing: CmoSessionLocalSource[] | undefined,
   }
 
   return [next, ...scopedExisting.filter((source) => source.source_id !== next.source_id)].slice(0, 3);
+}
+
+const RESEARCH_UNSAFE_KEYS = /^(api_key|authorization|body|content|cookie|cookies|credential|credentials|env|file_body|file_content|full_content|full_source|full_text|headers|html|markdown|password|private_key|raw|raw_.*|secret|secrets|source_text.*|text|token|tool_args|tool_result)$/i;
+
+function compactResearchText(value: string, maxChars = 360): string {
+  return compactSessionSourceText(value, maxChars);
+}
+
+function safeResearchScalar(value: unknown): unknown {
+  if (typeof value === "string") {
+    return compactResearchText(value);
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  return undefined;
+}
+
+function safeResearchRecord(value: Record<string, unknown>): Record<string, unknown> | null {
+  const safe: Record<string, unknown> = {};
+
+  for (const [key, nested] of Object.entries(value)) {
+    if (RESEARCH_UNSAFE_KEYS.test(key)) {
+      continue;
+    }
+
+    const scalar = safeResearchScalar(nested);
+    if (scalar !== undefined) {
+      safe[key] = scalar;
+    }
+  }
+
+  return Object.keys(safe).length > 0 ? safe : null;
+}
+
+function safeResearchList(value: unknown, maxItems = 8): Array<Record<string, unknown> | string> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (typeof item === "string" && item.trim()) {
+        return compactResearchText(item);
+      }
+
+      if (isRecord(item)) {
+        return safeResearchRecord(item);
+      }
+
+      return null;
+    })
+    .filter((item): item is Record<string, unknown> | string => Boolean(item))
+    .slice(0, maxItems);
+}
+
+function safeResearchStringList(value: unknown, maxItems = 12): string[] {
+  return safeResearchList(value, maxItems)
+    .map((item) => (typeof item === "string" ? item : stringValue(item.summary ?? item.title ?? item.name ?? item.label)))
+    .filter((item) => Boolean(item))
+    .slice(0, maxItems);
+}
+
+function normalizeSessionLocalResearchResult(value: unknown): CmoSessionLocalResearchResult | undefined {
+  if (!isRecord(value) || value.type !== "session_local_research_result" || value.schema_version !== "cmo.session_local_research_result.v1") {
+    return undefined;
+  }
+
+  const workspaceId = normalizeOptionalString(value.workspace_id);
+  const sessionId = normalizeOptionalString(value.session_id);
+  const turnId = normalizeOptionalString(value.turn_id);
+  const createdTurnId = normalizeOptionalString(value.created_turn_id);
+  const researchId = normalizeOptionalString(value.research_id);
+  const userQuestion = normalizeOptionalString(value.user_question);
+  const createdAt = normalizeOptionalString(value.created_at);
+  const researchType = value.research_type === "competitor_landscape" ? "competitor_landscape" : value.research_type === "external_research" ? "external_research" : undefined;
+
+  if (!workspaceId || !sessionId || !turnId || !createdTurnId || !researchId || !userQuestion || !createdAt || !researchType) {
+    return undefined;
+  }
+
+  const competitors = safeResearchList(value.competitors, 8);
+  const adjacentProducts = safeResearchList(value.adjacent_products, 8);
+  const sourcesUsed = safeResearchList(value.sources_used, 12);
+  const keyFindings = safeResearchStringList(value.key_findings, 12);
+  const evidenceGaps = safeResearchStringList(value.evidence_gaps, 8);
+
+  return {
+    type: "session_local_research_result",
+    schema_version: "cmo.session_local_research_result.v1",
+    workspace_id: workspaceId,
+    session_id: sessionId,
+    turn_id: turnId,
+    created_turn_id: createdTurnId,
+    research_id: researchId,
+    source_agent: "surf",
+    research_type: researchType,
+    user_question: compactResearchText(userQuestion, 500),
+    ...(competitors.length > 0 ? { competitors } : {}),
+    ...(adjacentProducts.length > 0 ? { adjacent_products: adjacentProducts } : {}),
+    ...(sourcesUsed.length > 0 ? { sources_used: sourcesUsed } : {}),
+    ...(keyFindings.length > 0 ? { key_findings: keyFindings } : {}),
+    ...(evidenceGaps.length > 0 ? { evidence_gaps: evidenceGaps } : {}),
+    created_at: createdAt,
+    truth_status: "session_only",
+    saved_to_vault: false,
+    no_auto_promote: true,
+    safety: {
+      read_only: true,
+      vault_mutation: false,
+      gbrain_mutation: false,
+      promotion_performed: false,
+    },
+  };
+}
+
+function normalizeSessionLocalResearchResults(value: unknown, workspaceId?: string, sessionId?: string): CmoSessionLocalResearchResult[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map(normalizeSessionLocalResearchResult)
+    .filter((result): result is CmoSessionLocalResearchResult => Boolean(result))
+    .filter((result) => (workspaceId ? result.workspace_id === workspaceId : true))
+    .filter((result) => (sessionId ? result.session_id === sessionId : true))
+    .slice(0, 3);
+}
+
+function mergeSessionLocalResearchResults(
+  existing: CmoSessionLocalResearchResult[] | undefined,
+  next: CmoSessionLocalResearchResult | undefined,
+): CmoSessionLocalResearchResult[] {
+  const scopedExisting = existing ?? [];
+
+  if (!next) {
+    return scopedExisting.slice(0, 3);
+  }
+
+  return [next, ...scopedExisting.filter((result) => result.research_id !== next.research_id)].slice(0, 3);
+}
+
+function sessionLocalResearchResultFromHermesResult(input: {
+  hermesResult: HermesCmoRuntimeResult;
+  workspaceId: string;
+  sessionId: string;
+  turnId: string;
+  createdAt: string;
+  userQuestion: string;
+}): CmoSessionLocalResearchResult | undefined {
+  const execution = input.hermesResult.delegationSummary.find(
+    (item) => item.targetAgent === "surf" && item.status === "completed" && isRecord(item.response),
+  );
+  const response = isRecord(execution?.response) ? execution.response : null;
+  const researchPack = isRecord(response?.research_pack)
+    ? response.research_pack
+    : isRecord(response?.researchPack)
+      ? response.researchPack
+      : {};
+
+  if (!execution || !response) {
+    return undefined;
+  }
+
+  const competitors = safeResearchList(response.competitors ?? researchPack.competitors, 8);
+  const adjacentProducts = safeResearchList(response.adjacent_products ?? response.adjacentProducts ?? researchPack.adjacent_products ?? researchPack.adjacentProducts, 8);
+  const sourcesUsed = safeResearchList(response.sources_used ?? researchPack.sources_used, 12);
+  const keyFindings = safeResearchStringList(response.key_findings ?? researchPack.key_findings, 12);
+  const evidenceGaps = safeResearchStringList(response.evidence_gaps ?? researchPack.evidence_gaps, 8);
+
+  if (competitors.length === 0 && adjacentProducts.length === 0 && sourcesUsed.length === 0 && keyFindings.length === 0) {
+    return undefined;
+  }
+
+  return {
+    type: "session_local_research_result",
+    schema_version: "cmo.session_local_research_result.v1",
+    workspace_id: input.workspaceId,
+    session_id: input.sessionId,
+    turn_id: input.turnId,
+    created_turn_id: input.turnId,
+    research_id: `research_${execution.delegationId}`,
+    source_agent: "surf",
+    research_type: competitors.length > 0 || adjacentProducts.length > 0 ? "competitor_landscape" : "external_research",
+    user_question: compactResearchText(input.userQuestion, 500),
+    ...(competitors.length > 0 ? { competitors } : {}),
+    ...(adjacentProducts.length > 0 ? { adjacent_products: adjacentProducts } : {}),
+    ...(sourcesUsed.length > 0 ? { sources_used: sourcesUsed } : {}),
+    ...(keyFindings.length > 0 ? { key_findings: keyFindings } : {}),
+    ...(evidenceGaps.length > 0 ? { evidence_gaps: evidenceGaps } : {}),
+    created_at: input.createdAt,
+    truth_status: "session_only",
+    saved_to_vault: false,
+    no_auto_promote: true,
+    safety: {
+      read_only: true,
+      vault_mutation: false,
+      gbrain_mutation: false,
+      promotion_performed: false,
+    },
+  };
 }
 
 function sourceReviewContextFromSessionLocalSource(
@@ -1474,6 +1678,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             runtimeContext: isRecord(message.runtimeContext) ? message.runtimeContext as unknown as CMOChatMessage["runtimeContext"] : undefined,
             sourceReviewContext: normalizeSourceReviewContext(message.sourceReviewContext),
             sourceAnswerContext: normalizeSourceAnswerContext(message.sourceAnswerContext),
+            sessionLocalResearchResults: normalizeSessionLocalResearchResults(message.sessionLocalResearchResults, undefined, id),
           };
         })
         .filter((message): message is CMOChatMessage => Boolean(message))
@@ -1491,6 +1696,12 @@ function normalizeSession(value: unknown): CMOChatSession | null {
   const sessionLocalSources = persistedSessionLocalSources.length
     ? persistedSessionLocalSources
     : mergeSessionLocalSources(messageSessionLocalSources, undefined);
+  const persistedSessionLocalResearchResults = normalizeSessionLocalResearchResults(value.sessionLocalResearchResults, undefined, id);
+  const messageSessionLocalResearchResults = [...messages].reverse()
+    .flatMap((message) => message.sessionLocalResearchResults ?? []);
+  const sessionLocalResearchResults = persistedSessionLocalResearchResults.length
+    ? persistedSessionLocalResearchResults
+    : mergeSessionLocalResearchResults(messageSessionLocalResearchResults, undefined);
   const activeSourceId = normalizeOptionalString(value.activeSourceId);
   const normalizedActiveSourceId = activeSourceId && sessionLocalSources.some((source) => source.source_id === activeSourceId)
     ? activeSourceId
@@ -1572,6 +1783,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     sourceReviewContext: normalizeSourceReviewContext(value.sourceReviewContext),
     sourceAnswerContext: normalizeSourceAnswerContext(value.sourceAnswerContext),
     sessionLocalSources,
+    sessionLocalResearchResults,
     ...(normalizedActiveSourceId ? { activeSourceId: normalizedActiveSourceId } : {}),
     decisionLayer,
     assumptions: normalizeStringList(value.assumptions),
@@ -1675,6 +1887,10 @@ export async function createAppChatSession(
     continuedSession?.sessionLocalSources?.filter((source) => source.workspace_id === request.workspaceId && source.session_id === sessionId),
     newSessionLocalSource,
   );
+  let sessionLocalResearchResults = mergeSessionLocalResearchResults(
+    continuedSession?.sessionLocalResearchResults?.filter((result) => result.workspace_id === request.workspaceId && result.session_id === sessionId),
+    undefined,
+  );
   const activeSourceId = newSessionLocalSource?.source_id ?? continuedSession?.activeSourceId ?? sessionLocalSources[0]?.source_id;
   const activeSessionLocalSource = activeSourceId
     ? sessionLocalSources.find((source) => source.source_id === activeSourceId)
@@ -1703,6 +1919,7 @@ export async function createAppChatSession(
     ...(activeSourceReviewContext ? { sourceReviewContext: activeSourceReviewContext } : {}),
     ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
     sessionLocalSources,
+    sessionLocalResearchResults,
     ...(activeSourceId ? { activeSourceId } : {}),
     contextPack: {
       ...contextPackage.contextPack,
@@ -1791,6 +2008,17 @@ export async function createAppChatSession(
       });
       hermesRequestSent = true;
       const hermesResult = await runHermesCmoRuntime(hermesRequest);
+      sessionLocalResearchResults = mergeSessionLocalResearchResults(
+        sessionLocalResearchResults,
+        sessionLocalResearchResultFromHermesResult({
+          hermesResult,
+          workspaceId: request.workspaceId,
+          sessionId,
+          turnId: messageId,
+          createdAt: now,
+          userQuestion: request.message,
+        }),
+      );
       const counterValidation = validateHermesCmoChatCounters(hermesResult);
 
       if (!counterValidation.ok) {
@@ -2101,6 +2329,7 @@ export async function createAppChatSession(
     ...(sourceReviewContext ? { sourceReviewContext } : {}),
     ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
     sessionLocalSources,
+    sessionLocalResearchResults,
     ...(activeSourceId ? { activeSourceId } : {}),
     contextDiagnostics,
     contextQualitySummary,
@@ -2123,6 +2352,7 @@ export async function createAppChatSession(
         runtimeContext,
         ...(sourceReviewContext ? { sourceReviewContext } : {}),
         ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
+        sessionLocalResearchResults,
       },
       {
         id: assistantId,
@@ -2159,6 +2389,7 @@ export async function createAppChatSession(
         ...(sourceReviewContext ? { sourceReviewContext } : {}),
         ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
         sessionLocalSources,
+        sessionLocalResearchResults,
         ...(activeSourceId ? { activeSourceId } : {}),
         contextUsedCount: contextUsed.length,
         graphHintCount,
@@ -2295,6 +2526,7 @@ export async function createAppChatSession(
     ...(sourceReviewContext ? { sourceReviewContext } : {}),
     ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
     sessionLocalSources,
+    sessionLocalResearchResults,
     ...(activeSourceId ? { activeSourceId } : {}),
     contextDiagnostics,
     contextQualitySummary,
