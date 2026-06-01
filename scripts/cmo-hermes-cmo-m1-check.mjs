@@ -182,6 +182,7 @@ const m44e6ResearchFollowupRequest = (requestId, userMessage = "Ok lập bảng 
   const researchArtifact = {
     type: "session_local_research_result",
     schema_version: "cmo.session_local_research_result.v1",
+    artifact_id: "research_del_m44e_feeback_competitors",
     tenant_id: "holdstation",
     workspace_id: "feeback",
     app_id: "feeback",
@@ -207,6 +208,7 @@ const m44e6ResearchFollowupRequest = (requestId, userMessage = "Ok lập bảng 
     truth_status: "session_only",
     saved_to_vault: false,
     no_auto_promote: true,
+    scope_validated_by_product: true,
     safety: {
       read_only: true,
       vault_mutation: false,
@@ -221,6 +223,29 @@ const m44e6ResearchFollowupRequest = (requestId, userMessage = "Ok lập bảng 
     context_pack: {
       ...base.context_pack,
       artifacts_in: [...base.context_pack.artifacts_in, researchArtifact],
+      session_working_memory: {
+        schema_version: "cmo.session_working_memory.v1",
+        scope_validated_by_product: true,
+        active_contexts: [
+          {
+            kind: "session_local_research_result",
+            artifact_id: researchArtifact.research_id,
+            schema_version: "cmo.session_local_research_result.v1",
+            status: "available",
+            truth_status: "session_only",
+            saved_to_vault: false,
+            no_auto_promote: true,
+            scope: {
+              tenant_id: "holdstation",
+              workspace_id: "feeback",
+              app_id: "feeback",
+              user_id: "server_derived_user_id",
+              session_id: "session_m44e6_research_followup",
+              validated_by_product: true,
+            },
+          },
+        ],
+      },
       research_context: {
         schema_version: "cmo.session_research_context.v1",
         artifact_count: 1,
@@ -233,9 +258,10 @@ const m44e6ResearchFollowupRequest = (requestId, userMessage = "Ok lập bảng 
     source_acquisition: {
       ...base.source_acquisition,
       session_local_research_results_count: 1,
-      research_followup_requested: true,
       research_followup_has_session_artifact: true,
       research_followup_missing_session_artifact: false,
+      scoped_session_research_artifact_available: true,
+      scope_validated_by_product: true,
     },
   };
 };
@@ -1286,12 +1312,16 @@ const startServer = async () => {
             assert.equal(url.pathname, "/agents/cmo/execute");
             assert.equal(body.constraints?.allowSurfExecution, false);
             assert.equal(body.constraints?.delegations_mode, "proposals_only");
-            assert.equal(body.source_acquisition?.research_followup_requested, true);
+            assert.equal(body.source_acquisition?.research_followup_requested, undefined);
             assert.equal(body.source_acquisition?.research_followup_has_session_artifact, true);
             assert.equal(body.source_acquisition?.research_followup_missing_session_artifact, false);
+            assert.equal(body.source_acquisition?.scoped_session_research_artifact_available, true);
+            assert.equal(body.source_acquisition?.scope_validated_by_product, true);
             const researchArtifact = body.context_pack?.artifacts_in?.find((artifact) => artifact?.type === "session_local_research_result");
             assert.ok(researchArtifact, "research follow-up request must include session-local research artifact");
             assert.equal(researchArtifact.schema_version, "cmo.session_local_research_result.v1");
+            assert.equal(researchArtifact.artifact_id, "research_del_m44e_feeback_competitors");
+            assert.equal(researchArtifact.scope_validated_by_product, true);
             assert.equal(researchArtifact.tenant_id, "holdstation");
             assert.equal(researchArtifact.workspace_id, "feeback");
             assert.equal(researchArtifact.app_id, "feeback");
@@ -1300,13 +1330,29 @@ const startServer = async () => {
             assert.equal(researchArtifact.saved_to_vault, false);
             assert.equal(researchArtifact.no_auto_promote, true);
             assert.equal(body.context_pack?.research_context?.artifact_count, 1);
+            assert.equal(body.context_pack?.session_working_memory?.scope_validated_by_product, true);
+            assert.equal(body.context_pack?.session_working_memory?.active_contexts?.[0]?.artifact_id, "research_del_m44e_feeback_competitors");
             writeJson(
               response,
               200,
               cmoResponse(body, {
                 response: {
                   answer_basis: {
-                    mode: "external_research",
+                    schema_version: "cmo.answer_basis.v1",
+                    mode: "session_research_artifact",
+                  },
+                  context_resolution: {
+                    schema_version: "cmo.context_resolution.v1",
+                    status: "resolved",
+                    semantic_intent: {
+                      primary: "research_followup",
+                      subtype:
+                        body.request_id === "req_m44e6_research_followup_rank"
+                          ? "ranking_similarity"
+                          : "table_comparison",
+                      requires_surf: false,
+                    },
+                    used_live_surf: false,
                   },
                   structured_output: {
                     classification: "research_followup",
@@ -4144,6 +4190,13 @@ try {
     assert.equal(m44e6ResearchFollowupTableResult.hermesCmoAgentPath, "/agents/cmo/execute");
     assert.equal(m44e6ResearchFollowupTableResult.hermesCmoEndpointKind, "execute");
     assert.equal(m44e6ResearchFollowupTableResult.surfCalls, 0);
+    assert.equal(m44e6ResearchFollowupTableResult.response.answer_basis.schema_version, "cmo.answer_basis.v1");
+    assert.equal(m44e6ResearchFollowupTableResult.response.answer_basis.mode, "session_research_artifact");
+    assert.equal(m44e6ResearchFollowupTableResult.response.context_resolution?.schema_version, "cmo.context_resolution.v1");
+    assert.equal(m44e6ResearchFollowupTableResult.response.context_resolution?.status, "resolved");
+    assert.equal(m44e6ResearchFollowupTableResult.response.context_resolution?.semantic_intent?.primary, "research_followup");
+    assert.equal(m44e6ResearchFollowupTableResult.response.context_resolution?.semantic_intent?.requires_surf, false);
+    assert.equal(m44e6ResearchFollowupTableResult.response.context_resolution?.used_live_surf, false);
     assert.equal(m44e6ResearchFollowupTableResult.response.structured_output?.classification, "research_followup");
     assert.equal(m44e6ResearchFollowupTableResult.response.structured_output?.response_style, "research_followup");
     assert.equal(m44e6ResearchFollowupTableResult.response.structured_output?.used_session_local_research_result, true);
@@ -4157,6 +4210,9 @@ try {
     );
     assert.equal(m44e6ResearchFollowupRankResult.hermesCmoAgentPath, "/agents/cmo/execute");
     assert.equal(m44e6ResearchFollowupRankResult.surfCalls, 0);
+    assert.equal(m44e6ResearchFollowupRankResult.response.answer_basis.mode, "session_research_artifact");
+    assert.equal(m44e6ResearchFollowupRankResult.response.context_resolution?.semantic_intent?.primary, "research_followup");
+    assert.equal(m44e6ResearchFollowupRankResult.response.context_resolution?.semantic_intent?.subtype, "ranking_similarity");
     assert.equal(m44e6ResearchFollowupRankResult.response.structured_output?.classification, "research_followup");
     assert.equal(m44e6ResearchFollowupRankResult.response.structured_output?.response_style, "research_followup");
     assert.match(m44e6ResearchFollowupRankResult.response.answer?.body ?? "", /existing Surf results/);

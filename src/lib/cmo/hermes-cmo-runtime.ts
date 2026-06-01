@@ -194,6 +194,11 @@ export interface HermesCmoRuntimeAnswerBasis {
     | "source_transform"
     | "structured_review"
     | "external_research"
+    | "session_research_artifact"
+    | "live_external_research"
+    | "session_source_artifact"
+    | "insufficient_context"
+    | "clarification"
     | "save_to_vault"
     | "tool_read";
   missing_inputs: string[];
@@ -327,6 +332,11 @@ const answerBasisModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "source_transform",
   "structured_review",
   "external_research",
+  "session_research_artifact",
+  "live_external_research",
+  "session_source_artifact",
+  "insufficient_context",
+  "clarification",
   "save_to_vault",
 ]);
 const answerFormats = new Set<HermesCmoRuntimeAnswer["format"]>(["markdown", "plain_text", "json"]);
@@ -339,6 +349,11 @@ const simpleAnswerModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "source_transform",
   "save_to_vault",
   "tool_read",
+  "session_research_artifact",
+  "live_external_research",
+  "session_source_artifact",
+  "insufficient_context",
+  "clarification",
 ]);
 const classifications = new Set<HermesCmoClassification>([
   "native_conversation",
@@ -550,6 +565,27 @@ const responseUsesResearchFollowupClassificationOrStyle = (response: Record<stri
     isResearchFollowupValue(structuredOutput.classification) ||
     isResearchFollowupValue(response.response_style) ||
     isResearchFollowupValue(structuredOutput.response_style)
+  );
+};
+
+const validateContextResolution = (value: unknown): boolean => {
+  if (value === undefined || value === null) {
+    return true;
+  }
+
+  if (!isRecord(value) || value.schema_version !== "cmo.context_resolution.v1") {
+    return false;
+  }
+
+  const status = value.status;
+  const semanticIntent = isRecord(value.semantic_intent) ? value.semantic_intent : null;
+
+  return (
+    (status === undefined || typeof status === "string") &&
+    (semanticIntent === null ||
+      ((semanticIntent.primary === undefined || typeof semanticIntent.primary === "string") &&
+        (semanticIntent.subtype === undefined || typeof semanticIntent.subtype === "string") &&
+        (semanticIntent.requires_surf === undefined || typeof semanticIntent.requires_surf === "boolean")))
   );
 };
 
@@ -967,6 +1003,7 @@ const responseValidationFailureReason = (
 
     return `answer_basis_invalid:mode=${String(basis.mode)}`;
   }
+  if (!validateContextResolution(response.context_resolution)) return "context_resolution_invalid";
   if (!validateClarifyingQuestion(response.clarifying_question)) return "clarifying_question_invalid";
   if (!validateHermesCmoRuntimeAnswer(response.answer)) return "answer_invalid";
   if (!(isRecord(response.structured_output) || response.structured_output === null)) return "structured_output_invalid";
@@ -987,7 +1024,7 @@ const responseValidationFailureReason = (
     response.status === "needs_user_input" &&
     (response.answer !== null ||
       response.structured_output !== null ||
-      isRecord(response.answer_basis) && response.answer_basis.mode !== "needs_user_input" ||
+      isRecord(response.answer_basis) && response.answer_basis.mode !== "needs_user_input" && response.answer_basis.mode !== "clarification" ||
       isRecord(response.clarifying_question) && response.clarifying_question.required !== true)
   ) {
     return "needs_user_input_shape_invalid";
@@ -1138,7 +1175,7 @@ const sourceSeekingTextPattern =
   /(https?:\/\/|www\.|\b(read|open|fetch|load|summari[sz]e|summary|translate|review|audit|analy[sz]e|source|link|url|docs?|document|faq)\b|\b(t[oó]m\s*t[aắ]t|d[iị]ch|[đd]ọc|link|ngu[oồ]n|t[aà]i\s*li[eệ]u)\b)/i;
 
 const externalResearchTextPattern =
-  /\b(competitor|competitors|market\s+landscape|current\s+market|market\s+scan|trend|trends|current|live|today|compare\s+alternatives?|alternatives?|x\/twitter|twitter|social\s+signals?|social\s+listening)\b|(?:th\u1ecb\s*tr\u01b0\u1eddng|\u0111\u1ed1i\s*th\u1ee7|b\u00ean\s*n\u00e0o\s*gi\u1ed1ng|gi\u1ed1ng\s*m\u00ecnh|h\u00f4m\s*nay|xu\s*h\u01b0\u1edbng)/i;
+  /\b(competitor|competitors|market\s+landscape|current\s+market|market\s+scan|trend|trends|current|live|today|compare\s+alternatives?|alternatives?|x\/twitter|twitter|social\s+signals?|social\s+listening)\b|(?:th\u1ecb\s*tr\u01b0\u1eddng|\u0111\u1ed1i\s*th\u1ee7|b\u00ean\s*n\u00e0o\s*gi\u1ed1ng|gi\u1ed1ng\s*m\u00ecnh|h\u00f4m\s*nay|xu\s*h\u01b0\u1edbng|t\u00ecm\s*th\u00eam|th\u00eam\s*\d+\s*b\u00ean|b\u00ean\s*kh\u00e1c\s*n\u1eefa)/i;
 
 const researchFollowupTextPattern =
   /\b(rank|ranking|compare|comparison|table|score|scorecard|criteria)\b|(?:l\u1eadp\s*b\u1ea3ng|so\s*s\u00e1nh|trong\s*5\s*b\u00ean\s*\u0111\u00f3|b\u00ean\s*n\u00e0o\s*gi\u1ed1ng\s*nh\u1ea5t|x\u1ebfp\s*h\u1ea1ng|theo\s*ti\u00eau\s*ch\u00ed|so\s*v\u1edbi\s*hold\s*pay|gi\u1ed1ng\s*hold\s*pay\s*nh\u1ea5t)/i;
@@ -1206,30 +1243,18 @@ const requestHasResearchFollowupContext = (request: HermesCmoRuntimeRequest): bo
   requestHasSessionResearchArtifact(request) || isRecord(request.context_pack.research_context);
 
 const requestIsResearchFollowup = (request: HermesCmoRuntimeRequest): boolean =>
-  (isRecord(request.source_acquisition) && request.source_acquisition.research_followup_requested === true) ||
   researchFollowupTextPattern.test(stripAcknowledgementPrefix(request.intent.user_message));
 
 const requestIsResearchFollowupUsingPriorResult = (request: HermesCmoRuntimeRequest): boolean =>
   requestIsResearchFollowup(request) &&
-  (isRecord(request.source_acquisition) && request.source_acquisition.should_call_surf === false && requestHasResearchFollowupContext(request) ||
-    requestHasSessionResearchArtifact(request) ||
+  (requestHasSessionResearchArtifact(request) ||
     /(?:trong\s*5\s*b\u00ean\s*\u0111\u00f3|5\s*b\u00ean|b\u00ean\s*\u0111\u00f3|l\u1eadp\s*b\u1ea3ng|x\u1ebfp\s*h\u1ea1ng|theo\s*ti\u00eau\s*ch\u00ed|so\s*v\u1edbi\s*hold\s*pay)/i.test(
       stripAcknowledgementPrefix(request.intent.user_message),
     ));
 
-const requestShouldCallSurfFromProduct = (request: HermesCmoRuntimeRequest): boolean =>
-  isRecord(request.source_acquisition) && request.source_acquisition.should_call_surf === true;
-
-const requestResolvedNoSurfFromProduct = (request: HermesCmoRuntimeRequest): boolean =>
-  isRecord(request.source_acquisition) &&
-  request.source_acquisition.research_followup_requested === true &&
-  request.source_acquisition.should_call_surf === false;
-
 const requestIsExternalResearch = (request: HermesCmoRuntimeRequest): boolean =>
-  requestShouldCallSurfFromProduct(request) ||
-  (!requestResolvedNoSurfFromProduct(request) &&
-    externalResearchTextPattern.test(stripAcknowledgementPrefix(request.intent.user_message))) ||
-  (!requestResolvedNoSurfFromProduct(request) && requestIsResearchFollowup(request));
+  externalResearchTextPattern.test(stripAcknowledgementPrefix(request.intent.user_message)) ||
+  requestIsResearchFollowup(request);
 
 const requestIsSourceBackedOrSeeking = (request: HermesCmoRuntimeRequest): boolean => {
   const sourceAcquisition = isRecord(request.source_acquisition) ? request.source_acquisition : {};
@@ -2024,6 +2049,7 @@ export const validateHermesCmoRuntimeResponse = (
     responseCandidate.turn_id !== request.turn_id ||
     !responseStatuses.has(responseCandidate.status as HermesCmoRuntimeResponse["status"]) ||
     !validateAnswerBasis(answerBasis, { allowToolRead: isToolCapableResponseCandidate(responseCandidate) }) ||
+    !validateContextResolution(responseCandidate.context_resolution) ||
     !validateClarifyingQuestion(clarifyingQuestion) ||
     !validateHermesCmoRuntimeAnswer(responseCandidate.answer) ||
     !(isRecord(responseCandidate.structured_output) || responseCandidate.structured_output === null) ||
@@ -2048,7 +2074,7 @@ export const validateHermesCmoRuntimeResponse = (
     responseCandidate.status === "needs_user_input" &&
     (responseCandidate.answer !== null ||
       responseCandidate.structured_output !== null ||
-      answerBasis.mode !== "needs_user_input" ||
+      answerBasis.mode !== "needs_user_input" && answerBasis.mode !== "clarification" ||
       clarifyingQuestion.required !== true)
   ) {
     return false;

@@ -817,6 +817,10 @@ export interface HermesCmoChatMetadata {
   toolsUsed?: string[];
   tools_used?: string[];
   toolReadsCount?: number;
+  contextResolution?: Record<string, unknown>;
+  context_resolution?: Record<string, unknown>;
+  answerBasis?: Record<string, unknown>;
+  answer_basis?: Record<string, unknown>;
   strategyMode?: CmoStrategyMode;
   mainBottleneck?: string;
   decisionLabel?: CmoDecisionLabel;

@@ -596,16 +596,25 @@ try {
     assert.equal(researchArtifact.truth_status, "session_only");
     assert.equal(researchArtifact.saved_to_vault, false);
     assert.equal(researchArtifact.no_auto_promote, true);
+    assert.equal(researchArtifact.artifact_id, "research_surf_competitors");
+    assert.equal(researchArtifact.subject, "Holdstation Mini App");
+    assert.deepEqual(researchArtifact.comparison_set, ["PayPal Payouts", "Stripe Connect"]);
+    assert.equal(researchArtifact.scope_validated_by_product, true);
     assert.equal(researchFollowupRequest.context_pack.research_context.artifact_count, 1);
     assert.equal(researchFollowupRequest.context_pack.session_working_memory.schema_version, "cmo.session_working_memory.v1");
-    assert.equal(researchFollowupRequest.context_pack.session_working_memory.active_context_kind, "research_result");
-    assert.equal(researchFollowupRequest.context_pack.session_working_memory.should_call_surf, false);
-    assert.equal(researchFollowupRequest.source_acquisition.research_followup_requested, true);
+    assert.equal(researchFollowupRequest.context_pack.session_working_memory.scope_validated_by_product, true);
+    assert.equal(researchFollowupRequest.context_pack.session_working_memory.active_contexts.length, 1);
+    assert.equal(researchFollowupRequest.context_pack.session_working_memory.active_contexts[0].kind, "session_local_research_result");
+    assert.equal(researchFollowupRequest.context_pack.session_working_memory.active_contexts[0].artifact_id, "research_surf_competitors");
+    assert.equal(researchFollowupRequest.context_pack.session_working_memory.active_contexts[0].scope.validated_by_product, true);
+    assert.equal(researchFollowupRequest.source_acquisition.research_followup_requested, undefined);
     assert.equal(researchFollowupRequest.source_acquisition.research_followup_has_session_artifact, true);
     assert.equal(researchFollowupRequest.source_acquisition.research_followup_missing_session_artifact, false);
-    assert.equal(researchFollowupRequest.source_acquisition.research_followup_action, "table_comparison");
-    assert.equal(researchFollowupRequest.source_acquisition.active_context_kind, "research_result");
-    assert.equal(researchFollowupRequest.source_acquisition.should_call_surf, false);
+    assert.equal(researchFollowupRequest.source_acquisition.research_followup_action, undefined);
+    assert.equal(researchFollowupRequest.source_acquisition.active_context_kind, undefined);
+    assert.equal(researchFollowupRequest.source_acquisition.should_call_surf, undefined);
+    assert.equal(researchFollowupRequest.source_acquisition.scoped_session_research_artifact_available, true);
+    assert.equal(researchFollowupRequest.source_acquisition.scope_validated_by_product, true);
 
     const advantageFollowupInput = JSON.parse(JSON.stringify(researchFollowupInput));
     advantageFollowupInput.message = "Hmmm vậy mình có lợi thế gì hơn so với 5 bên đó nhỉ";
@@ -620,15 +629,15 @@ try {
         userEmail: "jay@example.com",
       },
     });
-    assert.equal(advantageFollowupRequest.source_acquisition.research_followup_requested, true);
+    assert.equal(advantageFollowupRequest.source_acquisition.research_followup_requested, undefined);
     assert.equal(advantageFollowupRequest.source_acquisition.research_followup_has_session_artifact, true);
-    assert.equal(advantageFollowupRequest.source_acquisition.research_followup_action, "advantage_differentiation");
-    assert.equal(advantageFollowupRequest.source_acquisition.active_context_kind, "research_result");
-    assert.equal(advantageFollowupRequest.source_acquisition.should_call_surf, false);
-    assert.equal(advantageFollowupRequest.context_pack.session_working_memory.active_context_kind, "research_result");
+    assert.equal(advantageFollowupRequest.source_acquisition.research_followup_action, undefined);
+    assert.equal(advantageFollowupRequest.source_acquisition.active_context_kind, undefined);
+    assert.equal(advantageFollowupRequest.source_acquisition.should_call_surf, undefined);
+    assert.equal(advantageFollowupRequest.context_pack.session_working_memory.active_contexts[0].kind, "session_local_research_result");
     assert.ok(
       advantageFollowupRequest.context_pack.artifacts_in.some((artifact) => artifact.type === "session_local_research_result"),
-      "semantic advantage follow-up must keep the scoped session-local research artifact",
+      "semantic advantage follow-up must carry the scoped session-local research artifact for Hermes-owned resolution",
     );
 
     const scopeMismatchInput = JSON.parse(JSON.stringify(researchFollowupInput));
@@ -643,10 +652,10 @@ try {
         userEmail: "jay@example.com",
       },
     });
-    assert.equal(scopeMismatchRequest.source_acquisition.research_followup_requested, true);
+    assert.equal(scopeMismatchRequest.source_acquisition.research_followup_requested, false);
     assert.equal(scopeMismatchRequest.source_acquisition.research_followup_has_session_artifact, false);
     assert.equal(scopeMismatchRequest.source_acquisition.research_followup_missing_session_artifact, true);
-    assert.equal(scopeMismatchRequest.context_pack.session_working_memory.session_local_research_results_count, 0);
+    assert.deepEqual(scopeMismatchRequest.context_pack.session_working_memory.active_contexts, []);
     assert.ok(
       !scopeMismatchRequest.context_pack.artifacts_in.some((artifact) => artifact.type === "session_local_research_result"),
       "scope-mismatched research artifacts must be dropped before Hermes",
@@ -665,9 +674,10 @@ try {
         userEmail: "jay@example.com",
       },
     });
-    assert.equal(casualNativeRequest.source_acquisition.research_followup_requested, false);
-    assert.equal(casualNativeRequest.source_acquisition.active_context_kind, "none");
-    assert.equal(casualNativeRequest.source_acquisition.should_call_surf, false);
+    assert.equal(casualNativeRequest.source_acquisition.research_followup_requested, undefined);
+    assert.equal(casualNativeRequest.source_acquisition.active_context_kind, undefined);
+    assert.equal(casualNativeRequest.source_acquisition.should_call_surf, undefined);
+    assert.equal(casualNativeRequest.source_acquisition.research_followup_has_session_artifact, true);
 
     const newResearchInput = JSON.parse(JSON.stringify(researchFollowupInput));
     newResearchInput.message = "Tìm thêm 5 bên khác nữa đi";
@@ -682,9 +692,10 @@ try {
         userEmail: "jay@example.com",
       },
     });
-    assert.equal(newResearchRequest.source_acquisition.research_followup_requested, false);
-    assert.equal(newResearchRequest.source_acquisition.active_context_kind, "none");
-    assert.equal(newResearchRequest.source_acquisition.should_call_surf, true);
+    assert.equal(newResearchRequest.source_acquisition.research_followup_requested, undefined);
+    assert.equal(newResearchRequest.source_acquisition.active_context_kind, undefined);
+    assert.equal(newResearchRequest.source_acquisition.should_call_surf, undefined);
+    assert.equal(newResearchRequest.source_acquisition.research_followup_has_session_artifact, true);
 
     const sourceDocsInput = JSON.parse(JSON.stringify(researchFollowupInput));
     sourceDocsInput.message = "FAQ nói gì về KYC?";
@@ -699,9 +710,10 @@ try {
         userEmail: "jay@example.com",
       },
     });
-    assert.equal(sourceDocsRequest.source_acquisition.research_followup_requested, false);
-    assert.equal(sourceDocsRequest.source_acquisition.active_context_kind, "source_context");
-    assert.equal(sourceDocsRequest.source_acquisition.should_call_surf, false);
+    assert.equal(sourceDocsRequest.source_acquisition.research_followup_requested, undefined);
+    assert.equal(sourceDocsRequest.source_acquisition.active_context_kind, undefined);
+    assert.equal(sourceDocsRequest.source_acquisition.should_call_surf, undefined);
+    assert.equal(sourceDocsRequest.context_pack.source_answer_context.schema_version, "cmo.source_answer_context.v1");
 
     const missingResearchInput = JSON.parse(JSON.stringify(sampleTurnInput));
     missingResearchInput.message = "Trong 5 bên đó, bên nào giống Hold Pay nhất nếu xét merchant payout API + local fiat rail?";
@@ -713,7 +725,7 @@ try {
       userMessageId: "msg_research_followup_missing",
       createdAt: "2026-06-01T00:01:00.000Z",
     });
-    assert.equal(missingResearchRequest.source_acquisition.research_followup_requested, true);
+    assert.equal(missingResearchRequest.source_acquisition.research_followup_requested, false);
     assert.equal(missingResearchRequest.source_acquisition.research_followup_has_session_artifact, false);
     assert.equal(missingResearchRequest.source_acquisition.research_followup_missing_session_artifact, true);
 
@@ -1159,11 +1171,22 @@ try {
       response: {
         ...makeRuntimeResult().response,
         answer_basis: {
-          mode: "external_research",
+          schema_version: "cmo.answer_basis.v1",
+          mode: "session_research_artifact",
           missing_inputs: [],
           assumptions_used: [],
           user_can_override: true,
           suggested_user_inputs: [],
+        },
+        context_resolution: {
+          schema_version: "cmo.context_resolution.v1",
+          status: "resolved",
+          semantic_intent: {
+            primary: "research_followup",
+            subtype: "advantage_differentiation",
+            requires_surf: false,
+          },
+          used_live_surf: false,
         },
         answer: {
           format: "markdown",
@@ -1193,6 +1216,9 @@ try {
       "| Product | Similarity | Note |\n| --- | --- | --- |\n| UserVoice | High | Feedback workflow overlap |",
     );
     assert.equal(researchFollowupMapped.hermesCmoMetadata.productRenderSource, "hermes_cmo");
+    assert.equal(researchFollowupMapped.hermesCmoMetadata.context_resolution.status, "resolved");
+    assert.equal(researchFollowupMapped.hermesCmoMetadata.context_resolution.semantic_intent.subtype, "advantage_differentiation");
+    assert.equal(researchFollowupMapped.hermesCmoMetadata.answer_basis.mode, "session_research_artifact");
     assert.equal(researchFollowupMapped.hermesCmoMetadata.surfCalls, 0);
     assert.equal(researchFollowupMapped.hermesCmoCounters.surfCalls, 0);
 
