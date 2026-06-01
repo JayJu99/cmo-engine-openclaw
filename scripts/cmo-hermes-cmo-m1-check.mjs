@@ -445,6 +445,7 @@ const startServer = async () => {
           const m44dToolEndpointArbitraryModeFixture = body.request_id === "req_m44d_tool_endpoint_arbitrary_mode";
           const m44dUnknownAnswerBasisFixture = body.request_id === "req_m44d_unknown_answer_basis";
           const m44eExternalResearchFixture = body.request_id === "req_m44e_external_research_active_source";
+          const m44eSurfSafeFailFixture = body.request_id === "req_m44e_surf_safe_failure";
           const m44eSourceKycToolEndpointFixture = body.request_id === "req_m44e_source_kyc_tool_endpoint";
           const m44d2NativeExecuteFixture = body.request_id === "req_m44d2_native_execute";
           const m44aToolReadCompletedHtmlFixture = body.request_id === "req_m44a_tool_read_completed_html";
@@ -1144,6 +1145,62 @@ const startServer = async () => {
             return;
           }
 
+          if (m44eSurfSafeFailFixture && cmoCallCount === 1) {
+            assert.equal(url.pathname, "/agents/cmo/execute");
+            assert.equal(body.constraints?.allowSurfExecution, true);
+            assert.equal(body.context_pack?.active_source_id, "source_feeback_home");
+            assert.equal(body.source_acquisition?.original_url, "https://feeback.org");
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                response: {
+                  status: "delegated",
+                  answer_basis: {
+                    mode: "external_research",
+                  },
+                  structured_output: {
+                    classification: "external_research",
+                    response_style: "external_research",
+                    tool_policy: "surf",
+                  },
+                  answer: {
+                    format: "markdown",
+                    title: "External research delegation",
+                    summary: "Delegating competitor landscape research to Surf.",
+                    decision: "WAIT",
+                    body: "Delegating competitor landscape research to Surf.",
+                  },
+                  delegations: [
+                    {
+                      id: "del_m44e_surf_safe_fail",
+                      target: { agent: "surf", mode: "surf.default" },
+                      task_type: "competitor_landscape_research",
+                      objective: "Research whether current competitors overlap with Feeback.",
+                      input: {
+                        brief: "Research current competitor products similar to Feeback.",
+                        context: {
+                          workspace_id: "feeback",
+                          app_name: "Feeback",
+                          active_source_url: "https://feeback.org",
+                          user_question: body.intent?.user_message,
+                        },
+                      },
+                      output_contract: {
+                        desired_format: "concise market landscape with sources and confidence",
+                        no_auto_save_13_sources: true,
+                        no_auto_promote_12_knowledge: true,
+                        no_gbrain_mutation: true,
+                      },
+                      constraints: ["Read-only external research.", "No Vault write.", "No source auto-save.", "No knowledge promotion."],
+                    },
+                  ],
+                },
+              }),
+            );
+            return;
+          }
+
           if (m44aToolReadCompletedHtmlFixture) {
             writeJson(
               response,
@@ -1784,6 +1841,7 @@ const startServer = async () => {
         const failedExecutionSynthesis =
           body.request_id === "req_m1_echo_fail" ||
           body.request_id === "req_m1_surf_fail" ||
+          body.request_id === "req_m44e_surf_safe_failure" ||
           (body.request_id === "req_m1_duplicate_delegated_stop" && cmoCallCount === 3) ||
           (body.request_id === "req_m1_echo_completed_unresolved" && cmoCallCount === 3) ||
           (body.request_id === "req_m1_max_rounds" && cmoCallCount === 4) ||
@@ -2270,10 +2328,20 @@ const startServer = async () => {
         calls.surfRequests.push({
           handoffId: body.handoff_id,
           mode: body.mode,
+          workspace: body.workspace,
+          workspaceId: body.workspace_id,
+          appId: body.app_id,
+          appName: body.app_name,
           objective: body.objective,
+          researchObjective: body.research_objective,
+          userQuestion: body.user_question,
+          activeSourceUrl: body.active_source_url,
           brief: body.brief ?? body.input?.brief,
           input: body.input,
           outputContract: body.output_contract,
+          expectedOutputFormat: body.expected_output_format,
+          safetyConstraints: body.safety_constraints,
+          sourceContext: body.source_context,
         });
         assert.equal(body.source_agent, "cmo");
         assert.equal(body.target_agent, "surf");
@@ -2310,6 +2378,28 @@ const startServer = async () => {
             mode: "surf.x",
             status: "failed",
             failure_reason: "Surf fixture unavailable",
+            safety: {
+              published: false,
+              vault_write: false,
+              supabase_mutation: false,
+              session_mutation: false,
+              raw_capture: false,
+              kanban: false,
+              openclaw_call: false,
+            },
+          });
+          return;
+        }
+
+        if (body.handoff_id === "del_m44e_surf_safe_fail") {
+          writeJson(response, 200, {
+            schema_version: "surf.response.v1",
+            handoff_id: body.handoff_id,
+            agent: "surf",
+            mode: "surf.default",
+            status: "failed",
+            error_code: "surf_contract_missing_query",
+            safe_reason: "Surf needs a bounded research query or objective.",
             safety: {
               published: false,
               vault_write: false,
@@ -3082,7 +3172,9 @@ try {
     assert.equal(surfFailResult.echoCalls, 0);
     assert.equal(surfFailResult.delegationSummary[0].mode, "surf.x");
     assert.equal(surfFailResult.delegationSummary[0].status, "failed");
-    assert.equal(surfFailResult.delegationSummary[0].failureReason, "Surf fixture unavailable");
+    assert.match(surfFailResult.delegationSummary[0].failureReason, /endpoint=\/agents\/surf\/execute/);
+    assert.match(surfFailResult.delegationSummary[0].failureReason, /mode=surf\.x/);
+    assert.match(surfFailResult.delegationSummary[0].failureReason, /safe_reason=Surf fixture unavailable/);
     assert.equal(surfFailResult.response.answer?.decision, "WAIT");
     assert.match(surfFailResult.response.answer?.body ?? "", /Surf did not complete/);
     assert.match(surfFailResult.response.answer?.body ?? "", /Surf fixture unavailable/);
@@ -3811,6 +3903,33 @@ try {
     assert.equal(m44eSurfRequest.outputContract?.no_auto_save_13_sources, true);
     assert.equal(m44eSurfRequest.outputContract?.no_auto_promote_12_knowledge, true);
     assert.equal(m44eSurfRequest.outputContract?.no_gbrain_mutation, true);
+    assert.equal(m44eSurfRequest.workspace, "feeback");
+    assert.equal(m44eSurfRequest.workspaceId, "feeback");
+    assert.equal(m44eSurfRequest.appId, "feeback");
+    assert.equal(m44eSurfRequest.appName, "Feeback");
+    assert.match(m44eSurfRequest.userQuestion, /Feeback/);
+    assert.equal(m44eSurfRequest.researchObjective, "Research whether there are current products similar to Feeback.");
+    assert.equal(m44eSurfRequest.activeSourceUrl, "https://feeback.org");
+    assert.equal(m44eSurfRequest.expectedOutputFormat?.desired_format, "concise market landscape with sources and confidence");
+    assert.equal(m44eSurfRequest.safetyConstraints?.read_only, true);
+    assert.equal(m44eSurfRequest.safetyConstraints?.no_vault_write, true);
+    assert.equal(m44eSurfRequest.safetyConstraints?.no_source_auto_save, true);
+    assert.equal(m44eSurfRequest.safetyConstraints?.no_knowledge_promotion, true);
+    assert.equal(m44eSurfRequest.safetyConstraints?.no_gbrain_mutation, true);
+    assert.equal(m44eSurfRequest.sourceContext?.active_source_url, "https://feeback.org");
+
+    const m44eSurfSafeFailResult = await runHermesCmoRuntime(m44eExternalResearchRequest("req_m44e_surf_safe_failure"));
+    assert.equal(m44eSurfSafeFailResult.hermesCmoAgentPath, "/agents/cmo/execute");
+    assert.equal(m44eSurfSafeFailResult.hermesCmoEndpointKind, "execute");
+    assert.equal(m44eSurfSafeFailResult.surfCalls, 1);
+    assert.equal(m44eSurfSafeFailResult.delegationSummary[0].mode, "surf.default");
+    assert.equal(m44eSurfSafeFailResult.delegationSummary[0].status, "failed");
+    assert.match(m44eSurfSafeFailResult.delegationSummary[0].failureReason, /endpoint=\/agents\/surf\/execute/);
+    assert.match(m44eSurfSafeFailResult.delegationSummary[0].failureReason, /mode=surf\.default/);
+    assert.match(m44eSurfSafeFailResult.delegationSummary[0].failureReason, /error_code=surf_contract_missing_query/);
+    assert.match(m44eSurfSafeFailResult.delegationSummary[0].failureReason, /safe_reason=Surf needs a bounded research query or objective/);
+    assert.match(m44eSurfSafeFailResult.response.answer?.body ?? "", /Surf did not complete/);
+    assert.match(m44eSurfSafeFailResult.response.answer?.body ?? "", /surf_contract_missing_query/);
 
     const m44eSourceKycResult = await runHermesCmoRuntime({
       ...m44dToolEndpointRequest("req_m44e_source_kyc_tool_endpoint"),

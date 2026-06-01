@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+
 export interface HermesEchoBrief {
   handoff_id: string;
   source_agent: "cmo" | "jay";
@@ -49,8 +52,14 @@ export interface HermesSurfBrief {
   target_agent: "surf";
   mode?: "direct_jay" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
   workspace: string;
+  workspace_id?: string;
+  app_id?: string;
+  app_name?: string;
   task_type: string;
   objective: string;
+  research_objective?: string;
+  user_question?: string;
+  active_source_url?: string;
   topic?: string;
   topics?: string[];
   surface?: string;
@@ -58,6 +67,16 @@ export interface HermesSurfBrief {
   query?: string;
   search_query?: string;
   output_contract?: unknown;
+  expected_output_format?: unknown;
+  safety_constraints?: {
+    read_only: true;
+    no_vault_write: true;
+    no_source_auto_save: true;
+    no_knowledge_promotion: true;
+    no_gbrain_mutation: true;
+    no_supabase_mutation: true;
+    no_session_mutation: true;
+  };
   research_mode?: "x_search" | "last30days";
   input?: Record<string, unknown>;
   input_material: unknown;
@@ -78,6 +97,12 @@ export interface HermesSurfBrief {
   source_context: {
     raw_request: string;
     origin: string;
+    workspace_id?: string;
+    app_id?: string;
+    app_name?: string;
+    active_source_url?: string;
+    user_question?: string;
+    research_objective?: string;
     input_material?: unknown;
     source_material?: unknown;
     delegation_context?: unknown;
@@ -324,6 +349,51 @@ function compactText(value: string, max = 500): string {
   return value.replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+function shortString(value: unknown, max = 160): string | undefined {
+  return typeof value === "string" && value.trim() ? compactText(value, max) : undefined;
+}
+
+function safeStringField(value: Record<string, unknown>, keys: string[], max = 160): string | undefined {
+  for (const key of keys) {
+    const textValue = shortString(value[key], max);
+    if (textValue) {
+      return textValue;
+    }
+  }
+
+  return undefined;
+}
+
+function specialistStatus(value: unknown): "failed" | "blocked" | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return value.status === "failed" || value.status === "blocked" ? value.status : null;
+}
+
+function surfFailureReason(value: unknown, endpointPath: string, mode: unknown): string | null {
+  const status = specialistStatus(value);
+
+  if (!status || !isRecord(value)) {
+    return null;
+  }
+
+  const parts = [
+    `Hermes Surf returned status ${status}.`,
+    `endpoint=${endpointPath}`,
+    typeof mode === "string" && mode.trim() ? `mode=${mode.trim()}` : null,
+    safeStringField(value, ["error_code", "errorCode", "code"], 80)
+      ? `error_code=${safeStringField(value, ["error_code", "errorCode", "code"], 80)}`
+      : null,
+    safeStringField(value, ["safe_reason", "safeReason", "failure_reason", "failureReason", "reason", "message", "detail", "blocker"], 220)
+      ? `safe_reason=${safeStringField(value, ["safe_reason", "safeReason", "failure_reason", "failureReason", "reason", "message", "detail", "blocker"], 220)}`
+      : null,
+  ];
+
+  return parts.filter((part): part is string => Boolean(part)).join(" ");
+}
+
 function structuredErrorMessage(value: unknown): string | null {
   if (!isRecord(value)) {
     return null;
@@ -367,6 +437,102 @@ async function hermesHttpFailureReason(response: Response, agentLabel: string): 
         : "";
 
   return detail ? `${base}${category} Detail: ${detail}` : `${base}${category}`;
+}
+
+function surfTraceEnabled(): boolean {
+  return process.env.CMO_HERMES_CMO_TRACE_ENABLED === "true" || Boolean(process.env.CMO_HERMES_SURF_TRACE_DIR?.trim());
+}
+
+function surfTraceDirectory(): string {
+  return path.resolve(
+    process.env.CMO_HERMES_SURF_TRACE_DIR?.trim() ??
+      path.join(process.cwd(), "data", "cmo-dashboard", "hermes-surf-traces"),
+  );
+}
+
+function safeTraceId(value: unknown, fallback: string): string {
+  const raw = typeof value === "string" && value.trim() ? value.trim() : fallback;
+  return raw.replace(/[^a-z0-9._-]+/gi, "_").slice(0, 96) || fallback;
+}
+
+function objectKeys(value: unknown): string[] {
+  return isRecord(value) ? Object.keys(value).sort() : [];
+}
+
+function listCount(value: unknown): number | undefined {
+  return Array.isArray(value) ? value.length : undefined;
+}
+
+function surfResponseStatus(value: unknown): string | undefined {
+  return isRecord(value) && typeof value.status === "string" ? value.status : undefined;
+}
+
+function surfTraceRequestPayload(brief: HermesSurfBrief, endpointPath: string, timeoutMs: number): Record<string, unknown> {
+  return {
+    schema_version: "cmo.hermes_surf_trace.request.v1",
+    delegation_id: brief.handoff_id,
+    surf_mode: brief.mode,
+    endpoint: endpointPath,
+    timeout_ms: timeoutMs,
+    workspace: brief.workspace,
+    workspace_id: brief.workspace_id,
+    app_id: brief.app_id,
+    app_name: brief.app_name,
+    task_type: brief.task_type,
+    objective_present: Boolean(brief.objective),
+    research_objective_present: Boolean(brief.research_objective),
+    user_question_present: Boolean(brief.user_question),
+    active_source_url_present: Boolean(brief.active_source_url),
+    query_present: Boolean(brief.query ?? brief.search_query),
+    output_contract_keys: objectKeys(brief.output_contract),
+    expected_output_format_keys: objectKeys(brief.expected_output_format),
+    safety_constraints: brief.safety_constraints,
+    input_keys: objectKeys(brief.input),
+    source_context_keys: objectKeys(brief.source_context),
+    context_keys: objectKeys(brief.context),
+  };
+}
+
+function surfTraceResponsePayload(
+  brief: HermesSurfBrief,
+  endpointPath: string,
+  httpStatus: number | null,
+  data: unknown,
+  failureReason?: string,
+): Record<string, unknown> {
+  const record = isRecord(data) ? data : {};
+  const researchPack = isRecord(record.research_pack) ? record.research_pack : isRecord(record.researchPack) ? record.researchPack : {};
+
+  return {
+    schema_version: "cmo.hermes_surf_trace.response.v1",
+    delegation_id: brief.handoff_id,
+    surf_mode: brief.mode,
+    endpoint: endpointPath,
+    http_status: httpStatus,
+    response_status: surfResponseStatus(data),
+    error_code: safeStringField(record, ["error_code", "errorCode", "code"], 80),
+    safe_reason: safeStringField(record, ["safe_reason", "safeReason", "failure_reason", "failureReason", "reason", "message", "detail", "blocker"], 220),
+    failure_reason: failureReason ? compactText(failureReason, 280) : undefined,
+    sources_count: listCount(record.sources_used ?? researchPack.sources_used),
+    key_findings_count: listCount(record.key_findings ?? researchPack.key_findings),
+    evidence_gaps_count: listCount(record.evidence_gaps ?? researchPack.evidence_gaps),
+    safety_present: isRecord(record.safety),
+  };
+}
+
+async function writeSurfTrace(brief: HermesSurfBrief, suffix: "request" | "response", payload: Record<string, unknown>): Promise<void> {
+  if (!surfTraceEnabled()) {
+    return;
+  }
+
+  try {
+    const directory = surfTraceDirectory();
+    await mkdir(directory, { recursive: true });
+    const traceId = safeTraceId(brief.handoff_id, `surf_${Date.now()}`);
+    await writeFile(path.join(directory, `${traceId}.${suffix}.json`), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  } catch {
+    // Trace files are diagnostic only; execution must not fail if local tracing is unavailable.
+  }
 }
 
 export async function executeHermesEcho(brief: HermesEchoBrief): Promise<HermesEchoExecutionResult> {
@@ -497,6 +663,8 @@ function validateHermesSurfResponse(value: unknown): HermesSurfResponse | null {
 export async function executeHermesSurf(brief: HermesSurfBrief): Promise<HermesSurfExecutionResult> {
   const baseUrl = process.env.CMO_HERMES_BASE_URL?.replace(/\/+$/g, "");
   const apiKey = process.env.CMO_HERMES_API_KEY;
+  const endpointPath = "/agents/surf/execute";
+  const timeoutMs = hermesTimeoutMs();
 
   if (!isHermesExecutionEnabled()) {
     return { ok: false, failureReason: "Hermes execution is disabled." };
@@ -511,10 +679,11 @@ export async function executeHermesSurf(brief: HermesSurfBrief): Promise<HermesS
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), hermesTimeoutMs());
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  await writeSurfTrace(brief, "request", surfTraceRequestPayload(brief, endpointPath, timeoutMs));
 
   try {
-    const response = await fetch(`${baseUrl}/agents/surf/execute`, {
+    const response = await fetch(`${baseUrl}${endpointPath}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -525,34 +694,46 @@ export async function executeHermesSurf(brief: HermesSurfBrief): Promise<HermesS
     });
 
     if (!response.ok) {
-      return { ok: false, failureReason: await hermesHttpFailureReason(response, "Hermes Surf") };
+      const failureReason = await hermesHttpFailureReason(response, "Hermes Surf");
+      await writeSurfTrace(brief, "response", surfTraceResponsePayload(brief, endpointPath, response.status, null, failureReason));
+      return { ok: false, failureReason };
     }
 
     let data: unknown;
     try {
       data = await response.json();
     } catch {
-      return { ok: false, failureReason: "Hermes Surf returned invalid JSON." };
+      const failureReason = "Hermes Surf returned invalid JSON.";
+      await writeSurfTrace(brief, "response", surfTraceResponsePayload(brief, endpointPath, response.status, null, failureReason));
+      return { ok: false, failureReason };
     }
 
-    const failureReason = specialistFailureReason(data, "Hermes Surf");
+    const failureReason = surfFailureReason(data, endpointPath, brief.mode) ?? specialistFailureReason(data, "Hermes Surf");
     if (failureReason) {
+      await writeSurfTrace(brief, "response", surfTraceResponsePayload(brief, endpointPath, response.status, data, failureReason));
       return { ok: false, failureReason };
     }
 
     const validated = validateHermesSurfResponse(data);
 
     if (!validated) {
-      return { ok: false, failureReason: "Hermes Surf response did not match the Surf research contract." };
+      const invalidReason = "Hermes Surf response did not match the Surf research contract.";
+      await writeSurfTrace(brief, "response", surfTraceResponsePayload(brief, endpointPath, response.status, data, invalidReason));
+      return { ok: false, failureReason: invalidReason };
     }
 
+    await writeSurfTrace(brief, "response", surfTraceResponsePayload(brief, endpointPath, response.status, data));
     return { ok: true, response: validated };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      return { ok: false, failureReason: "Hermes Surf request timed out." };
+      const failureReason = "Hermes Surf request timed out.";
+      await writeSurfTrace(brief, "response", surfTraceResponsePayload(brief, endpointPath, null, null, failureReason));
+      return { ok: false, failureReason };
     }
 
-    return { ok: false, failureReason: error instanceof Error ? error.message : "Hermes Surf request failed." };
+    const failureReason = error instanceof Error ? error.message : "Hermes Surf request failed.";
+    await writeSurfTrace(brief, "response", surfTraceResponsePayload(brief, endpointPath, null, null, failureReason));
+    return { ok: false, failureReason };
   } finally {
     clearTimeout(timeout);
   }

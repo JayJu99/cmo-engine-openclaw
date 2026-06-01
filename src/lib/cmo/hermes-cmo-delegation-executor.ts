@@ -88,6 +88,9 @@ interface ExecutorInput {
   sessionId: string;
   turnId: string;
   workspaceSlug: string;
+  workspaceId?: string;
+  appId?: string;
+  appName?: string;
   userMessage: string;
   delegations: Record<string, unknown>[];
   maxDelegations: number;
@@ -125,6 +128,42 @@ function firstDefined(...values: unknown[]): unknown {
   for (const value of values) {
     if (value !== undefined && value !== null) {
       return value;
+    }
+  }
+
+  return undefined;
+}
+
+function textByKey(value: unknown, keys: Set<string>, depth = 4): string | undefined {
+  if (depth < 0 || value === null || value === undefined) {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = textByKey(item, keys, depth - 1);
+      if (found) {
+        return found;
+      }
+    }
+
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (keys.has(key) && typeof nestedValue === "string" && nestedValue.trim()) {
+      return nestedValue.trim();
+    }
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    const found = textByKey(nestedValue, keys, depth - 1);
+    if (found) {
+      return found;
     }
   }
 
@@ -371,6 +410,23 @@ function inputMaterialList(delegation: NormalizedDelegation): unknown {
   return delegation.inputMaterial ?? [delegation.brief].filter(Boolean);
 }
 
+function activeSourceUrl(delegation: NormalizedDelegation): string | undefined {
+  const urlKeys = new Set([
+    "active_source_url",
+    "activeSourceUrl",
+    "original_url",
+    "originalUrl",
+    "canonical_url",
+    "canonicalUrl",
+    "url",
+  ]);
+
+  return textByKey(delegation.context, urlKeys) ??
+    textByKey(delegation.sourceMaterial, urlKeys) ??
+    textByKey(delegation.inputMaterial, urlKeys) ??
+    textByKey(delegation.raw, urlKeys);
+}
+
 function echoBrief(input: ExecutorInput, delegation: NormalizedDelegation, previousResults: HermesCmoDelegationExecution[]): HermesEchoBrief {
   const prior = previousResults.length
     ? `Prior delegation results for claim boundaries:\n${JSON.stringify(previousResults, null, 2)}`
@@ -424,6 +480,10 @@ function defaultSurfBrief(input: ExecutorInput, delegation: NormalizedDelegation
   const surfMode = delegation.mode === "surf.x" || delegation.mode === "surf.trend" || delegation.mode === "surf.pulse"
     ? delegation.mode
     : "surf.default";
+  const sourceUrl = activeSourceUrl(delegation);
+  const expectedOutputFormat = delegation.outputContract ?? {
+    desired_format: "bounded research evidence pack with sources, confidence, evidence gaps, and recommended next checks",
+  };
 
   return {
     handoff_id: delegation.delegationId,
@@ -431,8 +491,14 @@ function defaultSurfBrief(input: ExecutorInput, delegation: NormalizedDelegation
     target_agent: "surf",
     mode: surfMode,
     workspace: cleanWorkspaceSlug(input.workspaceSlug),
+    workspace_id: input.workspaceId ?? input.workspaceSlug,
+    app_id: input.appId ?? input.workspaceSlug,
+    app_name: input.appName,
     task_type: delegation.taskType,
     objective: delegation.objective,
+    research_objective: delegation.objective,
+    user_question: input.userMessage,
+    active_source_url: sourceUrl,
     input: isRecord(delegation.raw.input) ? delegation.raw.input : undefined,
     input_material: inputMaterialList(delegation),
     source_material: delegation.sourceMaterial,
@@ -448,9 +514,25 @@ function defaultSurfBrief(input: ExecutorInput, delegation: NormalizedDelegation
     topic: delegation.topic,
     topics: delegation.topics.length > 0 ? delegation.topics : undefined,
     output_contract: delegation.outputContract,
+    expected_output_format: expectedOutputFormat,
+    safety_constraints: {
+      read_only: true,
+      no_vault_write: true,
+      no_source_auto_save: true,
+      no_knowledge_promotion: true,
+      no_gbrain_mutation: true,
+      no_supabase_mutation: true,
+      no_session_mutation: true,
+    },
     source_context: {
       raw_request: input.userMessage,
       origin: "cmo_engine_m1_hermes_cmo_orchestration",
+      workspace_id: input.workspaceId ?? input.workspaceSlug,
+      app_id: input.appId ?? input.workspaceSlug,
+      app_name: input.appName,
+      active_source_url: sourceUrl,
+      user_question: input.userMessage,
+      research_objective: delegation.objective,
       input_material: delegation.inputMaterial,
       source_material: delegation.sourceMaterial,
       delegation_context: delegation.context,

@@ -1271,6 +1271,25 @@ try {
     assert.match(hermesRuntimeSource, /bytes_read/);
     assert.match(hermesRuntimeSource, /source_text\.\*/);
 
+    const hermesClientSource = await readFile(path.join(cmoDir, "hermes-client.ts"), "utf8");
+    assert.match(hermesClientSource, /\/agents\/surf\/execute/);
+    assert.match(hermesClientSource, /hermes-surf-traces/);
+    assert.match(hermesClientSource, /surfTraceRequestPayload/);
+    assert.match(hermesClientSource, /surfTraceResponsePayload/);
+    assert.match(hermesClientSource, /safe_reason/);
+    assert.match(hermesClientSource, /error_code/);
+
+    const delegationExecutorSource = await readFile(path.join(cmoDir, "hermes-cmo-delegation-executor.ts"), "utf8");
+    assert.match(delegationExecutorSource, /workspace_id: input\.workspaceId/);
+    assert.match(delegationExecutorSource, /app_id: input\.appId/);
+    assert.match(delegationExecutorSource, /user_question: input\.userMessage/);
+    assert.match(delegationExecutorSource, /research_objective: delegation\.objective/);
+    assert.match(delegationExecutorSource, /active_source_url: sourceUrl/);
+    assert.match(delegationExecutorSource, /expected_output_format: expectedOutputFormat/);
+    assert.match(delegationExecutorSource, /no_source_auto_save: true/);
+    assert.match(delegationExecutorSource, /no_knowledge_promotion: true/);
+    assert.match(delegationExecutorSource, /no_gbrain_mutation: true/);
+
     const workspaceTypesSource = await readFile(path.join(cmoDir, "app-workspace-types.ts"), "utf8");
     assert.match(workspaceTypesSource, /sourceMode\?: "cmo\.default" \| "cmo\.tool_capable" \| HermesCmoExecutableMode/);
 
