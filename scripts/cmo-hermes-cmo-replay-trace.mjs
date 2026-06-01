@@ -269,11 +269,26 @@ const summarizeHermesResponse = (payload, httpStatus) => {
   const structured = isRecord(response.structured_output) ? response.structured_output : {};
   const basis = isRecord(response.answer_basis) ? response.answer_basis : {};
   const answer = isRecord(response.answer) ? response.answer : {};
+  const sideEffects = root.side_effects ?? response.side_effects;
+  const sideEffectSummary =
+    sideEffects === false
+      ? { safe: true, shape: "false" }
+      : isRecord(sideEffects)
+        ? {
+            safe: Object.values(sideEffects).every((value) => value === false),
+            shape: "object",
+            true_keys: Object.entries(sideEffects)
+              .filter(([, value]) => value === true)
+              .map(([key]) => key),
+          }
+        : { safe: sideEffects === undefined, shape: typeof sideEffects };
   return {
     httpStatus,
     status: response.status,
     classification: response.classification ?? structured.classification,
     answer_basis_mode: basis.mode,
+    tools_used: Array.isArray(response.tools_used) ? response.tools_used : root.tools_used,
+    tool_trace_summary: response.tool_trace_summary ?? root.tool_trace_summary,
     delegations: Array.isArray(response.delegations)
       ? response.delegations.map((delegation) => {
           const target = isRecord(delegation?.target) ? delegation.target : {};
@@ -293,13 +308,17 @@ const summarizeHermesResponse = (payload, httpStatus) => {
             type: event?.type,
             status: event?.status,
             tool_family: event?.data?.tool_family,
+            tool_name: event?.data?.tool_name,
+            tool_category: event?.data?.tool_category,
+            success: event?.data?.success,
             source_type: event?.data?.source_type,
             http_status: event?.data?.http_status,
           }))
       : [],
     safety_counters: root.safety_counters ?? response.safety_counters ?? response.safety?.counters,
     forbidden_counters: root.forbidden_counters ?? response.forbidden_counters,
-    side_effects: root.side_effects ?? response.side_effects,
+    side_effects: sideEffects,
+    side_effects_summary: sideEffectSummary,
     mutation_flags: {
       direct_vault_write: response.direct_vault_write,
       direct_memory_mutation: response.direct_memory_mutation,
@@ -359,8 +378,23 @@ const sessionFallbackReason = (session) => {
   return String(session.productFallbackReason ?? latestAssistant?.productFallbackReason ?? "");
 };
 
-const rootCauseClassification = ({ request, replay, session }) => {
-  const fallbackReason = sessionFallbackReason(session);
+const endpointSuccessSummary = (selectedHermesEndpoint, hermesEndpointKind) => {
+  if (selectedHermesEndpoint === "/agents/cmo/tool-execute") {
+    return `CMO Engine rendered a valid live Hermes CMO response via ${selectedHermesEndpoint}${hermesEndpointKind ? ` (${hermesEndpointKind})` : ""}.`;
+  }
+
+  return "CMO Engine rendered a valid live Hermes CMO response.";
+};
+
+const rootCauseClassification = ({ request, replay, session, productRenderSource, fallbackReason, selectedHermesEndpoint, hermesEndpointKind }) => {
+  fallbackReason = typeof fallbackReason === "string" ? fallbackReason : sessionFallbackReason(session);
+
+  if (productRenderSource === "hermes_cmo" && !fallbackReason.trim()) {
+    return {
+      case_id: "product_live_success",
+      summary: endpointSuccessSummary(selectedHermesEndpoint, hermesEndpointKind),
+    };
+  }
 
   if (/Rejected field/i.test(fallbackReason)) {
     return {
@@ -495,6 +529,10 @@ const run = async () => {
     request: output.request,
     replay: output.replay,
     session: output.session,
+    productRenderSource: output.productRenderSource,
+    fallbackReason: output.fallbackReason,
+    selectedHermesEndpoint: output.selectedHermesEndpoint,
+    hermesEndpointKind: output.hermesEndpointKind,
   });
 
   console.log(JSON.stringify(output, null, 2));

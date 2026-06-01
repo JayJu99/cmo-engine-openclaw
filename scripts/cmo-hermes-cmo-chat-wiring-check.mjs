@@ -1287,6 +1287,8 @@ try {
     assert.match(replaySource, /side_effects_summary/);
     assert.match(replaySource, /tools_used/);
     assert.match(replaySource, /side_effects/);
+    assert.match(replaySource, /product_live_success/);
+    assert.match(replaySource, /CMO Engine rendered a valid live Hermes CMO response/);
     assert.match(replaySource, /D_validator_rejected_valid_or_new_shape/);
     assert.match(replaySource, /A_request_context_missing/);
     assert.match(replaySource, /B_hermes_classification_or_answer_mismatch/);
