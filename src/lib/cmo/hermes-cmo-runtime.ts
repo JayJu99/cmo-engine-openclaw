@@ -46,6 +46,7 @@ export type HermesCmoClassification =
   | "structured_review"
   | "strategy_only"
   | "external_research"
+  | "research_followup"
   | "save_to_vault"
   | "clarify"
   | "needs_surf"
@@ -349,6 +350,7 @@ const classifications = new Set<HermesCmoClassification>([
   "structured_review",
   "strategy_only",
   "external_research",
+  "research_followup",
   "save_to_vault",
   "clarify",
   "needs_surf",
@@ -537,6 +539,19 @@ const optionalResponseStyleIsAllowed = (value: unknown) =>
 
 const optionalToolPolicyIsAllowed = (value: unknown) =>
   value === undefined || (typeof value === "string" && toolPolicies.has(value));
+
+const isResearchFollowupValue = (value: unknown): boolean => value === "research_followup";
+
+const responseUsesResearchFollowupClassificationOrStyle = (response: Record<string, unknown>): boolean => {
+  const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
+
+  return (
+    isResearchFollowupValue(response.classification) ||
+    isResearchFollowupValue(structuredOutput.classification) ||
+    isResearchFollowupValue(response.response_style) ||
+    isResearchFollowupValue(structuredOutput.response_style)
+  );
+};
 
 type M44aActivityDataRejectionReason =
   | "unknown_key"
@@ -964,6 +979,7 @@ const responseValidationFailureReason = (
   if (!optionalClassificationIsAllowed(structuredOutput.classification)) return `structured_output.classification=${String(structuredOutput.classification)}`;
   if (!optionalResponseStyleIsAllowed(response.response_style)) return `response_style=${String(response.response_style)}`;
   if (!optionalResponseStyleIsAllowed(structuredOutput.response_style)) return `structured_output.response_style=${String(structuredOutput.response_style)}`;
+  if (responseUsesResearchFollowupClassificationOrStyle(response) && !requestHasResearchFollowupContext(request)) return "research_followup_context_missing";
   if (!optionalToolPolicyIsAllowed(response.tool_policy)) return `tool_policy=${String(response.tool_policy)}`;
   if (!optionalToolPolicyIsAllowed(structuredOutput.tool_policy)) return `structured_output.tool_policy=${String(structuredOutput.tool_policy)}`;
 
@@ -1181,10 +1197,13 @@ const requestHasSourceUrl = (request: HermesCmoRuntimeRequest): boolean =>
 const researchArtifactRecords = (request: HermesCmoRuntimeRequest): Record<string, unknown>[] =>
   (Array.isArray(request.context_pack.artifacts_in) ? request.context_pack.artifacts_in : [])
     .filter(isRecord)
-    .filter((artifact) => artifact.type === "session_local_research_result");
+    .filter((artifact) => artifact.type === "session_local_research_result" && artifact.schema_version === "cmo.session_local_research_result.v1");
 
 const requestHasSessionResearchArtifact = (request: HermesCmoRuntimeRequest): boolean =>
   researchArtifactRecords(request).length > 0;
+
+const requestHasResearchFollowupContext = (request: HermesCmoRuntimeRequest): boolean =>
+  requestHasSessionResearchArtifact(request) || isRecord(request.context_pack.research_context);
 
 const requestIsResearchFollowup = (request: HermesCmoRuntimeRequest): boolean =>
   researchFollowupTextPattern.test(stripAcknowledgementPrefix(request.intent.user_message));
@@ -2006,6 +2025,7 @@ export const validateHermesCmoRuntimeResponse = (
     !optionalClassificationIsAllowed(structuredOutput.classification) ||
     !optionalResponseStyleIsAllowed(responseCandidate.response_style) ||
     !optionalResponseStyleIsAllowed(structuredOutput.response_style) ||
+    responseUsesResearchFollowupClassificationOrStyle(responseCandidate) && !requestHasResearchFollowupContext(request) ||
     !optionalToolPolicyIsAllowed(responseCandidate.tool_policy) ||
     !optionalToolPolicyIsAllowed(structuredOutput.tool_policy)
   ) {

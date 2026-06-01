@@ -675,6 +675,13 @@ function classificationFromResponse(response: HermesCmoRuntimeResponse): string 
   return typeof value === "string" ? value : "";
 }
 
+function responseStyleFromResponse(response: HermesCmoRuntimeResponse): string {
+  const structured = isRecord(response.structured_output) ? response.structured_output : {};
+  const value = response.response_style ?? structured.response_style;
+
+  return typeof value === "string" ? value : "";
+}
+
 function toolsUsedFromResponse(response: HermesCmoRuntimeResponse): string[] {
   return Array.isArray(response.tools_used)
     ? response.tools_used.filter((tool): tool is string => typeof tool === "string" && tool.trim().length > 0)
@@ -733,7 +740,9 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
   }
 
   const classification = classificationFromResponse(response);
+  const responseStyle = responseStyleFromResponse(response);
   const isSourceTransform = classification === "source_translate" || classification === "source_transform";
+  const isResearchFollowup = classification === "research_followup" || responseStyle === "research_followup";
   const isNativeConversation =
     classification === "native_conversation" ||
     classification === "source_acknowledgement" ||
@@ -749,7 +758,7 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
   const answer = response.answer;
   const body = answer.body.trim();
 
-  if (isSourceTransform || isNativeConversation) {
+  if (isSourceTransform || isNativeConversation || isResearchFollowup) {
     return body || answer.summary.trim();
   }
 

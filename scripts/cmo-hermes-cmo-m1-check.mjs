@@ -1302,7 +1302,7 @@ const startServer = async () => {
                     mode: "external_research",
                   },
                   structured_output: {
-                    classification: "external_research",
+                    classification: "research_followup",
                     response_style: "research_followup",
                     tool_policy: "none",
                     used_session_local_research_result: true,
@@ -2957,6 +2957,82 @@ try {
       false,
       "unknown CMO classification must remain rejected",
     );
+    const validResearchFollowupRequest = m44e6ResearchFollowupRequest("req_m44e6_validate_research_followup");
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(validResearchFollowupRequest).response,
+          answer_basis: {
+            mode: "external_research",
+            missing_inputs: [],
+            assumptions_used: [],
+            user_can_override: true,
+            suggested_user_inputs: [],
+          },
+          structured_output: {
+            classification: "research_followup",
+            response_style: "research_followup",
+            tool_policy: "none",
+            used_session_local_research_result: true,
+          },
+          answer: {
+            format: "markdown",
+            title: "Research follow-up",
+            summary: "Uses prior session-local research.",
+            decision: "KEEP",
+            body: "| Product | Similarity | Note |\n| --- | --- | --- |\n| UserVoice | High | Feedback workflow overlap |",
+          },
+        },
+        validResearchFollowupRequest,
+        { allowExecutableDelegations: false, maxDelegations: 0 },
+      ),
+      true,
+      "research_followup classification must validate with session-local research context",
+    );
+    const missingResearchFollowupRequest = {
+      ...validResearchFollowupRequest,
+      context_pack: {
+        ...validResearchFollowupRequest.context_pack,
+        artifacts_in: validResearchFollowupRequest.context_pack.artifacts_in.filter((artifact) => artifact.type !== "session_local_research_result"),
+        research_context: undefined,
+      },
+      source_acquisition: {
+        ...validResearchFollowupRequest.source_acquisition,
+        session_local_research_results_count: 0,
+        research_followup_has_session_artifact: false,
+        research_followup_missing_session_artifact: true,
+      },
+    };
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(missingResearchFollowupRequest).response,
+          answer_basis: {
+            mode: "external_research",
+            missing_inputs: [],
+            assumptions_used: [],
+            user_can_override: true,
+            suggested_user_inputs: ["Run external research first."],
+          },
+          structured_output: {
+            classification: "research_followup",
+            response_style: "research_followup",
+            tool_policy: "none",
+          },
+          answer: {
+            format: "markdown",
+            title: "Research follow-up",
+            summary: "No prior research is available.",
+            decision: "WAIT",
+            body: "Please run the research step first.",
+          },
+        },
+        missingResearchFollowupRequest,
+        { allowExecutableDelegations: false, maxDelegations: 0 },
+      ),
+      false,
+      "research_followup classification must reject without session-local research context",
+    );
     assert.equal(
       validateHermesCmoRuntimeResponse(
         {
@@ -4061,6 +4137,7 @@ try {
     assert.equal(m44e6ResearchFollowupTableResult.hermesCmoAgentPath, "/agents/cmo/execute");
     assert.equal(m44e6ResearchFollowupTableResult.hermesCmoEndpointKind, "execute");
     assert.equal(m44e6ResearchFollowupTableResult.surfCalls, 0);
+    assert.equal(m44e6ResearchFollowupTableResult.response.structured_output?.classification, "research_followup");
     assert.equal(m44e6ResearchFollowupTableResult.response.structured_output?.response_style, "research_followup");
     assert.equal(m44e6ResearchFollowupTableResult.response.structured_output?.used_session_local_research_result, true);
     assert.match(m44e6ResearchFollowupTableResult.response.answer?.body ?? "", /\| Product \| Similarity \| Note \|/);
@@ -4073,6 +4150,7 @@ try {
     );
     assert.equal(m44e6ResearchFollowupRankResult.hermesCmoAgentPath, "/agents/cmo/execute");
     assert.equal(m44e6ResearchFollowupRankResult.surfCalls, 0);
+    assert.equal(m44e6ResearchFollowupRankResult.response.structured_output?.classification, "research_followup");
     assert.equal(m44e6ResearchFollowupRankResult.response.structured_output?.response_style, "research_followup");
     assert.match(m44e6ResearchFollowupRankResult.response.answer?.body ?? "", /existing Surf results/);
 

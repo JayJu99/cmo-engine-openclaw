@@ -1043,6 +1043,48 @@ try {
     assert.equal(externalResearchMapped.hermesCmoMetadata.surfCalls, 1);
     assert.deepEqual(externalResearchMapped.hermesCmoMetadata.agentsUsed, ["cmo", "surf"]);
 
+    const researchFollowupMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...makeRuntimeResult(),
+      response: {
+        ...makeRuntimeResult().response,
+        answer_basis: {
+          mode: "external_research",
+          missing_inputs: [],
+          assumptions_used: [],
+          user_can_override: true,
+          suggested_user_inputs: [],
+        },
+        answer: {
+          format: "markdown",
+          title: "Follow-up comparison",
+          summary: "Comparison from existing Surf results.",
+          decision: "KEEP",
+          body: "| Product | Similarity | Note |\n| --- | --- | --- |\n| UserVoice | High | Feedback workflow overlap |",
+        },
+        structured_output: {
+          classification: "research_followup",
+          response_style: "research_followup",
+          tool_policy: "none",
+          used_session_local_research_result: true,
+        },
+      },
+      delegationSummary: [],
+      safety_counters: { ...expectedCounters, surfCalls: 0 },
+      safety: {
+        counters: { ...expectedCounters, surfCalls: 0 },
+      },
+      agentsUsed: ["cmo"],
+      surfCalls: 0,
+      echoCalls: 0,
+    });
+    assert.equal(
+      researchFollowupMapped.answer,
+      "| Product | Similarity | Note |\n| --- | --- | --- |\n| UserVoice | High | Feedback workflow overlap |",
+    );
+    assert.equal(researchFollowupMapped.hermesCmoMetadata.productRenderSource, "hermes_cmo");
+    assert.equal(researchFollowupMapped.hermesCmoMetadata.surfCalls, 0);
+    assert.equal(researchFollowupMapped.hermesCmoCounters.surfCalls, 0);
+
     const strategyOnlyReviewBase = makeRuntimeResult();
     const strategyOnlyReviewMapped = mapper.mapHermesCmoResponseToChatResult({
       ...strategyOnlyReviewBase,
