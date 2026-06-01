@@ -41,7 +41,7 @@ export function getOpenClawCmoTimeoutMs(): number {
 }
 
 export function getCmoLiveAppTurnTimeoutMs(): number {
-  return positiveIntEnv("CMO_LIVE_APP_TURN_TIMEOUT_MS", 12_000);
+  return positiveIntEnv("CMO_LIVE_APP_TURN_TIMEOUT_MS", 240_000);
 }
 
 export function getCmoFallbackFastAfterMs(): number {
@@ -61,7 +61,7 @@ export function getCmoHermesApiKey(): string {
 }
 
 export function getCmoHermesTimeoutMs(): number {
-  return positiveIntEnv("CMO_HERMES_TIMEOUT_MS", 30_000);
+  return positiveIntEnv("CMO_HERMES_TIMEOUT_MS", 240_000);
 }
 
 function booleanEnv(name: string, fallback = false): boolean {

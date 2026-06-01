@@ -174,6 +174,26 @@ const summarizeSession = (session) => {
 
 const stringOrNull = (value) => (typeof value === "string" && value.trim() ? value : null);
 
+const positiveIntEnv = (name, fallback) => {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+const timeoutConfigSummary = (traceRoot) => {
+  const cmoLiveAppTurnTimeoutMs = positiveIntEnv("CMO_LIVE_APP_TURN_TIMEOUT_MS", 240_000);
+  const cmoFallbackFastAfterMs = positiveIntEnv("CMO_FALLBACK_FAST_AFTER_MS", cmoLiveAppTurnTimeoutMs);
+  const cmoHermesTimeoutMs = positiveIntEnv("CMO_HERMES_TIMEOUT_MS", 240_000);
+
+  return {
+    cmoHermesTimeoutMs,
+    cmoLiveAppTurnTimeoutMs,
+    cmoFallbackFastAfterMs,
+    traceHermesEndpointTimeoutMs: typeof traceRoot?.timeout_ms === "number" ? traceRoot.timeout_ms : null,
+    supportsLongRunningSurfExternalResearchMs: 240_000,
+  };
+};
+
 const requestUserMessage = (request) =>
   stringOrNull(request?.user_message) ??
   stringOrNull(request?.message) ??
@@ -534,6 +554,7 @@ const run = async () => {
     hermesEndpointKind: traceRoot?.endpoint_kind ?? null,
     hermesToolEndpointEnabled: traceRoot?.tool_endpoint_enabled ?? null,
     hermesEndpointTimeoutMs: traceRoot?.timeout_ms ?? null,
+    timeoutConfig: timeoutConfigSummary(traceRoot),
     sessionTraceMatch: {
       request_session_id: request?.session_id ?? null,
       request_app_id: request?.workspace?.app_id ?? null,

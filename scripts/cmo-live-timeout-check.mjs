@@ -12,11 +12,36 @@ function positiveIntEnv(name, fallback) {
 }
 
 function liveTimeoutMs() {
-  return positiveIntEnv("CMO_LIVE_APP_TURN_TIMEOUT_MS", 12_000);
+  return positiveIntEnv("CMO_LIVE_APP_TURN_TIMEOUT_MS", 240_000);
 }
 
 function fastFallbackMs() {
   return positiveIntEnv("CMO_FALLBACK_FAST_AFTER_MS", liveTimeoutMs());
+}
+
+function hermesTimeoutMs() {
+  return positiveIntEnv("CMO_HERMES_TIMEOUT_MS", 240_000);
+}
+
+async function withEnv(patch, fn) {
+  const previous = {};
+
+  for (const [key, value] of Object.entries(patch)) {
+    previous[key] = process.env[key];
+    process.env[key] = String(value);
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 async function readRepoFile(relativePath) {
@@ -32,11 +57,25 @@ async function main() {
 
   const configuredLiveTimeoutMs = liveTimeoutMs();
   const configuredFastFallbackMs = fastFallbackMs();
+  const configuredHermesTimeoutMs = hermesTimeoutMs();
   const effectiveTimeoutMs = Math.min(configuredLiveTimeoutMs, configuredFastFallbackMs);
 
   assert.ok(configuredLiveTimeoutMs > 0, "live timeout must be positive");
   assert.ok(configuredFastFallbackMs > 0, "fast fallback threshold must be positive");
+  assert.ok(configuredHermesTimeoutMs > 0, "Hermes timeout must be positive");
   assert.ok(effectiveTimeoutMs > 0, "effective timeout must be positive");
+  await withEnv(
+    {
+      CMO_HERMES_TIMEOUT_MS: 240_000,
+      CMO_LIVE_APP_TURN_TIMEOUT_MS: 240_000,
+      CMO_FALLBACK_FAST_AFTER_MS: 240_000,
+    },
+    async () => {
+      assert.equal(hermesTimeoutMs(), 240_000, "CMO_HERMES_TIMEOUT_MS must support 240000");
+      assert.equal(liveTimeoutMs(), 240_000, "CMO_LIVE_APP_TURN_TIMEOUT_MS must support 240000");
+      assert.equal(fastFallbackMs(), 240_000, "CMO_FALLBACK_FAST_AFTER_MS must support 240000");
+    },
+  );
 
   const [configSource, runtimeSource, typeSource, chatStoreSource, openClawSource, remoteSource] = await Promise.all([
     readRepoFile("src/lib/cmo/config.ts"),
@@ -49,6 +88,8 @@ async function main() {
 
   requireSource(configSource, "CMO_LIVE_APP_TURN_TIMEOUT_MS", "config");
   requireSource(configSource, "CMO_FALLBACK_FAST_AFTER_MS", "config");
+  requireSource(configSource, "CMO_HERMES_TIMEOUT_MS", "config");
+  requireSource(configSource, "240_000", "config");
   requireSource(runtimeSource, "liveAttemptStartedAt", "runtime");
   requireSource(runtimeSource, "fallbackDurationMs", "runtime");
   requireSource(runtimeSource, "timeoutMs", "runtime");
@@ -79,7 +120,9 @@ async function main() {
         ok: true,
         configuredLiveTimeoutMs,
         configuredFastFallbackMs,
+        configuredHermesTimeoutMs,
         effectiveTimeoutMs,
+        supportedLongRunningExternalResearchTimeoutMs: 240_000,
         fallbackDryRunDurationMs,
         checks: {
           timeoutParser: "ok",

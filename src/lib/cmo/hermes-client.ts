@@ -224,8 +224,8 @@ export function isHermesExecutionEnabled(): boolean {
 }
 
 function hermesTimeoutMs(): number {
-  const value = Number.parseInt(process.env.CMO_HERMES_TIMEOUT_MS ?? "30000", 10);
-  return Number.isFinite(value) && value > 0 ? value : 30000;
+  const value = Number.parseInt(process.env.CMO_HERMES_TIMEOUT_MS ?? "240000", 10);
+  return Number.isFinite(value) && value > 0 ? value : 240000;
 }
 
 function hermesSurfXTimeoutMs(): number {

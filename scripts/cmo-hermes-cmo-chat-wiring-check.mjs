@@ -1394,6 +1394,11 @@ try {
     assert.match(replaySource, /side_effects_summary/);
     assert.match(replaySource, /tools_used/);
     assert.match(replaySource, /side_effects/);
+    assert.match(replaySource, /timeoutConfig/);
+    assert.match(replaySource, /cmoHermesTimeoutMs/);
+    assert.match(replaySource, /cmoLiveAppTurnTimeoutMs/);
+    assert.match(replaySource, /cmoFallbackFastAfterMs/);
+    assert.match(replaySource, /supportsLongRunningSurfExternalResearchMs/);
     assert.match(replaySource, /product_live_success/);
     assert.match(replaySource, /execute_request_missing_user_message/);
     assert.match(replaySource, /external_research_surf_execution_blocked/);

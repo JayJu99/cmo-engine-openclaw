@@ -1094,9 +1094,9 @@ const envEnabled = (value: string | undefined) =>
   value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "yes";
 
 const hermesTimeoutMs = () => {
-  const value = Number.parseInt(process.env.CMO_HERMES_TIMEOUT_MS ?? "30000", 10);
+  const value = Number.parseInt(process.env.CMO_HERMES_TIMEOUT_MS ?? "240000", 10);
 
-  return Number.isFinite(value) && value > 0 ? value : 30000;
+  return Number.isFinite(value) && value > 0 ? value : 240000;
 };
 
 const endpointPathFromConfig = (value: string): string => {
