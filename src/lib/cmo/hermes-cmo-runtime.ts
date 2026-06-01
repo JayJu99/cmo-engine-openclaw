@@ -1178,8 +1178,23 @@ const requestHasSourceUrl = (request: HermesCmoRuntimeRequest): boolean =>
   sourceArtifactRecords(request).some(sourceHasUrl) ||
   (isRecord(request.source_acquisition) && (typeof request.source_acquisition.original_url === "string" || typeof request.source_acquisition.canonical_url === "string"));
 
+const researchArtifactRecords = (request: HermesCmoRuntimeRequest): Record<string, unknown>[] =>
+  (Array.isArray(request.context_pack.artifacts_in) ? request.context_pack.artifacts_in : [])
+    .filter(isRecord)
+    .filter((artifact) => artifact.type === "session_local_research_result");
+
+const requestHasSessionResearchArtifact = (request: HermesCmoRuntimeRequest): boolean =>
+  researchArtifactRecords(request).length > 0;
+
 const requestIsResearchFollowup = (request: HermesCmoRuntimeRequest): boolean =>
   researchFollowupTextPattern.test(stripAcknowledgementPrefix(request.intent.user_message));
+
+const requestIsResearchFollowupUsingPriorResult = (request: HermesCmoRuntimeRequest): boolean =>
+  requestIsResearchFollowup(request) &&
+  (requestHasSessionResearchArtifact(request) ||
+    /(?:trong\s*5\s*b\u00ean\s*\u0111\u00f3|5\s*b\u00ean|b\u00ean\s*\u0111\u00f3|l\u1eadp\s*b\u1ea3ng|x\u1ebfp\s*h\u1ea1ng|theo\s*ti\u00eau\s*ch\u00ed|so\s*v\u1edbi\s*hold\s*pay)/i.test(
+      stripAcknowledgementPrefix(request.intent.user_message),
+    ));
 
 const requestIsExternalResearch = (request: HermesCmoRuntimeRequest): boolean =>
   externalResearchTextPattern.test(stripAcknowledgementPrefix(request.intent.user_message)) ||
@@ -1707,6 +1722,7 @@ const buildHermesCmoLiveRequest = (
   request: HermesCmoRuntimeRequest,
   options: HermesCmoRuntimeRequestOptions,
 ): HermesCmoRuntimeRequest => {
+  const userMessage = request.intent.user_message;
   const subAgentExecutionAllowed = options.orchestrationEnabled && options.finalSynthesis !== true;
   const iterativeDelegationAllowed = options.allowNextDelegation === true && options.finalSynthesis === true;
   const echoRetryAllowed =
@@ -1732,6 +1748,13 @@ const buildHermesCmoLiveRequest = (
 
   return {
     ...request,
+    user_message: userMessage,
+    message: userMessage,
+    input: {
+      ...(isRecord(request.input) ? request.input : {}),
+      user_message: userMessage,
+      message: userMessage,
+    },
     skill_kernel: buildCleanCmoSkillKernel(),
     context_pack: {
       ...request.context_pack,
@@ -2609,8 +2632,8 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
   }
 
   const externalResearchRequested = requestIsExternalResearch(request);
-  const researchFollowupRequested = requestIsResearchFollowup(request);
-  const orchestrationEnabled = researchFollowupRequested
+  const researchFollowupUsesPriorResult = requestIsResearchFollowupUsingPriorResult(request);
+  const orchestrationEnabled = researchFollowupUsesPriorResult
     ? false
     : isCmoHermesCmoOrchestrationEnabled() || externalResearchRequested;
   const maxDelegations = getCmoHermesCmoMaxDelegations();

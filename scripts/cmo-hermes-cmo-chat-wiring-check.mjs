@@ -1313,7 +1313,10 @@ try {
     assert.match(hermesRuntimeSource, /researchFollowupTextPattern/);
     assert.match(hermesRuntimeSource, /stripAcknowledgementPrefix/);
     assert.match(hermesRuntimeSource, /requestIsResearchFollowup/);
-    assert.match(hermesRuntimeSource, /researchFollowupRequested\s*\?\s*false/);
+    assert.match(hermesRuntimeSource, /requestIsResearchFollowupUsingPriorResult/);
+    assert.match(hermesRuntimeSource, /researchFollowupUsesPriorResult\s*\?\s*false/);
+    assert.match(hermesRuntimeSource, /user_message: userMessage/);
+    assert.match(hermesRuntimeSource, /input: \{/);
     assert.match(hermesRuntimeSource, /externalResearchTextPattern/);
     assert.match(hermesRuntimeSource, /toolEndpointEnabled && !externalResearch && requestIsSourceBackedOrSeeking/);
     assert.match(hermesRuntimeSource, /toolEndpointRequest/);
@@ -1392,6 +1395,10 @@ try {
     assert.match(replaySource, /tools_used/);
     assert.match(replaySource, /side_effects/);
     assert.match(replaySource, /product_live_success/);
+    assert.match(replaySource, /execute_request_missing_user_message/);
+    assert.match(replaySource, /external_research_surf_execution_blocked/);
+    assert.match(replaySource, /external_research_expected_surf_allowed/);
+    assert.match(replaySource, /research_followup_artifact_missing/);
     assert.match(replaySource, /CMO Engine rendered a valid live Hermes CMO response/);
     assert.match(replaySource, /D_validator_rejected_valid_or_new_shape/);
     assert.match(replaySource, /A_request_context_missing/);

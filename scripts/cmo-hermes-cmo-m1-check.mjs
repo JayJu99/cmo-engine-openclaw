@@ -468,6 +468,10 @@ const startServer = async () => {
             body.request_id === "req_m44e6_research_followup_table" ||
             body.request_id === "req_m44e6_research_followup_rank";
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
+          assert.equal(body.user_message, body.intent?.user_message);
+          assert.equal(body.message, body.intent?.user_message);
+          assert.equal(body.input?.user_message, body.intent?.user_message);
+          assert.equal(body.input?.message, body.intent?.user_message);
           assert.deepEqual(body.constraints.allowed_agents, firstCallProposalsOnly ? [] : ["echo", "surf"]);
           assert.deepEqual(body.constraints.allowed_surf_modes, firstCallProposalsOnly ? [] : ["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
           assert.equal(body.constraints.delegations_mode, firstCallProposalsOnly ? "proposals_only" : "echo_surf_bounded");
@@ -1154,7 +1158,15 @@ const startServer = async () => {
 
           if (m44eExternalResearchFixture && cmoCallCount === 1) {
             assert.equal(url.pathname, "/agents/cmo/execute");
+            assert.equal(body.user_message, body.intent?.user_message);
+            assert.equal(body.message, body.intent?.user_message);
+            assert.equal(body.input?.user_message, body.intent?.user_message);
             assert.equal(body.constraints?.allowSurfExecution, true);
+            assert.deepEqual(body.constraints?.allowed_agents, ["echo", "surf"]);
+            assert.deepEqual(body.constraints?.allowed_surf_modes, ["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
+            assert.equal(body.constraints?.execution_boundary?.surf_execution_allowed, true);
+            assert.equal(body.constraints?.execution_boundary?.sub_agent_execution_allowed, true);
+            assert.equal(body.constraints?.execution_boundary?.vault_agent_execution_allowed, false);
             assert.equal(body.constraints?.delegations_mode, "echo_surf_bounded");
             assert.equal(body.context_pack?.active_source_id, "source_feeback_home");
             assert.equal(body.source_acquisition?.original_url, "https://feeback.org");
@@ -1212,6 +1224,8 @@ const startServer = async () => {
           if (m44eSurfSafeFailFixture && cmoCallCount === 1) {
             assert.equal(url.pathname, "/agents/cmo/execute");
             assert.equal(body.constraints?.allowSurfExecution, true);
+            assert.deepEqual(body.constraints?.allowed_agents, ["echo", "surf"]);
+            assert.equal(body.constraints?.execution_boundary?.surf_execution_allowed, true);
             assert.equal(body.context_pack?.active_source_id, "source_feeback_home");
             assert.equal(body.source_acquisition?.original_url, "https://feeback.org");
             writeJson(

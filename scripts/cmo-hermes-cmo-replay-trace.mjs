@@ -186,28 +186,68 @@ const requestActiveSourceId = (request) =>
   stringOrNull(request?.context_pack?.active_source_id) ??
   stringOrNull(request?.source_acquisition?.active_source_id);
 
-const summarizeHermesRequest = (request) => ({
-  request_present: true,
-  request_id: request.request_id,
-  session_id: request.session_id,
-  turn_id: request.turn_id,
-  workspace: request.workspace,
-  user_message: stringOrNull(request.user_message),
-  message: stringOrNull(request.message),
-  input_user_message: stringOrNull(request.input?.user_message),
-  input_message: stringOrNull(request.input?.message),
-  nested_user_message: stringOrNull(request.intent?.user_message),
-  resolved_user_message_present: Boolean(requestUserMessage(request)),
-  tool_policy: request.tool_policy,
-  product_boundary: request.product_boundary,
-  source_acquisition: request.source_acquisition,
-  tool_endpoint: request.tool_endpoint,
-  context_pack_keys: Object.keys(request.context_pack ?? {}),
-  active_source_id: requestActiveSourceId(request),
-  top_active_source_id: stringOrNull(request.active_source_id),
-  context_pack_active_source_id: stringOrNull(request.context_pack?.active_source_id),
-  source_acquisition_active_source_id: stringOrNull(request.source_acquisition?.active_source_id),
-  artifacts_in: Array.isArray(request.context_pack?.artifacts_in)
+const externalResearchPattern =
+  /\b(competitor|competitors|market\s+landscape|current\s+market|market\s+scan|trend|trends|current|live|today|compare\s+alternatives?|alternatives?|x\/twitter|twitter|social\s+signals?|social\s+listening)\b|(?:thị\s*trường|đối\s*thủ|bên\s*nào\s*giống|giống\s*mình|hôm\s*nay|xu\s*hướng)/i;
+
+const researchFollowupPattern =
+  /\b(rank|ranking|compare|comparison|table|score|scorecard|criteria)\b|(?:lập\s*bảng|so\s*sánh|trong\s*5\s*bên\s*đó|bên\s*nào\s*giống\s*nhất|xếp\s*hạng|theo\s*tiêu\s*chí|so\s*với\s*hold\s*pay|giống\s*hold\s*pay\s*nhất)/i;
+
+const stripAckPrefix = (value) =>
+  stringOrNull(value)?.replace(/^\s*(?:ok(?:ay)?|rồi|ừ|uh|thanks?|thank you|cảm ơn|cam on|rõ rồi|ro roi)[,.\s:;-]+/i, "").trim() ?? "";
+
+const requestResearchArtifacts = (request) =>
+  Array.isArray(request?.context_pack?.artifacts_in)
+    ? request.context_pack.artifacts_in.filter((artifact) => artifact?.type === "session_local_research_result")
+    : [];
+
+const requestDiagnostics = (request) => {
+  const userMessage = requestUserMessage(request);
+  const normalizedMessage = stripAckPrefix(userMessage);
+  const researchFollowup = researchFollowupPattern.test(normalizedMessage);
+  const externalResearch = externalResearchPattern.test(normalizedMessage) || researchFollowup;
+  const researchArtifacts = requestResearchArtifacts(request);
+  const surfAllowed =
+    Array.isArray(request?.constraints?.allowed_agents) &&
+    request.constraints.allowed_agents.includes("surf") &&
+    Array.isArray(request?.constraints?.allowed_surf_modes) &&
+    request.constraints.allowed_surf_modes.length > 0 &&
+    request?.constraints?.execution_boundary?.surf_execution_allowed === true;
+  const executeRequest = request?.schema_version === "hermes.cmo.request.v1" && request?.tool_endpoint === undefined;
+
+  return {
+    execute_request_missing_user_message: Boolean(executeRequest && !userMessage),
+    external_research_expected_surf_allowed: Boolean(externalResearch && !researchFollowup),
+    external_research_surf_execution_blocked: Boolean(externalResearch && !researchFollowup && !surfAllowed),
+    research_followup_artifact_missing: Boolean(researchFollowup && researchArtifacts.length === 0),
+  };
+};
+
+const summarizeHermesRequest = (request) => {
+  const diagnostics = requestDiagnostics(request);
+
+  return {
+    request_present: true,
+    request_id: request.request_id,
+    session_id: request.session_id,
+    turn_id: request.turn_id,
+    workspace: request.workspace,
+    user_message: stringOrNull(request.user_message),
+    message: stringOrNull(request.message),
+    input_user_message: stringOrNull(request.input?.user_message),
+    input_message: stringOrNull(request.input?.message),
+    nested_user_message: stringOrNull(request.intent?.user_message),
+    resolved_user_message_present: Boolean(requestUserMessage(request)),
+    diagnostics,
+    tool_policy: request.tool_policy,
+    product_boundary: request.product_boundary,
+    source_acquisition: request.source_acquisition,
+    tool_endpoint: request.tool_endpoint,
+    context_pack_keys: Object.keys(request.context_pack ?? {}),
+    active_source_id: requestActiveSourceId(request),
+    top_active_source_id: stringOrNull(request.active_source_id),
+    context_pack_active_source_id: stringOrNull(request.context_pack?.active_source_id),
+    source_acquisition_active_source_id: stringOrNull(request.source_acquisition?.active_source_id),
+    artifacts_in: Array.isArray(request.context_pack?.artifacts_in)
     ? request.context_pack.artifacts_in.map((artifact) => ({
         type: artifact?.type,
         schema_version: artifact?.schema_version,
@@ -227,7 +267,7 @@ const summarizeHermesRequest = (request) => ({
         truth_status: artifact?.truth_status,
       }))
     : [],
-  source_answer_context: request.context_pack?.source_answer_context
+    source_answer_context: request.context_pack?.source_answer_context
     ? {
         schema_version: request.context_pack.source_answer_context.schema_version,
         workspace_id: request.context_pack.source_answer_context.workspace_id,
@@ -244,7 +284,7 @@ const summarizeHermesRequest = (request) => ({
         tool_read_recommended: request.context_pack.source_answer_context.tool_read_recommended,
       }
     : null,
-  source_review_context: request.context_pack?.source_review_context
+    source_review_context: request.context_pack?.source_review_context
     ? {
         mode: request.context_pack.source_review_context.mode,
         workspace_id: request.context_pack.source_review_context.workspace_id,
@@ -253,15 +293,16 @@ const summarizeHermesRequest = (request) => ({
         extraction_status: request.context_pack.source_review_context.extraction?.status,
       }
     : null,
-  runtime_context: request.runtime_context,
-  constraints: {
+    runtime_context: request.runtime_context,
+    constraints: {
     allowed_agents: request.constraints?.allowed_agents,
     allowed_surf_modes: request.constraints?.allowed_surf_modes,
     delegations_mode: request.constraints?.delegations_mode,
     vault_agent_delegation_allowed: request.constraints?.vault_agent_delegation_allowed,
     execution_boundary: request.constraints?.execution_boundary,
-  },
-});
+    },
+  };
+};
 
 const summarizeHermesResponse = (payload, httpStatus) => {
   const root = isRecord(payload) ? payload : {};
@@ -407,6 +448,27 @@ const rootCauseClassification = ({ request, replay, session, productRenderSource
     return {
       case_id: "no_trace_available",
       summary: "No Hermes request trace was found to classify.",
+    };
+  }
+
+  if (request.diagnostics?.execute_request_missing_user_message) {
+    return {
+      case_id: "execute_request_missing_user_message",
+      summary: "CMO Engine sent /agents/cmo/execute without user_message/message/input.user_message compatibility fields.",
+    };
+  }
+
+  if (request.diagnostics?.external_research_surf_execution_blocked) {
+    return {
+      case_id: "external_research_surf_execution_blocked",
+      summary: "Hermes classified external research, but CMO Engine request constraints blocked bounded Surf execution.",
+    };
+  }
+
+  if (request.diagnostics?.research_followup_artifact_missing) {
+    return {
+      case_id: "research_followup_artifact_missing",
+      summary: "The user asked a research follow-up, but CMO Engine did not include a session-local research result artifact.",
     };
   }
 
