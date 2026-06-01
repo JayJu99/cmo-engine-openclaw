@@ -182,7 +182,10 @@ const m44e6ResearchFollowupRequest = (requestId, userMessage = "Ok lập bảng 
   const researchArtifact = {
     type: "session_local_research_result",
     schema_version: "cmo.session_local_research_result.v1",
+    tenant_id: "holdstation",
     workspace_id: "feeback",
+    app_id: "feeback",
+    user_id: "server_derived_user_id",
     session_id: "session_m44e6_research_followup",
     turn_id: "msg_m44e6_previous",
     created_turn_id: "msg_m44e6_previous",
@@ -1289,6 +1292,10 @@ const startServer = async () => {
             const researchArtifact = body.context_pack?.artifacts_in?.find((artifact) => artifact?.type === "session_local_research_result");
             assert.ok(researchArtifact, "research follow-up request must include session-local research artifact");
             assert.equal(researchArtifact.schema_version, "cmo.session_local_research_result.v1");
+            assert.equal(researchArtifact.tenant_id, "holdstation");
+            assert.equal(researchArtifact.workspace_id, "feeback");
+            assert.equal(researchArtifact.app_id, "feeback");
+            assert.equal(researchArtifact.user_id, "server_derived_user_id");
             assert.equal(researchArtifact.truth_status, "session_only");
             assert.equal(researchArtifact.saved_to_vault, false);
             assert.equal(researchArtifact.no_auto_promote, true);

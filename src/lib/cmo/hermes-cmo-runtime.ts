@@ -1206,18 +1206,30 @@ const requestHasResearchFollowupContext = (request: HermesCmoRuntimeRequest): bo
   requestHasSessionResearchArtifact(request) || isRecord(request.context_pack.research_context);
 
 const requestIsResearchFollowup = (request: HermesCmoRuntimeRequest): boolean =>
+  (isRecord(request.source_acquisition) && request.source_acquisition.research_followup_requested === true) ||
   researchFollowupTextPattern.test(stripAcknowledgementPrefix(request.intent.user_message));
 
 const requestIsResearchFollowupUsingPriorResult = (request: HermesCmoRuntimeRequest): boolean =>
   requestIsResearchFollowup(request) &&
-  (requestHasSessionResearchArtifact(request) ||
+  (isRecord(request.source_acquisition) && request.source_acquisition.should_call_surf === false && requestHasResearchFollowupContext(request) ||
+    requestHasSessionResearchArtifact(request) ||
     /(?:trong\s*5\s*b\u00ean\s*\u0111\u00f3|5\s*b\u00ean|b\u00ean\s*\u0111\u00f3|l\u1eadp\s*b\u1ea3ng|x\u1ebfp\s*h\u1ea1ng|theo\s*ti\u00eau\s*ch\u00ed|so\s*v\u1edbi\s*hold\s*pay)/i.test(
       stripAcknowledgementPrefix(request.intent.user_message),
     ));
 
+const requestShouldCallSurfFromProduct = (request: HermesCmoRuntimeRequest): boolean =>
+  isRecord(request.source_acquisition) && request.source_acquisition.should_call_surf === true;
+
+const requestResolvedNoSurfFromProduct = (request: HermesCmoRuntimeRequest): boolean =>
+  isRecord(request.source_acquisition) &&
+  request.source_acquisition.research_followup_requested === true &&
+  request.source_acquisition.should_call_surf === false;
+
 const requestIsExternalResearch = (request: HermesCmoRuntimeRequest): boolean =>
-  externalResearchTextPattern.test(stripAcknowledgementPrefix(request.intent.user_message)) ||
-  requestIsResearchFollowup(request);
+  requestShouldCallSurfFromProduct(request) ||
+  (!requestResolvedNoSurfFromProduct(request) &&
+    externalResearchTextPattern.test(stripAcknowledgementPrefix(request.intent.user_message))) ||
+  (!requestResolvedNoSurfFromProduct(request) && requestIsResearchFollowup(request));
 
 const requestIsSourceBackedOrSeeking = (request: HermesCmoRuntimeRequest): boolean => {
   const sourceAcquisition = isRecord(request.source_acquisition) ? request.source_acquisition : {};

@@ -273,7 +273,10 @@ function normalizeSessionLocalResearchResult(value: unknown): CmoSessionLocalRes
     return undefined;
   }
 
+  const tenantId = normalizeOptionalString(value.tenant_id);
   const workspaceId = normalizeOptionalString(value.workspace_id);
+  const appId = normalizeOptionalString(value.app_id);
+  const userId = normalizeOptionalString(value.user_id);
   const sessionId = normalizeOptionalString(value.session_id);
   const turnId = normalizeOptionalString(value.turn_id);
   const createdTurnId = normalizeOptionalString(value.created_turn_id);
@@ -282,7 +285,7 @@ function normalizeSessionLocalResearchResult(value: unknown): CmoSessionLocalRes
   const createdAt = normalizeOptionalString(value.created_at);
   const researchType = value.research_type === "competitor_landscape" ? "competitor_landscape" : value.research_type === "external_research" ? "external_research" : undefined;
 
-  if (!workspaceId || !sessionId || !turnId || !createdTurnId || !researchId || !userQuestion || !createdAt || !researchType) {
+  if (!tenantId || !workspaceId || !appId || !userId || !sessionId || !turnId || !createdTurnId || !researchId || !userQuestion || !createdAt || !researchType) {
     return undefined;
   }
 
@@ -295,7 +298,10 @@ function normalizeSessionLocalResearchResult(value: unknown): CmoSessionLocalRes
   return {
     type: "session_local_research_result",
     schema_version: "cmo.session_local_research_result.v1",
+    tenant_id: tenantId,
     workspace_id: workspaceId,
+    app_id: appId,
+    user_id: userId,
     session_id: sessionId,
     turn_id: turnId,
     created_turn_id: createdTurnId,
@@ -349,7 +355,10 @@ function mergeSessionLocalResearchResults(
 
 function sessionLocalResearchResultFromHermesResult(input: {
   hermesResult: HermesCmoRuntimeResult;
+  tenantId: string;
   workspaceId: string;
+  appId: string;
+  userId: string;
   sessionId: string;
   turnId: string;
   createdAt: string;
@@ -382,7 +391,10 @@ function sessionLocalResearchResultFromHermesResult(input: {
   return {
     type: "session_local_research_result",
     schema_version: "cmo.session_local_research_result.v1",
+    tenant_id: input.tenantId,
     workspace_id: input.workspaceId,
+    app_id: input.appId,
+    user_id: input.userId,
     session_id: input.sessionId,
     turn_id: input.turnId,
     created_turn_id: input.turnId,
@@ -1871,10 +1883,12 @@ export async function createAppChatSession(
     : vaultAgentContextPackHandoff.metadata;
   contextPackage = applyVaultAgentContextPackToCmoContextPackage(contextPackage, vaultAgentContextPackHandoff);
   const runtimeContext = buildRuntimeContext({ nowIso: now, userIdentity });
+  const requestTenantId = request.tenantId ?? "holdstation";
+  const requestUserId = sourceReviewUserId(userIdentity);
   const sourceReviewContext = await buildSourceReviewContextFromMessage({
-    tenantId: request.tenantId ?? "holdstation",
+    tenantId: requestTenantId,
     workspaceId: request.workspaceId,
-    userId: sourceReviewUserId(userIdentity),
+    userId: requestUserId,
     sessionId,
     requestId: messageId,
     message: request.message,
@@ -1888,7 +1902,12 @@ export async function createAppChatSession(
     newSessionLocalSource,
   );
   let sessionLocalResearchResults = mergeSessionLocalResearchResults(
-    continuedSession?.sessionLocalResearchResults?.filter((result) => result.workspace_id === request.workspaceId && result.session_id === sessionId),
+    continuedSession?.sessionLocalResearchResults?.filter((result) =>
+      result.tenant_id === requestTenantId &&
+      result.workspace_id === request.workspaceId &&
+      result.app_id === request.appId &&
+      result.user_id === requestUserId &&
+      result.session_id === sessionId),
     undefined,
   );
   const activeSourceId = newSessionLocalSource?.source_id ?? continuedSession?.activeSourceId ?? sessionLocalSources[0]?.source_id;
@@ -1897,12 +1916,12 @@ export async function createAppChatSession(
     : undefined;
   const activeSourceReviewContext = newSessionLocalSource
     ? sourceReviewContextFromSessionLocalSource(newSessionLocalSource, {
-        tenantId: request.tenantId ?? "holdstation",
-        userId: sourceReviewUserId(userIdentity),
+        tenantId: requestTenantId,
+        userId: requestUserId,
       })
     : sourceReviewContext ?? sourceReviewContextFromSessionLocalSource(activeSessionLocalSource, {
-        tenantId: request.tenantId ?? "holdstation",
-        userId: sourceReviewUserId(userIdentity),
+        tenantId: requestTenantId,
+        userId: requestUserId,
       });
   const hermesCmoChatRequested = !request.forceFallback && shouldUseHermesCmoChat(request.appId);
   const sourceAnswerContext = await buildSourceAnswerContext({
@@ -2012,7 +2031,10 @@ export async function createAppChatSession(
         sessionLocalResearchResults,
         sessionLocalResearchResultFromHermesResult({
           hermesResult,
+          tenantId: requestTenantId,
           workspaceId: request.workspaceId,
+          appId: request.appId,
+          userId: requestUserId,
           sessionId,
           turnId: messageId,
           createdAt: now,

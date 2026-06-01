@@ -19,6 +19,10 @@ import type {
   HermesCmoRuntimeResult,
 } from "@/lib/cmo/hermes-cmo-runtime";
 import type { CmoRuntimeTurnInput } from "@/lib/cmo/runtime";
+import {
+  resolveSessionWorkingMemory,
+  type CmoSessionWorkingMemoryAction,
+} from "./session-working-memory";
 
 export const HERMES_CMO_PROPOSALS_ONLY = "proposals_only" as const;
 export const HERMES_CMO_BOUNDED_DELEGATIONS = "echo_surf_bounded" as const;
@@ -287,13 +291,14 @@ function sessionLocalSourceArtifacts(input: HermesCmoChatRequestInput): Record<s
 
 function sessionLocalResearchResultArtifacts(input: HermesCmoChatRequestInput): Record<string, unknown>[] {
   return (input.contextPackage.sessionLocalResearchResults ?? [])
-    .filter((result) => result.workspace_id === input.request.workspaceId)
-    .filter((result) => result.session_id === input.sessionId)
     .slice(0, 3)
     .map((result: CmoSessionLocalResearchResult) => ({
       type: "session_local_research_result",
       schema_version: "cmo.session_local_research_result.v1",
+      tenant_id: result.tenant_id,
       workspace_id: result.workspace_id,
+      app_id: result.app_id,
+      user_id: result.user_id,
       session_id: result.session_id,
       turn_id: result.turn_id,
       created_turn_id: result.created_turn_id,
@@ -319,16 +324,22 @@ function sessionLocalResearchResultArtifacts(input: HermesCmoChatRequestInput): 
     }));
 }
 
-const researchFollowupTextPattern =
-  /\b(rank|ranking|compare|comparison|table|score|scorecard|criteria)\b|(?:l\u1eadp\s*b\u1ea3ng|so\s*s\u00e1nh|trong\s*5\s*b\u00ean\s*\u0111\u00f3|b\u00ean\s*n\u00e0o\s*gi\u1ed1ng\s*nh\u1ea5t|x\u1ebfp\s*h\u1ea1ng|theo\s*ti\u00eau\s*ch\u00ed|so\s*v\u1edbi\s*hold\s*pay|gi\u1ed1ng\s*hold\s*pay\s*nh\u1ea5t)/i;
-
 const stripAcknowledgementPrefix = (value: string): string =>
   value
     .replace(/^\s*(?:ok(?:ay)?|r\u1ed3i|\u1eeb|uh|thanks?|thank you|c\u1ea3m \u01a1n|cam on|r\u00f5 r\u1ed3i|ro roi)[,.\s:;-]+/i, "")
     .trim();
 
-function researchFollowupRequested(message: string): boolean {
-  return researchFollowupTextPattern.test(stripAcknowledgementPrefix(message));
+function researchFollowupActionFallback(message: string): CmoSessionWorkingMemoryAction | undefined {
+  const stripped = stripAcknowledgementPrefix(message);
+
+  if (/\b(table|l\u1eadp\s*b\u1ea3ng)\b/i.test(stripped)) return "table_comparison";
+  if (/\b(rank|ranking|gi\u1ed1ng\s*nh\u1ea5t|x\u1ebfp\s*h\u1ea1ng)\b/i.test(stripped)) return "ranking_similarity";
+  if (/\b(advantage|edge|differentiat|l\u1ee3i\s*th\u1ebf|kh\u00e1c\s*bi\u1ec7t|th\u1eafng\s*\u1edf\s*\u0111\u00e2u)\b/i.test(stripped)) return "advantage_differentiation";
+  if (/\b(position|positioning|wedge|wedge\s*n\u00e0o)\b/i.test(stripped)) return "positioning_strategy";
+  if (/\b(claim|claim\s*n\u00e0o)\b/i.test(stripped)) return "claim_selection";
+  if (/\b(criteria|scorecard|theo\s*ti\u00eau\s*ch\u00ed)\b/i.test(stripped)) return "criteria_comparison";
+
+  return undefined;
 }
 
 function userId(input: HermesCmoChatRequestInput): string {
@@ -350,8 +361,28 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const sourceReviewContext = sourceReviewContextArtifact(input);
   const sourceAnswerContext = sourceAnswerContextArtifact(input);
   const sessionLocalSources = sessionLocalSourceArtifacts(input);
-  const sessionLocalResearchResults = sessionLocalResearchResultArtifacts(input);
-  const researchFollowup = researchFollowupRequested(input.message);
+  const sessionWorkingMemoryResolution = resolveSessionWorkingMemory({
+    message: input.message,
+    scope: {
+      tenantId: input.request.tenantId ?? "holdstation",
+      workspaceId: input.request.workspaceId,
+      appId: input.request.appId,
+      userId: userId(input),
+      sessionId: input.sessionId,
+    },
+    researchResults: input.contextPackage.sessionLocalResearchResults,
+    sourceContextAvailable: Boolean(sourceAnswerContext || sourceReviewContext),
+  });
+  const sessionWorkingMemory = sessionWorkingMemoryResolution.workingMemory;
+  const sessionLocalResearchResults = sessionLocalResearchResultArtifacts({
+    ...input,
+    contextPackage: {
+      ...input.contextPackage,
+      sessionLocalResearchResults: sessionWorkingMemoryResolution.scopedResearchResults,
+    },
+  });
+  const researchFollowup = sessionWorkingMemory.research_followup_requested;
+  const researchFollowupAction = sessionWorkingMemory.research_followup_action ?? researchFollowupActionFallback(input.message);
   const toolReadRecommended =
     sourceAnswerContext?.tool_read_recommended === true ||
     sessionLocalSources.some((source) => source.tool_read_recommended === true);
@@ -410,6 +441,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             },
           }
         : {}),
+      session_working_memory: sessionWorkingMemory,
       read_only_snapshot: true,
       context_quality_summary: input.contextPackage.contextQualitySummary,
       context_graph: {
@@ -538,6 +570,9 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       research_followup_requested: researchFollowup,
       research_followup_has_session_artifact: researchFollowup && sessionLocalResearchResults.length > 0,
       research_followup_missing_session_artifact: researchFollowup && sessionLocalResearchResults.length === 0,
+      research_followup_action: researchFollowup ? researchFollowupAction : null,
+      active_context_kind: sessionWorkingMemory.active_context_kind,
+      should_call_surf: sessionWorkingMemory.should_call_surf,
       tool_read_recommended: toolReadRecommended,
       nav_heavy_source_count: navHeavySourceCount,
       ...(activeSessionLocalSource?.original_url ? { original_url: activeSessionLocalSource.original_url } : {}),

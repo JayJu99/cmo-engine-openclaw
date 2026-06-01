@@ -73,8 +73,10 @@ const loadCompiledModules = async () => {
   const configOut = path.join(tmpDir, "config.js");
   const routerOut = path.join(tmpDir, "hermes-cmo-chat-router.js");
   const mapperOut = path.join(tmpDir, "hermes-cmo-chat-mapper.js");
+  const sessionWorkingMemoryOut = path.join(tmpDir, "session-working-memory.js");
 
   await transpile(path.join(cmoDir, "config.ts"), configOut);
+  await transpile(path.join(cmoDir, "session-working-memory.ts"), sessionWorkingMemoryOut);
   await transpile(path.join(cmoDir, "hermes-cmo-chat-router.ts"), routerOut, (output) =>
     output.replace('require("@/lib/cmo/config")', 'require("./config.js")'),
   );
@@ -548,7 +550,10 @@ try {
       {
         type: "session_local_research_result",
         schema_version: "cmo.session_local_research_result.v1",
+        tenant_id: "holdstation",
         workspace_id: "holdstation-mini-app",
+        app_id: "holdstation-mini-app",
+        user_id: "user_h6",
         session_id: "session_h6",
         turn_id: "msg_prior_surf",
         created_turn_id: "msg_prior_surf",
@@ -580,6 +585,10 @@ try {
       sessionId: "session_h6",
       userMessageId: "msg_research_followup",
       createdAt: "2026-06-01T00:00:00.000Z",
+      userIdentity: {
+        userId: "user_h6",
+        userEmail: "jay@example.com",
+      },
     });
     const researchArtifact = researchFollowupRequest.context_pack.artifacts_in.find((artifact) => artifact.type === "session_local_research_result");
     assert.ok(researchArtifact, "research follow-up must pass completed Surf result as session-local research artifact");
@@ -588,9 +597,111 @@ try {
     assert.equal(researchArtifact.saved_to_vault, false);
     assert.equal(researchArtifact.no_auto_promote, true);
     assert.equal(researchFollowupRequest.context_pack.research_context.artifact_count, 1);
+    assert.equal(researchFollowupRequest.context_pack.session_working_memory.schema_version, "cmo.session_working_memory.v1");
+    assert.equal(researchFollowupRequest.context_pack.session_working_memory.active_context_kind, "research_result");
+    assert.equal(researchFollowupRequest.context_pack.session_working_memory.should_call_surf, false);
     assert.equal(researchFollowupRequest.source_acquisition.research_followup_requested, true);
     assert.equal(researchFollowupRequest.source_acquisition.research_followup_has_session_artifact, true);
     assert.equal(researchFollowupRequest.source_acquisition.research_followup_missing_session_artifact, false);
+    assert.equal(researchFollowupRequest.source_acquisition.research_followup_action, "table_comparison");
+    assert.equal(researchFollowupRequest.source_acquisition.active_context_kind, "research_result");
+    assert.equal(researchFollowupRequest.source_acquisition.should_call_surf, false);
+
+    const advantageFollowupInput = JSON.parse(JSON.stringify(researchFollowupInput));
+    advantageFollowupInput.message = "Hmmm vậy mình có lợi thế gì hơn so với 5 bên đó nhỉ";
+    advantageFollowupInput.contextPackage.userMessage = advantageFollowupInput.message;
+    const advantageFollowupRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...advantageFollowupInput,
+      sessionId: "session_h6",
+      userMessageId: "msg_research_followup_advantage",
+      createdAt: "2026-06-01T00:00:30.000Z",
+      userIdentity: {
+        userId: "user_h6",
+        userEmail: "jay@example.com",
+      },
+    });
+    assert.equal(advantageFollowupRequest.source_acquisition.research_followup_requested, true);
+    assert.equal(advantageFollowupRequest.source_acquisition.research_followup_has_session_artifact, true);
+    assert.equal(advantageFollowupRequest.source_acquisition.research_followup_action, "advantage_differentiation");
+    assert.equal(advantageFollowupRequest.source_acquisition.active_context_kind, "research_result");
+    assert.equal(advantageFollowupRequest.source_acquisition.should_call_surf, false);
+    assert.equal(advantageFollowupRequest.context_pack.session_working_memory.active_context_kind, "research_result");
+    assert.ok(
+      advantageFollowupRequest.context_pack.artifacts_in.some((artifact) => artifact.type === "session_local_research_result"),
+      "semantic advantage follow-up must keep the scoped session-local research artifact",
+    );
+
+    const scopeMismatchInput = JSON.parse(JSON.stringify(researchFollowupInput));
+    scopeMismatchInput.contextPackage.sessionLocalResearchResults[0].user_id = "other_user";
+    const scopeMismatchRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...scopeMismatchInput,
+      sessionId: "session_h6",
+      userMessageId: "msg_research_followup_scope_mismatch",
+      createdAt: "2026-06-01T00:00:45.000Z",
+      userIdentity: {
+        userId: "user_h6",
+        userEmail: "jay@example.com",
+      },
+    });
+    assert.equal(scopeMismatchRequest.source_acquisition.research_followup_requested, true);
+    assert.equal(scopeMismatchRequest.source_acquisition.research_followup_has_session_artifact, false);
+    assert.equal(scopeMismatchRequest.source_acquisition.research_followup_missing_session_artifact, true);
+    assert.equal(scopeMismatchRequest.context_pack.session_working_memory.session_local_research_results_count, 0);
+    assert.ok(
+      !scopeMismatchRequest.context_pack.artifacts_in.some((artifact) => artifact.type === "session_local_research_result"),
+      "scope-mismatched research artifacts must be dropped before Hermes",
+    );
+
+    const casualNativeInput = JSON.parse(JSON.stringify(researchFollowupInput));
+    casualNativeInput.message = "Ok thanks bro";
+    casualNativeInput.contextPackage.userMessage = casualNativeInput.message;
+    const casualNativeRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...casualNativeInput,
+      sessionId: "session_h6",
+      userMessageId: "msg_research_followup_native",
+      createdAt: "2026-06-01T00:00:50.000Z",
+      userIdentity: {
+        userId: "user_h6",
+        userEmail: "jay@example.com",
+      },
+    });
+    assert.equal(casualNativeRequest.source_acquisition.research_followup_requested, false);
+    assert.equal(casualNativeRequest.source_acquisition.active_context_kind, "none");
+    assert.equal(casualNativeRequest.source_acquisition.should_call_surf, false);
+
+    const newResearchInput = JSON.parse(JSON.stringify(researchFollowupInput));
+    newResearchInput.message = "Tìm thêm 5 bên khác nữa đi";
+    newResearchInput.contextPackage.userMessage = newResearchInput.message;
+    const newResearchRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...newResearchInput,
+      sessionId: "session_h6",
+      userMessageId: "msg_research_followup_new_research",
+      createdAt: "2026-06-01T00:00:55.000Z",
+      userIdentity: {
+        userId: "user_h6",
+        userEmail: "jay@example.com",
+      },
+    });
+    assert.equal(newResearchRequest.source_acquisition.research_followup_requested, false);
+    assert.equal(newResearchRequest.source_acquisition.active_context_kind, "none");
+    assert.equal(newResearchRequest.source_acquisition.should_call_surf, true);
+
+    const sourceDocsInput = JSON.parse(JSON.stringify(researchFollowupInput));
+    sourceDocsInput.message = "FAQ nói gì về KYC?";
+    sourceDocsInput.contextPackage.userMessage = sourceDocsInput.message;
+    const sourceDocsRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...sourceDocsInput,
+      sessionId: "session_h6",
+      userMessageId: "msg_source_docs_question",
+      createdAt: "2026-06-01T00:00:58.000Z",
+      userIdentity: {
+        userId: "user_h6",
+        userEmail: "jay@example.com",
+      },
+    });
+    assert.equal(sourceDocsRequest.source_acquisition.research_followup_requested, false);
+    assert.equal(sourceDocsRequest.source_acquisition.active_context_kind, "source_context");
+    assert.equal(sourceDocsRequest.source_acquisition.should_call_surf, false);
 
     const missingResearchInput = JSON.parse(JSON.stringify(sampleTurnInput));
     missingResearchInput.message = "Trong 5 bên đó, bên nào giống Hold Pay nhất nếu xét merchant payout API + local fiat rail?";

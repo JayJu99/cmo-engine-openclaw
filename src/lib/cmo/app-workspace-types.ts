@@ -743,7 +743,10 @@ export interface CmoSessionLocalSource {
 export interface CmoSessionLocalResearchResult {
   type: "session_local_research_result";
   schema_version: "cmo.session_local_research_result.v1";
+  tenant_id: string;
   workspace_id: string;
+  app_id: string;
+  user_id: string;
   session_id: string;
   turn_id: string;
   created_turn_id: string;
