@@ -17,6 +17,7 @@ import type {
   CMOChatSession,
   CMORuntimeStatus,
   CmoVaultApprovedWriteDryRunResult,
+  CmoVaultApprovedWriteResult,
   CmoRuntimeErrorReason,
   CmoVaultUpdateReviewAction,
 } from "@/lib/cmo/app-workspace-types";
@@ -130,6 +131,13 @@ function dryRunResultForApproval(
   approvalId: string,
 ): CmoVaultApprovedWriteDryRunResult | null {
   return [...(message.vaultUpdateDryRunResults ?? [])].reverse().find((result) => result.approval_id === approvalId) ?? null;
+}
+
+function writeResultForApproval(
+  message: CMOChatMessage,
+  approvalId: string,
+): CmoVaultApprovedWriteResult | null {
+  return [...(message.vaultUpdateWriteResults ?? [])].reverse().find((result) => result.approval_id === approvalId) ?? null;
 }
 
 function runtimeStatusLabel(status: CMORuntimeStatus | null): string {
@@ -333,6 +341,8 @@ export function CMOChatPanel({
   const [reviewingCandidateKey, setReviewingCandidateKey] = useState<string | null>(null);
   const [dryRunStatusMessage, setDryRunStatusMessage] = useState<string | null>(null);
   const [dryRunningApprovalId, setDryRunningApprovalId] = useState<string | null>(null);
+  const [writeStatusMessage, setWriteStatusMessage] = useState<string | null>(null);
+  const [writingApprovalId, setWritingApprovalId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedQualitySummary = contextBrief.contextQualitySummary;
   const visibleMessages = messages.length ? messages : selectedSession?.messages ?? [];
@@ -392,6 +402,7 @@ export function CMOChatPanel({
       setSendStatus(null);
       setReviewStatusMessage(null);
       setDryRunStatusMessage(null);
+      setWriteStatusMessage(null);
       setPendingAssistantMessageId(null);
       setPendingStartedAt(null);
       setPendingElapsedMs(0);
@@ -414,6 +425,7 @@ export function CMOChatPanel({
         setPendingElapsedMs(0);
         setReviewStatusMessage(null);
         setDryRunStatusMessage(null);
+        setWriteStatusMessage(null);
       }, 0);
 
       return () => window.clearTimeout(timeout);
@@ -426,6 +438,7 @@ export function CMOChatPanel({
       setRuntimeErrorReason(selectedSession.runtimeErrorReason ?? null);
       setReviewStatusMessage(null);
       setDryRunStatusMessage(null);
+      setWriteStatusMessage(null);
       setPendingAssistantMessageId(null);
       setPendingStartedAt(null);
       setPendingElapsedMs(0);
@@ -577,6 +590,7 @@ export function CMOChatPanel({
                 suggestedVaultUpdates: response.suggestedVaultUpdates,
                 vaultUpdateApprovalEvents: response.vaultUpdateApprovalEvents,
                 vaultUpdateDryRunResults: response.vaultUpdateDryRunResults,
+                vaultUpdateWriteResults: response.vaultUpdateWriteResults,
               }
             : message,
         ),
@@ -690,6 +704,44 @@ export function CMOChatPanel({
     }
   }
 
+  async function writeVaultUpdate(approvalId: string) {
+    const activeSession = activeDisplaySessionId;
+
+    if (!approvalId || !activeSession || writingApprovalId) {
+      return;
+    }
+
+    setWritingApprovalId(approvalId);
+    setWriteStatusMessage("Vault write pending...");
+    setError(null);
+
+    try {
+      const payload = await readJsonResponse<{ data: CMOChatSession }>(
+        await fetch("/api/cmo/sessions/suggested-vault-updates/write", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            appId: app.id,
+            sessionId: activeSession,
+            approvalId,
+          }),
+        }),
+      );
+
+      setSessionId(payload.data.id);
+      setMessages(payload.data.messages);
+      setWriteStatusMessage("Vault write receipt recorded.");
+      onSessionCreated?.(payload.data.id);
+    } catch (writeError) {
+      setWriteStatusMessage(null);
+      setError(`Write failed: ${writeError instanceof Error ? writeError.message : "Vault write failed"}`);
+    } finally {
+      setWritingApprovalId(null);
+    }
+  }
+
   function renderDryRunResult(result: CmoVaultApprovedWriteDryRunResult | null) {
     if (!result) {
       return null;
@@ -736,10 +788,44 @@ export function CMOChatPanel({
             {result.errors.join(" | ")}
           </div>
         ) : null}
-        <Button type="button" size="sm" variant="outline" disabled>
-          <icons.LockKeyhole />
-          Write disabled
-        </Button>
+      </div>
+    );
+  }
+
+  function renderWriteResult(result: CmoVaultApprovedWriteResult | null) {
+    if (!result) {
+      return null;
+    }
+
+    return (
+      <div className="mt-3 space-y-3 rounded-lg border border-emerald-100 bg-emerald-50/60 px-3 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={result.conflict || result.errors?.length ? "red" : result.deduped ? "blue" : "green"}>
+            {result.conflict ? "conflict" : result.deduped ? "Already written" : result.status ?? "completed"}
+          </Badge>
+          <Badge variant={result.vault_write_performed ? "green" : "slate"}>vault_write_performed={String(result.vault_write_performed)}</Badge>
+          {result.gbrain_index === false ? <Badge variant="slate">gbrain_index=false</Badge> : null}
+          {result.promotion_performed === false ? <Badge variant="slate">promotion_performed=false</Badge> : null}
+        </div>
+        {result.vault_path ? (
+          <div>
+            <div className="text-xs font-bold uppercase text-slate-500">Vault path</div>
+            <pre className="mt-1 overflow-auto rounded bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-50">{result.vault_path}</pre>
+          </div>
+        ) : null}
+        {result.content_hash ? (
+          <div className="break-all text-xs font-semibold text-slate-600">content_hash: {result.content_hash}</div>
+        ) : null}
+        {result.warnings?.length ? (
+          <div className="rounded border border-orange-100 bg-orange-50 px-3 py-2 text-xs leading-5 text-orange-800">
+            {result.warnings.join(" | ")}
+          </div>
+        ) : null}
+        {result.errors?.length ? (
+          <div className="rounded border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-800">
+            {result.errors.join(" | ")}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -775,7 +861,19 @@ export function CMOChatPanel({
             const approvedEvent = reviewStatus === "approved" ? latestApprovedEventForCandidate(message, key) : null;
             const approvalId = recordString(approvedEvent ?? {}, ["approval_id"]);
             const dryRunResult = approvalId ? dryRunResultForApproval(message, approvalId) : null;
+            const writeResult = approvalId ? writeResultForApproval(message, approvalId) : null;
             const dryRunBusy = Boolean(approvalId && dryRunningApprovalId === approvalId);
+            const writeBusy = Boolean(approvalId && writingApprovalId === approvalId);
+            const canWrite =
+              Boolean(approvalId) &&
+              dryRunResult?.dry_run === true &&
+              dryRunResult.write_allowed === true &&
+              dryRunResult.vault_write_performed === false &&
+              dryRunResult.conflict !== true &&
+              !(dryRunResult.errors?.length) &&
+              !writeResult?.conflict &&
+              !writeResult?.vault_write_performed &&
+              !writeResult?.deduped;
 
             return (
               <div key={key} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
@@ -809,9 +907,16 @@ export function CMOChatPanel({
                         Preview Vault Write
                       </Button>
                     ) : null}
+                    {canWrite ? (
+                      <Button type="button" size="sm" variant="outline" disabled={Boolean(writingApprovalId)} onClick={() => void writeVaultUpdate(approvalId)}>
+                        {writeBusy ? <icons.RefreshCw className="animate-spin" /> : <icons.Check />}
+                        Write to Vault
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
                 {renderDryRunResult(dryRunResult)}
+                {renderWriteResult(writeResult)}
               </div>
             );
           })}
@@ -905,6 +1010,7 @@ export function CMOChatPanel({
         {sendStatus ? <div className="border-t border-indigo-100 bg-indigo-50 px-5 py-3 text-sm font-medium text-indigo-700">{sendStatus}</div> : null}
         {reviewStatusMessage ? <div className="border-t border-blue-100 bg-blue-50 px-5 py-3 text-sm font-medium text-blue-700">{reviewStatusMessage}</div> : null}
         {dryRunStatusMessage ? <div className="border-t border-blue-100 bg-blue-50 px-5 py-3 text-sm font-medium text-blue-700">{dryRunStatusMessage}</div> : null}
+        {writeStatusMessage ? <div className="border-t border-emerald-100 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-700">{writeStatusMessage}</div> : null}
         {error ? <div className="border-t border-red-100 bg-red-50 px-5 py-3 text-sm font-medium text-red-700">{error}</div> : null}
 
         <div className="border-t border-slate-100 bg-white p-4">

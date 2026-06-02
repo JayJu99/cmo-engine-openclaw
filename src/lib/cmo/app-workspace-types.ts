@@ -817,6 +817,7 @@ export interface HermesCmoChatMetadata {
   hermesToolEndpointEnabled?: boolean;
   sideEffects?: false | Record<string, false>;
   side_effects?: false | Record<string, false>;
+  write_side_effects?: false | Record<string, boolean>;
   vault_context_usage?: unknown;
   contract_warnings?: string[];
   contract_warnings_count?: number;
@@ -832,7 +833,13 @@ export interface HermesCmoChatMetadata {
   latest_dry_run_status?: CmoVaultApprovedWriteDryRunResult["status"];
   latest_dry_run_approval_id?: string;
   latest_dry_run_write_allowed?: boolean;
-  vault_write_performed?: false;
+  write_results_count?: number;
+  latest_write_status?: CmoVaultApprovedWriteResult["status"];
+  latest_write_approval_id?: string;
+  latest_vault_path?: string;
+  write_source_endpoint?: "/agents/cmo/chat";
+  vault_agent_write?: boolean;
+  vault_write_performed?: boolean;
   delegationsMode: HermesCmoDelegationsMode;
   counters: HermesCmoSafetyCounters;
   forbiddenCounters: HermesCmoForbiddenCounters;
@@ -1131,6 +1138,7 @@ export interface CMOChatMessage {
   suggestedVaultUpdates?: Record<string, unknown>[];
   vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
   vaultUpdateDryRunResults?: CmoVaultApprovedWriteDryRunResult[];
+  vaultUpdateWriteResults?: CmoVaultApprovedWriteResult[];
 }
 
 export type CmoVaultUpdateReviewAction = "approved" | "rejected" | "deferred";
@@ -1174,6 +1182,29 @@ export interface CmoVaultApprovedWriteDryRunResult {
   conflict?: boolean;
   previous_approval_payload_hash?: string;
   latest_approval_payload_hash?: string;
+  product_approval_payload_hash?: string;
+}
+
+export interface CmoVaultApprovedWriteResult {
+  schema_version: "vault_agent.approved_write_result.v1";
+  approval_id: string;
+  idempotency_key: string;
+  approval_payload_hash: string;
+  vault_write_performed: boolean;
+  vault_path?: string;
+  content_hash?: string;
+  deduped?: boolean;
+  conflict?: boolean;
+  side_effects?: false | Record<string, boolean>;
+  warnings?: string[];
+  errors?: string[];
+  created_at: string;
+  status?: "completed" | "failed" | "conflict" | "deduped";
+  gbrain_index?: false;
+  promotion_performed?: false;
+  previous_approval_payload_hash?: string;
+  latest_approval_payload_hash?: string;
+  product_approval_payload_hash?: string;
 }
 
 export interface CMOChatSession {
@@ -1257,6 +1288,7 @@ export interface CMOChatSession {
   suggestedVaultUpdates?: Record<string, unknown>[];
   vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
   vaultUpdateDryRunResults?: CmoVaultApprovedWriteDryRunResult[];
+  vaultUpdateWriteResults?: CmoVaultApprovedWriteResult[];
   decisionLayer?: CmoDecisionLayer;
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
@@ -1359,6 +1391,7 @@ export interface CMOAppChatResponse {
   suggestedVaultUpdates?: Record<string, unknown>[];
   vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
   vaultUpdateDryRunResults?: CmoVaultApprovedWriteDryRunResult[];
+  vaultUpdateWriteResults?: CmoVaultApprovedWriteResult[];
   decisionLayer?: CmoDecisionLayer;
   rawCapturePath?: string;
   rawCaptureStatus?: "saved" | "failed" | "pending";
