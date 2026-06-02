@@ -686,6 +686,17 @@ try {
       suggested_session_summary_update: "CMO recommended tightening onboarding proof.",
       suggested_vault_updates: [{ type: "session_summary", statement: "Draft only; do not persist to Vault." }],
       vault_context_usage: { used: true, source_count: 1 },
+      contract_warnings: ["artifact_refs_missing:using_artifacts_out_fallback"],
+      artifacts_out_count: 1,
+      artifact_refs_count: 2,
+      decisions_count: 3,
+      suggested_vault_updates_count: 1,
+      state_contract: {
+        schema_version: "cmo.chat.state_contract.v1",
+        artifact_refs: ["artifact_2", "artifact_3"],
+        decisions: ["Decision metadata only."],
+        content: "This raw-looking field must not persist.",
+      },
       side_effects: {
         vault_write: false,
         memory_mutation: false,
@@ -706,9 +717,15 @@ try {
     assert.equal(chatV11Mapped.metadata.fallback_used, false);
     assert.equal(chatV11Mapped.metadata.side_effects.vault_write, false);
     assert.equal(chatV11Mapped.metadata.vault_context_usage.used, true);
+    assert.deepEqual(chatV11Mapped.metadata.contract_warnings, ["artifact_refs_missing:using_artifacts_out_fallback"]);
+    assert.equal(chatV11Mapped.metadata.contract_warnings_count, 1);
     assert.equal(chatV11Mapped.metadata.artifacts_out_count, 1);
+    assert.equal(chatV11Mapped.metadata.artifact_refs_count, 2);
+    assert.equal(chatV11Mapped.metadata.decisions_count, 3);
     assert.equal(chatV11Mapped.metadata.session_summary_update_present, true);
     assert.equal(chatV11Mapped.metadata.suggested_vault_updates_count, 1);
+    assert.equal(chatV11Mapped.metadata.state_contract.schema_version, "cmo.chat.state_contract.v1");
+    assert.equal(chatV11Mapped.metadata.state_contract.content, undefined, "state_contract raw content must not persist");
 
     const baseChatV11Response = {
       schema_version: "hermes.cmo.chat.response.v1_1",
@@ -763,8 +780,50 @@ try {
     }, chatV11Request);
     assert.equal(falseSideEffects.side_effects.publishing, false, "side_effects=false must normalize to full false superset");
 
+    const warningWithFalseSideEffects = chatV11.normalizeHermesCmoChatV11Response({
+      ...baseChatV11Response,
+      contract_warnings: [
+        "artifact_refs_missing:using_artifacts_out_fallback",
+        " ".repeat(4),
+        "x".repeat(500),
+      ],
+      artifacts_out_count: 7,
+      artifact_refs_count: 3,
+      decisions_count: 2,
+      suggested_vault_updates_count: 4,
+      state_contract: {
+        schema_version: "cmo.chat.state_contract.v1",
+        artifact_refs: ["artifact_2"],
+        decisions: ["Decision metadata only."],
+        raw: "do not persist",
+      },
+      side_effects: false,
+    }, chatV11Request);
+    assert.notEqual(warningWithFalseSideEffects, "unsafe_response:side_effects", "warnings with side_effects=false must be accepted");
+    assert.deepEqual(
+      warningWithFalseSideEffects.contract_warnings.slice(0, 2),
+      ["artifact_refs_missing:using_artifacts_out_fallback", `${"x".repeat(237)}...`],
+      "contract warnings must be sanitized and capped as short strings",
+    );
+    assert.equal(warningWithFalseSideEffects.contract_warnings_count, 2);
+    assert.equal(warningWithFalseSideEffects.artifacts_out_count, 7);
+    assert.equal(warningWithFalseSideEffects.artifact_refs_count, 3);
+    assert.equal(warningWithFalseSideEffects.decisions_count, 2);
+    assert.equal(warningWithFalseSideEffects.suggested_vault_updates_count, 4);
+    assert.equal(warningWithFalseSideEffects.state_contract.schema_version, "cmo.chat.state_contract.v1");
+    assert.equal(warningWithFalseSideEffects.state_contract.raw, undefined, "unsafe state_contract keys must be omitted");
+
+    const emptyWarnings = chatV11.normalizeHermesCmoChatV11Response({
+      ...baseChatV11Response,
+      contract_warnings: [],
+      side_effects: false,
+    }, chatV11Request);
+    assert.deepEqual(emptyWarnings.contract_warnings, [], "empty contract_warnings must be accepted");
+    assert.equal(emptyWarnings.contract_warnings_count, 0);
+
     const unsafeVaultWrite = chatV11.normalizeHermesCmoChatV11Response({
       ...baseChatV11Response,
+      contract_warnings: ["warning must not hide unsafe mutation"],
       side_effects: {
         vault_write: true,
       },
@@ -866,12 +925,29 @@ try {
                 suggested_session_summary_update: { summary_delta: "Trace summary delta." },
                 suggested_vault_updates: [{ type: "draft", summary: "Draft only." }],
                 vault_context_usage: { used: false },
+                contract_warnings: ["state_contract_warning"],
+                artifacts_out_count: 11,
+                artifact_refs_count: 5,
+                decisions_count: 4,
+                suggested_vault_updates_count: 2,
+                state_contract: {
+                  schema_version: "cmo.chat.state_contract.v1",
+                  artifact_refs: ["trace_artifact_1"],
+                  raw: "must be omitted from state_contract summary",
+                },
                 side_effects: false,
               }), { status: 200, headers: { "content-type": "application/json" } });
             };
 
             const result = await chatV11.runHermesCmoChatV11(chatV11RunInput());
             assert.equal(result.ok, true, "successful v1.1 run must return ok=true");
+            assert.deepEqual(result.metadata.contract_warnings, ["state_contract_warning"]);
+            assert.equal(result.metadata.contract_warnings_count, 1);
+            assert.equal(result.metadata.artifacts_out_count, 11);
+            assert.equal(result.metadata.artifact_refs_count, 5);
+            assert.equal(result.metadata.decisions_count, 4);
+            assert.equal(result.metadata.suggested_vault_updates_count, 2);
+            assert.equal(result.metadata.state_contract.raw, undefined);
 
             const requestTrace = await readTraceFile(successTraceDir, "request");
             assert.equal(requestTrace.schema_version, "hermes.cmo.chat.request.v1_1");
@@ -893,9 +969,15 @@ try {
             assert.equal(responseTrace.fallback_used, false);
             assert.equal(responseTrace.side_effects.vault_write, false);
             assert.equal(responseTrace.side_effects.executed_surf, false);
-            assert.equal(responseTrace.artifacts_out_count, 1);
+            assert.deepEqual(responseTrace.contract_warnings, ["state_contract_warning"]);
+            assert.equal(responseTrace.contract_warnings_count, 1);
+            assert.equal(responseTrace.artifacts_out_count, 11);
+            assert.equal(responseTrace.artifact_refs_count, 5);
+            assert.equal(responseTrace.decisions_count, 4);
             assert.equal(responseTrace.session_summary_update_present, true);
-            assert.equal(responseTrace.suggested_vault_updates_count, 1);
+            assert.equal(responseTrace.suggested_vault_updates_count, 2);
+            assert.equal(responseTrace.state_contract.schema_version, "cmo.chat.state_contract.v1");
+            assert.equal(responseTrace.state_contract.raw, undefined);
           },
         );
       } finally {

@@ -818,7 +818,12 @@ export interface HermesCmoChatMetadata {
   sideEffects?: false | Record<string, false>;
   side_effects?: false | Record<string, false>;
   vault_context_usage?: unknown;
+  contract_warnings?: string[];
+  contract_warnings_count?: number;
+  state_contract?: Record<string, unknown>;
   artifacts_out_count?: number;
+  artifact_refs_count?: number;
+  decisions_count?: number;
   session_summary_update_present?: boolean;
   suggested_vault_updates_count?: number;
   delegationsMode: HermesCmoDelegationsMode;

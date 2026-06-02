@@ -14,6 +14,8 @@ const MAX_SESSION_SUMMARY_CHARS = 6_000;
 const MAX_ARTIFACTS = 20;
 const MAX_ARTIFACT_JSON_CHARS = 12_000;
 const MAX_SUGGESTED_VAULT_UPDATES = 12;
+const MAX_CONTRACT_WARNINGS = 20;
+const MAX_CONTRACT_WARNING_CHARS = 240;
 const UNSAFE_ARTIFACT_KEYS =
   /^(api_key|authorization|body|content|cookie|cookies|credential|credentials|env|file_body|file_content|full_content|full_source|full_text|headers|html|markdown|password|private_key|raw|raw_.*|secret|secrets|source_text.*|text|token|tool_args|tool_result)$/i;
 const SIDE_EFFECT_KEYS = [
@@ -106,6 +108,13 @@ export interface HermesCmoChatV11Response {
   suggested_session_summary_update?: unknown;
   suggested_vault_updates: Record<string, unknown>[];
   vault_context_usage?: unknown;
+  contract_warnings: string[];
+  contract_warnings_count: number;
+  state_contract?: Record<string, unknown>;
+  artifacts_out_count: number;
+  artifact_refs_count: number;
+  decisions_count: number;
+  suggested_vault_updates_count: number;
   side_effects: HermesCmoChatV11SideEffects;
 }
 
@@ -164,7 +173,10 @@ const traceValue = (value: unknown, depth = 0): unknown => {
 
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => {
-      if (/api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token/i.test(key)) {
+      if (
+        /api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token/i.test(key) ||
+        UNSAFE_ARTIFACT_KEYS.test(key)
+      ) {
         return [key, "[redacted]"];
       }
 
@@ -178,6 +190,8 @@ const chatResponseTraceSummary = (payload: unknown): Record<string, unknown> => 
   const response = isRecord(root.response) ? root.response : root;
   const sideEffects = response.side_effects ?? root.side_effects;
   const vaultContextUsage = response.vault_context_usage;
+  const contractWarnings = sanitizedContractWarnings(response.contract_warnings);
+  const stateContract = isRecord(response.state_contract) ? safeRecord(response.state_contract, 6_000) : null;
 
   return {
     response_schema_version: response.schema_version,
@@ -185,9 +199,15 @@ const chatResponseTraceSummary = (payload: unknown): Record<string, unknown> => 
     status: response.status,
     ...(sideEffects !== undefined ? { side_effects: sideEffects } : {}),
     ...(vaultContextUsage !== undefined ? { vault_context_usage: vaultContextUsage } : {}),
-    artifacts_out_count: Array.isArray(response.artifacts_out) ? response.artifacts_out.length : 0,
+    contract_warnings: contractWarnings,
+    contract_warnings_count: contractWarnings.length,
+    ...(stateContract ? { state_contract: stateContract } : {}),
+    artifacts_out_count: nonNegativeInteger(response.artifacts_out_count) ?? (Array.isArray(response.artifacts_out) ? response.artifacts_out.length : 0),
+    artifact_refs_count: nonNegativeInteger(response.artifact_refs_count) ?? artifactRefsCount(response),
+    decisions_count: nonNegativeInteger(response.decisions_count) ?? decisionsCount(response),
     session_summary_update_present: response.suggested_session_summary_update !== undefined,
-    suggested_vault_updates_count: Array.isArray(response.suggested_vault_updates) ? response.suggested_vault_updates.length : 0,
+    suggested_vault_updates_count: nonNegativeInteger(response.suggested_vault_updates_count) ??
+      (Array.isArray(response.suggested_vault_updates) ? response.suggested_vault_updates.length : 0),
   };
 };
 
@@ -217,7 +237,11 @@ export async function writeHermesCmoChatV11Trace(
       app_id: request.app_id,
       fallback_used: false,
       side_effects: emptySideEffects(),
+      contract_warnings: [],
+      contract_warnings_count: 0,
       artifacts_out_count: 0,
+      artifact_refs_count: 0,
+      decisions_count: 0,
       session_summary_update_present: false,
       suggested_vault_updates_count: 0,
       request,
@@ -259,7 +283,11 @@ export async function writeHermesCmoChatV11FallbackTrace(
     fallback_to: "/agents/cmo/execute",
     response: input.fallbackResponse,
     side_effects: input.sideEffects ?? emptySideEffects(),
+    contract_warnings: [],
+    contract_warnings_count: 0,
     artifacts_out_count: input.artifactsOutCount ?? 0,
+    artifact_refs_count: 0,
+    decisions_count: 0,
     session_summary_update_present: input.sessionSummaryUpdatePresent === true,
     suggested_vault_updates_count: input.suggestedVaultUpdatesCount ?? 0,
   });
@@ -385,6 +413,51 @@ function safeRecord(value: Record<string, unknown>, maxJsonChars = MAX_ARTIFACT_
     truncated: true,
     summary: compactText(json, maxJsonChars),
   };
+}
+
+function sanitizedContractWarnings(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => typeof item === "string" ? compactText(item, MAX_CONTRACT_WARNING_CHARS) : "")
+    .filter(Boolean)
+    .slice(0, MAX_CONTRACT_WARNINGS);
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : undefined;
+}
+
+function artifactRefsCount(response: Record<string, unknown>): number {
+  const update = isRecord(response.suggested_session_summary_update) ? response.suggested_session_summary_update : {};
+  const stateContract = isRecord(response.state_contract) ? response.state_contract : {};
+
+  if (Array.isArray(update.artifact_refs)) {
+    return update.artifact_refs.length;
+  }
+
+  if (Array.isArray(stateContract.artifact_refs)) {
+    return stateContract.artifact_refs.length;
+  }
+
+  return 0;
+}
+
+function decisionsCount(response: Record<string, unknown>): number {
+  const update = isRecord(response.suggested_session_summary_update) ? response.suggested_session_summary_update : {};
+  const stateContract = isRecord(response.state_contract) ? response.state_contract : {};
+
+  if (Array.isArray(update.decisions)) {
+    return update.decisions.length;
+  }
+
+  if (Array.isArray(stateContract.decisions)) {
+    return stateContract.decisions.length;
+  }
+
+  return 0;
 }
 
 export function sanitizeHermesCmoChatV11Records(value: unknown, maxItems = MAX_ARTIFACTS): Record<string, unknown>[] {
@@ -538,6 +611,10 @@ export function normalizeHermesCmoChatV11Response(payload: unknown, request: Her
   const answer = isRecord(response.answer) ? response.answer : {};
   const content = typeof answer.content === "string" ? answer.content.trim() : "";
   const sideEffects = sideEffectsAreSafe(response.side_effects ?? payload.side_effects);
+  const artifactsOut = sanitizeHermesCmoChatV11Records(response.artifacts_out);
+  const suggestedVaultUpdates = sanitizeHermesCmoChatV11Records(response.suggested_vault_updates, MAX_SUGGESTED_VAULT_UPDATES);
+  const contractWarnings = sanitizedContractWarnings(response.contract_warnings);
+  const stateContract = isRecord(response.state_contract) ? safeRecord(response.state_contract, 6_000) : null;
 
   if (
     response.schema_version !== CHAT_RESPONSE_SCHEMA ||
@@ -566,12 +643,19 @@ export function normalizeHermesCmoChatV11Response(payload: unknown, request: Her
       ...answer,
       content,
     },
-    artifacts_out: sanitizeHermesCmoChatV11Records(response.artifacts_out),
+    artifacts_out: artifactsOut,
     ...(response.suggested_session_summary_update !== undefined
       ? { suggested_session_summary_update: response.suggested_session_summary_update }
       : {}),
-    suggested_vault_updates: sanitizeHermesCmoChatV11Records(response.suggested_vault_updates, MAX_SUGGESTED_VAULT_UPDATES),
+    suggested_vault_updates: suggestedVaultUpdates,
     ...(response.vault_context_usage !== undefined ? { vault_context_usage: response.vault_context_usage } : {}),
+    contract_warnings: contractWarnings,
+    contract_warnings_count: contractWarnings.length,
+    ...(stateContract ? { state_contract: stateContract } : {}),
+    artifacts_out_count: nonNegativeInteger(response.artifacts_out_count) ?? artifactsOut.length,
+    artifact_refs_count: nonNegativeInteger(response.artifact_refs_count) ?? artifactRefsCount(response),
+    decisions_count: nonNegativeInteger(response.decisions_count) ?? decisionsCount(response),
+    suggested_vault_updates_count: nonNegativeInteger(response.suggested_vault_updates_count) ?? suggestedVaultUpdates.length,
     side_effects: sideEffects,
   };
 }
@@ -631,7 +715,11 @@ function baseMetadata(input: {
   fallbackUsed: boolean;
   fallbackReason?: string;
   vaultContextUsage?: unknown;
+  contractWarnings?: string[];
+  stateContract?: Record<string, unknown>;
   artifactsOutCount?: number;
+  artifactRefsCount?: number;
+  decisionsCount?: number;
   sessionSummaryUpdatePresent?: boolean;
   suggestedVaultUpdatesCount?: number;
 }): HermesCmoChatMetadata {
@@ -643,6 +731,7 @@ function baseMetadata(input: {
     directSupabaseMutations: 0,
     openclawCalls: 0,
   };
+  const stateContract = input.stateContract ? safeRecord(input.stateContract, 6_000) : null;
 
   return {
     runtimeMode: "hermes_cmo",
@@ -665,7 +754,12 @@ function baseMetadata(input: {
       : {}),
     ...(input.sideEffects !== undefined ? { sideEffects: input.sideEffects, side_effects: input.sideEffects } : {}),
     ...(input.vaultContextUsage !== undefined ? { vault_context_usage: input.vaultContextUsage } : {}),
+    contract_warnings: input.contractWarnings ?? [],
+    contract_warnings_count: input.contractWarnings?.length ?? 0,
+    ...(stateContract ? { state_contract: stateContract } : {}),
     artifacts_out_count: input.artifactsOutCount ?? 0,
+    artifact_refs_count: input.artifactRefsCount ?? 0,
+    decisions_count: input.decisionsCount ?? 0,
     session_summary_update_present: input.sessionSummaryUpdatePresent === true,
     suggested_vault_updates_count: input.suggestedVaultUpdatesCount ?? 0,
     delegationsMode: "proposals_only",
@@ -758,9 +852,13 @@ export function mapHermesCmoChatV11ToChatResult(
       fallbackUsed: false,
       sideEffects: response.side_effects,
       vaultContextUsage: response.vault_context_usage,
-      artifactsOutCount: response.artifacts_out.length,
+      contractWarnings: response.contract_warnings,
+      stateContract: response.state_contract,
+      artifactsOutCount: response.artifacts_out_count,
+      artifactRefsCount: response.artifact_refs_count,
+      decisionsCount: response.decisions_count,
       sessionSummaryUpdatePresent: response.suggested_session_summary_update !== undefined,
-      suggestedVaultUpdatesCount: response.suggested_vault_updates.length,
+      suggestedVaultUpdatesCount: response.suggested_vault_updates_count,
     }),
     artifactsOut: response.artifacts_out,
     ...(response.suggested_session_summary_update !== undefined
@@ -880,9 +978,14 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
       ...(typeof normalized === "string" ? {} : {
         side_effects: normalized.side_effects,
         vault_context_usage: normalized.vault_context_usage,
-        artifacts_out_count: normalized.artifacts_out.length,
+        contract_warnings: normalized.contract_warnings,
+        contract_warnings_count: normalized.contract_warnings_count,
+        state_contract: normalized.state_contract,
+        artifacts_out_count: normalized.artifacts_out_count,
+        artifact_refs_count: normalized.artifact_refs_count,
+        decisions_count: normalized.decisions_count,
         session_summary_update_present: normalized.suggested_session_summary_update !== undefined,
-        suggested_vault_updates_count: normalized.suggested_vault_updates.length,
+        suggested_vault_updates_count: normalized.suggested_vault_updates_count,
       }),
     });
 
@@ -916,9 +1019,13 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
         fallbackUsed: false,
         sideEffects: normalized.side_effects,
         vaultContextUsage: normalized.vault_context_usage,
-        artifactsOutCount: normalized.artifacts_out.length,
+        contractWarnings: normalized.contract_warnings,
+        stateContract: normalized.state_contract,
+        artifactsOutCount: normalized.artifacts_out_count,
+        artifactRefsCount: normalized.artifact_refs_count,
+        decisionsCount: normalized.decisions_count,
         sessionSummaryUpdatePresent: normalized.suggested_session_summary_update !== undefined,
-        suggestedVaultUpdatesCount: normalized.suggested_vault_updates.length,
+        suggestedVaultUpdatesCount: normalized.suggested_vault_updates_count,
       }),
     };
   } catch (error) {

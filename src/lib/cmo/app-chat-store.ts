@@ -1346,6 +1346,64 @@ function normalizeHermesCmoPlatformPersistenceSummary(value: unknown): HermesCmo
   };
 }
 
+function normalizeContractWarnings(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const warnings = value
+    .map((item) => typeof item === "string" ? compactSessionSourceText(item, 240) : "")
+    .filter(Boolean)
+    .slice(0, 20);
+
+  return warnings;
+}
+
+function normalizeSafeMetadataValue(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") {
+    return compactSessionSourceText(value, 500);
+  }
+
+  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, 12)
+      .map((item) => normalizeSafeMetadataValue(item, depth + 1))
+      .filter((item) => item !== undefined);
+  }
+
+  if (!isRecord(value) || depth >= 3) {
+    return undefined;
+  }
+
+  const safe: Record<string, unknown> = {};
+
+  for (const [key, nested] of Object.entries(value)) {
+    if (RESEARCH_UNSAFE_KEYS.test(key)) {
+      continue;
+    }
+
+    const normalized = normalizeSafeMetadataValue(nested, depth + 1);
+    if (normalized !== undefined) {
+      safe[key] = normalized;
+    }
+  }
+
+  return Object.keys(safe).length ? safe : undefined;
+}
+
+function normalizeStateContractMetadata(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const normalized = normalizeSafeMetadataValue(value);
+  return isRecord(normalized) ? normalized : undefined;
+}
+
 function supabaseIndexingStatus(results: CmoIndexResult[]): HermesCmoPlatformPersistenceSummary["supabaseIndexingStatus"] {
   if (results.some((result) => result.status === "failed")) {
     return "failed";
@@ -1419,6 +1477,8 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ? value.agentsUsed.map(normalizeHermesCmoAgentUsed).filter((agent): agent is HermesCmoAgentUsed => Boolean(agent))
     : undefined;
   const platformPersistenceSummary = normalizeHermesCmoPlatformPersistenceSummary(value.platformPersistenceSummary);
+  const contractWarnings = normalizeContractWarnings(value.contract_warnings);
+  const stateContract = normalizeStateContractMetadata(value.state_contract);
   const sideEffects = value.sideEffects === false
     ? false
     : isRecord(value.sideEffects) && Object.values(value.sideEffects).every((item) => item === false)
@@ -1452,8 +1512,19 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(typeof value.hermesToolEndpointEnabled === "boolean" ? { hermesToolEndpointEnabled: value.hermesToolEndpointEnabled } : {}),
     ...(sideEffects !== undefined ? { sideEffects, side_effects: sideEffects } : {}),
     ...(value.vault_context_usage !== undefined ? { vault_context_usage: value.vault_context_usage } : {}),
+    ...(contractWarnings ? { contract_warnings: contractWarnings, contract_warnings_count: contractWarnings.length } : {}),
+    ...(typeof value.contract_warnings_count === "number" && Number.isFinite(value.contract_warnings_count)
+      ? { contract_warnings_count: Math.max(0, Math.floor(value.contract_warnings_count)) }
+      : {}),
+    ...(stateContract ? { state_contract: stateContract } : {}),
     ...(typeof value.artifacts_out_count === "number" && Number.isFinite(value.artifacts_out_count)
       ? { artifacts_out_count: Math.max(0, Math.floor(value.artifacts_out_count)) }
+      : {}),
+    ...(typeof value.artifact_refs_count === "number" && Number.isFinite(value.artifact_refs_count)
+      ? { artifact_refs_count: Math.max(0, Math.floor(value.artifact_refs_count)) }
+      : {}),
+    ...(typeof value.decisions_count === "number" && Number.isFinite(value.decisions_count)
+      ? { decisions_count: Math.max(0, Math.floor(value.decisions_count)) }
       : {}),
     ...(typeof value.session_summary_update_present === "boolean"
       ? { session_summary_update_present: value.session_summary_update_present }
