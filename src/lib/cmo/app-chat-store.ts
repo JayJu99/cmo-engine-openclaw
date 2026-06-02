@@ -20,6 +20,7 @@ import type {
   CmoSourceAnswerContext,
   CmoSourceReviewContext,
   CmoStrategyMode,
+  CmoVaultApprovedWriteDryRunResult,
   CmoVaultUpdateApprovalEvent,
   CmoVaultUpdateReviewAction,
   CmoAssumptionReviewStatus,
@@ -76,7 +77,7 @@ import {
 } from "@/lib/cmo/hermes-cmo-chat-v11";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
-import { getCmoVaultAgentHandoffMode } from "@/lib/cmo/config";
+import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs, getCmoVaultAgentHandoffMode } from "@/lib/cmo/config";
 import { indexChatMessages, indexChatSession, type CmoIndexResult } from "@/lib/cmo/supabase-indexing";
 import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/lib/cmo/indexed-context-canary";
 import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
@@ -101,6 +102,8 @@ const INDEXED_SUPPLEMENT_WARNING_CHARS = 4_000;
 const LEGACY_AUTO_CAPTURE_WRITE_REMOTE_SKIP_REASON = "skipped_legacy_auto_capture_because_vault_agent_write_remote_enabled";
 const MAX_SUGGESTED_VAULT_UPDATES_SESSION = 24;
 const MAX_VAULT_UPDATE_APPROVAL_EVENTS = 80;
+const MAX_VAULT_UPDATE_DRY_RUN_RESULTS = 40;
+const VAULT_AGENT_APPROVED_WRITE_DRY_RUN_ENDPOINT = "/agents/vault-agent/approved-write-dry-run";
 
 export interface CmoAppChatTimingInput {
   requestReceivedAt?: string;
@@ -406,6 +409,185 @@ function normalizeVaultUpdateApprovalEvents(value: unknown): CmoVaultUpdateAppro
     })
     .filter((item): item is CmoVaultUpdateApprovalEvent => Boolean(item))
     .slice(-MAX_VAULT_UPDATE_APPROVAL_EVENTS);
+}
+
+const VAULT_APPROVED_WRITE_DRY_RUN_SIDE_EFFECT_KEYS = [
+  "executed_echo",
+  "executed_surf",
+  "executed_vault_agent",
+  "vault_context_retrieval",
+  "vault_write",
+  "memory_mutation",
+  "gbrain_mutation",
+  "supabase_mutation",
+  "session_mutation",
+  "raw_capture",
+  "repo_mutation",
+  "kanban",
+  "openclaw",
+  "publishing",
+  "source_auto_save",
+  "knowledge_promotion",
+] as const;
+
+const VAULT_APPROVED_WRITE_DRY_RUN_SIDE_EFFECT_KEY_SET = new Set<string>(VAULT_APPROVED_WRITE_DRY_RUN_SIDE_EFFECT_KEYS);
+
+function normalizeVaultApprovedWriteDryRunSideEffects(value: unknown): { sideEffects?: false | Record<string, false>; errors: string[] } {
+  if (value === false || value === undefined) {
+    return { sideEffects: value === false ? false : Object.fromEntries(VAULT_APPROVED_WRITE_DRY_RUN_SIDE_EFFECT_KEYS.map((key) => [key, false])) as Record<string, false>, errors: [] };
+  }
+
+  if (!isRecord(value)) {
+    return { sideEffects: Object.fromEntries(VAULT_APPROVED_WRITE_DRY_RUN_SIDE_EFFECT_KEYS.map((key) => [key, false])) as Record<string, false>, errors: ["invalid_side_effects"] };
+  }
+
+  const errors: string[] = [];
+  const sideEffects = Object.fromEntries(VAULT_APPROVED_WRITE_DRY_RUN_SIDE_EFFECT_KEYS.map((key) => [key, false])) as Record<string, false>;
+
+  for (const [key, item] of Object.entries(value)) {
+    if (!VAULT_APPROVED_WRITE_DRY_RUN_SIDE_EFFECT_KEY_SET.has(key)) {
+      continue;
+    }
+
+    if (item !== false && item !== undefined) {
+      errors.push(`unsafe_side_effect:${key}`);
+    }
+  }
+
+  return { sideEffects, errors };
+}
+
+function normalizeDryRunStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => typeof item === "string" ? compactSessionSourceText(item, 240) : "")
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function normalizeDryRunBodyPreview(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return compactSessionSourceText(value, 4_000);
+  }
+
+  const safe = normalizeSafeMetadataValue(value);
+
+  if (safe === undefined) {
+    return undefined;
+  }
+
+  return compactSessionSourceText(JSON.stringify(safe, null, 2), 4_000);
+}
+
+function normalizeVaultApprovedWriteDryRunResult(
+  value: unknown,
+  fallbackApprovalId = "",
+  fallbackCreatedAt = new Date().toISOString(),
+): CmoVaultApprovedWriteDryRunResult | null {
+  if (!isRecord(value) || value.schema_version !== "vault_agent.approved_write_dry_run.v1") {
+    return null;
+  }
+
+  const approvalId = candidateString(value, ["approval_id"], 160) || fallbackApprovalId;
+  const idempotencyKey = candidateString(value, ["idempotency_key"], 240);
+  const approvalPayloadHash = candidateString(value, ["approval_payload_hash"], 240);
+
+  if (!approvalId || !idempotencyKey || !approvalPayloadHash || value.dry_run !== true) {
+    return null;
+  }
+
+  const sideEffects = normalizeVaultApprovedWriteDryRunSideEffects(value.side_effects);
+  const warnings = normalizeDryRunStringList(value.warnings);
+  const unsafeVaultWritePerformed = value.vault_write_performed !== undefined && value.vault_write_performed !== false;
+  const errors = [
+    ...normalizeDryRunStringList(value.errors),
+    ...sideEffects.errors,
+    ...(unsafeVaultWritePerformed ? ["unsafe_vault_write_performed"] : []),
+  ].slice(0, 20);
+  const targetPreview = normalizeSafeMetadataValue(value.target_preview ?? value.target_path ?? value.target);
+  const frontmatterPreview = normalizeSafeMetadataValue(value.frontmatter_preview ?? value.frontmatter);
+  const bodyPreview = normalizeDryRunBodyPreview(value.body_preview ?? value.body);
+  const status = value.status === "conflict" || value.status === "failed" || value.status === "completed"
+    ? errors.length && value.status === "completed"
+      ? "failed"
+      : value.status
+    : errors.length
+      ? "failed"
+      : "completed";
+
+  return {
+    schema_version: "vault_agent.approved_write_dry_run.v1",
+    approval_id: approvalId,
+    idempotency_key: idempotencyKey,
+    approval_payload_hash: approvalPayloadHash,
+    dry_run: true,
+    write_allowed: value.write_allowed === true && errors.length === 0,
+    vault_write_performed: false,
+    ...(targetPreview !== undefined ? { target_preview: targetPreview } : {}),
+    ...(frontmatterPreview !== undefined ? { frontmatter_preview: frontmatterPreview } : {}),
+    ...(bodyPreview ? { body_preview: bodyPreview } : {}),
+    ...(sideEffects.sideEffects !== undefined ? { side_effects: sideEffects.sideEffects } : {}),
+    ...(warnings.length ? { warnings } : {}),
+    ...(errors.length ? { errors } : {}),
+    created_at: candidateString(value, ["created_at"], 80) || fallbackCreatedAt,
+    status,
+    ...(value.conflict === true ? { conflict: true } : {}),
+    ...(candidateString(value, ["previous_approval_payload_hash"], 240) ? { previous_approval_payload_hash: candidateString(value, ["previous_approval_payload_hash"], 240) } : {}),
+    ...(candidateString(value, ["latest_approval_payload_hash"], 240) ? { latest_approval_payload_hash: candidateString(value, ["latest_approval_payload_hash"], 240) } : {}),
+  };
+}
+
+function normalizeVaultApprovedWriteDryRunResults(value: unknown): CmoVaultApprovedWriteDryRunResult[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const merged = new Map<string, CmoVaultApprovedWriteDryRunResult>();
+
+  for (const item of value) {
+    const normalized = normalizeVaultApprovedWriteDryRunResult(item);
+
+    if (normalized) {
+      merged.set(normalized.approval_id, normalized);
+    }
+  }
+
+  return Array.from(merged.values()).slice(-MAX_VAULT_UPDATE_DRY_RUN_RESULTS);
+}
+
+function mergeVaultApprovedWriteDryRunResults(
+  existing: CmoVaultApprovedWriteDryRunResult[] | undefined,
+  next: CmoVaultApprovedWriteDryRunResult,
+): CmoVaultApprovedWriteDryRunResult[] {
+  const merged = new Map<string, CmoVaultApprovedWriteDryRunResult>();
+
+  for (const item of normalizeVaultApprovedWriteDryRunResults(existing)) {
+    merged.set(item.approval_id, item);
+  }
+
+  merged.set(next.approval_id, next);
+
+  return Array.from(merged.values()).slice(-MAX_VAULT_UPDATE_DRY_RUN_RESULTS);
+}
+
+function dryRunResultMetadata(results: CmoVaultApprovedWriteDryRunResult[]): Pick<
+  HermesCmoChatMetadata,
+  "dry_run_results_count" | "latest_dry_run_status" | "latest_dry_run_approval_id" | "latest_dry_run_write_allowed" | "vault_write_performed" | "endpoint_kind" | "runtime_kind"
+> {
+  const latest = results.at(-1);
+
+  return {
+    dry_run_results_count: results.length,
+    ...(latest?.status ? { latest_dry_run_status: latest.status } : {}),
+    ...(latest?.approval_id ? { latest_dry_run_approval_id: latest.approval_id } : {}),
+    ...(typeof latest?.write_allowed === "boolean" ? { latest_dry_run_write_allowed: latest.write_allowed } : {}),
+    vault_write_performed: false,
+    endpoint_kind: "agent_chat",
+    runtime_kind: "ai_agent",
+  };
 }
 
 function normalizeSessionLocalResearchResult(value: unknown): CmoSessionLocalResearchResult | undefined {
@@ -1666,6 +1848,14 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
       ? { approval_events_count: Math.max(0, Math.floor(value.approval_events_count)) }
       : {}),
     ...(normalizeVaultUpdateApprovalAction(value.latest_approval_action) ? { latest_approval_action: normalizeVaultUpdateApprovalAction(value.latest_approval_action) } : {}),
+    ...(typeof value.dry_run_results_count === "number" && Number.isFinite(value.dry_run_results_count)
+      ? { dry_run_results_count: Math.max(0, Math.floor(value.dry_run_results_count)) }
+      : {}),
+    ...(value.latest_dry_run_status === "completed" || value.latest_dry_run_status === "failed" || value.latest_dry_run_status === "conflict"
+      ? { latest_dry_run_status: value.latest_dry_run_status }
+      : {}),
+    ...(stringValue(value.latest_dry_run_approval_id) ? { latest_dry_run_approval_id: stringValue(value.latest_dry_run_approval_id) } : {}),
+    ...(typeof value.latest_dry_run_write_allowed === "boolean" ? { latest_dry_run_write_allowed: value.latest_dry_run_write_allowed } : {}),
     ...(value.vault_write_performed === false ? { vault_write_performed: false } : {}),
     delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode) ?? HERMES_CMO_PROPOSALS_ONLY,
     counters,
@@ -1939,6 +2129,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             sessionArtifacts: sanitizeHermesCmoChatV11Records(message.sessionArtifacts),
             suggestedVaultUpdates: mergeSuggestedVaultUpdates(undefined, sanitizeHermesCmoChatV11Records(message.suggestedVaultUpdates)),
             vaultUpdateApprovalEvents: normalizeVaultUpdateApprovalEvents(message.vaultUpdateApprovalEvents),
+            vaultUpdateDryRunResults: normalizeVaultApprovedWriteDryRunResults(message.vaultUpdateDryRunResults),
           };
         })
         .filter((message): message is CMOChatMessage => Boolean(message))
@@ -1967,6 +2158,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
   const sessionArtifacts = sanitizeHermesCmoChatV11Records(value.sessionArtifacts);
   const suggestedVaultUpdates = mergeSuggestedVaultUpdates(undefined, sanitizeHermesCmoChatV11Records(value.suggestedVaultUpdates));
   const vaultUpdateApprovalEvents = normalizeVaultUpdateApprovalEvents(value.vaultUpdateApprovalEvents);
+  const vaultUpdateDryRunResults = normalizeVaultApprovedWriteDryRunResults(value.vaultUpdateDryRunResults);
   const normalizedActiveSourceId = activeSourceId && sessionLocalSources.some((source) => source.source_id === activeSourceId)
     ? activeSourceId
     : sessionLocalSources[0]?.source_id;
@@ -2053,6 +2245,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
     ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
     ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
+    ...(vaultUpdateDryRunResults.length ? { vaultUpdateDryRunResults } : {}),
     decisionLayer,
     assumptions: normalizeStringList(value.assumptions),
     suggestedActions: normalizeSuggestedActions(value.suggestedActions),
@@ -2283,6 +2476,7 @@ export async function createAppChatSession(
   let sessionArtifacts = continuedSession?.sessionArtifacts ?? [];
   let suggestedVaultUpdates = continuedSession?.suggestedVaultUpdates ?? [];
   const vaultUpdateApprovalEvents = continuedSession?.vaultUpdateApprovalEvents ?? [];
+  const vaultUpdateDryRunResults = continuedSession?.vaultUpdateDryRunResults ?? [];
 
   if (hermesCmoChatV11Requested) {
     const hermesStartedAt = new Date().toISOString();
@@ -2775,6 +2969,10 @@ export async function createAppChatSession(
       suggested_vault_updates_count: suggestedVaultUpdates.length,
       approval_events_count: vaultUpdateApprovalEvents.length,
       ...(vaultUpdateApprovalEvents.at(-1)?.action ? { latest_approval_action: vaultUpdateApprovalEvents.at(-1)?.action } : {}),
+      dry_run_results_count: vaultUpdateDryRunResults.length,
+      ...(vaultUpdateDryRunResults.at(-1)?.status ? { latest_dry_run_status: vaultUpdateDryRunResults.at(-1)?.status } : {}),
+      ...(vaultUpdateDryRunResults.at(-1)?.approval_id ? { latest_dry_run_approval_id: vaultUpdateDryRunResults.at(-1)?.approval_id } : {}),
+      ...(typeof vaultUpdateDryRunResults.at(-1)?.write_allowed === "boolean" ? { latest_dry_run_write_allowed: vaultUpdateDryRunResults.at(-1)?.write_allowed } : {}),
       vault_write_performed: false,
       endpoint_kind: hermesCmoMetadata.endpoint_kind ?? "agent_chat",
       runtime_kind: hermesCmoMetadata.runtime_kind ?? "ai_agent",
@@ -2839,6 +3037,7 @@ export async function createAppChatSession(
     ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
     ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
     ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
+    ...(vaultUpdateDryRunResults.length ? { vaultUpdateDryRunResults } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,
@@ -2865,6 +3064,7 @@ export async function createAppChatSession(
         ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
         ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
         ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
+        ...(vaultUpdateDryRunResults.length ? { vaultUpdateDryRunResults } : {}),
       },
       {
         id: assistantId,
@@ -2907,6 +3107,7 @@ export async function createAppChatSession(
         ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
         ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
         ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
+        ...(vaultUpdateDryRunResults.length ? { vaultUpdateDryRunResults } : {}),
         contextUsedCount: contextUsed.length,
         graphHintCount,
         indexedContextStatus,
@@ -3061,6 +3262,7 @@ export async function createAppChatSession(
     ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
     ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
     ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
+    ...(vaultUpdateDryRunResults.length ? { vaultUpdateDryRunResults } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,
@@ -3637,6 +3839,169 @@ function approvalEventMetadata(events: CmoVaultUpdateApprovalEvent[]): Pick<Herm
   };
 }
 
+interface RunSuggestedVaultUpdateDryRunInput {
+  appId: string;
+  sessionId: string;
+  approvalId: string;
+}
+
+function vaultApprovedWriteDryRunTracePath(session: CMOChatSession, approvalId: string, suffix: "request" | "response" | "error"): string {
+  return path.join(
+    process.cwd(),
+    "data",
+    "cmo-dashboard",
+    "hermes-cmo-traces",
+    `${new Date().toISOString().replace(/[:.]/g, "-")}_${safeId(session.appId)}_${safeId(session.id)}_${safeId(approvalId)}_vault_approved_write_dry_run_${suffix}.json`,
+  );
+}
+
+async function writeVaultApprovedWriteDryRunTrace(
+  session: CMOChatSession,
+  approvalEvent: CmoVaultUpdateApprovalEvent,
+  suffix: "request" | "response" | "error",
+  payload: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const filePath = vaultApprovedWriteDryRunTracePath(session, approvalEvent.approval_id, suffix);
+    const traceRoot = {
+      schema_version: "vault_agent.approved_write_dry_run.trace.v1",
+      endpoint_kind: "agent_chat",
+      runtime_kind: "ai_agent",
+      source_endpoint: "/agents/cmo/chat",
+      requested_endpoint: VAULT_AGENT_APPROVED_WRITE_DRY_RUN_ENDPOINT,
+      app_id: session.appId,
+      session_id: session.id,
+      approval_id: approvalEvent.approval_id,
+      source_response_id: approvalEvent.source_response_id,
+      dry_run_results_count: session.vaultUpdateDryRunResults?.length ?? 0,
+      latest_dry_run_approval_id: approvalEvent.approval_id,
+      vault_write_performed: false,
+      ...payload,
+    };
+
+    const safeTrace = normalizeSafeMetadataValue(traceRoot);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, `${JSON.stringify(safeTrace ?? {}, null, 2)}\n`, "utf8");
+  } catch (error) {
+    console.warn("[cmo-app-chat] Failed to write approved Vault dry-run trace.", {
+      sessionId: session.id,
+      approvalId: approvalEvent.approval_id,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function readHermesDryRunJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+
+  if (!text.trim()) {
+    throw new Error("Hermes Vault Agent dry-run returned an empty response.");
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error("Hermes Vault Agent dry-run returned malformed JSON.");
+  }
+}
+
+function dryRunRequestEnvelope(approvalEvent: CmoVaultUpdateApprovalEvent): Record<string, unknown> {
+  return {
+    ...approvalEvent,
+    vault_write_performed: false,
+  };
+}
+
+async function callVaultAgentApprovedWriteDryRun(
+  session: CMOChatSession,
+  approvalEvent: CmoVaultUpdateApprovalEvent,
+): Promise<unknown> {
+  const baseUrl = getCmoHermesBaseUrl();
+  const apiKey = getCmoHermesApiKey();
+  const timeoutMs = getCmoHermesTimeoutMs();
+
+  if (!baseUrl) {
+    throw new Error("CMO_HERMES_BASE_URL is not configured.");
+  }
+
+  if (!apiKey) {
+    throw new Error("CMO_HERMES_API_KEY is not configured.");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const requestEnvelope = dryRunRequestEnvelope(approvalEvent);
+
+  await writeVaultApprovedWriteDryRunTrace(session, approvalEvent, "request", {
+    request: requestEnvelope,
+    timeout_ms: timeoutMs,
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}${VAULT_AGENT_APPROVED_WRITE_DRY_RUN_ENDPOINT}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(requestEnvelope),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    const payload = await readHermesDryRunJson(response);
+
+    if (!response.ok) {
+      throw new Error(`Hermes Vault Agent dry-run failed with HTTP ${response.status}.`);
+    }
+
+    await writeVaultApprovedWriteDryRunTrace(session, approvalEvent, "response", {
+      http_status: response.status,
+      response: payload,
+    });
+
+    return payload;
+  } catch (error) {
+    await writeVaultApprovedWriteDryRunTrace(session, approvalEvent, "error", {
+      error: error instanceof Error ? error.message : String(error),
+      vault_write_performed: false,
+    });
+
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("Hermes Vault Agent dry-run request timed out.");
+    }
+
+    throw error instanceof Error ? error : new Error("Hermes Vault Agent dry-run failed.");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function dryRunConflictResult(
+  existing: CmoVaultApprovedWriteDryRunResult,
+  next: CmoVaultApprovedWriteDryRunResult,
+  createdAt: string,
+): CmoVaultApprovedWriteDryRunResult {
+  const warnings = [
+    ...(next.warnings ?? []),
+    "approval_payload_hash changed for an existing approval_id; write is blocked until reviewed.",
+  ].slice(0, 20);
+
+  return {
+    ...next,
+    dry_run: true,
+    write_allowed: false,
+    vault_write_performed: false,
+    status: "conflict",
+    conflict: true,
+    previous_approval_payload_hash: existing.approval_payload_hash,
+    latest_approval_payload_hash: next.approval_payload_hash,
+    warnings,
+    created_at: createdAt,
+  };
+}
+
 export async function updateSuggestedVaultUpdateReview(input: UpdateSuggestedVaultUpdateReviewInput): Promise<CMOChatSession | null> {
   const app = getAppWorkspace(input.appId);
 
@@ -3748,6 +4113,96 @@ export async function updateSuggestedVaultUpdateReview(input: UpdateSuggestedVau
   };
 
   await writeJsonFile(sessionPath(session.id), updated);
+
+  return normalizeSession(updated);
+}
+
+export async function runSuggestedVaultUpdateDryRun(input: RunSuggestedVaultUpdateDryRunInput): Promise<CMOChatSession | null> {
+  const app = getAppWorkspace(input.appId);
+
+  if (!app) {
+    throw new Error(`Unknown appId: ${input.appId}`);
+  }
+
+  const session = await readAppChatSession(input.sessionId);
+
+  if (!session) {
+    return null;
+  }
+
+  if (session.appId !== app.id) {
+    throw new Error("Session does not belong to the requested app.");
+  }
+
+  const approvalId = input.approvalId.trim();
+  const approvalEvent = (session.vaultUpdateApprovalEvents ?? []).find((event) => event.approval_id === approvalId);
+
+  if (!approvalId || !approvalEvent) {
+    throw new Error("Vault update approval event was not found.");
+  }
+
+  if (approvalEvent.action !== "approved" || approvalEvent.review_status !== "approved") {
+    throw new Error("Only approved Vault update approval events can be dry-run previewed.");
+  }
+
+  if (!approvalEvent.approved_update) {
+    throw new Error("Approved Vault update event is missing approved_update.");
+  }
+
+  const dryRunCreatedAt = new Date().toISOString();
+  const payload = await callVaultAgentApprovedWriteDryRun(session, approvalEvent);
+  const normalized = normalizeVaultApprovedWriteDryRunResult(payload, approvalId, dryRunCreatedAt);
+
+  if (!normalized) {
+    throw new Error("Hermes Vault Agent dry-run response was malformed.");
+  }
+
+  const existing = (session.vaultUpdateDryRunResults ?? []).find((result) => result.approval_id === approvalId);
+  const result = existing && existing.approval_payload_hash !== normalized.approval_payload_hash
+    ? dryRunConflictResult(existing, normalized, dryRunCreatedAt)
+    : { ...normalized, created_at: dryRunCreatedAt, vault_write_performed: false as const };
+  const vaultUpdateDryRunResults = mergeVaultApprovedWriteDryRunResults(session.vaultUpdateDryRunResults, result);
+  const metadataPatch = dryRunResultMetadata(vaultUpdateDryRunResults);
+  const messages = session.messages.map((message) =>
+    message.id === approvalEvent.source_response_id
+      ? {
+          ...message,
+          vaultUpdateDryRunResults,
+          ...(message.hermesCmoMetadata
+            ? {
+                hermesCmoMetadata: {
+                  ...message.hermesCmoMetadata,
+                  ...metadataPatch,
+                },
+              }
+            : {}),
+        }
+      : message,
+  );
+  const updated: CMOChatSession = {
+    ...session,
+    vaultUpdateDryRunResults,
+    messages,
+    updatedAt: dryRunCreatedAt,
+    ...(session.hermesCmoMetadata
+      ? {
+          hermesCmoMetadata: {
+            ...session.hermesCmoMetadata,
+            ...metadataPatch,
+          },
+        }
+      : {}),
+  };
+
+  await writeJsonFile(sessionPath(session.id), updated);
+  await writeVaultApprovedWriteDryRunTrace(updated, approvalEvent, "response", {
+    dry_run_results_count: vaultUpdateDryRunResults.length,
+    latest_dry_run_status: result.status,
+    latest_dry_run_approval_id: result.approval_id,
+    latest_dry_run_write_allowed: result.write_allowed,
+    vault_write_performed: false,
+    result,
+  });
 
   return normalizeSession(updated);
 }

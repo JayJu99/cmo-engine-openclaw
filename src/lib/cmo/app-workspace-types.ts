@@ -828,6 +828,10 @@ export interface HermesCmoChatMetadata {
   suggested_vault_updates_count?: number;
   approval_events_count?: number;
   latest_approval_action?: CmoVaultUpdateReviewAction;
+  dry_run_results_count?: number;
+  latest_dry_run_status?: CmoVaultApprovedWriteDryRunResult["status"];
+  latest_dry_run_approval_id?: string;
+  latest_dry_run_write_allowed?: boolean;
   vault_write_performed?: false;
   delegationsMode: HermesCmoDelegationsMode;
   counters: HermesCmoSafetyCounters;
@@ -1126,6 +1130,7 @@ export interface CMOChatMessage {
   sessionArtifacts?: Record<string, unknown>[];
   suggestedVaultUpdates?: Record<string, unknown>[];
   vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
+  vaultUpdateDryRunResults?: CmoVaultApprovedWriteDryRunResult[];
 }
 
 export type CmoVaultUpdateReviewAction = "approved" | "rejected" | "deferred";
@@ -1148,6 +1153,27 @@ export interface CmoVaultUpdateApprovalEvent {
   rejected_update?: Record<string, unknown>;
   deferred_update?: Record<string, unknown>;
   vault_write_performed: false;
+}
+
+export interface CmoVaultApprovedWriteDryRunResult {
+  schema_version: "vault_agent.approved_write_dry_run.v1";
+  approval_id: string;
+  idempotency_key: string;
+  approval_payload_hash: string;
+  dry_run: true;
+  write_allowed: boolean;
+  vault_write_performed: false;
+  target_preview?: unknown;
+  frontmatter_preview?: unknown;
+  body_preview?: string;
+  side_effects?: false | Record<string, false>;
+  warnings?: string[];
+  errors?: string[];
+  created_at: string;
+  status?: "completed" | "failed" | "conflict";
+  conflict?: boolean;
+  previous_approval_payload_hash?: string;
+  latest_approval_payload_hash?: string;
 }
 
 export interface CMOChatSession {
@@ -1230,6 +1256,7 @@ export interface CMOChatSession {
   sessionArtifacts?: Record<string, unknown>[];
   suggestedVaultUpdates?: Record<string, unknown>[];
   vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
+  vaultUpdateDryRunResults?: CmoVaultApprovedWriteDryRunResult[];
   decisionLayer?: CmoDecisionLayer;
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
@@ -1331,6 +1358,7 @@ export interface CMOAppChatResponse {
   sessionArtifacts?: Record<string, unknown>[];
   suggestedVaultUpdates?: Record<string, unknown>[];
   vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
+  vaultUpdateDryRunResults?: CmoVaultApprovedWriteDryRunResult[];
   decisionLayer?: CmoDecisionLayer;
   rawCapturePath?: string;
   rawCaptureStatus?: "saved" | "failed" | "pending";

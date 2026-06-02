@@ -2069,6 +2069,11 @@ try {
     assert.match(source, /latest_approval_action/);
     assert.match(source, /MAX_SUGGESTED_VAULT_UPDATES_SESSION/);
     assert.match(source, /MAX_VAULT_UPDATE_APPROVAL_EVENTS/);
+    assert.match(source, /MAX_VAULT_UPDATE_DRY_RUN_RESULTS/);
+    assert.match(source, /VAULT_AGENT_APPROVED_WRITE_DRY_RUN_ENDPOINT = "\/agents\/vault-agent\/approved-write-dry-run"/);
+    assert.match(source, /getCmoHermesBaseUrl/);
+    assert.match(source, /getCmoHermesApiKey/);
+    assert.match(source, /getCmoHermesTimeoutMs/);
     assert.match(source, /candidate_key/);
     assert.match(source, /createHash\("sha256"\)/);
     assert.match(source, /truth_status: "draft"/);
@@ -2082,6 +2087,29 @@ try {
     assert.match(source, /action === "deferred" \? \{ deferred_update: reviewedUpdate \} : \{\}/);
     assert.doesNotMatch(source, /approved_update: approvedUpdate/);
     assert.match(source, /throw new Error\("Suggested Vault update candidate was not found\."\)/);
+    assert.match(source, /runSuggestedVaultUpdateDryRun/);
+    assert.match(source, /approvalEvent\.action !== "approved" \|\| approvalEvent\.review_status !== "approved"/);
+    assert.match(source, /!approvalEvent\.approved_update/);
+    assert.match(source, /callVaultAgentApprovedWriteDryRun/);
+    assert.match(source, /approved-write-dry-run/);
+    assert.match(source, /approval_payload_hash/);
+    assert.match(source, /idempotency_key/);
+    assert.match(source, /dry_run: true/);
+    assert.match(source, /unsafe_vault_write_performed/);
+    assert.match(source, /value\.vault_write_performed !== undefined && value\.vault_write_performed !== false/);
+    assert.match(source, /unsafe_side_effect:\$\{key\}/);
+    assert.match(source, /"vault_write"/);
+    assert.match(source, /dryRunConflictResult/);
+    assert.match(source, /previous_approval_payload_hash/);
+    assert.match(source, /latest_approval_payload_hash/);
+    assert.match(source, /write_allowed: false/);
+    assert.match(source, /vaultUpdateDryRunResults/);
+    assert.match(source, /dry_run_results_count/);
+    assert.match(source, /latest_dry_run_status/);
+    assert.match(source, /latest_dry_run_approval_id/);
+    assert.match(source, /latest_dry_run_write_allowed/);
+    assert.match(source, /writeVaultApprovedWriteDryRunTrace/);
+    assert.doesNotMatch(source, /\/agents\/vault-agent\/approved-write(?!-dry-run)/);
     assert.match(source, /sessionArtifacts/);
     assert.match(source, /mergeHermesCmoChatV11SessionSummary/);
     assert.match(source, /withSessionSourceRoutingMetadata/);
@@ -2100,14 +2128,36 @@ try {
     assert.doesNotMatch(suggestedVaultReviewRouteSource, /VaultAgent|runVaultAgent|autoCapture|save-to-vault|capture-save/);
     assert.doesNotMatch(suggestedVaultReviewRouteSource, /indexChat|Supabase|supabase|gbrain|memory_mutation|vault_write/);
 
+    const suggestedVaultDryRunRouteSource = await readFile(
+      path.join(rootDir, "src", "app", "api", "cmo", "sessions", "suggested-vault-updates", "dry-run", "route.ts"),
+      "utf8",
+    );
+    assert.match(suggestedVaultDryRunRouteSource, /runSuggestedVaultUpdateDryRun/);
+    assert.match(suggestedVaultDryRunRouteSource, /appId, sessionId, and approvalId are required/);
+    assert.doesNotMatch(suggestedVaultDryRunRouteSource, /approved-write(?!-dry-run)|write-turn-log|write_remote|autoCapture|save-to-vault|capture-save/);
+    assert.doesNotMatch(suggestedVaultDryRunRouteSource, /indexChat|Supabase|supabase|gbrain|memory_mutation|vault_write/);
+
     const cmoChatPanelSource = await readFile(path.join(rootDir, "src", "components", "cmo-apps", "cmo-chat-panel.tsx"), "utf8");
     assert.match(cmoChatPanelSource, /Suggested Vault Updates/);
     assert.match(cmoChatPanelSource, /Approve/);
     assert.match(cmoChatPanelSource, /Reject/);
     assert.match(cmoChatPanelSource, /Defer/);
+    assert.match(cmoChatPanelSource, /Preview Vault Write/);
+    assert.match(cmoChatPanelSource, /Write disabled/);
     assert.match(cmoChatPanelSource, /\/api\/cmo\/sessions\/suggested-vault-updates\/review/);
+    assert.match(cmoChatPanelSource, /\/api\/cmo\/sessions\/suggested-vault-updates\/dry-run/);
     assert.match(cmoChatPanelSource, /suggestedVaultUpdates: response\.suggestedVaultUpdates/);
     assert.match(cmoChatPanelSource, /vaultUpdateApprovalEvents: response\.vaultUpdateApprovalEvents/);
+    assert.match(cmoChatPanelSource, /vaultUpdateDryRunResults: response\.vaultUpdateDryRunResults/);
+    assert.match(cmoChatPanelSource, /latestApprovedEventForCandidate/);
+    assert.match(cmoChatPanelSource, /dryRunResultForApproval/);
+    assert.match(cmoChatPanelSource, /target_preview/);
+    assert.match(cmoChatPanelSource, /frontmatter_preview/);
+    assert.match(cmoChatPanelSource, /body_preview/);
+    assert.match(cmoChatPanelSource, /dry_run=true/);
+    assert.match(cmoChatPanelSource, /vault_write_performed=false/);
+    assert.match(cmoChatPanelSource, /const planAllowed = result\.write_allowed && !\(result\.errors\?\.length\)/);
+    assert.match(cmoChatPanelSource, /write_allowed=\{String\(planAllowed\)\}/);
     assert.match(cmoChatPanelSource, /recordString\(candidate, \["kind", "type"\]\)/);
     assert.match(cmoChatPanelSource, /recordString\(candidate, \["subject", "title", "name"\]\)/);
     assert.match(cmoChatPanelSource, /recordString\(candidate, \["summary", "statement", "description"\]\)/);
@@ -2200,6 +2250,12 @@ try {
     assert.match(workspaceTypesSource, /approved_update\?: Record<string, unknown>/);
     assert.match(workspaceTypesSource, /rejected_update\?: Record<string, unknown>/);
     assert.match(workspaceTypesSource, /deferred_update\?: Record<string, unknown>/);
+    assert.match(workspaceTypesSource, /CmoVaultApprovedWriteDryRunResult/);
+    assert.match(workspaceTypesSource, /schema_version: "vault_agent\.approved_write_dry_run\.v1"/);
+    assert.match(workspaceTypesSource, /approval_payload_hash: string/);
+    assert.match(workspaceTypesSource, /dry_run: true/);
+    assert.match(workspaceTypesSource, /vault_write_performed: false/);
+    assert.match(workspaceTypesSource, /vaultUpdateDryRunResults\?: CmoVaultApprovedWriteDryRunResult\[\]/);
 
     const replaySource = await readFile(path.join(rootDir, "scripts", "cmo-hermes-cmo-replay-trace.mjs"), "utf8");
     assert.match(replaySource, /rootCauseClassification/);
