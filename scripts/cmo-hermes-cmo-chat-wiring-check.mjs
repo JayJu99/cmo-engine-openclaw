@@ -701,6 +701,87 @@ try {
     assert.equal(chatV11Mapped.metadata.artifacts_out_count, 1);
     assert.equal(chatV11Mapped.metadata.session_summary_update_present, true);
     assert.equal(chatV11Mapped.metadata.suggested_vault_updates_count, 1);
+
+    const baseChatV11Response = {
+      schema_version: "hermes.cmo.chat.response.v1_1",
+      mode: "cmo.chat",
+      status: "completed",
+      answer: { content: "Accepted v1.1 response." },
+      artifacts_out: [],
+      suggested_vault_updates: [],
+    };
+    const fullSideEffectsFalse = chatV11.normalizeHermesCmoChatV11Response({
+      ...baseChatV11Response,
+      side_effects: {
+        executed_echo: false,
+        executed_surf: false,
+        executed_vault_agent: false,
+        vault_context_retrieval: false,
+        vault_write: false,
+        memory_mutation: false,
+        gbrain_mutation: false,
+        source_auto_save: false,
+        knowledge_promotion: false,
+        supabase_mutation: false,
+        session_mutation: false,
+        raw_capture: false,
+        repo_mutation: false,
+        kanban: false,
+        openclaw: false,
+        publishing: false,
+      },
+    }, chatV11Request);
+    assert.equal(fullSideEffectsFalse.side_effects.vault_write, false, "full side_effects=false object must be accepted");
+    assert.equal(fullSideEffectsFalse.side_effects.executed_surf, false);
+
+    const partialLegacySideEffects = chatV11.normalizeHermesCmoChatV11Response({
+      ...baseChatV11Response,
+      side_effects: {
+        vault_write: false,
+        memory_mutation: false,
+        supabase_mutation: false,
+        session_mutation: false,
+        raw_capture: false,
+      },
+    }, chatV11Request);
+    assert.equal(partialLegacySideEffects.side_effects.gbrain_mutation, false, "missing gbrain_mutation must normalize to false");
+    assert.equal(partialLegacySideEffects.side_effects.repo_mutation, false, "missing repo_mutation must normalize to false");
+    assert.equal(partialLegacySideEffects.side_effects.source_auto_save, false, "missing source_auto_save must normalize to false");
+    assert.equal(partialLegacySideEffects.side_effects.knowledge_promotion, false, "missing knowledge_promotion must normalize to false");
+
+    const falseSideEffects = chatV11.normalizeHermesCmoChatV11Response({
+      ...baseChatV11Response,
+      side_effects: false,
+    }, chatV11Request);
+    assert.equal(falseSideEffects.side_effects.publishing, false, "side_effects=false must normalize to full false superset");
+
+    const unsafeVaultWrite = chatV11.normalizeHermesCmoChatV11Response({
+      ...baseChatV11Response,
+      side_effects: {
+        vault_write: true,
+      },
+    }, chatV11Request);
+    assert.equal(unsafeVaultWrite, "unsafe_response:side_effects", "vault_write=true must be rejected");
+
+    const unsafeSurfExecution = chatV11.normalizeHermesCmoChatV11Response({
+      ...baseChatV11Response,
+      side_effects: {
+        executed_surf: true,
+      },
+    }, chatV11Request);
+    assert.equal(unsafeSurfExecution, "unsafe_response:side_effects", "executed_surf=true must be rejected for v1.1 normal chat");
+
+    const oldHermesResponse = chatV11.normalizeHermesCmoChatV11Response({
+      schema_version: "hermes.cmo.response.v1",
+      request_id: chatV11Request.request_id,
+      session_id: chatV11Request.session_id,
+      turn_id: chatV11Request.turn_id,
+      status: "completed",
+      answer: { content: "Old contract shape should not be accepted as /chat v1.1." },
+      side_effects: false,
+    }, chatV11Request);
+    assert.equal(oldHermesResponse, "malformed_response:contract", "old hermes.cmo.response.v1 must not be accepted by /chat v1.1 normalizer");
+
     const mergedArtifacts = chatV11.mergeHermesCmoChatV11Artifacts(
       chatV11Request.context_pack.artifacts_in,
       chatV11Mapped.artifactsOut,

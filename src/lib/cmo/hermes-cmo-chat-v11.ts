@@ -13,6 +13,26 @@ const MAX_ARTIFACT_JSON_CHARS = 12_000;
 const MAX_SUGGESTED_VAULT_UPDATES = 12;
 const UNSAFE_ARTIFACT_KEYS =
   /^(api_key|authorization|body|content|cookie|cookies|credential|credentials|env|file_body|file_content|full_content|full_source|full_text|headers|html|markdown|password|private_key|raw|raw_.*|secret|secrets|source_text.*|text|token|tool_args|tool_result)$/i;
+const SIDE_EFFECT_KEYS = [
+  "executed_echo",
+  "executed_surf",
+  "executed_vault_agent",
+  "vault_context_retrieval",
+  "vault_write",
+  "memory_mutation",
+  "gbrain_mutation",
+  "source_auto_save",
+  "knowledge_promotion",
+  "supabase_mutation",
+  "session_mutation",
+  "raw_capture",
+  "repo_mutation",
+  "kanban",
+  "openclaw",
+  "publishing",
+] as const;
+
+type HermesCmoChatV11SideEffects = Record<(typeof SIDE_EFFECT_KEYS)[number], false>;
 
 export interface HermesCmoChatV11RequestInput extends HermesCmoChatRequestInput {
   sessionSummary?: string;
@@ -83,7 +103,7 @@ export interface HermesCmoChatV11Response {
   suggested_session_summary_update?: unknown;
   suggested_vault_updates: Record<string, unknown>[];
   vault_context_usage?: unknown;
-  side_effects: false | Record<string, false>;
+  side_effects: HermesCmoChatV11SideEffects;
 }
 
 export interface HermesCmoChatV11RunResult {
@@ -318,39 +338,36 @@ export function mergeHermesCmoChatV11SessionSummary(existing: string | undefined
   return compactText(`${current}\n\n${updateText}`, MAX_SESSION_SUMMARY_CHARS);
 }
 
-function sideEffectsAreSafe(value: unknown): false | Record<string, false> | null {
+function emptySideEffects(): HermesCmoChatV11SideEffects {
+  return Object.fromEntries(SIDE_EFFECT_KEYS.map((key) => [key, false])) as HermesCmoChatV11SideEffects;
+}
+
+function sideEffectsAreSafe(value: unknown): HermesCmoChatV11SideEffects | null {
   if (value === undefined || value === false) {
-    return false;
+    return emptySideEffects();
   }
 
   if (!isRecord(value)) {
     return null;
   }
 
-  const requiredFalseKeys = [
-    "vault_write",
-    "memory_mutation",
-    "gbrain_mutation",
-    "supabase_mutation",
-    "session_mutation",
-    "raw_capture",
-    "repo_mutation",
-    "publishing",
-  ];
-
-  for (const key of requiredFalseKeys) {
-    if (value[key] !== false) {
-      return null;
-    }
-  }
-
-  for (const key of ["knowledge_promotion", "source_auto_save", "published"]) {
+  for (const key of SIDE_EFFECT_KEYS) {
     if (value[key] !== undefined && value[key] !== false) {
       return null;
     }
   }
 
-  return Object.fromEntries(Object.entries(value).filter(([, item]) => item === false)) as Record<string, false>;
+  if (value.published !== undefined && value.published !== false) {
+    return null;
+  }
+
+  for (const [key, nested] of Object.entries(value)) {
+    if (/^(vault|memory|gbrain|supabase|session|raw_capture|repo|publish|knowledge_promotion|source_auto_save|executed_|kanban|openclaw)/i.test(key) && nested !== false) {
+      return null;
+    }
+  }
+
+  return emptySideEffects();
 }
 
 function unsafeTopLevelMutation(payload: Record<string, unknown>): string | null {
@@ -374,7 +391,7 @@ function unsafeTopLevelMutation(payload: Record<string, unknown>): string | null
   return null;
 }
 
-function normalizeHermesCmoChatV11Response(payload: unknown, request: HermesCmoChatV11Request): HermesCmoChatV11Response | string {
+export function normalizeHermesCmoChatV11Response(payload: unknown, request: HermesCmoChatV11Request): HermesCmoChatV11Response | string {
   if (!isRecord(payload)) {
     return "malformed_response:not_object";
   }
