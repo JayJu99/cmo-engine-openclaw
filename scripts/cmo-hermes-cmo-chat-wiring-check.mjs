@@ -935,7 +935,28 @@ try {
                   artifact_refs: ["trace_artifact_1"],
                   raw: "must be omitted from state_contract summary",
                 },
-                side_effects: false,
+                raw_capture: {
+                  body: "raw payload must not appear in trace",
+                },
+                content: "top-level content-like payload must be redacted",
+                side_effects: {
+                  executed_echo: false,
+                  executed_surf: false,
+                  executed_vault_agent: false,
+                  vault_context_retrieval: false,
+                  vault_write: false,
+                  memory_mutation: false,
+                  gbrain_mutation: false,
+                  source_auto_save: false,
+                  knowledge_promotion: false,
+                  supabase_mutation: false,
+                  session_mutation: false,
+                  raw_capture: false,
+                  repo_mutation: false,
+                  kanban: false,
+                  openclaw: false,
+                  publishing: false,
+                },
               }), { status: 200, headers: { "content-type": "application/json" } });
             };
 
@@ -969,6 +990,10 @@ try {
             assert.equal(responseTrace.fallback_used, false);
             assert.equal(responseTrace.side_effects.vault_write, false);
             assert.equal(responseTrace.side_effects.executed_surf, false);
+            assert.equal(responseTrace.side_effects.raw_capture, false, "side_effects.raw_capture=false must remain a boolean in traces");
+            assert.equal(responseTrace.response.side_effects.raw_capture, false, "nested response side_effects.raw_capture=false must remain a boolean");
+            assert.equal(responseTrace.response.raw_capture, "[redacted]", "raw_capture payload outside side_effects must still be redacted");
+            assert.equal(responseTrace.response.content, "[redacted]", "content-like fields outside side_effects must still be redacted");
             assert.deepEqual(responseTrace.contract_warnings, ["state_contract_warning"]);
             assert.equal(responseTrace.contract_warnings_count, 1);
             assert.equal(responseTrace.artifacts_out_count, 11);

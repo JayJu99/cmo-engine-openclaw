@@ -36,6 +36,7 @@ const SIDE_EFFECT_KEYS = [
   "openclaw",
   "publishing",
 ] as const;
+const SIDE_EFFECT_KEY_SET = new Set<string>(SIDE_EFFECT_KEYS);
 
 type HermesCmoChatV11SideEffects = Record<(typeof SIDE_EFFECT_KEYS)[number], false>;
 
@@ -154,7 +155,7 @@ function compactText(value: string, maxChars: number): string {
   return compact.length > maxChars ? `${compact.slice(0, maxChars - 3).trimEnd()}...` : compact;
 }
 
-const traceValue = (value: unknown, depth = 0): unknown => {
+const traceValue = (value: unknown, depth = 0, parentKey?: string): unknown => {
   if (typeof value === "string") {
     return compactText(value, 1_200);
   }
@@ -164,7 +165,7 @@ const traceValue = (value: unknown, depth = 0): unknown => {
   }
 
   if (Array.isArray(value)) {
-    return value.slice(0, 20).map((item) => traceValue(item, depth + 1));
+    return value.slice(0, 20).map((item) => traceValue(item, depth + 1, parentKey));
   }
 
   if (depth >= 6 || !isRecord(value)) {
@@ -173,6 +174,10 @@ const traceValue = (value: unknown, depth = 0): unknown => {
 
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => {
+      if (parentKey === "side_effects" && SIDE_EFFECT_KEY_SET.has(key) && typeof item === "boolean") {
+        return [key, item];
+      }
+
       if (
         /api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token/i.test(key) ||
         UNSAFE_ARTIFACT_KEYS.test(key)
@@ -180,7 +185,7 @@ const traceValue = (value: unknown, depth = 0): unknown => {
         return [key, "[redacted]"];
       }
 
-      return [key, traceValue(item, depth + 1)];
+      return [key, traceValue(item, depth + 1, key)];
     }),
   );
 };
