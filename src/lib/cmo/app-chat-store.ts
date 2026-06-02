@@ -3905,9 +3905,48 @@ async function readHermesDryRunJson(response: Response): Promise<unknown> {
   }
 }
 
-function dryRunRequestEnvelope(approvalEvent: CmoVaultUpdateApprovalEvent): Record<string, unknown> {
+function approvedUpdateSummaryForDryRun(approvedUpdate: Record<string, unknown>): string {
+  const summary = candidateString(approvedUpdate, ["summary"], 1_500);
+
+  if (summary) {
+    return summary;
+  }
+
+  const decision = candidateString(approvedUpdate, ["decision"], 1_000);
+  const rationale = candidateString(approvedUpdate, ["rationale"], 1_500);
+
+  if (decision && rationale) {
+    return compactSessionSourceText(`${decision}\n\nRationale: ${rationale}`, 1_500);
+  }
+
+  return decision || rationale || candidateString(approvedUpdate, ["subject"], 1_500);
+}
+
+function dryRunApprovalEventEnvelope(approvalEvent: CmoVaultUpdateApprovalEvent): CmoVaultUpdateApprovalEvent {
+  if (!approvalEvent.approved_update) {
+    return approvalEvent;
+  }
+
+  const dryRunApprovedUpdate = {
+    ...approvalEvent.approved_update,
+    summary: approvedUpdateSummaryForDryRun(approvalEvent.approved_update),
+  };
+
   return {
     ...approvalEvent,
+    approved_update: dryRunApprovedUpdate,
+    reviewed_update: approvalEvent.reviewed_update === approvalEvent.approved_update
+      ? dryRunApprovedUpdate
+      : approvalEvent.reviewed_update,
+    vault_write_performed: false,
+  };
+}
+
+function dryRunRequestEnvelope(approvalEvent: CmoVaultUpdateApprovalEvent): Record<string, unknown> {
+  const normalizedApprovalEvent = dryRunApprovalEventEnvelope(approvalEvent);
+
+  return {
+    ...normalizedApprovalEvent,
     vault_write_performed: false,
   };
 }
