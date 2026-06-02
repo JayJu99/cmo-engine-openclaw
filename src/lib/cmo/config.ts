@@ -94,6 +94,18 @@ export function getCmoHermesCmoCanaryApps(): string[] {
   return commaSeparatedEnv("CMO_HERMES_CMO_CANARY_APPS");
 }
 
+export function isCmoHermesCmoChatV11Enabled(): boolean {
+  return booleanEnv("CMO_HERMES_CMO_CHAT_V11_ENABLED", false);
+}
+
+export function getCmoHermesCmoChatV11CanaryApps(): string[] {
+  return commaSeparatedEnv("CMO_HERMES_CMO_CHAT_V11_CANARY_APPS");
+}
+
+export function isCmoHermesCmoChatV11FallbackEnabled(): boolean {
+  return booleanEnv("CMO_HERMES_CMO_CHAT_V11_FALLBACK_ENABLED", false);
+}
+
 export function isCmoHermesCmoOrchestrationEnabled(): boolean {
   return booleanEnv("CMO_HERMES_CMO_ORCHESTRATION_ENABLED", false);
 }

@@ -71,16 +71,22 @@ const transpile = async (sourcePath, outputPath, rewrite) => {
 const loadCompiledModules = async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "hermes-cmo-chat-wiring-"));
   const configOut = path.join(tmpDir, "config.js");
+  const appRoutingIntentOut = path.join(tmpDir, "app-routing-intent.js");
   const routerOut = path.join(tmpDir, "hermes-cmo-chat-router.js");
   const mapperOut = path.join(tmpDir, "hermes-cmo-chat-mapper.js");
+  const chatV11Out = path.join(tmpDir, "hermes-cmo-chat-v11.js");
   const sessionWorkingMemoryOut = path.join(tmpDir, "session-working-memory.js");
 
   await transpile(path.join(cmoDir, "config.ts"), configOut);
+  await transpile(path.join(cmoDir, "app-routing-intent.ts"), appRoutingIntentOut);
   await transpile(path.join(cmoDir, "session-working-memory.ts"), sessionWorkingMemoryOut);
   await transpile(path.join(cmoDir, "hermes-cmo-chat-router.ts"), routerOut, (output) =>
-    output.replace('require("@/lib/cmo/config")', 'require("./config.js")'),
+    output
+      .replace('require("@/lib/cmo/config")', 'require("./config.js")')
+      .replace('require("@/lib/cmo/app-routing-intent")', 'require("./app-routing-intent.js")'),
   );
   await transpile(path.join(cmoDir, "hermes-cmo-chat-mapper.ts"), mapperOut);
+  await transpile(path.join(cmoDir, "hermes-cmo-chat-v11.ts"), chatV11Out);
 
   const requireFromTmp = createRequire(routerOut);
 
@@ -88,6 +94,7 @@ const loadCompiledModules = async () => {
     tmpDir,
     router: requireFromTmp(routerOut),
     mapper: requireFromTmp(mapperOut),
+    chatV11: requireFromTmp(chatV11Out),
   };
 };
 
@@ -450,7 +457,7 @@ const makeRuntimeResult = (overrides = {}) => {
 };
 
 try {
-  const { tmpDir, router, mapper } = await loadCompiledModules();
+  const { tmpDir, router, mapper, chatV11 } = await loadCompiledModules();
 
   try {
     await withEnv(
@@ -492,6 +499,66 @@ try {
       },
       async () => {
         assert.equal(router.shouldUseHermesCmoChat("aion"), false, "non-canary app must keep existing path selected");
+      },
+    );
+
+    await withEnv(
+      {
+        CMO_HERMES_CMO_CHAT_V11_ENABLED: "true",
+        CMO_HERMES_CMO_CHAT_V11_CANARY_APPS: "hold-pay",
+        CMO_HERMES_CMO_CHAT_V11_FALLBACK_ENABLED: "true",
+      },
+      async () => {
+        assert.equal(
+          router.shouldUseHermesCmoChatV11("hold-pay"),
+          true,
+          "v1.1 canary flag is intentionally independent from legacy CMO_HERMES_CMO_CHAT_ENABLED",
+        );
+
+        const holdPayMarketResearch = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "Research the merchant payout API market and tell me where Hold Pay should focus.",
+        });
+        assert.equal(holdPayMarketResearch.endpoint, "/agents/cmo/chat", "Hold Pay normal market research must route to /agents/cmo/chat");
+        assert.equal(holdPayMarketResearch.endpointKind, "agent_chat");
+
+        const holdPayCasual = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "What should CMO do next for the Hold Pay onboarding funnel?",
+        });
+        assert.equal(holdPayCasual.endpoint, "/agents/cmo/chat", "Hold Pay casual canary chat must route to /agents/cmo/chat");
+        assert.equal(holdPayCasual.endpointKind, "agent_chat");
+        assert.equal(holdPayCasual.fallbackEnabled, true);
+
+        const nonCanary = router.resolveHermesCmoChatRoute({
+          appId: "holdstation-mini-app",
+          message: "What should CMO do next?",
+        });
+        assert.equal(nonCanary.endpoint, "/agents/cmo/execute", "non-canary normal chat must route to deterministic /execute fallback");
+        assert.equal(nonCanary.endpointKind, "execute");
+
+        const sourceTool = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "Use the active source artifact to answer this.",
+          hasSourceOrToolTask: true,
+        });
+        assert.equal(sourceTool.endpoint, "/agents/cmo/tool-execute", "explicit source/tool task must route to /tool-execute");
+        assert.equal(sourceTool.endpointKind, "tool_execute");
+
+        const surfResearchIntent = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "/surf Research merchant payout API positioning for Hold Pay",
+        });
+        assert.equal(surfResearchIntent.endpoint, "/agents/cmo/chat", "routeIntent surf_research must not override Hold Pay v1.1 canary chat");
+        assert.equal(surfResearchIntent.endpointKind, "agent_chat");
+
+        const forcedFallback = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "What should CMO do next?",
+          forceFallback: true,
+        });
+        assert.equal(forcedFallback.endpoint, "/agents/cmo/execute", "forceFallback must route to /execute");
+        assert.equal(forcedFallback.endpointKind, "execute");
       },
     );
 
@@ -542,6 +609,130 @@ try {
     assert.equal(sessionLocalSource.cache_role, "high_quality_evidence");
     assert.equal(sessionLocalSource.nav_heavy, false);
     assert.equal(sessionLocalSource.tool_read_recommended, false);
+
+    const chatV11Request = chatV11.buildHermesCmoChatV11Request({
+      ...sampleTurnInput,
+      sessionId: "session_h6",
+      userMessageId: "msg_001",
+      createdAt: "2026-05-28T11:00:00.000Z",
+      userIdentity: {
+        userId: "user_h6",
+        userEmail: "jay@example.com",
+      },
+      sessionSummary: "Prior session summary: activation proof was the bottleneck.",
+      sessionArtifacts: [{ type: "prior_artifact", artifact_id: "artifact_1", summary: "Prior artifact survives across turns." }],
+      vaultContext: {
+        schema_version: "cmo.vault_context_pack.runtime.v1",
+        status: "completed",
+        source_count: 1,
+      },
+    });
+    assert.equal(chatV11Request.schema_version, "hermes.cmo.chat.request.v1_1");
+    assert.equal(chatV11Request.tenant_id, "holdstation");
+    assert.equal(chatV11Request.workspace_id, "holdstation-mini-app");
+    assert.equal(chatV11Request.user_id, "user_h6");
+    assert.equal(chatV11Request.intent.user_message, "Review activation plan.");
+    assert.ok(Array.isArray(chatV11Request.messages) && chatV11Request.messages.length >= 2, "/chat request must include recent messages");
+    assert.ok(chatV11Request.messages.length <= 20, "/chat request messages must be capped");
+    assert.equal(chatV11Request.context_pack.session_summary.schema_version, "cmo.session_summary.v1");
+    assert.match(chatV11Request.context_pack.session_summary.summary, /activation proof/);
+    assert.deepEqual(chatV11Request.context_pack.session_summary.active_subjects, []);
+    assert.deepEqual(chatV11Request.context_pack.session_summary.decisions, []);
+    assert.deepEqual(chatV11Request.context_pack.session_summary.open_questions, []);
+    assert.deepEqual(chatV11Request.context_pack.session_summary.comparison_sets, []);
+    assert.deepEqual(chatV11Request.context_pack.session_summary.user_corrections, []);
+    assert.deepEqual(chatV11Request.context_pack.session_summary.source_refs, []);
+    assert.deepEqual(chatV11Request.context_pack.session_summary.artifact_refs, []);
+    assert.deepEqual(chatV11Request.context_pack.session_summary.vault_refs, []);
+    assert.ok(chatV11Request.context_pack.artifacts_in.some((artifact) => artifact.type === "prior_artifact"));
+    assert.equal(chatV11Request.context_pack.vault_context.status, "completed");
+    assert.equal(chatV11Request.options.mode, "cmo.normal_chat");
+    assert.equal(chatV11Request.tool_policy.allow_vault_write, false);
+    assert.equal(chatV11Request.tool_policy.allow_memory_mutation, false);
+    assert.equal(chatV11Request.tool_policy.allow_surf_delegation, false);
+    assert.equal(chatV11Request.tool_policy.read_web_allowed, true);
+    assert.equal(chatV11Request.tool_policy.read_browser_allowed, true);
+
+    const chatV11NullSummaryRequest = chatV11.buildHermesCmoChatV11Request({
+      ...sampleTurnInput,
+      history: [],
+      sessionId: "session_empty_summary",
+      userMessageId: "msg_empty_summary",
+      createdAt: "2026-05-28T11:00:00.000Z",
+      userIdentity: {
+        userId: "user_h6",
+        userEmail: "jay@example.com",
+      },
+      sessionSummary: undefined,
+      sessionArtifacts: [],
+      vaultContext: null,
+    });
+    assert.equal(chatV11NullSummaryRequest.context_pack.session_summary, null);
+
+    const chatV11Mapped = chatV11.mapHermesCmoChatV11ToChatResult(chatV11Request, {
+      schema_version: "hermes.cmo.chat.response.v1_1",
+      mode: "cmo.chat",
+      status: "completed",
+      answer: { content: "Hermes chat v1.1 answer." },
+      artifacts_out: [{ type: "analysis", artifact_id: "artifact_2", summary: "Stored in session only." }],
+      suggested_session_summary_update: "CMO recommended tightening onboarding proof.",
+      suggested_vault_updates: [{ type: "session_summary", statement: "Draft only; do not persist to Vault." }],
+      vault_context_usage: { used: true, source_count: 1 },
+      side_effects: {
+        vault_write: false,
+        memory_mutation: false,
+        gbrain_mutation: false,
+        supabase_mutation: false,
+        session_mutation: false,
+        raw_capture: false,
+        repo_mutation: false,
+        publishing: false,
+        knowledge_promotion: false,
+        source_auto_save: false,
+      },
+    });
+    assert.equal(chatV11Mapped.answer, "Hermes chat v1.1 answer.");
+    assert.equal(chatV11Mapped.metadata.endpoint_kind, "agent_chat");
+    assert.equal(chatV11Mapped.metadata.runtime_kind, "ai_agent");
+    assert.equal(chatV11Mapped.metadata.requested_endpoint, "/agents/cmo/chat");
+    assert.equal(chatV11Mapped.metadata.fallback_used, false);
+    assert.equal(chatV11Mapped.metadata.side_effects.vault_write, false);
+    assert.equal(chatV11Mapped.metadata.vault_context_usage.used, true);
+    assert.equal(chatV11Mapped.metadata.artifacts_out_count, 1);
+    assert.equal(chatV11Mapped.metadata.session_summary_update_present, true);
+    assert.equal(chatV11Mapped.metadata.suggested_vault_updates_count, 1);
+    const mergedArtifacts = chatV11.mergeHermesCmoChatV11Artifacts(
+      chatV11Request.context_pack.artifacts_in,
+      chatV11Mapped.artifactsOut,
+    );
+    assert.ok(mergedArtifacts.some((artifact) => artifact.artifact_id === "artifact_2"), "artifacts_out must be storable in session");
+    assert.match(
+      chatV11.mergeHermesCmoChatV11SessionSummary("Existing summary.", chatV11Mapped.suggestedSessionSummaryUpdate),
+      /tightening onboarding proof/,
+      "suggested_session_summary_update must merge into Product-owned session_summary",
+    );
+    const mergedSummaryDelta = chatV11.mergeHermesCmoChatV11SessionSummary("Existing summary.", {
+      summary_delta: "Hold Pay should compare payout API competitors.",
+      decisions: ["Keep read-only Hermes chat for normal research."],
+      open_questions: ["Which fiat rails are in scope?"],
+      active_subjects: ["Hold Pay", "merchant payout API"],
+      comparison_sets: ["Stripe Connect vs PayPal Payouts"],
+      artifact_refs: ["artifact_2"],
+      vault_refs: ["vault://hold-pay/positioning"],
+    });
+    assert.match(mergedSummaryDelta, /Hold Pay should compare payout API competitors/);
+    assert.match(mergedSummaryDelta, /Decisions: Keep read-only Hermes chat for normal research/);
+    assert.match(mergedSummaryDelta, /Open questions: Which fiat rails are in scope/);
+    assert.match(mergedSummaryDelta, /Active subjects: Hold Pay; merchant payout API/);
+    assert.match(mergedSummaryDelta, /Comparison sets: Stripe Connect vs PayPal Payouts/);
+    assert.match(mergedSummaryDelta, /Artifact refs: artifact_2/);
+    assert.match(mergedSummaryDelta, /Vault refs: vault:\/\/hold-pay\/positioning/);
+    assert.equal(chatV11Mapped.suggestedVaultUpdates.length, 1, "suggested_vault_updates must remain draft/proposal data");
+
+    const fallbackTrace = chatV11.fallbackHermesCmoChatV11Metadata(chatV11Request.request_id, "http_500");
+    assert.equal(fallbackTrace.fallback_used, true);
+    assert.equal(fallbackTrace.fallback_from, "/agents/cmo/chat");
+    assert.equal(fallbackTrace.fallback_to, "/agents/cmo/execute");
 
     const researchFollowupInput = JSON.parse(JSON.stringify(sampleTurnInput));
     researchFollowupInput.message = "Ok lập bảng so 5 bên cho mình xem thử";
@@ -1466,14 +1657,30 @@ try {
     assert.match(invalidCounters.errorReason, /^forbidden_counter_non_zero:vaultWrites=1/);
 
     const source = await readFile(path.join(cmoDir, "app-chat-store.ts"), "utf8");
-    assert.match(source, /const hermesCmoChatRequested = !request\.forceFallback && shouldUseHermesCmoChat\(request\.appId\)/);
+    assert.match(source, /resolveHermesCmoChatRoute\(\{/);
+    assert.match(source, /const hermesCmoChatV11Requested = hermesCmoRoute\.endpointKind === "agent_chat"/);
+    assert.match(source, /const hermesCmoLegacyRequested = legacyHermesCmoChatRequested \|\| hermesCmoRoute\.endpointKind === "tool_execute"/);
     assert.match(source, /shouldUseHermesCmoChat\(request\.appId\)/);
+    assert.match(source, /runHermesCmoChatV11\(\{/);
     assert.match(source, /runHermesCmoRuntime\(hermesRequest\)/);
+    assert.match(source, /const hermesFallbackRequest = mapCmoChatToHermesCmoRequest\(\{/);
+    assert.match(source, /const hermesFallbackResult = await runHermesCmoRuntime\(hermesFallbackRequest\)/);
+    assert.match(source, /answer = mappedHermesFallbackResult\.answer/);
+    assert.match(source, /fallback_used: true/);
+    assert.match(source, /fallback_from: fallbackTrace\.fallback_from/);
+    assert.match(source, /fallback_to: fallbackTrace\.fallback_to/);
+    assert.match(source, /answer = mappedChat\.answer/);
     assert.match(source, /answer = mappedHermesResult\.answer/);
     assert.match(source, /productRenderSource = "hermes_cmo"/);
     assert.match(source, /if \(!usedHermesCmoChat\)/);
     assert.match(source, /productRenderSource = hermesCmoChatRequested \? "fallback_after_hermes_failure"/);
     assert.match(source, /productFallbackReason = hermesCmoChatRequested/);
+    assert.match(source, /durableSideEffectsSuppressed = hermesCmoChatV11Attempted/);
+    assert.match(source, /skipped_hermes_cmo_chat_v11_no_auto_save/);
+    assert.match(source, /skipped_hermes_cmo_chat_v11_no_supabase_mutation/);
+    assert.match(source, /suggestedVaultUpdates/);
+    assert.match(source, /sessionArtifacts/);
+    assert.match(source, /mergeHermesCmoChatV11SessionSummary/);
     assert.match(source, /withSessionSourceRoutingMetadata/);
     assert.match(source, /fallbackContextPackage/);
     assert.match(source, /failed_then_existing_fallback/);

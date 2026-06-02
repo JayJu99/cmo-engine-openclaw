@@ -1,0 +1,729 @@
+import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs } from "./config";
+import type { CMOAppChatResponse, CMOChatMessage, HermesCmoChatMetadata } from "./app-workspace-types";
+import { mapCmoChatToHermesCmoRequest, type HermesCmoChatRequestInput } from "./hermes-cmo-chat-mapper";
+import { HERMES_CMO_CHAT_V11_ENDPOINT } from "./hermes-cmo-chat-router";
+
+const CHAT_REQUEST_SCHEMA = "hermes.cmo.chat.request.v1_1" as const;
+const CHAT_RESPONSE_SCHEMA = "hermes.cmo.chat.response.v1_1" as const;
+const MAX_MESSAGES = 20;
+const MAX_MESSAGE_CHARS = 4_000;
+const MAX_SESSION_SUMMARY_CHARS = 6_000;
+const MAX_ARTIFACTS = 20;
+const MAX_ARTIFACT_JSON_CHARS = 12_000;
+const MAX_SUGGESTED_VAULT_UPDATES = 12;
+const UNSAFE_ARTIFACT_KEYS =
+  /^(api_key|authorization|body|content|cookie|cookies|credential|credentials|env|file_body|file_content|full_content|full_source|full_text|headers|html|markdown|password|private_key|raw|raw_.*|secret|secrets|source_text.*|text|token|tool_args|tool_result)$/i;
+
+export interface HermesCmoChatV11RequestInput extends HermesCmoChatRequestInput {
+  sessionSummary?: string;
+  sessionArtifacts?: Record<string, unknown>[];
+  vaultContext?: unknown;
+}
+
+export interface HermesCmoChatV11Message {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at?: string;
+}
+
+export interface HermesCmoChatV11SessionSummary {
+  schema_version: "cmo.session_summary.v1";
+  summary: string;
+  active_subjects: string[];
+  decisions: string[];
+  open_questions: string[];
+  comparison_sets: string[];
+  user_corrections: string[];
+  source_refs: string[];
+  artifact_refs: string[];
+  vault_refs: string[];
+}
+
+export interface HermesCmoChatV11Request {
+  schema_version: typeof CHAT_REQUEST_SCHEMA;
+  request_id: string;
+  session_id: string;
+  turn_id: string;
+  tenant_id: string;
+  workspace_id: string;
+  app_id: string;
+  user_id: string;
+  intent: {
+    user_message: string;
+  };
+  messages: HermesCmoChatV11Message[];
+  context_pack: {
+    session_summary: HermesCmoChatV11SessionSummary | null;
+    artifacts_in: Record<string, unknown>[];
+    vault_context: unknown;
+  };
+  options: {
+    mode: "cmo.normal_chat";
+  };
+  tool_policy: {
+    mode: "cmo.normal_chat";
+    allow_vault_write: false;
+    allow_memory_mutation: false;
+    allow_surf_delegation: false;
+    read_web_allowed: boolean;
+    read_browser_allowed: boolean;
+  };
+}
+
+export interface HermesCmoChatV11Response {
+  schema_version: typeof CHAT_RESPONSE_SCHEMA;
+  mode: "cmo.chat";
+  status: "completed" | "failed";
+  answer: {
+    content: string;
+    [key: string]: unknown;
+  };
+  artifacts_out: Record<string, unknown>[];
+  suggested_session_summary_update?: unknown;
+  suggested_vault_updates: Record<string, unknown>[];
+  vault_context_usage?: unknown;
+  side_effects: false | Record<string, false>;
+}
+
+export interface HermesCmoChatV11RunResult {
+  ok: true;
+  request: HermesCmoChatV11Request;
+  response: HermesCmoChatV11Response;
+  metadata: HermesCmoChatMetadata;
+}
+
+export interface HermesCmoChatV11RunFailure {
+  ok: false;
+  request?: HermesCmoChatV11Request;
+  fallbackEligible: boolean;
+  fallbackReason: string;
+}
+
+export type HermesCmoChatV11Run = HermesCmoChatV11RunResult | HermesCmoChatV11RunFailure;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function compactText(value: string, maxChars: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+
+  return compact.length > maxChars ? `${compact.slice(0, maxChars - 3).trimEnd()}...` : compact;
+}
+
+function userId(input: HermesCmoChatV11RequestInput): string {
+  return (
+    input.userIdentity?.userId?.trim() ||
+    input.userIdentity?.userEmail?.trim() ||
+    input.userIdentity?.createdByEmail?.trim() ||
+    "legacy_dashboard_user"
+  );
+}
+
+function tenantId(input: HermesCmoChatV11RequestInput): string {
+  return input.request.tenantId?.trim() || "holdstation";
+}
+
+function sanitizedMessages(history: CMOChatMessage[], current: { id: string; content: string; createdAt: string }): HermesCmoChatV11Message[] {
+  const messages = [
+    ...history
+      .filter((message) => message.role === "user" || message.role === "assistant")
+      .map((message) => ({
+        id: message.id,
+        role: message.role as "user" | "assistant",
+        content: compactText(message.content, MAX_MESSAGE_CHARS),
+        ...(message.createdAt ? { created_at: message.createdAt } : {}),
+      })),
+    {
+      id: current.id,
+      role: "user" as const,
+      content: compactText(current.content, MAX_MESSAGE_CHARS),
+      created_at: current.createdAt,
+    },
+  ].filter((message) => message.content);
+
+  return messages.slice(-MAX_MESSAGES);
+}
+
+function stringListFromUnknown(value: unknown, maxItems = 12, maxItemChars = 300): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        return item;
+      }
+
+      if (!isRecord(item)) {
+        return "";
+      }
+
+      for (const key of ["summary", "statement", "title", "name", "question", "decision", "id", "ref", "path"]) {
+        if (typeof item[key] === "string" && item[key].trim()) {
+          return item[key];
+        }
+      }
+
+      return JSON.stringify(safeRecord(item, 1_000) ?? {});
+    })
+    .map((item) => compactText(item, maxItemChars))
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
+function structuredSessionSummary(summary: string | null): HermesCmoChatV11SessionSummary | null {
+  if (!summary?.trim()) {
+    return null;
+  }
+
+  return {
+    schema_version: "cmo.session_summary.v1",
+    summary: compactText(summary, MAX_SESSION_SUMMARY_CHARS),
+    active_subjects: [],
+    decisions: [],
+    open_questions: [],
+    comparison_sets: [],
+    user_corrections: [],
+    source_refs: [],
+    artifact_refs: [],
+    vault_refs: [],
+  };
+}
+
+function safeRecord(value: Record<string, unknown>, maxJsonChars = MAX_ARTIFACT_JSON_CHARS): Record<string, unknown> | null {
+  const safe: Record<string, unknown> = {};
+
+  for (const [key, nested] of Object.entries(value)) {
+    if (UNSAFE_ARTIFACT_KEYS.test(key)) {
+      continue;
+    }
+
+    if (typeof nested === "string") {
+      safe[key] = compactText(nested, 1_200);
+    } else if (typeof nested === "number" || typeof nested === "boolean" || nested === null) {
+      safe[key] = nested;
+    } else if (Array.isArray(nested)) {
+      safe[key] = nested
+        .slice(0, 12)
+        .map((item) => typeof item === "string" ? compactText(item, 500) : isRecord(item) ? safeRecord(item, 2_000) : item)
+        .filter((item) => item !== undefined && item !== null);
+    } else if (isRecord(nested)) {
+      const nestedSafe = safeRecord(nested, 2_000);
+      if (nestedSafe) {
+        safe[key] = nestedSafe;
+      }
+    }
+  }
+
+  if (!Object.keys(safe).length) {
+    return null;
+  }
+
+  const json = JSON.stringify(safe);
+  if (json.length <= maxJsonChars) {
+    return safe;
+  }
+
+  return {
+    type: typeof safe.type === "string" ? safe.type : "hermes_cmo_artifact",
+    truncated: true,
+    summary: compactText(json, maxJsonChars),
+  };
+}
+
+export function sanitizeHermesCmoChatV11Records(value: unknown, maxItems = MAX_ARTIFACTS): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value
+        .slice(0, maxItems)
+        .map((item) => isRecord(item) ? safeRecord(item) : null)
+        .filter((item): item is Record<string, unknown> => Boolean(item))
+    : [];
+}
+
+export function mergeHermesCmoChatV11Artifacts(
+  existing: Record<string, unknown>[] | undefined,
+  next: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  const byKey = new Map<string, Record<string, unknown>>();
+
+  for (const artifact of [...(existing ?? []), ...next]) {
+    const key = typeof artifact.artifact_id === "string"
+      ? artifact.artifact_id
+      : typeof artifact.id === "string"
+        ? artifact.id
+        : `${typeof artifact.type === "string" ? artifact.type : "artifact"}:${JSON.stringify(artifact).slice(0, 160)}`;
+    byKey.set(key, artifact);
+  }
+
+  return Array.from(byKey.values()).slice(-MAX_ARTIFACTS);
+}
+
+function sessionSummaryUpdateText(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) {
+    return compactText(value, MAX_SESSION_SUMMARY_CHARS);
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const lines: string[] = [];
+
+  for (const key of ["summary_delta", "session_summary", "summary", "content", "text", "update"]) {
+    if (typeof value[key] === "string" && value[key].trim()) {
+      lines.push(compactText(value[key], MAX_SESSION_SUMMARY_CHARS));
+      break;
+    }
+  }
+
+  const listLabels: Array<[string, string]> = [
+    ["active_subjects", "Active subjects"],
+    ["decisions", "Decisions"],
+    ["open_questions", "Open questions"],
+    ["comparison_sets", "Comparison sets"],
+    ["artifact_refs", "Artifact refs"],
+    ["vault_refs", "Vault refs"],
+  ];
+
+  for (const [key, label] of listLabels) {
+    const items = stringListFromUnknown(value[key], 8, 220);
+
+    if (items.length) {
+      lines.push(`${label}: ${items.join("; ")}`);
+    }
+  }
+
+  return lines.length ? compactText(lines.join("\n"), MAX_SESSION_SUMMARY_CHARS) : null;
+}
+
+export function mergeHermesCmoChatV11SessionSummary(existing: string | undefined, update: unknown): string | undefined {
+  const updateText = sessionSummaryUpdateText(update);
+  const current = typeof existing === "string" && existing.trim() ? compactText(existing, MAX_SESSION_SUMMARY_CHARS) : "";
+
+  if (!updateText) {
+    return current || undefined;
+  }
+
+  if (!current) {
+    return updateText;
+  }
+
+  if (current.includes(updateText)) {
+    return current;
+  }
+
+  return compactText(`${current}\n\n${updateText}`, MAX_SESSION_SUMMARY_CHARS);
+}
+
+function sideEffectsAreSafe(value: unknown): false | Record<string, false> | null {
+  if (value === undefined || value === false) {
+    return false;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const requiredFalseKeys = [
+    "vault_write",
+    "memory_mutation",
+    "gbrain_mutation",
+    "supabase_mutation",
+    "session_mutation",
+    "raw_capture",
+    "repo_mutation",
+    "publishing",
+  ];
+
+  for (const key of requiredFalseKeys) {
+    if (value[key] !== false) {
+      return null;
+    }
+  }
+
+  for (const key of ["knowledge_promotion", "source_auto_save", "published"]) {
+    if (value[key] !== undefined && value[key] !== false) {
+      return null;
+    }
+  }
+
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item === false)) as Record<string, false>;
+}
+
+function unsafeTopLevelMutation(payload: Record<string, unknown>): string | null {
+  for (const key of [
+    "vault_write",
+    "memory_mutation",
+    "gbrain_mutation",
+    "supabase_mutation",
+    "session_mutation",
+    "raw_capture",
+    "repo_mutation",
+    "publishing",
+    "knowledge_promotion",
+    "source_auto_save",
+  ]) {
+    if (payload[key] === true) {
+      return `${key}=true`;
+    }
+  }
+
+  return null;
+}
+
+function normalizeHermesCmoChatV11Response(payload: unknown, request: HermesCmoChatV11Request): HermesCmoChatV11Response | string {
+  if (!isRecord(payload)) {
+    return "malformed_response:not_object";
+  }
+
+  const response = isRecord(payload.response) ? payload.response : payload;
+  const unsafeMutation = unsafeTopLevelMutation(response);
+  if (unsafeMutation) {
+    return `unsafe_response:${unsafeMutation}`;
+  }
+
+  const answer = isRecord(response.answer) ? response.answer : {};
+  const content = typeof answer.content === "string" ? answer.content.trim() : "";
+  const sideEffects = sideEffectsAreSafe(response.side_effects ?? payload.side_effects);
+
+  if (
+    response.schema_version !== CHAT_RESPONSE_SCHEMA ||
+    response.mode !== "cmo.chat" ||
+    response.request_id !== undefined && response.request_id !== request.request_id ||
+    response.session_id !== undefined && response.session_id !== request.session_id ||
+    response.turn_id !== undefined && response.turn_id !== request.turn_id ||
+    (response.status !== "completed" && response.status !== "failed")
+  ) {
+    return "malformed_response:contract";
+  }
+
+  if (!content) {
+    return "missing_answer_content";
+  }
+
+  if (sideEffects === null) {
+    return "unsafe_response:side_effects";
+  }
+
+  return {
+    schema_version: CHAT_RESPONSE_SCHEMA,
+    mode: "cmo.chat",
+    status: response.status,
+    answer: {
+      ...answer,
+      content,
+    },
+    artifacts_out: sanitizeHermesCmoChatV11Records(response.artifacts_out),
+    ...(response.suggested_session_summary_update !== undefined
+      ? { suggested_session_summary_update: response.suggested_session_summary_update }
+      : {}),
+    suggested_vault_updates: sanitizeHermesCmoChatV11Records(response.suggested_vault_updates, MAX_SUGGESTED_VAULT_UPDATES),
+    ...(response.vault_context_usage !== undefined ? { vault_context_usage: response.vault_context_usage } : {}),
+    side_effects: sideEffects,
+  };
+}
+
+export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput): HermesCmoChatV11Request {
+  const legacyRequest = mapCmoChatToHermesCmoRequest(input);
+  const artifactsIn = sanitizeHermesCmoChatV11Records([
+    ...(Array.isArray(legacyRequest.context_pack.artifacts_in) ? legacyRequest.context_pack.artifacts_in : []),
+    ...(input.sessionArtifacts ?? []),
+  ]);
+  const sessionSummaryText = input.sessionSummary?.trim()
+    ? compactText(input.sessionSummary, MAX_SESSION_SUMMARY_CHARS)
+    : typeof legacyRequest.context_pack.recent_session_summary === "string"
+      ? compactText(legacyRequest.context_pack.recent_session_summary, MAX_SESSION_SUMMARY_CHARS)
+      : null;
+
+  return {
+    schema_version: CHAT_REQUEST_SCHEMA,
+    request_id: `req_cmo_chat_v11_${input.userMessageId}`,
+    session_id: input.sessionId,
+    turn_id: input.userMessageId,
+    tenant_id: tenantId(input),
+    workspace_id: input.request.workspaceId,
+    app_id: input.request.appId,
+    user_id: userId(input),
+    intent: {
+      user_message: input.message,
+    },
+    messages: sanitizedMessages(input.history, {
+      id: input.userMessageId,
+      content: input.message,
+      createdAt: input.createdAt,
+    }),
+    context_pack: {
+      session_summary: structuredSessionSummary(sessionSummaryText),
+      artifacts_in: artifactsIn,
+      vault_context: input.vaultContext ?? null,
+    },
+    options: {
+      mode: "cmo.normal_chat",
+    },
+    tool_policy: {
+      mode: "cmo.normal_chat",
+      allow_vault_write: false,
+      allow_memory_mutation: false,
+      allow_surf_delegation: false,
+      read_web_allowed: true,
+      read_browser_allowed: true,
+    },
+  };
+}
+
+function baseMetadata(input: {
+  requestId: string;
+  responseStatus: string;
+  sideEffects?: false | Record<string, false>;
+  fallbackUsed: boolean;
+  fallbackReason?: string;
+  vaultContextUsage?: unknown;
+  artifactsOutCount?: number;
+  sessionSummaryUpdatePresent?: boolean;
+  suggestedVaultUpdatesCount?: number;
+}): HermesCmoChatMetadata {
+  const counters = {
+    surfCalls: 0,
+    echoCalls: 0,
+    vaultAgentCalls: 0,
+    vaultWrites: 0,
+    directSupabaseMutations: 0,
+    openclawCalls: 0,
+  };
+
+  return {
+    runtimeMode: "hermes_cmo",
+    runtimeStatus: input.fallbackUsed ? "fallback" : "live",
+    calledHermesCmo: true,
+    hermesRequestSent: true,
+    productRenderSource: input.fallbackUsed ? "fallback_after_hermes_failure" : "hermes_cmo",
+    selectedHermesEndpoint: HERMES_CMO_CHAT_V11_ENDPOINT,
+    hermesEndpointKind: "agent_chat",
+    endpoint_kind: "agent_chat",
+    runtime_kind: "ai_agent",
+    requested_endpoint: HERMES_CMO_CHAT_V11_ENDPOINT,
+    fallback_used: input.fallbackUsed,
+    ...(input.fallbackReason ? { fallback_reason: input.fallbackReason } : {}),
+    ...(input.fallbackUsed
+      ? {
+          fallback_from: HERMES_CMO_CHAT_V11_ENDPOINT,
+          fallback_to: "/agents/cmo/execute",
+        }
+      : {}),
+    ...(input.sideEffects !== undefined ? { sideEffects: input.sideEffects, side_effects: input.sideEffects } : {}),
+    ...(input.vaultContextUsage !== undefined ? { vault_context_usage: input.vaultContextUsage } : {}),
+    artifacts_out_count: input.artifactsOutCount ?? 0,
+    session_summary_update_present: input.sessionSummaryUpdatePresent === true,
+    suggested_vault_updates_count: input.suggestedVaultUpdatesCount ?? 0,
+    delegationsMode: "proposals_only",
+    counters,
+    forbiddenCounters: {
+      vaultAgentCalls: 0,
+      vaultWrites: 0,
+      openclawCalls: 0,
+      directSupabaseMutations: 0,
+    },
+    requestId: input.requestId,
+    responseStatus: input.responseStatus,
+    activityEventsCount: 0,
+    activityEvents: [],
+    delegationSummary: [],
+    agentsUsed: ["cmo"],
+    surfCalls: 0,
+    echoCalls: 0,
+  };
+}
+
+export function fallbackHermesCmoChatV11Metadata(requestId: string, fallbackReason: string): HermesCmoChatMetadata {
+  return baseMetadata({
+    requestId,
+    responseStatus: "failed",
+    fallbackUsed: true,
+    fallbackReason,
+    sideEffects: {
+      vault_write: false,
+      memory_mutation: false,
+      gbrain_mutation: false,
+      supabase_mutation: false,
+      session_mutation: false,
+      raw_capture: false,
+      repo_mutation: false,
+      publishing: false,
+      knowledge_promotion: false,
+      source_auto_save: false,
+    },
+  });
+}
+
+export function failedHermesCmoChatV11Metadata(requestId: string, failureReason: string): HermesCmoChatMetadata {
+  return baseMetadata({
+    requestId,
+    responseStatus: "failed",
+    fallbackUsed: false,
+    fallbackReason: failureReason,
+    sideEffects: {
+      vault_write: false,
+      memory_mutation: false,
+      gbrain_mutation: false,
+      supabase_mutation: false,
+      session_mutation: false,
+      raw_capture: false,
+      repo_mutation: false,
+      publishing: false,
+      knowledge_promotion: false,
+      source_auto_save: false,
+    },
+  });
+}
+
+export function mapHermesCmoChatV11ToChatResult(
+  request: HermesCmoChatV11Request,
+  response: HermesCmoChatV11Response,
+): Pick<
+  CMOAppChatResponse,
+  "answer" | "assumptions" | "suggestedActions" | "runtimeStatus" | "runtimeMode" | "runtimeLabel" | "runtimeProvider" | "runtimeAgent" | "isDevelopmentFallback" | "isRuntimeFallback"
+> & {
+  metadata: HermesCmoChatMetadata;
+  artifactsOut: Record<string, unknown>[];
+  suggestedSessionSummaryUpdate?: unknown;
+  suggestedVaultUpdates: Record<string, unknown>[];
+} {
+  return {
+    answer: response.answer.content,
+    assumptions: [],
+    suggestedActions: [],
+    runtimeStatus: response.status === "completed" ? "live" : "runtime_error",
+    runtimeMode: response.status === "completed" ? "live" : "configured_but_unreachable",
+    runtimeLabel: "Hermes CMO chat v1.1",
+    runtimeProvider: "hermes",
+    runtimeAgent: "cmo",
+    isDevelopmentFallback: false,
+    isRuntimeFallback: false,
+    metadata: baseMetadata({
+      requestId: request.request_id,
+      responseStatus: response.status,
+      fallbackUsed: false,
+      sideEffects: response.side_effects,
+      vaultContextUsage: response.vault_context_usage,
+      artifactsOutCount: response.artifacts_out.length,
+      sessionSummaryUpdatePresent: response.suggested_session_summary_update !== undefined,
+      suggestedVaultUpdatesCount: response.suggested_vault_updates.length,
+    }),
+    artifactsOut: response.artifacts_out,
+    ...(response.suggested_session_summary_update !== undefined
+      ? { suggestedSessionSummaryUpdate: response.suggested_session_summary_update }
+      : {}),
+    suggestedVaultUpdates: response.suggested_vault_updates,
+  };
+}
+
+async function parseJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error(`malformed_response:invalid_json:${compactText(text, 240)}`);
+  }
+}
+
+async function httpFailureReason(response: Response): Promise<string> {
+  let detail = "";
+
+  try {
+    const payload = await parseJson(response);
+    detail = isRecord(payload) && typeof payload.error === "string" ? payload.error : compactText(JSON.stringify(payload), 240);
+  } catch {
+    detail = "";
+  }
+
+  return detail ? `http_${response.status}:${detail}` : `http_${response.status}`;
+}
+
+export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): Promise<HermesCmoChatV11Run> {
+  const request = buildHermesCmoChatV11Request(input);
+  const baseUrl = getCmoHermesBaseUrl();
+  const apiKey = getCmoHermesApiKey();
+
+  if (!baseUrl) {
+    return { ok: false, request, fallbackEligible: false, fallbackReason: "CMO_HERMES_BASE_URL is not configured." };
+  }
+
+  if (!apiKey) {
+    return { ok: false, request, fallbackEligible: false, fallbackReason: "CMO_HERMES_API_KEY is not configured." };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), getCmoHermesTimeoutMs());
+
+  try {
+    const response = await fetch(`${baseUrl}${HERMES_CMO_CHAT_V11_ENDPOINT}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(request),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const reason = await httpFailureReason(response);
+
+      return {
+        ok: false,
+        request,
+        fallbackEligible: response.status === 500,
+        fallbackReason: reason,
+      };
+    }
+
+    const payload = await parseJson(response);
+    const normalized = normalizeHermesCmoChatV11Response(payload, request);
+
+    if (typeof normalized === "string") {
+      return {
+        ok: false,
+        request,
+        fallbackEligible: normalized === "missing_answer_content" || normalized.startsWith("malformed_response:"),
+        fallbackReason: normalized,
+      };
+    }
+
+    return {
+      ok: true,
+      request,
+      response: normalized,
+      metadata: baseMetadata({
+        requestId: request.request_id,
+        responseStatus: normalized.status,
+        fallbackUsed: false,
+        sideEffects: normalized.side_effects,
+        vaultContextUsage: normalized.vault_context_usage,
+        artifactsOutCount: normalized.artifacts_out.length,
+        sessionSummaryUpdatePresent: normalized.suggested_session_summary_update !== undefined,
+        suggestedVaultUpdatesCount: normalized.suggested_vault_updates.length,
+      }),
+    };
+  } catch (error) {
+    const fallbackReason = error instanceof Error && error.name === "AbortError"
+      ? "timeout"
+      : error instanceof Error
+        ? error.message
+        : "Hermes CMO chat v1.1 request failed.";
+
+    return {
+      ok: false,
+      request,
+      fallbackEligible: fallbackReason === "timeout" || fallbackReason.startsWith("malformed_response:"),
+      fallbackReason,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}

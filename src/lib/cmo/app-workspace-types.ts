@@ -800,15 +800,27 @@ export interface HermesCmoPlatformPersistenceSummary {
 
 export interface HermesCmoChatMetadata {
   runtimeMode: "hermes_cmo";
-  runtimeStatus: "live";
+  runtimeStatus: "live" | "fallback";
   calledHermesCmo: true;
   hermesRequestSent?: true;
-  productRenderSource?: "hermes_cmo";
+  productRenderSource?: "hermes_cmo" | "fallback_after_hermes_failure";
   selectedHermesEndpoint?: string;
-  hermesEndpointKind?: "execute" | "tool_execute";
+  hermesEndpointKind?: "execute" | "tool_execute" | "agent_chat";
+  endpoint_kind?: "execute" | "tool_execute" | "agent_chat";
+  runtime_kind?: "ai_agent";
+  requested_endpoint?: string;
+  fallback_used?: boolean;
+  fallback_reason?: string;
+  fallback_from?: string;
+  fallback_to?: string;
   hermesEndpointTimeoutMs?: number;
   hermesToolEndpointEnabled?: boolean;
   sideEffects?: false | Record<string, false>;
+  side_effects?: false | Record<string, false>;
+  vault_context_usage?: unknown;
+  artifacts_out_count?: number;
+  session_summary_update_present?: boolean;
+  suggested_vault_updates_count?: number;
   delegationsMode: HermesCmoDelegationsMode;
   counters: HermesCmoSafetyCounters;
   forbiddenCounters: HermesCmoForbiddenCounters;
@@ -1102,6 +1114,9 @@ export interface CMOChatMessage {
   sessionLocalSources?: CmoSessionLocalSource[];
   sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
   activeSourceId?: string;
+  sessionSummary?: string;
+  sessionArtifacts?: Record<string, unknown>[];
+  suggestedVaultUpdates?: Record<string, unknown>[];
 }
 
 export interface CMOChatSession {
@@ -1180,6 +1195,9 @@ export interface CMOChatSession {
   sessionLocalSources?: CmoSessionLocalSource[];
   sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
   activeSourceId?: string;
+  sessionSummary?: string;
+  sessionArtifacts?: Record<string, unknown>[];
+  suggestedVaultUpdates?: Record<string, unknown>[];
   decisionLayer?: CmoDecisionLayer;
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
@@ -1277,6 +1295,9 @@ export interface CMOAppChatResponse {
   sessionLocalSources?: CmoSessionLocalSource[];
   sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
   activeSourceId?: string;
+  sessionSummary?: string;
+  sessionArtifacts?: Record<string, unknown>[];
+  suggestedVaultUpdates?: Record<string, unknown>[];
   decisionLayer?: CmoDecisionLayer;
   rawCapturePath?: string;
   rawCaptureStatus?: "saved" | "failed" | "pending";

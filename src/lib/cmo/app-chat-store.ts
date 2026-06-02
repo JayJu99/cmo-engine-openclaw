@@ -60,8 +60,17 @@ import {
   sanitizeHermesCmoMappedChatResult,
   validateHermesCmoChatCounters,
 } from "@/lib/cmo/hermes-cmo-chat-mapper";
-import { shouldUseHermesCmoChat } from "@/lib/cmo/hermes-cmo-chat-router";
+import { resolveHermesCmoChatRoute, shouldUseHermesCmoChat } from "@/lib/cmo/hermes-cmo-chat-router";
 import { runHermesCmoRuntime, type HermesCmoRuntimeResult } from "@/lib/cmo/hermes-cmo-runtime";
+import {
+  failedHermesCmoChatV11Metadata,
+  fallbackHermesCmoChatV11Metadata,
+  mapHermesCmoChatV11ToChatResult,
+  mergeHermesCmoChatV11Artifacts,
+  mergeHermesCmoChatV11SessionSummary,
+  runHermesCmoChatV11,
+  sanitizeHermesCmoChatV11Records,
+} from "@/lib/cmo/hermes-cmo-chat-v11";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
 import { getCmoVaultAgentHandoffMode } from "@/lib/cmo/config";
@@ -1384,7 +1393,12 @@ function attachHermesCmoPlatformPersistence(
 }
 
 function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | undefined {
-  if (!isRecord(value) || value.runtimeMode !== "hermes_cmo" || value.runtimeStatus !== "live" || value.calledHermesCmo !== true) {
+  if (
+    !isRecord(value) ||
+    value.runtimeMode !== "hermes_cmo" ||
+    (value.runtimeStatus !== "live" && value.runtimeStatus !== "fallback") ||
+    value.calledHermesCmo !== true
+  ) {
     return undefined;
   }
 
@@ -1412,17 +1426,40 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
 
   return {
     runtimeMode: "hermes_cmo",
-    runtimeStatus: "live",
+    runtimeStatus: value.runtimeStatus,
     calledHermesCmo: true,
     ...(value.hermesRequestSent === true ? { hermesRequestSent: true } : {}),
-    ...(value.productRenderSource === "hermes_cmo" ? { productRenderSource: "hermes_cmo" } : {}),
+    ...(value.productRenderSource === "hermes_cmo" || value.productRenderSource === "fallback_after_hermes_failure"
+      ? { productRenderSource: value.productRenderSource }
+      : {}),
     ...(stringValue(value.selectedHermesEndpoint) ? { selectedHermesEndpoint: stringValue(value.selectedHermesEndpoint) } : {}),
-    ...(value.hermesEndpointKind === "execute" || value.hermesEndpointKind === "tool_execute" ? { hermesEndpointKind: value.hermesEndpointKind } : {}),
+    ...(value.hermesEndpointKind === "execute" || value.hermesEndpointKind === "tool_execute" || value.hermesEndpointKind === "agent_chat"
+      ? { hermesEndpointKind: value.hermesEndpointKind }
+      : {}),
+    ...(value.endpoint_kind === "execute" || value.endpoint_kind === "tool_execute" || value.endpoint_kind === "agent_chat"
+      ? { endpoint_kind: value.endpoint_kind }
+      : {}),
+    ...(value.runtime_kind === "ai_agent" ? { runtime_kind: "ai_agent" } : {}),
+    ...(stringValue(value.requested_endpoint) ? { requested_endpoint: stringValue(value.requested_endpoint) } : {}),
+    ...(typeof value.fallback_used === "boolean" ? { fallback_used: value.fallback_used } : {}),
+    ...(stringValue(value.fallback_reason) ? { fallback_reason: stringValue(value.fallback_reason) } : {}),
+    ...(stringValue(value.fallback_from) ? { fallback_from: stringValue(value.fallback_from) } : {}),
+    ...(stringValue(value.fallback_to) ? { fallback_to: stringValue(value.fallback_to) } : {}),
     ...(typeof value.hermesEndpointTimeoutMs === "number" && Number.isFinite(value.hermesEndpointTimeoutMs)
       ? { hermesEndpointTimeoutMs: Math.max(0, Math.floor(value.hermesEndpointTimeoutMs)) }
       : {}),
     ...(typeof value.hermesToolEndpointEnabled === "boolean" ? { hermesToolEndpointEnabled: value.hermesToolEndpointEnabled } : {}),
-    ...(sideEffects !== undefined ? { sideEffects } : {}),
+    ...(sideEffects !== undefined ? { sideEffects, side_effects: sideEffects } : {}),
+    ...(value.vault_context_usage !== undefined ? { vault_context_usage: value.vault_context_usage } : {}),
+    ...(typeof value.artifacts_out_count === "number" && Number.isFinite(value.artifacts_out_count)
+      ? { artifacts_out_count: Math.max(0, Math.floor(value.artifacts_out_count)) }
+      : {}),
+    ...(typeof value.session_summary_update_present === "boolean"
+      ? { session_summary_update_present: value.session_summary_update_present }
+      : {}),
+    ...(typeof value.suggested_vault_updates_count === "number" && Number.isFinite(value.suggested_vault_updates_count)
+      ? { suggested_vault_updates_count: Math.max(0, Math.floor(value.suggested_vault_updates_count)) }
+      : {}),
     delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode) ?? HERMES_CMO_PROPOSALS_ONLY,
     counters,
     forbiddenCounters,
@@ -1691,6 +1728,9 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             sourceReviewContext: normalizeSourceReviewContext(message.sourceReviewContext),
             sourceAnswerContext: normalizeSourceAnswerContext(message.sourceAnswerContext),
             sessionLocalResearchResults: normalizeSessionLocalResearchResults(message.sessionLocalResearchResults, undefined, id),
+            sessionSummary: normalizeOptionalString(message.sessionSummary),
+            sessionArtifacts: sanitizeHermesCmoChatV11Records(message.sessionArtifacts),
+            suggestedVaultUpdates: sanitizeHermesCmoChatV11Records(message.suggestedVaultUpdates),
           };
         })
         .filter((message): message is CMOChatMessage => Boolean(message))
@@ -1715,6 +1755,9 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     ? persistedSessionLocalResearchResults
     : mergeSessionLocalResearchResults(messageSessionLocalResearchResults, undefined);
   const activeSourceId = normalizeOptionalString(value.activeSourceId);
+  const sessionSummary = normalizeOptionalString(value.sessionSummary);
+  const sessionArtifacts = sanitizeHermesCmoChatV11Records(value.sessionArtifacts);
+  const suggestedVaultUpdates = sanitizeHermesCmoChatV11Records(value.suggestedVaultUpdates);
   const normalizedActiveSourceId = activeSourceId && sessionLocalSources.some((source) => source.source_id === activeSourceId)
     ? activeSourceId
     : sessionLocalSources[0]?.source_id;
@@ -1797,6 +1840,9 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     sessionLocalSources,
     sessionLocalResearchResults,
     ...(normalizedActiveSourceId ? { activeSourceId: normalizedActiveSourceId } : {}),
+    ...(sessionSummary ? { sessionSummary } : {}),
+    ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
+    ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
     decisionLayer,
     assumptions: normalizeStringList(value.assumptions),
     suggestedActions: normalizeSuggestedActions(value.suggestedActions),
@@ -1923,15 +1969,31 @@ export async function createAppChatSession(
         tenantId: requestTenantId,
         userId: requestUserId,
       });
-  const hermesCmoChatRequested = !request.forceFallback && shouldUseHermesCmoChat(request.appId);
+  const preliminaryHermesCmoRoute = resolveHermesCmoChatRoute({
+    appId: request.appId,
+    message: request.message,
+    forceFallback: request.forceFallback,
+  });
+  const legacyHermesCmoChatRequested = !request.forceFallback && shouldUseHermesCmoChat(request.appId);
+  const preliminaryHermesCmoChatRequested = legacyHermesCmoChatRequested || preliminaryHermesCmoRoute.endpointKind === "agent_chat";
   const sourceAnswerContext = await buildSourceAnswerContext({
     source: activeSessionLocalSource,
     query: request.message,
     workspaceId: request.workspaceId,
     sessionId,
     nowIso: now,
-    allowRefetch: !hermesCmoChatRequested,
+    allowRefetch: !preliminaryHermesCmoChatRequested,
   });
+  const sourceOrToolTask = sourceAnswerContext?.tool_read_recommended === true;
+  const hermesCmoRoute = resolveHermesCmoChatRoute({
+    appId: request.appId,
+    message: request.message,
+    forceFallback: request.forceFallback,
+    hasSourceOrToolTask: sourceOrToolTask,
+  });
+  const hermesCmoChatV11Requested = hermesCmoRoute.endpointKind === "agent_chat";
+  const hermesCmoLegacyRequested = legacyHermesCmoChatRequested || hermesCmoRoute.endpointKind === "tool_execute";
+  const hermesCmoChatRequested = hermesCmoChatV11Requested || hermesCmoLegacyRequested;
   contextPackage = {
     ...contextPackage,
     runtimeContext,
@@ -2003,11 +2065,201 @@ export async function createAppChatSession(
   let forbiddenCounters: HermesCmoForbiddenCounters | undefined;
   let delegationsMode: HermesCmoDelegationsMode | undefined;
   let usedHermesCmoChat = false;
+  let hermesCmoChatV11Attempted = false;
   let hermesRequestSent = false;
   let productRenderSource: CmoProductRenderSource | undefined;
   let productFallbackReason: string | undefined;
+  let sessionSummary = continuedSession?.sessionSummary;
+  let sessionArtifacts = continuedSession?.sessionArtifacts ?? [];
+  let suggestedVaultUpdates = continuedSession?.suggestedVaultUpdates ?? [];
 
-  if (hermesCmoChatRequested) {
+  if (hermesCmoChatV11Requested) {
+    const hermesStartedAt = new Date().toISOString();
+    const hermesStartedMs = Date.now();
+
+    hermesCmoChatV11Attempted = true;
+    const chatResult = await runHermesCmoChatV11({
+      contextPack: contextPackage.contextPack,
+      contextPackage,
+      message: request.message,
+      history: continuedSession?.messages ?? [],
+      request,
+      contextUsed,
+      missingContext,
+      sessionId,
+      userMessageId: messageId,
+      createdAt: now,
+      userIdentity,
+      sessionSummary,
+      sessionArtifacts,
+      vaultContext: contextPackage.contextPack.vaultAgentContextPack ?? null,
+    });
+    hermesRequestSent = true;
+    liveAttemptStartedAt = hermesStartedAt;
+    liveAttemptDurationMs = Date.now() - hermesStartedMs;
+    calledHermesCmo = true;
+
+    if (chatResult.ok) {
+      const mappedChat = mapHermesCmoChatV11ToChatResult(chatResult.request, chatResult.response);
+
+      answer = mappedChat.answer;
+      status = chatResult.response.status === "completed" ? "completed" : "failed";
+      assumptions = mappedChat.assumptions;
+      suggestedActions = mappedChat.suggestedActions;
+      isDevelopmentFallback = mappedChat.isDevelopmentFallback;
+      isRuntimeFallback = mappedChat.isRuntimeFallback === true;
+      runtimeStatus = mappedChat.runtimeStatus;
+      runtimeMode = mappedChat.runtimeMode ?? "live";
+      attemptedRuntimeMode = "live";
+      runtimeLabel = mappedChat.runtimeLabel;
+      runtimeError = status === "failed" ? "Hermes CMO chat v1.1 returned failed status." : "";
+      runtimeErrorReason = status === "failed" ? "execution_error" : undefined;
+      runtimeProvider = mappedChat.runtimeProvider;
+      runtimeAgent = mappedChat.runtimeAgent;
+      fallbackDurationMs = undefined;
+      timeoutMs = undefined;
+      hermesCmoStatus = "live";
+      hermesCmoCounters = mappedChat.metadata.counters;
+      hermesCmoMetadata = mappedChat.metadata;
+      activityEvents = hermesCmoMetadata.activityEvents;
+      delegationSummary = hermesCmoMetadata.delegationSummary;
+      agentsUsed = hermesCmoMetadata.agentsUsed;
+      surfCalls = hermesCmoMetadata.surfCalls;
+      echoCalls = hermesCmoMetadata.echoCalls;
+      forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
+      delegationsMode = mappedChat.metadata.delegationsMode;
+      productRenderSource = "hermes_cmo";
+      sessionArtifacts = mergeHermesCmoChatV11Artifacts(sessionArtifacts, mappedChat.artifactsOut);
+      sessionSummary = mergeHermesCmoChatV11SessionSummary(sessionSummary, mappedChat.suggestedSessionSummaryUpdate);
+      suggestedVaultUpdates = sanitizeHermesCmoChatV11Records(mappedChat.suggestedVaultUpdates);
+      usedHermesCmoChat = true;
+    } else {
+      const reason = chatResult.fallbackReason;
+
+      console.warn("[cmo-app-chat] Hermes CMO chat v1.1 failed.", {
+        appId: request.appId,
+        sessionId,
+        reason,
+        fallbackEligible: chatResult.fallbackEligible,
+        fallbackEnabled: hermesCmoRoute.fallbackEnabled,
+      });
+
+      hermesCmoStatus = "failed_then_existing_fallback";
+      hermesCmoErrorReason = reason;
+      delegationsMode = HERMES_CMO_PROPOSALS_ONLY;
+
+      if (chatResult.fallbackEligible && hermesCmoRoute.fallbackEnabled) {
+        const fallbackStartedMs = Date.now();
+        const fallbackTrace = fallbackHermesCmoChatV11Metadata(chatResult.request?.request_id ?? `req_cmo_chat_v11_${messageId}`, reason);
+        const hermesFallbackRequest = mapCmoChatToHermesCmoRequest({
+          contextPack: contextPackage.contextPack,
+          contextPackage,
+          message: request.message,
+          history: continuedSession?.messages ?? [],
+          request,
+          contextUsed,
+          missingContext,
+          sessionId,
+          userMessageId: messageId,
+          createdAt: now,
+          userIdentity,
+        });
+        const hermesFallbackResult = await runHermesCmoRuntime(hermesFallbackRequest);
+        sessionLocalResearchResults = mergeSessionLocalResearchResults(
+          sessionLocalResearchResults,
+          sessionLocalResearchResultFromHermesResult({
+            hermesResult: hermesFallbackResult,
+            tenantId: requestTenantId,
+            workspaceId: request.workspaceId,
+            appId: request.appId,
+            userId: requestUserId,
+            sessionId,
+            turnId: messageId,
+            createdAt: now,
+            userQuestion: request.message,
+          }),
+        );
+        const counterValidation = validateHermesCmoChatCounters(hermesFallbackResult);
+
+        if (!counterValidation.ok) {
+          throw new Error(counterValidation.errorReason ?? "invalid_counters_schema");
+        }
+
+        const mappedHermesFallbackResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesFallbackResult));
+
+        answer = mappedHermesFallbackResult.answer;
+        status = "completed";
+        assumptions = mappedHermesFallbackResult.assumptions;
+        suggestedActions = mappedHermesFallbackResult.suggestedActions;
+        isDevelopmentFallback = mappedHermesFallbackResult.isDevelopmentFallback;
+        isRuntimeFallback = true;
+        runtimeStatus = "live_failed_then_fallback";
+        runtimeMode = "fallback";
+        attemptedRuntimeMode = "live";
+        runtimeLabel = mappedHermesFallbackResult.runtimeLabel;
+        runtimeError = reason;
+        runtimeErrorReason = reason === "timeout" ? "timeout" : reason === "missing_answer_content" ? "empty_answer" : "invalid_response";
+        runtimeProvider = mappedHermesFallbackResult.runtimeProvider;
+        runtimeAgent = mappedHermesFallbackResult.runtimeAgent;
+        fallbackDurationMs = Date.now() - fallbackStartedMs;
+        productFallbackReason = reason;
+        hermesCmoStatus = "failed_then_existing_fallback";
+        hermesCmoCounters = mappedHermesFallbackResult.hermesCmoCounters;
+        hermesCmoMetadata = {
+          ...mappedHermesFallbackResult.hermesCmoMetadata,
+          endpoint_kind: fallbackTrace.endpoint_kind,
+          runtime_kind: fallbackTrace.runtime_kind,
+          requested_endpoint: fallbackTrace.requested_endpoint,
+          fallback_used: true,
+          fallback_reason: reason,
+          fallback_from: fallbackTrace.fallback_from,
+          fallback_to: fallbackTrace.fallback_to,
+          side_effects: mappedHermesFallbackResult.hermesCmoMetadata.side_effects ?? fallbackTrace.side_effects,
+        };
+        strategyMode = hermesCmoMetadata.strategyMode;
+        mainBottleneck = hermesCmoMetadata.mainBottleneck;
+        decisionLabel = hermesCmoMetadata.decisionLabel;
+        currentStep = hermesCmoMetadata.currentStep;
+        forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
+        activityEvents = hermesCmoMetadata.activityEvents;
+        delegationSummary = hermesCmoMetadata.delegationSummary;
+        agentsUsed = hermesCmoMetadata.agentsUsed;
+        surfCalls = hermesCmoMetadata.surfCalls;
+        echoCalls = hermesCmoMetadata.echoCalls;
+        delegationsMode = mappedHermesFallbackResult.delegationsMode;
+        productRenderSource = "fallback_after_hermes_failure";
+        usedHermesCmoChat = true;
+      } else {
+        answer = [
+          "Runtime boundary error: Hermes CMO chat v1.1 did not produce a usable answer.",
+          reason,
+          "Fallback to /agents/cmo/execute was disabled or not eligible for this failure.",
+        ].join("\n");
+        status = "failed";
+        isDevelopmentFallback = false;
+        isRuntimeFallback = false;
+        runtimeStatus = "runtime_error";
+        runtimeMode = "configured_but_unreachable";
+        attemptedRuntimeMode = "live";
+        runtimeLabel = "Hermes CMO chat v1.1";
+        runtimeError = reason;
+        runtimeErrorReason = reason === "timeout" ? "timeout" : reason === "missing_answer_content" ? "empty_answer" : "invalid_response";
+        runtimeProvider = "hermes";
+        runtimeAgent = "cmo";
+        productRenderSource = "fallback_after_hermes_failure";
+        productFallbackReason = reason;
+        hermesCmoMetadata = failedHermesCmoChatV11Metadata(chatResult.request?.request_id ?? `req_cmo_chat_v11_${messageId}`, reason);
+        hermesCmoCounters = hermesCmoMetadata.counters;
+        forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
+        activityEvents = hermesCmoMetadata.activityEvents;
+        delegationSummary = hermesCmoMetadata.delegationSummary;
+        agentsUsed = hermesCmoMetadata.agentsUsed;
+        surfCalls = hermesCmoMetadata.surfCalls;
+        echoCalls = hermesCmoMetadata.echoCalls;
+        usedHermesCmoChat = true;
+      }
+    }
+  } else if (hermesCmoLegacyRequested) {
     const hermesStartedAt = new Date().toISOString();
     const hermesStartedMs = Date.now();
 
@@ -2353,6 +2605,9 @@ export async function createAppChatSession(
     sessionLocalSources,
     sessionLocalResearchResults,
     ...(activeSourceId ? { activeSourceId } : {}),
+    ...(sessionSummary ? { sessionSummary } : {}),
+    ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
+    ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,
@@ -2375,6 +2630,9 @@ export async function createAppChatSession(
         ...(sourceReviewContext ? { sourceReviewContext } : {}),
         ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
         sessionLocalResearchResults,
+        ...(sessionSummary ? { sessionSummary } : {}),
+        ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
+        ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
       },
       {
         id: assistantId,
@@ -2413,6 +2671,9 @@ export async function createAppChatSession(
         sessionLocalSources,
         sessionLocalResearchResults,
         ...(activeSourceId ? { activeSourceId } : {}),
+        ...(sessionSummary ? { sessionSummary } : {}),
+        ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
+        ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
         contextUsedCount: contextUsed.length,
         graphHintCount,
         indexedContextStatus,
@@ -2427,7 +2688,16 @@ export async function createAppChatSession(
 
   let persistedSession = session;
   const vaultAgentHandoffMode = getCmoVaultAgentHandoffMode();
-  const autoCapture: AutoCaptureResult = status !== "completed"
+  const durableSideEffectsSuppressed = hermesCmoChatV11Attempted;
+  const autoCapture: AutoCaptureResult = durableSideEffectsSuppressed
+    ? {
+        ok: true,
+        savedToVault: false,
+        warnings: ["skipped_hermes_cmo_chat_v11_no_auto_save"],
+        skipped: true,
+        skipReason: "skipped_hermes_cmo_chat_v11_no_auto_save",
+      }
+    : status !== "completed"
     ? { ok: false, savedToVault: false, warnings: [], error: "Chat response failed; auto capture skipped" }
     : vaultAgentHandoffMode === "write_remote"
       ? skippedLegacyAutoCaptureForVaultAgentWriteRemote()
@@ -2445,7 +2715,7 @@ export async function createAppChatSession(
           runtimeProvider,
           runtimeAgent,
         });
-  const vaultAgentHandoff = status === "completed" ? await runVaultAgentDryRunHandoff({
+  const vaultAgentHandoff = status === "completed" && !durableSideEffectsSuppressed ? await runVaultAgentDryRunHandoff({
     request,
     session,
     userIdentity,
@@ -2480,15 +2750,19 @@ export async function createAppChatSession(
     };
     await writeJsonFile(sessionPath(sessionId), persistedSession);
   }
-  const sessionIndexResult = await indexChatSession({
-    session: persistedSession,
-    jsonPath: sessionJsonIndexPath(sessionId),
-    auditCreated: !continuedSession,
-  });
-  const messageIndexResults = await indexChatMessages({
-    session: persistedSession,
-    messages: session.messages.slice(-2),
-  });
+  const sessionIndexResult: CmoIndexResult = durableSideEffectsSuppressed
+    ? { status: "skipped", table: "cmo_chat_sessions", reason: "skipped_hermes_cmo_chat_v11_no_supabase_mutation" }
+    : await indexChatSession({
+        session: persistedSession,
+        jsonPath: sessionJsonIndexPath(sessionId),
+        auditCreated: !continuedSession,
+      });
+  const messageIndexResults: CmoIndexResult[] = durableSideEffectsSuppressed
+    ? [{ status: "skipped", table: "cmo_chat_messages", reason: "skipped_hermes_cmo_chat_v11_no_supabase_mutation" }]
+    : await indexChatMessages({
+        session: persistedSession,
+        messages: session.messages.slice(-2),
+      });
   const platformPersistenceSummary: HermesCmoPlatformPersistenceSummary = {
     sessionJsonSaved: true,
     rawCaptureSaved: autoCapture.savedToVault === true,
@@ -2550,6 +2824,9 @@ export async function createAppChatSession(
     sessionLocalSources,
     sessionLocalResearchResults,
     ...(activeSourceId ? { activeSourceId } : {}),
+    ...(sessionSummary ? { sessionSummary } : {}),
+    ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
+    ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,
