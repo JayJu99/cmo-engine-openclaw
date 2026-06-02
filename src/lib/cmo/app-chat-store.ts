@@ -4188,8 +4188,12 @@ function dryRunApprovalEventEnvelope(approvalEvent: CmoVaultUpdateApprovalEvent)
   const generatedSummary = approvedUpdateSummaryForDryRun(approvalEvent.approved_update);
   const title = candidateString(approvalEvent.approved_update, ["title"], 1_500);
   const subject = candidateString(approvalEvent.approved_update, ["subject"], 1_500);
+  const updateType = candidateString(approvalEvent.approved_update, ["type"], 240);
+  const updateKind = candidateString(approvalEvent.approved_update, ["kind"], 120);
   const dryRunApprovedUpdate = {
     ...approvalEvent.approved_update,
+    ...(!updateType && updateKind ? { type: updateKind } : {}),
+    ...(!updateKind && updateType ? { kind: updateType } : {}),
     ...(generatedSummary ? { summary: generatedSummary } : {}),
     ...(!subject && title ? { subject: title } : {}),
   };

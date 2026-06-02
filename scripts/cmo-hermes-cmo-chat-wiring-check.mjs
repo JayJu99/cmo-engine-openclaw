@@ -2107,6 +2107,10 @@ try {
     assert.match(source, /const generatedSummary = approvedUpdateSummaryForDryRun\(approvalEvent\.approved_update\)/);
     assert.match(source, /const title = candidateString\(approvalEvent\.approved_update, \["title"\]/);
     assert.match(source, /const subject = candidateString\(approvalEvent\.approved_update, \["subject"\]/);
+    assert.match(source, /const updateType = candidateString\(approvalEvent\.approved_update, \["type"\]/);
+    assert.match(source, /const updateKind = candidateString\(approvalEvent\.approved_update, \["kind"\]/);
+    assert.match(source, /\.\.\(!updateType && updateKind \? \{ type: updateKind \} : \{\}\)/);
+    assert.match(source, /\.\.\(!updateKind && updateType \? \{ kind: updateType \} : \{\}\)/);
     assert.match(source, /\.\.\(generatedSummary \? \{ summary: generatedSummary \} : \{\}\)/);
     assert.match(source, /\.\.\(!subject && title \? \{ subject: title \} : \{\}\)/);
     assert.doesNotMatch(source, /summary: approvedUpdateSummaryForDryRun\(approvalEvent\.approved_update\)/);
