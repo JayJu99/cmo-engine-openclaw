@@ -2226,9 +2226,15 @@ try {
     assert.match(cmoChatPanelSource, /latestApprovedEventForCandidate/);
     assert.match(cmoChatPanelSource, /dryRunResultForApproval/);
     assert.match(cmoChatPanelSource, /writeResultForApproval/);
+    assert.match(cmoChatPanelSource, /canWriteVaultUpdate/);
+    assert.match(cmoChatPanelSource, /session\?\.vaultUpdateApprovalEvents/);
+    assert.match(cmoChatPanelSource, /session\?\.vaultUpdateDryRunResults/);
+    assert.match(cmoChatPanelSource, /session\?\.vaultUpdateWriteResults/);
+    assert.match(cmoChatPanelSource, /renderDryRunResult\(\{ result: dryRunResult, approvalId, writeResult, canWrite \}\)/);
     assert.match(cmoChatPanelSource, /dryRunResult\.write_allowed === true/);
     assert.match(cmoChatPanelSource, /dryRunResult\.vault_write_performed === false/);
     assert.match(cmoChatPanelSource, /!writeResult\?\.conflict/);
+    assert.match(cmoChatPanelSource, /canWrite \? \(/);
     assert.match(cmoChatPanelSource, /target_preview/);
     assert.match(cmoChatPanelSource, /frontmatter_preview/);
     assert.match(cmoChatPanelSource, /body_preview/);

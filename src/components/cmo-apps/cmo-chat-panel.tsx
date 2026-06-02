@@ -110,10 +110,8 @@ function approvalCandidateKey(event: Record<string, unknown>): string {
   return isRecord(event.reviewed_update) ? recordString(event.reviewed_update, ["candidate_key", "candidate_id", "update_id", "id"]) : "";
 }
 
-function latestApprovedEventForCandidate(message: CMOChatMessage, key: string): Record<string, unknown> | null {
-  const events = message.vaultUpdateApprovalEvents ?? [];
-
-  const event = [...events].reverse().find((item) =>
+function latestApprovedEventForCandidate(message: CMOChatMessage, key: string, session?: CMOChatSession | null): Record<string, unknown> | null {
+  const messageEvent = [...(message.vaultUpdateApprovalEvents ?? [])].reverse().find((item) =>
     isRecord(item) &&
     item.action === "approved" &&
     item.review_status === "approved" &&
@@ -121,23 +119,57 @@ function latestApprovedEventForCandidate(message: CMOChatMessage, key: string): 
     approvalCandidateKey(item) === key,
   );
 
-  return event
-    ? event as unknown as Record<string, unknown>
+  if (messageEvent) {
+    return messageEvent as unknown as Record<string, unknown>;
+  }
+
+  const sessionEvent = [...(session?.vaultUpdateApprovalEvents ?? [])].reverse().find((item) =>
+    isRecord(item) &&
+    item.action === "approved" &&
+    item.review_status === "approved" &&
+    Boolean(item.approved_update) &&
+    approvalCandidateKey(item) === key,
+  );
+
+  return sessionEvent
+    ? sessionEvent as unknown as Record<string, unknown>
     : null;
 }
 
 function dryRunResultForApproval(
   message: CMOChatMessage,
   approvalId: string,
+  session?: CMOChatSession | null,
 ): CmoVaultApprovedWriteDryRunResult | null {
-  return [...(message.vaultUpdateDryRunResults ?? [])].reverse().find((result) => result.approval_id === approvalId) ?? null;
+  return [...(message.vaultUpdateDryRunResults ?? [])].reverse().find((result) => result.approval_id === approvalId)
+    ?? [...(session?.vaultUpdateDryRunResults ?? [])].reverse().find((result) => result.approval_id === approvalId)
+    ?? null;
 }
 
 function writeResultForApproval(
   message: CMOChatMessage,
   approvalId: string,
+  session?: CMOChatSession | null,
 ): CmoVaultApprovedWriteResult | null {
-  return [...(message.vaultUpdateWriteResults ?? [])].reverse().find((result) => result.approval_id === approvalId) ?? null;
+  return [...(message.vaultUpdateWriteResults ?? [])].reverse().find((result) => result.approval_id === approvalId)
+    ?? [...(session?.vaultUpdateWriteResults ?? [])].reverse().find((result) => result.approval_id === approvalId)
+    ?? null;
+}
+
+function canWriteVaultUpdate(
+  approvalId: string,
+  dryRunResult: CmoVaultApprovedWriteDryRunResult | null,
+  writeResult: CmoVaultApprovedWriteResult | null,
+): boolean {
+  return Boolean(approvalId) &&
+    dryRunResult?.dry_run === true &&
+    dryRunResult.write_allowed === true &&
+    dryRunResult.vault_write_performed === false &&
+    dryRunResult.conflict !== true &&
+    !(dryRunResult.errors?.length) &&
+    !writeResult?.conflict &&
+    !writeResult?.vault_write_performed &&
+    !writeResult?.deduped;
 }
 
 function runtimeStatusLabel(status: CMORuntimeStatus | null): string {
@@ -742,7 +774,16 @@ export function CMOChatPanel({
     }
   }
 
-  function renderDryRunResult(result: CmoVaultApprovedWriteDryRunResult | null) {
+  function renderDryRunResult({
+    result,
+    approvalId,
+    canWrite,
+  }: {
+    result: CmoVaultApprovedWriteDryRunResult | null;
+    approvalId: string;
+    writeResult: CmoVaultApprovedWriteResult | null;
+    canWrite: boolean;
+  }) {
     if (!result) {
       return null;
     }
@@ -786,6 +827,14 @@ export function CMOChatPanel({
         {result.errors?.length ? (
           <div className="rounded border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-800">
             {result.errors.join(" | ")}
+          </div>
+        ) : null}
+        {canWrite ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" variant="outline" disabled={Boolean(writingApprovalId)} onClick={() => void writeVaultUpdate(approvalId)}>
+              {writingApprovalId === approvalId ? <icons.RefreshCw className="animate-spin" /> : <icons.Check />}
+              Write to Vault
+            </Button>
           </div>
         ) : null}
       </div>
@@ -858,22 +907,13 @@ export function CMOChatPanel({
             const requiresApproval = candidate.requires_user_or_product_approval !== false;
             const isReviewed = reviewStatus === "approved" || reviewStatus === "rejected" || reviewStatus === "deferred";
             const isBusy = reviewingCandidateKey === key;
-            const approvedEvent = reviewStatus === "approved" ? latestApprovedEventForCandidate(message, key) : null;
+            const approvedEvent = reviewStatus === "approved" ? latestApprovedEventForCandidate(message, key, selectedSession) : null;
             const approvalId = recordString(approvedEvent ?? {}, ["approval_id"]);
-            const dryRunResult = approvalId ? dryRunResultForApproval(message, approvalId) : null;
-            const writeResult = approvalId ? writeResultForApproval(message, approvalId) : null;
+            const dryRunResult = approvalId ? dryRunResultForApproval(message, approvalId, selectedSession) : null;
+            const writeResult = approvalId ? writeResultForApproval(message, approvalId, selectedSession) : null;
             const dryRunBusy = Boolean(approvalId && dryRunningApprovalId === approvalId);
             const writeBusy = Boolean(approvalId && writingApprovalId === approvalId);
-            const canWrite =
-              Boolean(approvalId) &&
-              dryRunResult?.dry_run === true &&
-              dryRunResult.write_allowed === true &&
-              dryRunResult.vault_write_performed === false &&
-              dryRunResult.conflict !== true &&
-              !(dryRunResult.errors?.length) &&
-              !writeResult?.conflict &&
-              !writeResult?.vault_write_performed &&
-              !writeResult?.deduped;
+            const canWrite = canWriteVaultUpdate(approvalId, dryRunResult, writeResult);
 
             return (
               <div key={key} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
@@ -915,7 +955,7 @@ export function CMOChatPanel({
                     ) : null}
                   </div>
                 </div>
-                {renderDryRunResult(dryRunResult)}
+                {renderDryRunResult({ result: dryRunResult, approvalId, writeResult, canWrite })}
                 {renderWriteResult(writeResult)}
               </div>
             );
