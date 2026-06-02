@@ -826,6 +826,9 @@ export interface HermesCmoChatMetadata {
   decisions_count?: number;
   session_summary_update_present?: boolean;
   suggested_vault_updates_count?: number;
+  approval_events_count?: number;
+  latest_approval_action?: CmoVaultUpdateReviewAction;
+  vault_write_performed?: false;
   delegationsMode: HermesCmoDelegationsMode;
   counters: HermesCmoSafetyCounters;
   forbiddenCounters: HermesCmoForbiddenCounters;
@@ -1122,6 +1125,29 @@ export interface CMOChatMessage {
   sessionSummary?: string;
   sessionArtifacts?: Record<string, unknown>[];
   suggestedVaultUpdates?: Record<string, unknown>[];
+  vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
+}
+
+export type CmoVaultUpdateReviewAction = "approved" | "rejected" | "deferred";
+
+export interface CmoVaultUpdateApprovalEvent {
+  schema_version: "cmo.vault_update_approval.v1";
+  approval_id: string;
+  tenant_id: string;
+  workspace_id: string;
+  session_id: string;
+  turn_id: string;
+  source_endpoint: "/agents/cmo/chat";
+  source_response_id: string;
+  action: CmoVaultUpdateReviewAction;
+  review_status: CmoVaultUpdateReviewAction;
+  approved_by: "user_or_product";
+  approved_at: string;
+  reviewed_update: Record<string, unknown>;
+  approved_update?: Record<string, unknown>;
+  rejected_update?: Record<string, unknown>;
+  deferred_update?: Record<string, unknown>;
+  vault_write_performed: false;
 }
 
 export interface CMOChatSession {
@@ -1203,6 +1229,7 @@ export interface CMOChatSession {
   sessionSummary?: string;
   sessionArtifacts?: Record<string, unknown>[];
   suggestedVaultUpdates?: Record<string, unknown>[];
+  vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
   decisionLayer?: CmoDecisionLayer;
   assumptions?: string[];
   suggestedActions?: CMOAppChatResponse["suggestedActions"];
@@ -1303,6 +1330,7 @@ export interface CMOAppChatResponse {
   sessionSummary?: string;
   sessionArtifacts?: Record<string, unknown>[];
   suggestedVaultUpdates?: Record<string, unknown>[];
+  vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
   decisionLayer?: CmoDecisionLayer;
   rawCapturePath?: string;
   rawCaptureStatus?: "saved" | "failed" | "pending";

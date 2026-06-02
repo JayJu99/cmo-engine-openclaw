@@ -17,6 +17,7 @@ import type {
   CMOChatSession,
   CMORuntimeStatus,
   CmoRuntimeErrorReason,
+  CmoVaultUpdateReviewAction,
 } from "@/lib/cmo/app-workspace-types";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +40,48 @@ function nowIso() {
 
 function messageId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function recordString(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return "";
+}
+
+function candidateKey(candidate: Record<string, unknown>): string {
+  return recordString(candidate, ["candidate_key", "candidate_id", "update_id", "id"]);
+}
+
+function candidateStatus(candidate: Record<string, unknown>): string {
+  const status = recordString(candidate, ["review_status", "status"]);
+
+  return status || "needs_review";
+}
+
+function statusVariant(status: string): "green" | "orange" | "red" | "blue" | "slate" {
+  if (status === "approved") {
+    return "green";
+  }
+
+  if (status === "rejected") {
+    return "red";
+  }
+
+  if (status === "deferred") {
+    return "blue";
+  }
+
+  return status === "draft" || status === "needs_review" ? "orange" : "slate";
+}
+
+function reviewActionLabel(action: CmoVaultUpdateReviewAction): string {
+  return action === "approved" ? "Approve" : action === "rejected" ? "Reject" : "Defer";
 }
 
 function runtimeStatusLabel(status: CMORuntimeStatus | null): string {
@@ -238,6 +281,8 @@ export function CMOChatPanel({
   const [pendingElapsedMs, setPendingElapsedMs] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [sendStatus, setSendStatus] = useState<string | null>(null);
+  const [reviewStatusMessage, setReviewStatusMessage] = useState<string | null>(null);
+  const [reviewingCandidateKey, setReviewingCandidateKey] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedQualitySummary = contextBrief.contextQualitySummary;
   const visibleMessages = messages.length ? messages : selectedSession?.messages ?? [];
@@ -295,6 +340,7 @@ export function CMOChatPanel({
       setRuntimeErrorReason(null);
       setError(null);
       setSendStatus(null);
+      setReviewStatusMessage(null);
       setPendingAssistantMessageId(null);
       setPendingStartedAt(null);
       setPendingElapsedMs(0);
@@ -315,6 +361,7 @@ export function CMOChatPanel({
         setPendingAssistantMessageId(null);
         setPendingStartedAt(null);
         setPendingElapsedMs(0);
+        setReviewStatusMessage(null);
       }, 0);
 
       return () => window.clearTimeout(timeout);
@@ -325,6 +372,7 @@ export function CMOChatPanel({
       setMessages(selectedSession.messages);
       setRuntimeStatus(selectedSession.runtimeStatus ?? initialRuntimeStatus);
       setRuntimeErrorReason(selectedSession.runtimeErrorReason ?? null);
+      setReviewStatusMessage(null);
       setPendingAssistantMessageId(null);
       setPendingStartedAt(null);
       setPendingElapsedMs(0);
@@ -471,6 +519,10 @@ export function CMOChatPanel({
                 sessionResolutionDurationMs: response.sessionResolutionDurationMs,
                 contextPackBuildDurationMs: response.contextPackBuildDurationMs,
                 indexedContextBuildDurationMs: response.indexedContextBuildDurationMs,
+                sessionSummary: response.sessionSummary,
+                sessionArtifacts: response.sessionArtifacts,
+                suggestedVaultUpdates: response.suggestedVaultUpdates,
+                vaultUpdateApprovalEvents: response.vaultUpdateApprovalEvents,
               }
             : message,
         ),
@@ -504,6 +556,111 @@ export function CMOChatPanel({
     }
 
     inputRef.current?.focus();
+  }
+
+  async function reviewSuggestedVaultUpdate(candidate: Record<string, unknown>, action: CmoVaultUpdateReviewAction) {
+    const activeKey = candidateKey(candidate);
+    const activeSession = activeDisplaySessionId;
+
+    if (!activeKey || !activeSession || reviewingCandidateKey) {
+      return;
+    }
+
+    setReviewingCandidateKey(activeKey);
+    setReviewStatusMessage(`${reviewActionLabel(action)} pending...`);
+    setError(null);
+
+    try {
+      const payload = await readJsonResponse<{ data: CMOChatSession }>(
+        await fetch("/api/cmo/sessions/suggested-vault-updates/review", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            appId: app.id,
+            sessionId: activeSession,
+            candidateKey: activeKey,
+            action,
+          }),
+        }),
+      );
+
+      setSessionId(payload.data.id);
+      setMessages(payload.data.messages);
+      setReviewStatusMessage(`${reviewActionLabel(action)} recorded. Vault write was not performed.`);
+      onSessionCreated?.(payload.data.id);
+    } catch (reviewError) {
+      setReviewStatusMessage(null);
+      setError(`Review failed: ${reviewError instanceof Error ? reviewError.message : "suggested Vault update review failed"}`);
+    } finally {
+      setReviewingCandidateKey(null);
+    }
+  }
+
+  function renderSuggestedVaultUpdates(message: CMOChatMessage) {
+    const candidates = message.suggestedVaultUpdates ?? [];
+
+    if (message.role !== "assistant" || !candidates.length) {
+      return null;
+    }
+
+    return (
+      <div className="mt-4 border-t border-slate-100 pt-4">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase text-slate-500">
+            <icons.Database className="size-4" />
+            Suggested Vault Updates
+          </div>
+          <Badge variant="orange">draft</Badge>
+          <Badge variant="slate">{candidates.length}</Badge>
+        </div>
+        <div className="grid gap-3">
+          {candidates.map((candidate, index) => {
+            const key = candidateKey(candidate) || `candidate_${index}`;
+            const kind = recordString(candidate, ["kind", "type"]) || "vault_update";
+            const subject = recordString(candidate, ["subject", "title", "name"]) || "Untitled update";
+            const summary = recordString(candidate, ["summary", "statement", "description"]);
+            const truthStatus = recordString(candidate, ["truth_status"]) || "draft";
+            const reviewStatus = candidateStatus(candidate);
+            const requiresApproval = candidate.requires_user_or_product_approval !== false;
+            const isReviewed = reviewStatus === "approved" || reviewStatus === "rejected" || reviewStatus === "deferred";
+            const isBusy = reviewingCandidateKey === key;
+
+            return (
+              <div key={key} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="slate">{kind}</Badge>
+                      <Badge variant={statusVariant(reviewStatus)}>{reviewStatus}</Badge>
+                      <Badge variant={truthStatus === "confirmed" ? "green" : "orange"}>{truthStatus}</Badge>
+                      {requiresApproval ? <Badge variant="blue">needs_review</Badge> : null}
+                    </div>
+                    <div className="mt-2 break-words text-sm font-bold leading-6 text-slate-950">{subject}</div>
+                    {summary ? <p className="mt-1 break-words text-sm leading-6 text-slate-600">{summary}</p> : null}
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <Button type="button" size="sm" variant="outline" disabled={isReviewed || Boolean(reviewingCandidateKey)} onClick={() => void reviewSuggestedVaultUpdate(candidate, "approved")}>
+                      {isBusy ? <icons.RefreshCw className="animate-spin" /> : <icons.Check />}
+                      Approve
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" disabled={isReviewed || Boolean(reviewingCandidateKey)} onClick={() => void reviewSuggestedVaultUpdate(candidate, "rejected")}>
+                      <icons.X />
+                      Reject
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" disabled={isReviewed || Boolean(reviewingCandidateKey)} onClick={() => void reviewSuggestedVaultUpdate(candidate, "deferred")}>
+                      <icons.Clock3 />
+                      Defer
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -564,6 +721,7 @@ export function CMOChatPanel({
                       elapsedMs={pendingAssistantMessageId === message.id ? pendingElapsedMs : null}
                     />
                   ) : null}
+                  {renderSuggestedVaultUpdates(message)}
                   {message.role === "assistant" && assistantProvenance(message) ? (
                     <div className="mt-4 border-t border-emerald-100 pt-3 text-xs font-semibold text-emerald-700">
                       {assistantProvenance(message)}
@@ -588,6 +746,7 @@ export function CMOChatPanel({
         </div>
 
         {sendStatus ? <div className="border-t border-indigo-100 bg-indigo-50 px-5 py-3 text-sm font-medium text-indigo-700">{sendStatus}</div> : null}
+        {reviewStatusMessage ? <div className="border-t border-blue-100 bg-blue-50 px-5 py-3 text-sm font-medium text-blue-700">{reviewStatusMessage}</div> : null}
         {error ? <div className="border-t border-red-100 bg-red-50 px-5 py-3 text-sm font-medium text-red-700">{error}</div> : null}
 
         <div className="border-t border-slate-100 bg-white p-4">

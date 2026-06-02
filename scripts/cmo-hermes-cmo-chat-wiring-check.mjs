@@ -2059,6 +2059,29 @@ try {
     assert.match(source, /skipped_hermes_cmo_chat_v11_no_auto_save/);
     assert.match(source, /skipped_hermes_cmo_chat_v11_no_supabase_mutation/);
     assert.match(source, /suggestedVaultUpdates/);
+    assert.match(source, /mergeSuggestedVaultUpdates/);
+    assert.match(source, /suggestedVaultUpdates = mergeSuggestedVaultUpdates\(suggestedVaultUpdates, mappedChat\.suggestedVaultUpdates\)/);
+    assert.match(source, /cmo\.vault_update_approval\.v1/);
+    assert.match(source, /updateSuggestedVaultUpdateReview/);
+    assert.match(source, /source_endpoint: "\/agents\/cmo\/chat"/);
+    assert.match(source, /vault_write_performed: false/);
+    assert.match(source, /approval_events_count/);
+    assert.match(source, /latest_approval_action/);
+    assert.match(source, /MAX_SUGGESTED_VAULT_UPDATES_SESSION/);
+    assert.match(source, /MAX_VAULT_UPDATE_APPROVAL_EVENTS/);
+    assert.match(source, /candidate_key/);
+    assert.match(source, /createHash\("sha256"\)/);
+    assert.match(source, /truth_status: "draft"/);
+    assert.match(source, /requires_user_or_product_approval: true/);
+    assert.match(source, /vault_write_performed: false/);
+    assert.doesNotMatch(source, /requires_user_or_product_approval:\s*value\.requires_user_or_product_approval/);
+    assert.match(source, /review_status: action/);
+    assert.match(source, /reviewed_update: reviewedUpdate/);
+    assert.match(source, /action === "approved" \? \{ approved_update: reviewedUpdate \} : \{\}/);
+    assert.match(source, /action === "rejected" \? \{ rejected_update: reviewedUpdate \} : \{\}/);
+    assert.match(source, /action === "deferred" \? \{ deferred_update: reviewedUpdate \} : \{\}/);
+    assert.doesNotMatch(source, /approved_update: approvedUpdate/);
+    assert.match(source, /throw new Error\("Suggested Vault update candidate was not found\."\)/);
     assert.match(source, /sessionArtifacts/);
     assert.match(source, /mergeHermesCmoChatV11SessionSummary/);
     assert.match(source, /withSessionSourceRoutingMetadata/);
@@ -2066,6 +2089,28 @@ try {
     assert.match(source, /failed_then_existing_fallback/);
     assert.match(source, /guardrail_violation_then_existing_fallback/);
     assert.doesNotMatch(source, /Source Review:|What I Read|CMO Read/);
+
+    const suggestedVaultReviewRouteSource = await readFile(
+      path.join(rootDir, "src", "app", "api", "cmo", "sessions", "suggested-vault-updates", "review", "route.ts"),
+      "utf8",
+    );
+    assert.match(suggestedVaultReviewRouteSource, /updateSuggestedVaultUpdateReview/);
+    assert.match(suggestedVaultReviewRouteSource, /value === "approved" \|\| value === "rejected" \|\| value === "deferred"/);
+    assert.match(suggestedVaultReviewRouteSource, /appId, sessionId, candidateKey, and action are required/);
+    assert.doesNotMatch(suggestedVaultReviewRouteSource, /VaultAgent|runVaultAgent|autoCapture|save-to-vault|capture-save/);
+    assert.doesNotMatch(suggestedVaultReviewRouteSource, /indexChat|Supabase|supabase|gbrain|memory_mutation|vault_write/);
+
+    const cmoChatPanelSource = await readFile(path.join(rootDir, "src", "components", "cmo-apps", "cmo-chat-panel.tsx"), "utf8");
+    assert.match(cmoChatPanelSource, /Suggested Vault Updates/);
+    assert.match(cmoChatPanelSource, /Approve/);
+    assert.match(cmoChatPanelSource, /Reject/);
+    assert.match(cmoChatPanelSource, /Defer/);
+    assert.match(cmoChatPanelSource, /\/api\/cmo\/sessions\/suggested-vault-updates\/review/);
+    assert.match(cmoChatPanelSource, /suggestedVaultUpdates: response\.suggestedVaultUpdates/);
+    assert.match(cmoChatPanelSource, /vaultUpdateApprovalEvents: response\.vaultUpdateApprovalEvents/);
+    assert.match(cmoChatPanelSource, /recordString\(candidate, \["kind", "type"\]\)/);
+    assert.match(cmoChatPanelSource, /recordString\(candidate, \["subject", "title", "name"\]\)/);
+    assert.match(cmoChatPanelSource, /recordString\(candidate, \["summary", "statement", "description"\]\)/);
 
     const runtimeSource = await readFile(path.join(cmoDir, "runtime.ts"), "utf8");
     assert.match(runtimeSource, /function sourceReviewFallbackAnswer/);
@@ -2150,6 +2195,11 @@ try {
     const workspaceTypesSource = await readFile(path.join(cmoDir, "app-workspace-types.ts"), "utf8");
     assert.match(workspaceTypesSource, /sourceMode\?: "cmo\.default" \| "cmo\.tool_capable" \| HermesCmoExecutableMode/);
     assert.match(workspaceTypesSource, /CmoSessionLocalResearchResult/);
+    assert.match(workspaceTypesSource, /review_status: CmoVaultUpdateReviewAction/);
+    assert.match(workspaceTypesSource, /reviewed_update: Record<string, unknown>/);
+    assert.match(workspaceTypesSource, /approved_update\?: Record<string, unknown>/);
+    assert.match(workspaceTypesSource, /rejected_update\?: Record<string, unknown>/);
+    assert.match(workspaceTypesSource, /deferred_update\?: Record<string, unknown>/);
 
     const replaySource = await readFile(path.join(rootDir, "scripts", "cmo-hermes-cmo-replay-trace.mjs"), "utf8");
     assert.match(replaySource, /rootCauseClassification/);

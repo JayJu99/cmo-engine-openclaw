@@ -1,4 +1,4 @@
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { mkdir, readdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 
@@ -20,6 +20,8 @@ import type {
   CmoSourceAnswerContext,
   CmoSourceReviewContext,
   CmoStrategyMode,
+  CmoVaultUpdateApprovalEvent,
+  CmoVaultUpdateReviewAction,
   CmoAssumptionReviewStatus,
   CmoDecisionLayer,
   CmoDecisionReviewStatus,
@@ -97,6 +99,8 @@ const DEFAULT_LIMIT = 20;
 const CONTEXT_SIZE_WARNING_CHARS = 32_000;
 const INDEXED_SUPPLEMENT_WARNING_CHARS = 4_000;
 const LEGACY_AUTO_CAPTURE_WRITE_REMOTE_SKIP_REASON = "skipped_legacy_auto_capture_because_vault_agent_write_remote_enabled";
+const MAX_SUGGESTED_VAULT_UPDATES_SESSION = 24;
+const MAX_VAULT_UPDATE_APPROVAL_EVENTS = 80;
 
 export interface CmoAppChatTimingInput {
   requestReceivedAt?: string;
@@ -276,6 +280,132 @@ function safeResearchStringList(value: unknown, maxItems = 12): string[] {
     .map((item) => (typeof item === "string" ? item : stringValue(item.summary ?? item.title ?? item.name ?? item.label)))
     .filter((item) => Boolean(item))
     .slice(0, maxItems);
+}
+
+function candidateString(value: Record<string, unknown>, keys: string[], maxChars = 500): string {
+  for (const key of keys) {
+    const item = value[key];
+
+    if (typeof item === "string" && item.trim()) {
+      return compactSessionSourceText(item, maxChars);
+    }
+  }
+
+  return "";
+}
+
+function suggestedVaultUpdateStableKey(candidate: Record<string, unknown>): string {
+  const explicitId = candidateString(candidate, ["candidate_key", "candidate_id", "update_id", "id"], 160);
+
+  if (explicitId) {
+    return explicitId;
+  }
+
+  const kind = candidateString(candidate, ["kind", "type"], 120);
+  const subject = candidateString(candidate, ["subject", "title", "name"], 240);
+  const summary = candidateString(candidate, ["summary", "statement", "description"], 500);
+  const hash = createHash("sha256").update([kind, subject, summary].join("\n")).digest("hex").slice(0, 16);
+
+  return `vault_update_${hash}`;
+}
+
+function normalizeSuggestedVaultUpdateCandidate(value: Record<string, unknown>, existing?: Record<string, unknown>): Record<string, unknown> {
+  const candidateKey = suggestedVaultUpdateStableKey(value);
+  const currentStatus = candidateString(existing ?? {}, ["review_status"], 80);
+  const incomingStatus = candidateString(value, ["review_status"], 80);
+  const reviewStatus = currentStatus && ["needs_review", "draft", "approved", "rejected", "deferred"].includes(currentStatus)
+    ? currentStatus
+    : incomingStatus && ["needs_review", "draft", "approved", "rejected", "deferred"].includes(incomingStatus)
+      ? incomingStatus
+      : "needs_review";
+
+  return {
+    ...value,
+    candidate_key: candidateKey,
+    truth_status: "draft",
+    review_status: reviewStatus,
+    status: reviewStatus === "needs_review" ? "draft" : reviewStatus,
+    vault_write_performed: false,
+    requires_user_or_product_approval: true,
+    ...(existing?.reviewed_at ? { reviewed_at: existing.reviewed_at } : {}),
+    ...(existing?.reviewed_by ? { reviewed_by: existing.reviewed_by } : {}),
+  };
+}
+
+function mergeSuggestedVaultUpdates(
+  existing: Record<string, unknown>[] | undefined,
+  next: Record<string, unknown>[] | undefined,
+): Record<string, unknown>[] {
+  const existingCandidates = sanitizeHermesCmoChatV11Records(existing, MAX_SUGGESTED_VAULT_UPDATES_SESSION);
+  const existingByKey = new Map<string, Record<string, unknown>>();
+
+  for (const candidate of existingCandidates) {
+    const normalized = normalizeSuggestedVaultUpdateCandidate(candidate);
+    existingByKey.set(String(normalized.candidate_key), normalized);
+  }
+
+  const merged = new Map(existingByKey);
+
+  for (const candidate of sanitizeHermesCmoChatV11Records(next, MAX_SUGGESTED_VAULT_UPDATES_SESSION)) {
+    const key = suggestedVaultUpdateStableKey(candidate);
+    merged.set(key, normalizeSuggestedVaultUpdateCandidate(candidate, existingByKey.get(key)));
+  }
+
+  return Array.from(merged.values()).slice(-MAX_SUGGESTED_VAULT_UPDATES_SESSION);
+}
+
+function normalizeVaultUpdateApprovalAction(value: unknown): CmoVaultUpdateReviewAction | undefined {
+  return value === "approved" || value === "rejected" || value === "deferred" ? value : undefined;
+}
+
+function normalizeVaultUpdateApprovalEvents(value: unknown): CmoVaultUpdateApprovalEvent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item): CmoVaultUpdateApprovalEvent | null => {
+      if (!isRecord(item) || item.schema_version !== "cmo.vault_update_approval.v1") {
+        return null;
+      }
+
+      const action = normalizeVaultUpdateApprovalAction(item.action);
+      const reviewedUpdateSource =
+        isRecord(item.reviewed_update) ? item.reviewed_update :
+        action === "approved" && isRecord(item.approved_update) ? item.approved_update :
+        action === "rejected" && isRecord(item.rejected_update) ? item.rejected_update :
+        action === "deferred" && isRecord(item.deferred_update) ? item.deferred_update :
+        null;
+      const reviewedUpdate = reviewedUpdateSource
+        ? normalizeSuggestedVaultUpdateCandidate(sanitizeHermesCmoChatV11Records([reviewedUpdateSource], 1)[0] ?? {})
+        : null;
+
+      if (!action || !reviewedUpdate) {
+        return null;
+      }
+
+      return {
+        schema_version: "cmo.vault_update_approval.v1",
+        approval_id: candidateString(item, ["approval_id"], 160) || `approval_${randomUUID()}`,
+        tenant_id: candidateString(item, ["tenant_id"], 160) || "holdstation",
+        workspace_id: candidateString(item, ["workspace_id"], 160),
+        session_id: candidateString(item, ["session_id"], 160),
+        turn_id: candidateString(item, ["turn_id"], 160),
+        source_endpoint: "/agents/cmo/chat",
+        source_response_id: candidateString(item, ["source_response_id"], 160),
+        action,
+        review_status: action,
+        approved_by: "user_or_product",
+        approved_at: candidateString(item, ["approved_at"], 80) || new Date(0).toISOString(),
+        reviewed_update: reviewedUpdate,
+        ...(action === "approved" ? { approved_update: reviewedUpdate } : {}),
+        ...(action === "rejected" ? { rejected_update: reviewedUpdate } : {}),
+        ...(action === "deferred" ? { deferred_update: reviewedUpdate } : {}),
+        vault_write_performed: false,
+      };
+    })
+    .filter((item): item is CmoVaultUpdateApprovalEvent => Boolean(item))
+    .slice(-MAX_VAULT_UPDATE_APPROVAL_EVENTS);
 }
 
 function normalizeSessionLocalResearchResult(value: unknown): CmoSessionLocalResearchResult | undefined {
@@ -1532,6 +1662,11 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(typeof value.suggested_vault_updates_count === "number" && Number.isFinite(value.suggested_vault_updates_count)
       ? { suggested_vault_updates_count: Math.max(0, Math.floor(value.suggested_vault_updates_count)) }
       : {}),
+    ...(typeof value.approval_events_count === "number" && Number.isFinite(value.approval_events_count)
+      ? { approval_events_count: Math.max(0, Math.floor(value.approval_events_count)) }
+      : {}),
+    ...(normalizeVaultUpdateApprovalAction(value.latest_approval_action) ? { latest_approval_action: normalizeVaultUpdateApprovalAction(value.latest_approval_action) } : {}),
+    ...(value.vault_write_performed === false ? { vault_write_performed: false } : {}),
     delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode) ?? HERMES_CMO_PROPOSALS_ONLY,
     counters,
     forbiddenCounters,
@@ -1802,7 +1937,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             sessionLocalResearchResults: normalizeSessionLocalResearchResults(message.sessionLocalResearchResults, undefined, id),
             sessionSummary: normalizeOptionalString(message.sessionSummary),
             sessionArtifacts: sanitizeHermesCmoChatV11Records(message.sessionArtifacts),
-            suggestedVaultUpdates: sanitizeHermesCmoChatV11Records(message.suggestedVaultUpdates),
+            suggestedVaultUpdates: mergeSuggestedVaultUpdates(undefined, sanitizeHermesCmoChatV11Records(message.suggestedVaultUpdates)),
+            vaultUpdateApprovalEvents: normalizeVaultUpdateApprovalEvents(message.vaultUpdateApprovalEvents),
           };
         })
         .filter((message): message is CMOChatMessage => Boolean(message))
@@ -1829,7 +1965,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
   const activeSourceId = normalizeOptionalString(value.activeSourceId);
   const sessionSummary = normalizeOptionalString(value.sessionSummary);
   const sessionArtifacts = sanitizeHermesCmoChatV11Records(value.sessionArtifacts);
-  const suggestedVaultUpdates = sanitizeHermesCmoChatV11Records(value.suggestedVaultUpdates);
+  const suggestedVaultUpdates = mergeSuggestedVaultUpdates(undefined, sanitizeHermesCmoChatV11Records(value.suggestedVaultUpdates));
+  const vaultUpdateApprovalEvents = normalizeVaultUpdateApprovalEvents(value.vaultUpdateApprovalEvents);
   const normalizedActiveSourceId = activeSourceId && sessionLocalSources.some((source) => source.source_id === activeSourceId)
     ? activeSourceId
     : sessionLocalSources[0]?.source_id;
@@ -1915,6 +2052,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     ...(sessionSummary ? { sessionSummary } : {}),
     ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
     ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
+    ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
     decisionLayer,
     assumptions: normalizeStringList(value.assumptions),
     suggestedActions: normalizeSuggestedActions(value.suggestedActions),
@@ -2144,6 +2282,7 @@ export async function createAppChatSession(
   let sessionSummary = continuedSession?.sessionSummary;
   let sessionArtifacts = continuedSession?.sessionArtifacts ?? [];
   let suggestedVaultUpdates = continuedSession?.suggestedVaultUpdates ?? [];
+  const vaultUpdateApprovalEvents = continuedSession?.vaultUpdateApprovalEvents ?? [];
 
   if (hermesCmoChatV11Requested) {
     const hermesStartedAt = new Date().toISOString();
@@ -2203,7 +2342,7 @@ export async function createAppChatSession(
       productRenderSource = "hermes_cmo";
       sessionArtifacts = mergeHermesCmoChatV11Artifacts(sessionArtifacts, mappedChat.artifactsOut);
       sessionSummary = mergeHermesCmoChatV11SessionSummary(sessionSummary, mappedChat.suggestedSessionSummaryUpdate);
-      suggestedVaultUpdates = sanitizeHermesCmoChatV11Records(mappedChat.suggestedVaultUpdates);
+      suggestedVaultUpdates = mergeSuggestedVaultUpdates(suggestedVaultUpdates, mappedChat.suggestedVaultUpdates);
       usedHermesCmoChat = true;
     } else {
       const reason = chatResult.fallbackReason;
@@ -2630,6 +2769,17 @@ export async function createAppChatSession(
     contextCharLength,
     indexedSupplementCharLength,
   };
+  if (hermesCmoMetadata && hermesCmoChatV11Attempted) {
+    hermesCmoMetadata = {
+      ...hermesCmoMetadata,
+      suggested_vault_updates_count: suggestedVaultUpdates.length,
+      approval_events_count: vaultUpdateApprovalEvents.length,
+      ...(vaultUpdateApprovalEvents.at(-1)?.action ? { latest_approval_action: vaultUpdateApprovalEvents.at(-1)?.action } : {}),
+      vault_write_performed: false,
+      endpoint_kind: hermesCmoMetadata.endpoint_kind ?? "agent_chat",
+      runtime_kind: hermesCmoMetadata.runtime_kind ?? "ai_agent",
+    };
+  }
 
   const session: CMOChatSession = {
     id: sessionId,
@@ -2688,6 +2838,7 @@ export async function createAppChatSession(
     ...(sessionSummary ? { sessionSummary } : {}),
     ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
     ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
+    ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,
@@ -2713,6 +2864,7 @@ export async function createAppChatSession(
         ...(sessionSummary ? { sessionSummary } : {}),
         ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
         ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
+        ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
       },
       {
         id: assistantId,
@@ -2754,6 +2906,7 @@ export async function createAppChatSession(
         ...(sessionSummary ? { sessionSummary } : {}),
         ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
         ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
+        ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
         contextUsedCount: contextUsed.length,
         graphHintCount,
         indexedContextStatus,
@@ -2907,6 +3060,7 @@ export async function createAppChatSession(
     ...(sessionSummary ? { sessionSummary } : {}),
     ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
     ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
+    ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
     contextDiagnostics,
     contextQualitySummary,
     graphHints,
@@ -3428,4 +3582,172 @@ export async function updateDecisionLayerReview(input: UpdateDecisionLayerReview
   await writeJsonFile(sessionPath(session.id), updated);
 
   return updated;
+}
+
+export interface UpdateSuggestedVaultUpdateReviewInput {
+  appId: string;
+  sessionId: string;
+  candidateKey: string;
+  action: CmoVaultUpdateReviewAction;
+}
+
+function latestAssistantMessageId(session: CMOChatSession): string {
+  return [...session.messages].reverse().find((message) => message.role === "assistant")?.id ?? session.messages.at(-1)?.id ?? session.id;
+}
+
+function updateCandidateReviewStatus(
+  candidates: Record<string, unknown>[] | undefined,
+  candidateKey: string,
+  action: CmoVaultUpdateReviewAction,
+  reviewedAt: string,
+): { candidates: Record<string, unknown>[]; reviewedCandidate?: Record<string, unknown>; changed: boolean } {
+  let reviewedCandidate: Record<string, unknown> | undefined;
+  let changed = false;
+  const candidatesWithKeys = mergeSuggestedVaultUpdates(undefined, candidates);
+
+  const updated = candidatesWithKeys.map((candidate) => {
+    if (String(candidate.candidate_key) !== candidateKey) {
+      return candidate;
+    }
+
+    changed = true;
+    reviewedCandidate = {
+      ...candidate,
+      review_status: action,
+      status: action,
+      reviewed_by: "user_or_product",
+      reviewed_at: reviewedAt,
+      vault_write_performed: false,
+      requires_user_or_product_approval: true,
+    };
+
+    return reviewedCandidate;
+  });
+
+  return { candidates: updated, reviewedCandidate, changed };
+}
+
+function approvalEventMetadata(events: CmoVaultUpdateApprovalEvent[]): Pick<HermesCmoChatMetadata, "approval_events_count" | "latest_approval_action" | "vault_write_performed" | "endpoint_kind" | "runtime_kind"> {
+  return {
+    approval_events_count: events.length,
+    ...(events.at(-1)?.action ? { latest_approval_action: events.at(-1)?.action } : {}),
+    vault_write_performed: false,
+    endpoint_kind: "agent_chat",
+    runtime_kind: "ai_agent",
+  };
+}
+
+export async function updateSuggestedVaultUpdateReview(input: UpdateSuggestedVaultUpdateReviewInput): Promise<CMOChatSession | null> {
+  const app = getAppWorkspace(input.appId);
+
+  if (!app) {
+    throw new Error(`Unknown appId: ${input.appId}`);
+  }
+
+  const session = await readAppChatSession(input.sessionId);
+
+  if (!session) {
+    return null;
+  }
+
+  if (session.appId !== app.id) {
+    throw new Error("Session does not belong to the requested app.");
+  }
+
+  const action = normalizeVaultUpdateApprovalAction(input.action);
+  const candidateKey = input.candidateKey.trim();
+
+  if (!action || !candidateKey) {
+    throw new Error("Invalid suggested Vault update review action.");
+  }
+
+  const reviewedAt = new Date().toISOString();
+  const sessionCandidateUpdate = updateCandidateReviewStatus(session.suggestedVaultUpdates, candidateKey, action, reviewedAt);
+  let reviewedCandidate = sessionCandidateUpdate.reviewedCandidate;
+  let changed = sessionCandidateUpdate.changed;
+  let sourceResponseId = latestAssistantMessageId(session);
+  let turnId = sourceResponseId;
+
+  const messages = session.messages.map((message) => {
+    const messageCandidateUpdate = updateCandidateReviewStatus(message.suggestedVaultUpdates, candidateKey, action, reviewedAt);
+
+    if (messageCandidateUpdate.changed) {
+      changed = true;
+      reviewedCandidate = messageCandidateUpdate.reviewedCandidate ?? reviewedCandidate;
+      sourceResponseId = message.id;
+      turnId = stringValue(reviewedCandidate?.turn_id ?? reviewedCandidate?.source_turn_id, message.id);
+    }
+
+    return {
+      ...message,
+      ...(messageCandidateUpdate.candidates.length ? { suggestedVaultUpdates: messageCandidateUpdate.candidates } : {}),
+    };
+  });
+
+  if (!changed || !reviewedCandidate) {
+    throw new Error("Suggested Vault update candidate was not found.");
+  }
+
+  const reviewedUpdate = normalizeSuggestedVaultUpdateCandidate(reviewedCandidate);
+  const approvalEvent: CmoVaultUpdateApprovalEvent = {
+    schema_version: "cmo.vault_update_approval.v1",
+    approval_id: `approval_${randomUUID()}`,
+    tenant_id: app.tenantId,
+    workspace_id: app.workspaceId,
+    session_id: session.id,
+    turn_id: turnId,
+    source_endpoint: "/agents/cmo/chat",
+    source_response_id: sourceResponseId,
+    action,
+    review_status: action,
+    approved_by: "user_or_product",
+    approved_at: reviewedAt,
+    reviewed_update: reviewedUpdate,
+    ...(action === "approved" ? { approved_update: reviewedUpdate } : {}),
+    ...(action === "rejected" ? { rejected_update: reviewedUpdate } : {}),
+    ...(action === "deferred" ? { deferred_update: reviewedUpdate } : {}),
+    vault_write_performed: false,
+  };
+  const approvalEvents = [...(session.vaultUpdateApprovalEvents ?? []), approvalEvent].slice(-MAX_VAULT_UPDATE_APPROVAL_EVENTS);
+  const metadataPatch = approvalEventMetadata(approvalEvents);
+  const updatedSessionCandidates = sessionCandidateUpdate.changed
+    ? sessionCandidateUpdate.candidates
+    : mergeSuggestedVaultUpdates(session.suggestedVaultUpdates, [reviewedUpdate]);
+  const messagesWithApprovalEvents = messages.map((message) =>
+    message.id === sourceResponseId
+      ? {
+          ...message,
+          vaultUpdateApprovalEvents: approvalEvents,
+          ...(message.hermesCmoMetadata
+            ? {
+                hermesCmoMetadata: {
+                  ...message.hermesCmoMetadata,
+                  ...metadataPatch,
+                  suggested_vault_updates_count: updatedSessionCandidates.length,
+                },
+              }
+            : {}),
+        }
+      : message,
+  );
+  const updated: CMOChatSession = {
+    ...session,
+    suggestedVaultUpdates: updatedSessionCandidates,
+    vaultUpdateApprovalEvents: approvalEvents,
+    messages: messagesWithApprovalEvents,
+    updatedAt: reviewedAt,
+    ...(session.hermesCmoMetadata
+      ? {
+          hermesCmoMetadata: {
+            ...session.hermesCmoMetadata,
+            ...metadataPatch,
+            suggested_vault_updates_count: updatedSessionCandidates.length,
+          },
+        }
+      : {}),
+  };
+
+  await writeJsonFile(sessionPath(session.id), updated);
+
+  return normalizeSession(updated);
 }
