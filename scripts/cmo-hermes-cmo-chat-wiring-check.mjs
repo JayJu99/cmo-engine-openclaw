@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
@@ -51,6 +51,14 @@ const withEnv = async (patch, fn) => {
       restoreEnvValue(key, value);
     }
   }
+};
+
+const readTraceFile = async (directory, suffix) => {
+  const files = (await readdir(directory)).filter((file) => file.endsWith(`_${suffix}.json`)).sort();
+
+  assert.ok(files.length > 0, `expected ${suffix} trace file in ${directory}`);
+
+  return JSON.parse(await readFile(path.join(directory, files.at(-1)), "utf8"));
 };
 
 const transpile = async (sourcePath, outputPath, rewrite) => {
@@ -814,6 +822,189 @@ try {
     assert.equal(fallbackTrace.fallback_used, true);
     assert.equal(fallbackTrace.fallback_from, "/agents/cmo/chat");
     assert.equal(fallbackTrace.fallback_to, "/agents/cmo/execute");
+
+    const chatV11RunInput = (overrides = {}) => ({
+      ...sampleTurnInput,
+      sessionId: "session_h6",
+      userMessageId: "msg_trace_success",
+      createdAt: "2026-05-28T11:00:00.000Z",
+      userIdentity: {
+        userId: "user_h6",
+        userEmail: "jay@example.com",
+      },
+      sessionSummary: "Prior trace summary.",
+      sessionArtifacts: [],
+      vaultContext: null,
+      ...overrides,
+    });
+    const originalFetch = globalThis.fetch;
+
+    try {
+      const successTraceDir = await mkdtemp(path.join(os.tmpdir(), "hermes-cmo-chat-v11-success-trace-"));
+
+      try {
+        await withEnv(
+          {
+            CMO_HERMES_BASE_URL: "https://hermes.test",
+            CMO_HERMES_API_KEY: "trace-key",
+            CMO_HERMES_CMO_TRACE_DIR: successTraceDir,
+          },
+          async () => {
+            globalThis.fetch = async (url, init) => {
+              assert.equal(url, "https://hermes.test/agents/cmo/chat");
+              const body = JSON.parse(init.body);
+
+              return new Response(JSON.stringify({
+                schema_version: "hermes.cmo.chat.response.v1_1",
+                mode: "cmo.chat",
+                request_id: body.request_id,
+                session_id: body.session_id,
+                turn_id: body.turn_id,
+                status: "completed",
+                answer: { content: "Traced v1.1 success." },
+                artifacts_out: [{ type: "trace_artifact", artifact_id: "trace_artifact_1", summary: "Trace artifact." }],
+                suggested_session_summary_update: { summary_delta: "Trace summary delta." },
+                suggested_vault_updates: [{ type: "draft", summary: "Draft only." }],
+                vault_context_usage: { used: false },
+                side_effects: false,
+              }), { status: 200, headers: { "content-type": "application/json" } });
+            };
+
+            const result = await chatV11.runHermesCmoChatV11(chatV11RunInput());
+            assert.equal(result.ok, true, "successful v1.1 run must return ok=true");
+
+            const requestTrace = await readTraceFile(successTraceDir, "request");
+            assert.equal(requestTrace.schema_version, "hermes.cmo.chat.request.v1_1");
+            assert.equal(requestTrace.endpoint_kind, "agent_chat");
+            assert.equal(requestTrace.runtime_kind, "ai_agent");
+            assert.equal(requestTrace.requested_endpoint, "/agents/cmo/chat");
+            assert.equal(requestTrace.request.schema_version, "hermes.cmo.chat.request.v1_1");
+            assert.equal(requestTrace.request.intent.user_message, "Review activation plan.");
+            assert.equal(requestTrace.side_effects.vault_write, false);
+            assert.equal(requestTrace.artifacts_out_count, 0);
+            assert.equal(requestTrace.session_summary_update_present, false);
+            assert.equal(requestTrace.suggested_vault_updates_count, 0);
+
+            const responseTrace = await readTraceFile(successTraceDir, "response");
+            assert.equal(responseTrace.schema_version, "hermes.cmo.chat.request.v1_1");
+            assert.equal(responseTrace.endpoint_kind, "agent_chat");
+            assert.equal(responseTrace.runtime_kind, "ai_agent");
+            assert.equal(responseTrace.requested_endpoint, "/agents/cmo/chat");
+            assert.equal(responseTrace.fallback_used, false);
+            assert.equal(responseTrace.side_effects.vault_write, false);
+            assert.equal(responseTrace.side_effects.executed_surf, false);
+            assert.equal(responseTrace.artifacts_out_count, 1);
+            assert.equal(responseTrace.session_summary_update_present, true);
+            assert.equal(responseTrace.suggested_vault_updates_count, 1);
+          },
+        );
+      } finally {
+        await rm(successTraceDir, { recursive: true, force: true });
+      }
+
+      const fallbackTraceDir = await mkdtemp(path.join(os.tmpdir(), "hermes-cmo-chat-v11-fallback-trace-"));
+
+      try {
+        await withEnv(
+          {
+            CMO_HERMES_BASE_URL: "https://hermes.test",
+            CMO_HERMES_API_KEY: "trace-key",
+            CMO_HERMES_CMO_TRACE_DIR: fallbackTraceDir,
+          },
+          async () => {
+            globalThis.fetch = async () =>
+              new Response(JSON.stringify({ error: "Hermes crashed before answer." }), { status: 500, headers: { "content-type": "application/json" } });
+
+            const result = await chatV11.runHermesCmoChatV11(chatV11RunInput({ userMessageId: "msg_trace_fallback" }));
+            assert.equal(result.ok, false, "HTTP 500 v1.1 run must fail before fallback");
+            assert.equal(result.fallbackEligible, true, "HTTP 500 v1.1 failure must be fallback eligible");
+
+            const errorTrace = await readTraceFile(fallbackTraceDir, "error");
+            assert.equal(errorTrace.schema_version, "hermes.cmo.chat.request.v1_1");
+            assert.equal(errorTrace.endpoint_kind, "agent_chat");
+            assert.equal(errorTrace.requested_endpoint, "/agents/cmo/chat");
+            assert.equal(errorTrace.fallback_used, false);
+            assert.equal(errorTrace.fallback_eligible, true);
+            assert.match(errorTrace.fallback_reason, /^http_500/);
+            assert.equal(errorTrace.side_effects.vault_write, false);
+            assert.equal(errorTrace.artifacts_out_count, 0);
+            assert.equal(errorTrace.session_summary_update_present, false);
+            assert.equal(errorTrace.suggested_vault_updates_count, 0);
+
+            await chatV11.writeHermesCmoChatV11FallbackTrace(result.request, {
+              fallbackReason: result.fallbackReason,
+              fallbackResponse: {
+                schema_version: "hermes.cmo.response.v1",
+                status: "completed",
+                answer: { body: "Legacy /execute fallback answer." },
+              },
+              sideEffects: {
+                vault_write: false,
+                memory_mutation: false,
+                gbrain_mutation: false,
+                supabase_mutation: false,
+                session_mutation: false,
+                raw_capture: false,
+                repo_mutation: false,
+                publishing: false,
+                knowledge_promotion: false,
+                source_auto_save: false,
+              },
+            });
+
+            const productFallbackTrace = await readTraceFile(fallbackTraceDir, "fallback");
+            assert.equal(productFallbackTrace.fallback_used, true);
+            assert.match(productFallbackTrace.fallback_reason, /^http_500/);
+            assert.equal(productFallbackTrace.fallback_from, "/agents/cmo/chat");
+            assert.equal(productFallbackTrace.fallback_to, "/agents/cmo/execute");
+            assert.equal(productFallbackTrace.response.schema_version, "hermes.cmo.response.v1");
+            assert.equal(productFallbackTrace.side_effects.vault_write, false);
+          },
+        );
+      } finally {
+        await rm(fallbackTraceDir, { recursive: true, force: true });
+      }
+
+      const noFallbackTraceDir = await mkdtemp(path.join(os.tmpdir(), "hermes-cmo-chat-v11-no-fallback-trace-"));
+
+      try {
+        await withEnv(
+          {
+            CMO_HERMES_BASE_URL: "https://hermes.test",
+            CMO_HERMES_API_KEY: "trace-key",
+            CMO_HERMES_CMO_TRACE_DIR: noFallbackTraceDir,
+          },
+          async () => {
+            globalThis.fetch = async () =>
+              new Response(JSON.stringify({ error: "Bad request." }), { status: 400, headers: { "content-type": "application/json" } });
+
+            const result = await chatV11.runHermesCmoChatV11(chatV11RunInput({ userMessageId: "msg_trace_no_fallback" }));
+            assert.equal(result.ok, false, "HTTP 400 v1.1 run must fail");
+            assert.equal(result.fallbackEligible, false, "HTTP 400 v1.1 failure must not be fallback eligible");
+
+            const errorTrace = await readTraceFile(noFallbackTraceDir, "error");
+            assert.equal(errorTrace.schema_version, "hermes.cmo.chat.request.v1_1");
+            assert.equal(errorTrace.endpoint_kind, "agent_chat");
+            assert.equal(errorTrace.runtime_kind, "ai_agent");
+            assert.equal(errorTrace.requested_endpoint, "/agents/cmo/chat");
+            assert.equal(errorTrace.fallback_used, false);
+            assert.equal(errorTrace.fallback_eligible, false);
+            assert.match(errorTrace.fallback_reason, /^http_400/);
+            assert.equal(errorTrace.side_effects.vault_write, false);
+            assert.equal(errorTrace.artifacts_out_count, 0);
+            assert.equal(errorTrace.session_summary_update_present, false);
+            assert.equal(errorTrace.suggested_vault_updates_count, 0);
+
+            const files = await readdir(noFallbackTraceDir);
+            assert.equal(files.some((file) => file.endsWith("_fallback.json")), false, "no fallback trace should be written when fallback does not happen");
+          },
+        );
+      } finally {
+        await rm(noFallbackTraceDir, { recursive: true, force: true });
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
 
     const researchFollowupInput = JSON.parse(JSON.stringify(sampleTurnInput));
     researchFollowupInput.message = "Ok lập bảng so 5 bên cho mình xem thử";
@@ -1750,6 +1941,7 @@ try {
     assert.match(source, /fallback_used: true/);
     assert.match(source, /fallback_from: fallbackTrace\.fallback_from/);
     assert.match(source, /fallback_to: fallbackTrace\.fallback_to/);
+    assert.match(source, /writeHermesCmoChatV11FallbackTrace\(chatResult\.request/);
     assert.match(source, /answer = mappedChat\.answer/);
     assert.match(source, /answer = mappedHermesResult\.answer/);
     assert.match(source, /productRenderSource = "hermes_cmo"/);
@@ -1818,6 +2010,13 @@ try {
     assert.match(hermesClientSource, /surfTraceResponsePayload/);
     assert.match(hermesClientSource, /safe_reason/);
     assert.match(hermesClientSource, /error_code/);
+
+    const hermesChatV11Source = await readFile(path.join(cmoDir, "hermes-cmo-chat-v11.ts"), "utf8");
+    assert.match(hermesChatV11Source, /hermes-cmo-traces/);
+    assert.match(hermesChatV11Source, /writeHermesCmoChatV11Trace\(request, "request"/);
+    assert.match(hermesChatV11Source, /writeHermesCmoChatV11Trace\(request, "response"/);
+    assert.match(hermesChatV11Source, /writeHermesCmoChatV11Trace\(request, "error"/);
+    assert.match(hermesChatV11Source, /writeHermesCmoChatV11FallbackTrace/);
 
     const delegationExecutorSource = await readFile(path.join(cmoDir, "hermes-cmo-delegation-executor.ts"), "utf8");
     assert.match(delegationExecutorSource, /workspace_id: input\.workspaceId/);

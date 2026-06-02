@@ -70,6 +70,7 @@ import {
   mergeHermesCmoChatV11SessionSummary,
   runHermesCmoChatV11,
   sanitizeHermesCmoChatV11Records,
+  writeHermesCmoChatV11FallbackTrace,
 } from "@/lib/cmo/hermes-cmo-chat-v11";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
@@ -2216,6 +2217,14 @@ export async function createAppChatSession(
           fallback_to: fallbackTrace.fallback_to,
           side_effects: mappedHermesFallbackResult.hermesCmoMetadata.side_effects ?? fallbackTrace.side_effects,
         };
+        await writeHermesCmoChatV11FallbackTrace(chatResult.request, {
+          fallbackReason: reason,
+          fallbackResponse: hermesFallbackResult.response,
+          sideEffects: hermesCmoMetadata.side_effects,
+          artifactsOutCount: hermesCmoMetadata.artifacts_out_count,
+          sessionSummaryUpdatePresent: hermesCmoMetadata.session_summary_update_present,
+          suggestedVaultUpdatesCount: hermesCmoMetadata.suggested_vault_updates_count,
+        });
         strategyMode = hermesCmoMetadata.strategyMode;
         mainBottleneck = hermesCmoMetadata.mainBottleneck;
         decisionLabel = hermesCmoMetadata.decisionLabel;
