@@ -4173,7 +4173,11 @@ function approvedUpdateSummaryForDryRun(approvedUpdate: Record<string, unknown>)
     return compactSessionSourceText(`${decision}\n\nRationale: ${rationale}`, 1_500);
   }
 
-  return decision || rationale || candidateString(approvedUpdate, ["subject"], 1_500);
+  return decision ||
+    rationale ||
+    candidateString(approvedUpdate, ["subject"], 1_500) ||
+    candidateString(approvedUpdate, ["title"], 1_500) ||
+    candidateString(approvedUpdate, ["name"], 1_500);
 }
 
 function dryRunApprovalEventEnvelope(approvalEvent: CmoVaultUpdateApprovalEvent): CmoVaultUpdateApprovalEvent {
@@ -4181,9 +4185,13 @@ function dryRunApprovalEventEnvelope(approvalEvent: CmoVaultUpdateApprovalEvent)
     return approvalEvent;
   }
 
+  const generatedSummary = approvedUpdateSummaryForDryRun(approvalEvent.approved_update);
+  const title = candidateString(approvalEvent.approved_update, ["title"], 1_500);
+  const subject = candidateString(approvalEvent.approved_update, ["subject"], 1_500);
   const dryRunApprovedUpdate = {
     ...approvalEvent.approved_update,
-    summary: approvedUpdateSummaryForDryRun(approvalEvent.approved_update),
+    ...(generatedSummary ? { summary: generatedSummary } : {}),
+    ...(!subject && title ? { subject: title } : {}),
   };
 
   return {

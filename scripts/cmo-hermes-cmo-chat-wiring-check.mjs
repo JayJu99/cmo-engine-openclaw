@@ -2099,10 +2099,17 @@ try {
     assert.match(source, /candidateString\(approvedUpdate, \["decision"\]/);
     assert.match(source, /candidateString\(approvedUpdate, \["rationale"\]/);
     assert.match(source, /candidateString\(approvedUpdate, \["subject"\]/);
+    assert.match(source, /candidateString\(approvedUpdate, \["title"\]/);
+    assert.match(source, /candidateString\(approvedUpdate, \["name"\]/);
     assert.match(source, /\`\$\{decision\}\\n\\nRationale: \$\{rationale\}\`/);
     assert.match(source, /dryRunApprovalEventEnvelope/);
     assert.match(source, /\.\.\.approvalEvent\.approved_update/);
-    assert.match(source, /summary: approvedUpdateSummaryForDryRun\(approvalEvent\.approved_update\)/);
+    assert.match(source, /const generatedSummary = approvedUpdateSummaryForDryRun\(approvalEvent\.approved_update\)/);
+    assert.match(source, /const title = candidateString\(approvalEvent\.approved_update, \["title"\]/);
+    assert.match(source, /const subject = candidateString\(approvalEvent\.approved_update, \["subject"\]/);
+    assert.match(source, /\.\.\(generatedSummary \? \{ summary: generatedSummary \} : \{\}\)/);
+    assert.match(source, /\.\.\(!subject && title \? \{ subject: title \} : \{\}\)/);
+    assert.doesNotMatch(source, /summary: approvedUpdateSummaryForDryRun\(approvalEvent\.approved_update\)/);
     assert.match(source, /approval_payload_hash/);
     assert.match(source, /idempotency_key/);
     assert.match(source, /dry_run: true/);
