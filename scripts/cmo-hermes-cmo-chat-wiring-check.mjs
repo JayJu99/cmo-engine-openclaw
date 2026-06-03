@@ -900,21 +900,44 @@ try {
     assert.match(mergedSummaryDelta, /Vault refs: vault:\/\/hold-pay\/positioning/);
     assert.equal(chatV11Mapped.suggestedVaultUpdates.length, 1, "suggested_vault_updates must remain draft/proposal data");
 
-    const rollingComparisonArtifact = {
+    const productComparisonArtifact = {
       type: "comparison_set",
-      artifact_id: "hold_pay_competitor_set_v1",
+      id: "hold_pay_competitor_set_v1",
       title: "Hold Pay competitor comparison set",
-      competitors: ["Binance P2P", "Remitano", "OKX P2P"],
-      summary: "Comparison set: Binance P2P, Remitano, OKX P2P.",
+      content: "Comparison set: Binance P2P, Remitano, OKX P2P.",
+      metadata: {
+        comparison_set: ["Binance P2P", "Remitano", "OKX P2P"],
+        table_summary: "Binance P2P vs Remitano vs OKX P2P for Hold Pay similarity.",
+      },
     };
-    const rollingSessionSummary = chatV11.mergeHermesCmoChatV11SessionSummary(undefined, {
-      summary_delta: "Hold Pay comparison set created for Binance P2P, Remitano, OKX P2P.",
-      comparison_sets: ["Binance P2P, Remitano, OKX P2P"],
-      artifact_refs: ["hold_pay_competitor_set_v1"],
-    });
-    const rollingSessionArtifacts = chatV11.mergeHermesCmoChatV11Artifacts([], [rollingComparisonArtifact]);
+    const productArtifactResponse = chatV11.normalizeHermesCmoChatV11Response({
+      schema_version: "hermes.cmo.chat.response.v1_1",
+      mode: "cmo.chat",
+      request_id: chatV11Request.request_id,
+      session_id: chatV11Request.session_id,
+      turn_id: chatV11Request.turn_id,
+      status: "completed",
+      answer: { content: "Comparison artifact created." },
+      artifacts_out: [productComparisonArtifact],
+      suggested_session_summary_update: {
+        summary_delta: "Hold Pay comparison set created for Binance P2P, Remitano, OKX P2P.",
+        comparison_sets: ["Binance P2P, Remitano, OKX P2P"],
+        artifact_refs: ["hold_pay_competitor_set_v1"],
+      },
+      suggested_vault_updates: [],
+      side_effects: false,
+    }, chatV11Request);
+    assert.notEqual(typeof productArtifactResponse, "string", "Product-shaped artifacts_out response must normalize");
+    const productArtifactMapped = chatV11.mapHermesCmoChatV11ToChatResult(chatV11Request, productArtifactResponse);
+    const rollingSessionSummary = chatV11.mergeHermesCmoChatV11SessionSummary(undefined, productArtifactMapped.suggestedSessionSummaryUpdate);
+    const rollingSessionArtifacts = chatV11.mergeHermesCmoChatV11Artifacts([], productArtifactMapped.artifactsOut);
+    assert.equal(productArtifactMapped.artifactsOut[0].id, "hold_pay_competitor_set_v1");
+    assert.equal(productArtifactMapped.artifactsOut[0].type, "comparison_set");
+    assert.equal(productArtifactMapped.artifactsOut[0].title, "Hold Pay competitor comparison set");
+    assert.match(productArtifactMapped.artifactsOut[0].content, /Binance P2P, Remitano, OKX P2P/);
+    assert.deepEqual(productArtifactMapped.artifactsOut[0].metadata.comparison_set, ["Binance P2P", "Remitano", "OKX P2P"]);
     assert.match(rollingSessionSummary, /Binance P2P, Remitano, OKX P2P/);
-    assert.ok(rollingSessionArtifacts.some((artifact) => artifact.artifact_id === "hold_pay_competitor_set_v1"));
+    assert.ok(rollingSessionArtifacts.some((artifact) => artifact.id === "hold_pay_competitor_set_v1"));
 
     const longSessionHistory = Array.from({ length: 22 }, (_, index) => ({
       id: `long_session_msg_${index}`,
@@ -938,9 +961,12 @@ try {
     assert.match(rollingReplayRequest.context_pack.session_summary.summary, /Binance P2P, Remitano, OKX P2P/);
     assert.ok(
       rollingReplayRequest.context_pack.artifacts_in.some((artifact) =>
-        artifact.artifact_id === "hold_pay_competitor_set_v1" &&
-        Array.isArray(artifact.competitors) &&
-        artifact.competitors.includes("OKX P2P"),
+        artifact.id === "hold_pay_competitor_set_v1" &&
+        artifact.type === "comparison_set" &&
+        typeof artifact.content === "string" &&
+        artifact.content.includes("OKX P2P") &&
+        Array.isArray(artifact.metadata?.comparison_set) &&
+        artifact.metadata.comparison_set.includes("OKX P2P"),
       ),
       "artifacts_in must replay the stored comparison set",
     );
@@ -972,14 +998,54 @@ try {
     });
     assert.match(JSON.stringify(correctionReplayRequest.messages), /MoMo crypto rail giả định/);
     assert.match(correctionReplayRequest.context_pack.session_summary.summary, /OKX P2P/);
-    assert.ok(correctionReplayRequest.context_pack.artifacts_in.some((artifact) => artifact.artifact_id === "hold_pay_competitor_set_v1"));
+    assert.ok(correctionReplayRequest.context_pack.artifacts_in.some((artifact) => artifact.id === "hold_pay_competitor_set_v1"));
+    const missingArtifactInput = JSON.parse(JSON.stringify(sampleTurnInput));
+    missingArtifactInput.message = "mấy bên đó thì bên nào giống mình nhất?";
+    missingArtifactInput.contextPack.items = [];
+    missingArtifactInput.contextPack.contextQualitySummary = {
+      selectedCount: 0,
+      existingCount: 0,
+      missingCount: 0,
+      confirmedCount: 0,
+      draftCount: 0,
+      placeholderCount: 0,
+      placeholderOrDraftCount: 0,
+    };
+    missingArtifactInput.contextPackage.selectedContext = [];
+    missingArtifactInput.contextPackage.missingContext = [];
+    missingArtifactInput.contextPackage.contextQualitySummary = missingArtifactInput.contextPack.contextQualitySummary;
+    const missingArtifactRequest = chatV11.buildHermesCmoChatV11Request({
+      ...missingArtifactInput,
+      history: longSessionHistory,
+      sessionId: "session_missing_artifact",
+      userMessageId: "msg_missing_artifact",
+      createdAt: "2026-05-28T15:00:00.000Z",
+      sessionSummary: undefined,
+      sessionArtifacts: [],
+      vaultContext: null,
+    });
+    assert.equal(/Binance P2P|Remitano|OKX P2P|MoMo crypto rail/.test(missingArtifactRequest.context_pack.session_summary?.summary ?? ""), false);
+    assert.equal(missingArtifactRequest.context_pack.artifacts_in.length, 0);
+    assert.equal(/Binance P2P|Remitano|OKX P2P|MoMo crypto rail/.test(JSON.stringify(missingArtifactRequest.messages)), false);
     rollingReplaySmoke = {
       storedSuggestedSessionSummaryUpdate: true,
       mergedSessionSummaryContainsComparisonSet: /Binance P2P, Remitano, OKX P2P/.test(rollingSessionSummary),
       storedArtifactsOutCount: rollingSessionArtifacts.length,
+      productArtifactShapeStored: rollingSessionArtifacts.some((artifact) =>
+        artifact.id === "hold_pay_competitor_set_v1" &&
+        artifact.type === "comparison_set" &&
+        artifact.title === "Hold Pay competitor comparison set" &&
+        typeof artifact.content === "string" &&
+        artifact.content.includes("Binance P2P") &&
+        Array.isArray(artifact.metadata?.comparison_set),
+      ),
       replayRequestHasSessionSummary: Boolean(rollingReplayRequest.context_pack.session_summary?.summary),
-      replayRequestHasArtifactsIn: rollingReplayRequest.context_pack.artifacts_in.some((artifact) => artifact.artifact_id === "hold_pay_competitor_set_v1"),
+      replayRequestHasArtifactsIn: rollingReplayRequest.context_pack.artifacts_in.some((artifact) => artifact.id === "hold_pay_competitor_set_v1"),
+      replayRequestArtifactsInCount: rollingReplayRequest.context_pack.artifacts_in.length,
       recentMessagesContainOriginalSet: /Binance P2P|Remitano|OKX P2P/.test(rollingRecentMessageText),
+      missingArtifactRequestHasNoArtifactsIn: missingArtifactRequest.context_pack.artifacts_in.length === 0,
+      missingArtifactClarificationExpected: true,
+      correctionArtifactStillPresent: correctionReplayRequest.context_pack.artifacts_in.some((artifact) => artifact.id === "hold_pay_competitor_set_v1"),
       correctionRecentMessagePresent: /MoMo crypto rail giả định/.test(JSON.stringify(correctionReplayRequest.messages)),
       expectedCorrectedSet: ["Binance P2P", "Remitano", "MoMo crypto rail giả định"],
     };
@@ -1126,9 +1192,11 @@ try {
             assert.match(rollingRequestTrace.request.context_pack.session_summary.summary, /Binance P2P, Remitano, OKX P2P/);
             assert.ok(
               rollingRequestTrace.request.context_pack.artifacts_in.some((artifact) =>
-                artifact.artifact_id === "hold_pay_competitor_set_v1" &&
-                Array.isArray(artifact.competitors) &&
-                artifact.competitors.includes("OKX P2P"),
+                artifact.id === "hold_pay_competitor_set_v1" &&
+                artifact.type === "comparison_set" &&
+                artifact.content === "[redacted]" &&
+                Array.isArray(artifact.metadata?.comparison_set) &&
+                artifact.metadata.comparison_set.includes("OKX P2P"),
               ),
               "rolling request trace must include artifacts_in comparison set",
             );
@@ -1141,6 +1209,10 @@ try {
             assert.equal(rollingResponseTrace.response.knowledge_promotion, undefined);
             rollingReplaySmoke.traceRequestHasSessionSummary = Boolean(rollingRequestTrace.request.context_pack.session_summary?.summary);
             rollingReplaySmoke.traceRequestArtifactsInCount = rollingRequestTrace.request.context_pack.artifacts_in.length;
+            rollingReplaySmoke.traceArtifactsInContentRedacted = rollingRequestTrace.request.context_pack.artifacts_in.some((artifact) =>
+              artifact.id === "hold_pay_competitor_set_v1" &&
+              artifact.content === "[redacted]",
+            );
             rollingReplaySmoke.traceNoVaultWrite = rollingResponseTrace.side_effects.vault_write === false;
             rollingReplaySmoke.traceNoGbrain = rollingResponseTrace.side_effects.gbrain_mutation === false;
             rollingReplaySmoke.traceNoPromotion = rollingResponseTrace.side_effects.knowledge_promotion === false;

@@ -385,11 +385,20 @@ function structuredSessionSummary(summary: string | null): HermesCmoChatV11Sessi
   };
 }
 
-function safeRecord(value: Record<string, unknown>, maxJsonChars = MAX_ARTIFACT_JSON_CHARS): Record<string, unknown> | null {
+function safeRecord(
+  value: Record<string, unknown>,
+  maxJsonChars = MAX_ARTIFACT_JSON_CHARS,
+  options: { allowTopLevelContent?: boolean } = {},
+  depth = 0,
+): Record<string, unknown> | null {
   const safe: Record<string, unknown> = {};
 
   for (const [key, nested] of Object.entries(value)) {
     if (UNSAFE_ARTIFACT_KEYS.test(key)) {
+      if (options.allowTopLevelContent && depth === 0 && key === "content" && typeof nested === "string" && nested.trim()) {
+        safe[key] = compactText(nested, 4_000);
+      }
+
       continue;
     }
 
@@ -400,10 +409,10 @@ function safeRecord(value: Record<string, unknown>, maxJsonChars = MAX_ARTIFACT_
     } else if (Array.isArray(nested)) {
       safe[key] = nested
         .slice(0, 12)
-        .map((item) => typeof item === "string" ? compactText(item, 500) : isRecord(item) ? safeRecord(item, 2_000) : item)
+        .map((item) => typeof item === "string" ? compactText(item, 500) : isRecord(item) ? safeRecord(item, 2_000, options, depth + 1) : item)
         .filter((item) => item !== undefined && item !== null);
     } else if (isRecord(nested)) {
-      const nestedSafe = safeRecord(nested, 2_000);
+      const nestedSafe = safeRecord(nested, 2_000, options, depth + 1);
       if (nestedSafe) {
         safe[key] = nestedSafe;
       }
@@ -471,11 +480,15 @@ function decisionsCount(response: Record<string, unknown>): number {
   return 0;
 }
 
-export function sanitizeHermesCmoChatV11Records(value: unknown, maxItems = MAX_ARTIFACTS): Record<string, unknown>[] {
+export function sanitizeHermesCmoChatV11Records(
+  value: unknown,
+  maxItems = MAX_ARTIFACTS,
+  options: { allowTopLevelContent?: boolean } = {},
+): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value
         .slice(0, maxItems)
-        .map((item) => isRecord(item) ? safeRecord(item) : null)
+        .map((item) => isRecord(item) ? safeRecord(item, MAX_ARTIFACT_JSON_CHARS, options) : null)
         .filter((item): item is Record<string, unknown> => Boolean(item))
     : [];
 }
@@ -626,7 +639,7 @@ export function normalizeHermesCmoChatV11Response(payload: unknown, request: Her
     ? compactText(userVisible.answer, MAX_MESSAGE_CHARS)
     : "";
   const sideEffects = sideEffectsAreSafe(response.side_effects ?? payload.side_effects);
-  const artifactsOut = sanitizeHermesCmoChatV11Records(response.artifacts_out);
+  const artifactsOut = sanitizeHermesCmoChatV11Records(response.artifacts_out, MAX_ARTIFACTS, { allowTopLevelContent: true });
   const suggestedVaultUpdates = sanitizeHermesCmoChatV11Records(response.suggested_vault_updates, MAX_SUGGESTED_VAULT_UPDATES);
   const contractWarnings = sanitizedContractWarnings(response.contract_warnings);
   const stateContract = isRecord(response.state_contract) ? safeRecord(response.state_contract, 6_000) : null;
@@ -689,7 +702,7 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
   const artifactsIn = sanitizeHermesCmoChatV11Records([
     ...(Array.isArray(legacyRequest.context_pack.artifacts_in) ? legacyRequest.context_pack.artifacts_in : []),
     ...(input.sessionArtifacts ?? []),
-  ]);
+  ], MAX_ARTIFACTS, { allowTopLevelContent: true });
   const sessionSummaryText = input.sessionSummary?.trim()
     ? compactText(input.sessionSummary, MAX_SESSION_SUMMARY_CHARS)
     : typeof legacyRequest.context_pack.recent_session_summary === "string"

@@ -2351,7 +2351,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             sourceAnswerContext: normalizeSourceAnswerContext(message.sourceAnswerContext),
             sessionLocalResearchResults: normalizeSessionLocalResearchResults(message.sessionLocalResearchResults, undefined, id),
             sessionSummary: normalizeOptionalString(message.sessionSummary),
-            sessionArtifacts: sanitizeHermesCmoChatV11Records(message.sessionArtifacts),
+            sessionArtifacts: sanitizeHermesCmoChatV11Records(message.sessionArtifacts, undefined, { allowTopLevelContent: true }),
             suggestedVaultUpdates: mergeSuggestedVaultUpdates(undefined, sanitizeHermesCmoChatV11Records(message.suggestedVaultUpdates)),
             vaultUpdateApprovalEvents: normalizeVaultUpdateApprovalEvents(message.vaultUpdateApprovalEvents),
             vaultUpdateDryRunResults: normalizeVaultApprovedWriteDryRunResults(message.vaultUpdateDryRunResults),
@@ -2381,7 +2381,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     : mergeSessionLocalResearchResults(messageSessionLocalResearchResults, undefined);
   const activeSourceId = normalizeOptionalString(value.activeSourceId);
   const sessionSummary = normalizeOptionalString(value.sessionSummary);
-  const sessionArtifacts = sanitizeHermesCmoChatV11Records(value.sessionArtifacts);
+  const sessionArtifacts = sanitizeHermesCmoChatV11Records(value.sessionArtifacts, undefined, { allowTopLevelContent: true });
   const suggestedVaultUpdates = mergeSuggestedVaultUpdates(undefined, sanitizeHermesCmoChatV11Records(value.suggestedVaultUpdates));
   const vaultUpdateApprovalEvents = normalizeVaultUpdateApprovalEvents(value.vaultUpdateApprovalEvents);
   const vaultUpdateDryRunResults = normalizeVaultApprovedWriteDryRunResults(value.vaultUpdateDryRunResults);
