@@ -649,6 +649,8 @@ try {
     assert.deepEqual(chatV11Request.context_pack.session_summary.decisions, []);
     assert.deepEqual(chatV11Request.context_pack.session_summary.open_questions, []);
     assert.deepEqual(chatV11Request.context_pack.session_summary.comparison_sets, []);
+    assert.deepEqual(chatV11Request.context_pack.session_summary.corrections, []);
+    assert.deepEqual(chatV11Request.context_pack.session_summary.superseded_items, []);
     assert.deepEqual(chatV11Request.context_pack.session_summary.user_corrections, []);
     assert.deepEqual(chatV11Request.context_pack.session_summary.source_refs, []);
     assert.deepEqual(chatV11Request.context_pack.session_summary.artifact_refs, []);
@@ -938,6 +940,48 @@ try {
     assert.deepEqual(productArtifactMapped.artifactsOut[0].metadata.comparison_set, ["Binance P2P", "Remitano", "OKX P2P"]);
     assert.match(rollingSessionSummary, /Binance P2P, Remitano, OKX P2P/);
     assert.ok(rollingSessionArtifacts.some((artifact) => artifact.id === "hold_pay_competitor_set_v1"));
+    const compressedCorrectionUpdate = {
+      summary: "Compressed rolling summary for Hold Pay competitor comparison.",
+      active_subjects: ["Hold Pay competitor positioning"],
+      decisions: ["Use the corrected comparison set for follow-up answers."],
+      open_questions: ["Which competitor is closest to Hold Pay?"],
+      artifact_refs: ["hold_pay_competitor_set_v1"],
+      vault_refs: ["workspace_context:hold-pay"],
+      comparison_sets: [
+        "Binance P2P, Remitano, OKX P2P",
+        "Binance P2P, Remitano, MoMo crypto rail giả định",
+      ],
+      corrections: ["Replace OKX P2P with MoMo crypto rail giả định."],
+      superseded_items: ["OKX P2P"],
+    };
+    const compressedSessionSummary = chatV11.mergeHermesCmoChatV11SessionSummary(rollingSessionSummary, compressedCorrectionUpdate);
+    let boundedCompressedSessionSummary = compressedSessionSummary;
+
+    for (let index = 0; index < 20; index += 1) {
+      boundedCompressedSessionSummary = chatV11.mergeHermesCmoChatV11SessionSummary(boundedCompressedSessionSummary, compressedCorrectionUpdate);
+    }
+
+    assert.equal((boundedCompressedSessionSummary.match(/Replace OKX P2P with MoMo crypto rail/g) ?? []).length, 1);
+    assert.ok(boundedCompressedSessionSummary.length <= 6_000);
+    const compressionReplayRequest = chatV11.buildHermesCmoChatV11Request({
+      ...sampleTurnInput,
+      message: "vậy trong mấy bên đó, bên nào giống Hold Pay nhất?",
+      history: [],
+      sessionId: "session_compressed_replay",
+      userMessageId: "msg_compressed_replay",
+      createdAt: "2026-05-28T13:30:00.000Z",
+      sessionSummary: boundedCompressedSessionSummary,
+      sessionArtifacts: rollingSessionArtifacts,
+      vaultContext: null,
+    });
+    assert.deepEqual(compressionReplayRequest.context_pack.session_summary.active_subjects, ["Hold Pay competitor positioning"]);
+    assert.deepEqual(compressionReplayRequest.context_pack.session_summary.decisions, ["Use the corrected comparison set for follow-up answers."]);
+    assert.deepEqual(compressionReplayRequest.context_pack.session_summary.open_questions, ["Which competitor is closest to Hold Pay?"]);
+    assert.deepEqual(compressionReplayRequest.context_pack.session_summary.artifact_refs, ["hold_pay_competitor_set_v1"]);
+    assert.deepEqual(compressionReplayRequest.context_pack.session_summary.vault_refs, ["workspace_context:hold-pay"]);
+    assert.deepEqual(compressionReplayRequest.context_pack.session_summary.corrections, ["Replace OKX P2P with MoMo crypto rail giả định."]);
+    assert.deepEqual(compressionReplayRequest.context_pack.session_summary.superseded_items, ["OKX P2P"]);
+    assert.deepEqual(compressionReplayRequest.context_pack.session_summary.comparison_sets, ["Binance P2P, Remitano, MoMo crypto rail giả định"]);
 
     const longSessionHistory = Array.from({ length: 22 }, (_, index) => ({
       id: `long_session_msg_${index}`,
@@ -1039,6 +1083,11 @@ try {
         artifact.content.includes("Binance P2P") &&
         Array.isArray(artifact.metadata?.comparison_set),
       ),
+      compressedSummaryBounded: boundedCompressedSessionSummary.length <= 6_000,
+      duplicateCorrectionCount: (boundedCompressedSessionSummary.match(/Replace OKX P2P with MoMo crypto rail/g) ?? []).length,
+      compressionRequestComparisonSets: compressionReplayRequest.context_pack.session_summary.comparison_sets,
+      compressionRequestCorrections: compressionReplayRequest.context_pack.session_summary.corrections,
+      compressionRequestSupersededItems: compressionReplayRequest.context_pack.session_summary.superseded_items,
       replayRequestHasSessionSummary: Boolean(rollingReplayRequest.context_pack.session_summary?.summary),
       replayRequestHasArtifactsIn: rollingReplayRequest.context_pack.artifacts_in.some((artifact) => artifact.id === "hold_pay_competitor_set_v1"),
       replayRequestArtifactsInCount: rollingReplayRequest.context_pack.artifacts_in.length,
@@ -1182,7 +1231,7 @@ try {
               userMessageId: "msg_trace_rolling_replay",
               message: "vậy trong mấy bên đó, bên nào giống Hold Pay nhất?",
               history: longSessionHistory,
-              sessionSummary: rollingSessionSummary,
+              sessionSummary: boundedCompressedSessionSummary,
               sessionArtifacts: rollingSessionArtifacts,
             }));
             assert.equal(rollingTraceResult.ok, true, "rolling replay trace run must succeed");
@@ -1190,6 +1239,9 @@ try {
             const rollingRequestTrace = await readTraceFile(successTraceDir, "request");
             assert.equal(rollingRequestTrace.request.session_id, "session_trace_rolling_replay");
             assert.match(rollingRequestTrace.request.context_pack.session_summary.summary, /Binance P2P, Remitano, OKX P2P/);
+            assert.deepEqual(rollingRequestTrace.request.context_pack.session_summary.comparison_sets, compressionReplayRequest.context_pack.session_summary.comparison_sets);
+            assert.deepEqual(rollingRequestTrace.request.context_pack.session_summary.corrections, compressionReplayRequest.context_pack.session_summary.corrections);
+            assert.deepEqual(rollingRequestTrace.request.context_pack.session_summary.superseded_items, compressionReplayRequest.context_pack.session_summary.superseded_items);
             assert.ok(
               rollingRequestTrace.request.context_pack.artifacts_in.some((artifact) =>
                 artifact.id === "hold_pay_competitor_set_v1" &&
@@ -1209,6 +1261,9 @@ try {
             assert.equal(rollingResponseTrace.response.knowledge_promotion, undefined);
             rollingReplaySmoke.traceRequestHasSessionSummary = Boolean(rollingRequestTrace.request.context_pack.session_summary?.summary);
             rollingReplaySmoke.traceRequestArtifactsInCount = rollingRequestTrace.request.context_pack.artifacts_in.length;
+            rollingReplaySmoke.traceComparisonSets = rollingRequestTrace.request.context_pack.session_summary.comparison_sets;
+            rollingReplaySmoke.traceCorrections = rollingRequestTrace.request.context_pack.session_summary.corrections;
+            rollingReplaySmoke.traceSupersededItems = rollingRequestTrace.request.context_pack.session_summary.superseded_items;
             rollingReplaySmoke.traceArtifactsInContentRedacted = rollingRequestTrace.request.context_pack.artifacts_in.some((artifact) =>
               artifact.id === "hold_pay_competitor_set_v1" &&
               artifact.content === "[redacted]",

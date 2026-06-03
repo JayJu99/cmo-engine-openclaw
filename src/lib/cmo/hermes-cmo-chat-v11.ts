@@ -16,6 +16,8 @@ const MAX_ARTIFACT_JSON_CHARS = 12_000;
 const MAX_SUGGESTED_VAULT_UPDATES = 12;
 const MAX_CONTRACT_WARNINGS = 20;
 const MAX_CONTRACT_WARNING_CHARS = 240;
+const MAX_SESSION_SUMMARY_LINES = 80;
+const MAX_SESSION_SUMMARY_LIST_ITEMS = 12;
 const UNSAFE_ARTIFACT_KEYS =
   /^(api_key|authorization|body|content|cookie|cookies|credential|credentials|env|file_body|file_content|full_content|full_source|full_text|headers|html|markdown|password|private_key|raw|raw_.*|secret|secrets|source_text.*|text|token|tool_args|tool_result)$/i;
 const SIDE_EFFECT_KEYS = [
@@ -60,6 +62,8 @@ export interface HermesCmoChatV11SessionSummary {
   decisions: string[];
   open_questions: string[];
   comparison_sets: string[];
+  corrections: string[];
+  superseded_items: string[];
   user_corrections: string[];
   source_refs: string[];
   artifact_refs: string[];
@@ -157,6 +161,16 @@ const safeTraceId = (value: string) => value.replace(/[^a-z0-9_.-]+/gi, "_").sli
 
 function compactText(value: string, maxChars: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
+
+  return compact.length > maxChars ? `${compact.slice(0, maxChars - 3).trimEnd()}...` : compact;
+}
+
+function compactMultilineText(value: string, maxChars: number): string {
+  const compact = value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/[^\S\r\n]+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
 
   return compact.length > maxChars ? `${compact.slice(0, maxChars - 3).trimEnd()}...` : compact;
 }
@@ -366,22 +380,107 @@ function stringListFromUnknown(value: unknown, maxItems = 12, maxItemChars = 300
     .slice(0, maxItems);
 }
 
+function dedupeStrings(values: string[], maxItems = MAX_SESSION_SUMMARY_LIST_ITEMS): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const compact = compactText(value, 300);
+    const key = compact.toLowerCase();
+
+    if (!compact || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    result.push(compact);
+  }
+
+  return result.slice(-maxItems);
+}
+
+const SESSION_SUMMARY_LABELS: Record<string, keyof Pick<
+  HermesCmoChatV11SessionSummary,
+  "active_subjects" | "decisions" | "open_questions" | "comparison_sets" | "corrections" | "superseded_items" | "artifact_refs" | "vault_refs"
+>> = {
+  "active subjects": "active_subjects",
+  decisions: "decisions",
+  "open questions": "open_questions",
+  "comparison sets": "comparison_sets",
+  corrections: "corrections",
+  "superseded items": "superseded_items",
+  "artifact refs": "artifact_refs",
+  "vault refs": "vault_refs",
+};
+
+function parsedSessionSummaryLists(summary: string): Pick<
+  HermesCmoChatV11SessionSummary,
+  "active_subjects" | "decisions" | "open_questions" | "comparison_sets" | "corrections" | "superseded_items" | "artifact_refs" | "vault_refs"
+> {
+  const lists = {
+    active_subjects: [] as string[],
+    decisions: [] as string[],
+    open_questions: [] as string[],
+    comparison_sets: [] as string[],
+    corrections: [] as string[],
+    superseded_items: [] as string[],
+    artifact_refs: [] as string[],
+    vault_refs: [] as string[],
+  };
+
+  for (const line of summary.split(/\r?\n/)) {
+    const match = line.trim().match(/^([^:]{3,80}):\s*(.+)$/);
+
+    if (!match) {
+      continue;
+    }
+
+    const key = SESSION_SUMMARY_LABELS[match[1].trim().toLowerCase()];
+
+    if (!key) {
+      continue;
+    }
+
+    lists[key].push(...match[2].split(";").map((item) => item.trim()).filter(Boolean));
+  }
+
+  const supersededItems = dedupeStrings(lists.superseded_items);
+  const activeComparisonSets = dedupeStrings(lists.comparison_sets).filter((item) =>
+    !supersededItems.some((superseded) => item.toLowerCase().includes(superseded.toLowerCase())),
+  );
+
+  return {
+    active_subjects: dedupeStrings(lists.active_subjects),
+    decisions: dedupeStrings(lists.decisions),
+    open_questions: dedupeStrings(lists.open_questions),
+    comparison_sets: activeComparisonSets,
+    corrections: dedupeStrings(lists.corrections),
+    superseded_items: supersededItems,
+    artifact_refs: dedupeStrings(lists.artifact_refs),
+    vault_refs: dedupeStrings(lists.vault_refs),
+  };
+}
+
 function structuredSessionSummary(summary: string | null): HermesCmoChatV11SessionSummary | null {
   if (!summary?.trim()) {
     return null;
   }
 
+  const lists = parsedSessionSummaryLists(summary);
+
   return {
     schema_version: "cmo.session_summary.v1",
-    summary: compactText(summary, MAX_SESSION_SUMMARY_CHARS),
-    active_subjects: [],
-    decisions: [],
-    open_questions: [],
-    comparison_sets: [],
-    user_corrections: [],
+    summary: compactMultilineText(summary, MAX_SESSION_SUMMARY_CHARS),
+    active_subjects: lists.active_subjects,
+    decisions: lists.decisions,
+    open_questions: lists.open_questions,
+    comparison_sets: lists.comparison_sets,
+    corrections: lists.corrections,
+    superseded_items: lists.superseded_items,
+    user_corrections: lists.corrections,
     source_refs: [],
-    artifact_refs: [],
-    vault_refs: [],
+    artifact_refs: lists.artifact_refs,
+    vault_refs: lists.vault_refs,
   };
 }
 
@@ -534,6 +633,8 @@ function sessionSummaryUpdateText(value: unknown): string | null {
     ["decisions", "Decisions"],
     ["open_questions", "Open questions"],
     ["comparison_sets", "Comparison sets"],
+    ["corrections", "Corrections"],
+    ["superseded_items", "Superseded items"],
     ["artifact_refs", "Artifact refs"],
     ["vault_refs", "Vault refs"],
   ];
@@ -546,12 +647,12 @@ function sessionSummaryUpdateText(value: unknown): string | null {
     }
   }
 
-  return lines.length ? compactText(lines.join("\n"), MAX_SESSION_SUMMARY_CHARS) : null;
+  return lines.length ? compactMultilineText(lines.join("\n"), MAX_SESSION_SUMMARY_CHARS) : null;
 }
 
 export function mergeHermesCmoChatV11SessionSummary(existing: string | undefined, update: unknown): string | undefined {
   const updateText = sessionSummaryUpdateText(update);
-  const current = typeof existing === "string" && existing.trim() ? compactText(existing, MAX_SESSION_SUMMARY_CHARS) : "";
+  const current = typeof existing === "string" && existing.trim() ? compactMultilineText(existing, MAX_SESSION_SUMMARY_CHARS) : "";
 
   if (!updateText) {
     return current || undefined;
@@ -565,7 +666,24 @@ export function mergeHermesCmoChatV11SessionSummary(existing: string | undefined
     return current;
   }
 
-  return compactText(`${current}\n\n${updateText}`, MAX_SESSION_SUMMARY_CHARS);
+  const seen = new Set<string>();
+  const lines = `${current}\n${updateText}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => {
+      const key = line.toLowerCase();
+
+      if (seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    })
+    .slice(-MAX_SESSION_SUMMARY_LINES);
+
+  return compactMultilineText(lines.join("\n"), MAX_SESSION_SUMMARY_CHARS);
 }
 
 function emptySideEffects(): HermesCmoChatV11SideEffects {
@@ -704,9 +822,9 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
     ...(input.sessionArtifacts ?? []),
   ], MAX_ARTIFACTS, { allowTopLevelContent: true });
   const sessionSummaryText = input.sessionSummary?.trim()
-    ? compactText(input.sessionSummary, MAX_SESSION_SUMMARY_CHARS)
+    ? compactMultilineText(input.sessionSummary, MAX_SESSION_SUMMARY_CHARS)
     : typeof legacyRequest.context_pack.recent_session_summary === "string"
-      ? compactText(legacyRequest.context_pack.recent_session_summary, MAX_SESSION_SUMMARY_CHARS)
+      ? compactMultilineText(legacyRequest.context_pack.recent_session_summary, MAX_SESSION_SUMMARY_CHARS)
       : null;
 
   return {
