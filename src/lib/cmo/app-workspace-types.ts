@@ -1199,7 +1199,7 @@ export interface CmoVaultApprovedWriteResult {
   warnings?: string[];
   errors?: string[];
   created_at: string;
-  status?: "completed" | "failed" | "conflict" | "deduped";
+  status?: "completed" | "failed" | "conflict" | "deduped" | "rejected";
   gbrain_index?: false;
   promotion_performed?: false;
   previous_approval_payload_hash?: string;

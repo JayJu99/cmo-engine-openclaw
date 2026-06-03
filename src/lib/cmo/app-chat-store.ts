@@ -466,7 +466,35 @@ function normalizeDryRunStringList(value: unknown): string[] {
   }
 
   return value
-    .map((item) => typeof item === "string" ? compactSessionSourceText(item, 240) : "")
+    .map((item) => {
+      if (typeof item === "string") {
+        return compactSessionSourceText(item, 240);
+      }
+
+      if (isRecord(item)) {
+        const message = candidateString(item, ["message"], 240);
+
+        if (message) {
+          return message;
+        }
+
+        const type = candidateString(item, ["type"], 240);
+
+        if (type) {
+          return type;
+        }
+
+        const safe = normalizeSafeMetadataValue(item);
+
+        return safe === undefined ? "" : compactSessionSourceText(JSON.stringify(safe), 240);
+      }
+
+      if (typeof item === "number" || typeof item === "boolean") {
+        return compactSessionSourceText(String(item), 240);
+      }
+
+      return "";
+    })
     .filter(Boolean)
     .slice(0, 20);
 }
@@ -672,21 +700,28 @@ function normalizeVaultApprovedWriteResult(
   const vaultPath = candidateString(value, ["vault_path", "target_path"], 600);
   const contentHash = candidateString(value, ["content_hash"], 240);
   const receiptClaimsWrite = value.vault_write_performed === true;
+  const returnedStatus = value.status === "completed" || value.status === "failed" || value.status === "conflict" || value.status === "deduped" || value.status === "rejected"
+    ? value.status
+    : undefined;
+  const completedWithoutWriteProof = returnedStatus === "completed" && receiptClaimsWrite !== true && deduped !== true;
   const errors = [
     ...normalizeDryRunStringList(value.errors),
     ...sideEffects.errors,
     ...(receiptClaimsWrite && !vaultPath ? ["missing_vault_path"] : []),
     ...(receiptClaimsWrite && !contentHash ? ["missing_content_hash"] : []),
+    ...(completedWithoutWriteProof ? ["write_not_performed"] : []),
   ].slice(0, 20);
   const vaultWritePerformed = receiptClaimsWrite && Boolean(vaultPath) && Boolean(contentHash) && !conflict && errors.length === 0;
   const status = conflict
     ? "conflict"
+    : returnedStatus === "rejected"
+      ? "rejected"
     : errors.length
       ? "failed"
       : deduped
         ? "deduped"
-        : value.status === "completed" || value.status === "failed" || value.status === "conflict" || value.status === "deduped"
-          ? value.status
+        : returnedStatus
+          ? returnedStatus
           : "completed";
 
   return {
@@ -4294,7 +4329,19 @@ function writeRequestEnvelope(
     idempotency_key: dryRunResult.idempotency_key,
     approval_payload_hash: dryRunResult.approval_payload_hash,
     expected_approval_payload_hash: dryRunResult.approval_payload_hash,
-    dry_run: false,
+    dry_run: {
+      schema_version: dryRunResult.schema_version,
+      approval_id: dryRunResult.approval_id,
+      idempotency_key: dryRunResult.idempotency_key,
+      approval_payload_hash: dryRunResult.approval_payload_hash,
+      dry_run: true,
+      write_allowed: dryRunResult.write_allowed,
+      vault_write_performed: false,
+      target_preview: dryRunResult.target_preview,
+      frontmatter_preview: dryRunResult.frontmatter_preview,
+      body_preview: dryRunResult.body_preview,
+      side_effects: dryRunResult.side_effects,
+    },
     vault_write_performed: false,
   };
 }
