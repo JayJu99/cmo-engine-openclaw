@@ -466,6 +466,7 @@ const makeRuntimeResult = (overrides = {}) => {
 
 try {
   const { tmpDir, router, mapper, chatV11 } = await loadCompiledModules();
+  let rollingReplaySmoke = null;
 
   try {
     await withEnv(
@@ -899,6 +900,90 @@ try {
     assert.match(mergedSummaryDelta, /Vault refs: vault:\/\/hold-pay\/positioning/);
     assert.equal(chatV11Mapped.suggestedVaultUpdates.length, 1, "suggested_vault_updates must remain draft/proposal data");
 
+    const rollingComparisonArtifact = {
+      type: "comparison_set",
+      artifact_id: "hold_pay_competitor_set_v1",
+      title: "Hold Pay competitor comparison set",
+      competitors: ["Binance P2P", "Remitano", "OKX P2P"],
+      summary: "Comparison set: Binance P2P, Remitano, OKX P2P.",
+    };
+    const rollingSessionSummary = chatV11.mergeHermesCmoChatV11SessionSummary(undefined, {
+      summary_delta: "Hold Pay comparison set created for Binance P2P, Remitano, OKX P2P.",
+      comparison_sets: ["Binance P2P, Remitano, OKX P2P"],
+      artifact_refs: ["hold_pay_competitor_set_v1"],
+    });
+    const rollingSessionArtifacts = chatV11.mergeHermesCmoChatV11Artifacts([], [rollingComparisonArtifact]);
+    assert.match(rollingSessionSummary, /Binance P2P, Remitano, OKX P2P/);
+    assert.ok(rollingSessionArtifacts.some((artifact) => artifact.artifact_id === "hold_pay_competitor_set_v1"));
+
+    const longSessionHistory = Array.from({ length: 22 }, (_, index) => ({
+      id: `long_session_msg_${index}`,
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: index % 2 === 0 ? `Later unrelated planning question ${index}.` : `Later unrelated planning answer ${index}.`,
+      createdAt: `2026-05-28T12:${String(index).padStart(2, "0")}:00.000Z`,
+    }));
+    const rollingReplayRequest = chatV11.buildHermesCmoChatV11Request({
+      ...sampleTurnInput,
+      message: "vậy trong mấy bên đó, bên nào giống Hold Pay nhất?",
+      history: longSessionHistory,
+      sessionId: "session_rolling_replay",
+      userMessageId: "msg_rolling_replay",
+      createdAt: "2026-05-28T13:00:00.000Z",
+      sessionSummary: rollingSessionSummary,
+      sessionArtifacts: rollingSessionArtifacts,
+      vaultContext: null,
+    });
+    const rollingRecentMessageText = JSON.stringify(rollingReplayRequest.messages);
+    assert.equal(/Binance P2P|Remitano|OKX P2P/.test(rollingRecentMessageText), false, "recent messages should no longer carry the original comparison set");
+    assert.match(rollingReplayRequest.context_pack.session_summary.summary, /Binance P2P, Remitano, OKX P2P/);
+    assert.ok(
+      rollingReplayRequest.context_pack.artifacts_in.some((artifact) =>
+        artifact.artifact_id === "hold_pay_competitor_set_v1" &&
+        Array.isArray(artifact.competitors) &&
+        artifact.competitors.includes("OKX P2P"),
+      ),
+      "artifacts_in must replay the stored comparison set",
+    );
+
+    const correctionHistory = [
+      {
+        id: "correction_user",
+        role: "user",
+        content: "không, bỏ OKX ra, dùng MoMo crypto rail giả định thay thế",
+        createdAt: "2026-05-28T14:00:00.000Z",
+      },
+      {
+        id: "correction_assistant",
+        role: "assistant",
+        content: "Đã cập nhật phạm vi so sánh trong phiên này.",
+        createdAt: "2026-05-28T14:01:00.000Z",
+      },
+    ];
+    const correctionReplayRequest = chatV11.buildHermesCmoChatV11Request({
+      ...sampleTurnInput,
+      message: "vậy trong mấy bên đó, bên nào giống mình nhất?",
+      history: correctionHistory,
+      sessionId: "session_rolling_correction",
+      userMessageId: "msg_rolling_correction",
+      createdAt: "2026-05-28T14:02:00.000Z",
+      sessionSummary: rollingSessionSummary,
+      sessionArtifacts: rollingSessionArtifacts,
+      vaultContext: null,
+    });
+    assert.match(JSON.stringify(correctionReplayRequest.messages), /MoMo crypto rail giả định/);
+    assert.match(correctionReplayRequest.context_pack.session_summary.summary, /OKX P2P/);
+    assert.ok(correctionReplayRequest.context_pack.artifacts_in.some((artifact) => artifact.artifact_id === "hold_pay_competitor_set_v1"));
+    rollingReplaySmoke = {
+      storedSuggestedSessionSummaryUpdate: true,
+      mergedSessionSummaryContainsComparisonSet: /Binance P2P, Remitano, OKX P2P/.test(rollingSessionSummary),
+      storedArtifactsOutCount: rollingSessionArtifacts.length,
+      replayRequestHasSessionSummary: Boolean(rollingReplayRequest.context_pack.session_summary?.summary),
+      replayRequestHasArtifactsIn: rollingReplayRequest.context_pack.artifacts_in.some((artifact) => artifact.artifact_id === "hold_pay_competitor_set_v1"),
+      recentMessagesContainOriginalSet: /Binance P2P|Remitano|OKX P2P/.test(rollingRecentMessageText),
+      correctionRecentMessagePresent: /MoMo crypto rail giả định/.test(JSON.stringify(correctionReplayRequest.messages)),
+      expectedCorrectedSet: ["Binance P2P", "Remitano", "MoMo crypto rail giả định"],
+    };
+
     const fallbackTrace = chatV11.fallbackHermesCmoChatV11Metadata(chatV11Request.request_id, "http_500");
     assert.equal(fallbackTrace.fallback_used, true);
     assert.equal(fallbackTrace.fallback_from, "/agents/cmo/chat");
@@ -1025,6 +1110,40 @@ try {
             assert.equal(responseTrace.suggested_vault_updates_count, 2);
             assert.equal(responseTrace.state_contract.schema_version, "cmo.chat.state_contract.v1");
             assert.equal(responseTrace.state_contract.raw, undefined);
+
+            const rollingTraceResult = await chatV11.runHermesCmoChatV11(chatV11RunInput({
+              sessionId: "session_trace_rolling_replay",
+              userMessageId: "msg_trace_rolling_replay",
+              message: "vậy trong mấy bên đó, bên nào giống Hold Pay nhất?",
+              history: longSessionHistory,
+              sessionSummary: rollingSessionSummary,
+              sessionArtifacts: rollingSessionArtifacts,
+            }));
+            assert.equal(rollingTraceResult.ok, true, "rolling replay trace run must succeed");
+
+            const rollingRequestTrace = await readTraceFile(successTraceDir, "request");
+            assert.equal(rollingRequestTrace.request.session_id, "session_trace_rolling_replay");
+            assert.match(rollingRequestTrace.request.context_pack.session_summary.summary, /Binance P2P, Remitano, OKX P2P/);
+            assert.ok(
+              rollingRequestTrace.request.context_pack.artifacts_in.some((artifact) =>
+                artifact.artifact_id === "hold_pay_competitor_set_v1" &&
+                Array.isArray(artifact.competitors) &&
+                artifact.competitors.includes("OKX P2P"),
+              ),
+              "rolling request trace must include artifacts_in comparison set",
+            );
+
+            const rollingResponseTrace = await readTraceFile(successTraceDir, "response");
+            assert.equal(rollingResponseTrace.side_effects.vault_write, false);
+            assert.equal(rollingResponseTrace.side_effects.gbrain_mutation, false);
+            assert.equal(rollingResponseTrace.side_effects.knowledge_promotion, false);
+            assert.equal(rollingResponseTrace.response.gbrain_mutation, undefined);
+            assert.equal(rollingResponseTrace.response.knowledge_promotion, undefined);
+            rollingReplaySmoke.traceRequestHasSessionSummary = Boolean(rollingRequestTrace.request.context_pack.session_summary?.summary);
+            rollingReplaySmoke.traceRequestArtifactsInCount = rollingRequestTrace.request.context_pack.artifacts_in.length;
+            rollingReplaySmoke.traceNoVaultWrite = rollingResponseTrace.side_effects.vault_write === false;
+            rollingReplaySmoke.traceNoGbrain = rollingResponseTrace.side_effects.gbrain_mutation === false;
+            rollingReplaySmoke.traceNoPromotion = rollingResponseTrace.side_effects.knowledge_promotion === false;
           },
         );
       } finally {
@@ -2446,6 +2565,7 @@ try {
           mappedExistingChatShape: true,
           forbiddenCounterFallbackRequired: true,
           delegationsMode: "proposals_only",
+          rollingReplaySmoke,
           hermesWriteCounters: forbiddenZeroCounters,
         },
         null,
