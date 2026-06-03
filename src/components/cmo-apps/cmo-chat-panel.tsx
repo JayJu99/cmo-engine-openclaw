@@ -90,22 +90,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function previewText(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-
-  if (value && typeof value === "object") {
-    return JSON.stringify(value, null, 2);
-  }
-
-  return "";
-}
-
 function approvalCandidateKey(event: Record<string, unknown>): string {
   return isRecord(event.reviewed_update) ? recordString(event.reviewed_update, ["candidate_key", "candidate_id", "update_id", "id"]) : "";
 }
@@ -172,6 +156,62 @@ function canWriteVaultUpdate(
     !writeResult?.deduped;
 }
 
+function dryRunSemanticState(result: CmoVaultApprovedWriteDryRunResult): {
+  label: string;
+  detail: string;
+  variant: "green" | "orange" | "red" | "blue" | "slate";
+} {
+  if (result.conflict || result.errors?.length || result.write_allowed !== true) {
+    return {
+      label: "Save not available",
+      detail: "This draft needs review before saving.",
+      variant: result.errors?.length || result.conflict ? "red" : "orange",
+    };
+  }
+
+  return {
+    label: "Preview ready.",
+    detail: "This will be saved as an approved draft if you confirm.",
+    variant: "green",
+  };
+}
+
+function writeResultSemanticState(result: CmoVaultApprovedWriteResult): {
+  label: string;
+  detail: string;
+  variant: "green" | "orange" | "red" | "blue" | "slate";
+} {
+  if (result.conflict || result.errors?.length || result.status === "failed" || result.status === "rejected") {
+    return {
+      label: "Save failed.",
+      detail: "The draft was not saved. Review the candidate and try again.",
+      variant: "red",
+    };
+  }
+
+  if (result.deduped || result.status === "deduped") {
+    return {
+      label: "Already saved.",
+      detail: "This approved draft was already saved.",
+      variant: "blue",
+    };
+  }
+
+  if (result.vault_write_performed === true && result.status === "completed") {
+    return {
+      label: "Saved.",
+      detail: "Saved as approved draft.",
+      variant: "green",
+    };
+  }
+
+  return {
+    label: "Not saved.",
+    detail: "No save was performed.",
+    variant: "orange",
+  };
+}
+
 function runtimeStatusLabel(status: CMORuntimeStatus | null): string {
   if (status === "connected" || status === "live" || status === "configured_but_unreachable") {
     return "CMO Hermes Active";
@@ -210,7 +250,7 @@ function runtimeStatusVariant(status: CMORuntimeStatus | null): "green" | "orang
 
 function runtimeExplanation(status: CMORuntimeStatus | null, reason: CmoRuntimeErrorReason | null): string | null {
   if (status === "connected" || status === "live" || status === "configured_but_unreachable") {
-    return "Vault-backed workspace context enabled.";
+    return "Using approved workspace context.";
   }
 
   if (status === "development_fallback") {
@@ -255,7 +295,8 @@ function assistantProvenance(message: CMOChatMessage): string | null {
 function isBackendContextLine(line: string): boolean {
   return (
     /^(context used|unavailable context|context quality|context caution|draft or placeholder notes|graph hints|graph status|graph hint refs|runtime note|remote cmo adapter|cmo context pack)/i.test(line) ||
-    /\b(saved to vault|raw capture|context refs|session:\s*session_|vault path|record id|record_id|target path|target_path|gbrain_called|dry-run|receipt)\b/i.test(line) ||
+    /\b(saved to vault|raw capture|context refs|session:\s*session_|vault path|vault_path|record id|record_id|target path|target_path|content_hash|approval_payload_hash|idempotency_key|gbrain_index|promotion_performed|side_effects|dry-run|receipt)\b/i.test(line) ||
+    /\b(vault_agent\.approved_write_result\.v1|vault_agent\.approved_write_dry_run\.v1|12 Knowledge|13 Sources|90 Runtime|sha256:)\b/i.test(line) ||
     /\bsource:\s*[^.]+\.md\b/i.test(line) ||
     /\b[A-Z][^:\n]*\/[^:\n]+\.md\b/.test(line) ||
     /\b[A-Z][\w -]+\.md\b/.test(line)
@@ -688,11 +729,11 @@ export function CMOChatPanel({
 
       setSessionId(payload.data.id);
       setMessages(payload.data.messages);
-      setReviewStatusMessage(`${reviewActionLabel(action)} recorded. Vault write was not performed.`);
+      setReviewStatusMessage(`${reviewActionLabel(action)} recorded. Not saved.`);
       onSessionCreated?.(payload.data.id);
     } catch (reviewError) {
       setReviewStatusMessage(null);
-      setError(`Review failed: ${reviewError instanceof Error ? reviewError.message : "suggested Vault update review failed"}`);
+      setError(`Review failed: ${reviewError instanceof Error ? reviewError.message : "suggested update review failed"}`);
     } finally {
       setReviewingCandidateKey(null);
     }
@@ -706,7 +747,7 @@ export function CMOChatPanel({
     }
 
     setDryRunningApprovalId(approvalId);
-    setDryRunStatusMessage("Vault write preview pending...");
+    setDryRunStatusMessage("Save preview pending...");
     setError(null);
 
     try {
@@ -726,11 +767,11 @@ export function CMOChatPanel({
 
       setSessionId(payload.data.id);
       setMessages(payload.data.messages);
-      setDryRunStatusMessage("Vault write preview recorded. Vault write was not performed.");
+      setDryRunStatusMessage("Preview ready.");
       onSessionCreated?.(payload.data.id);
     } catch (dryRunError) {
       setDryRunStatusMessage(null);
-      setError(`Preview failed: ${dryRunError instanceof Error ? dryRunError.message : "Vault write preview failed"}`);
+      setError(`Preview failed: ${dryRunError instanceof Error ? dryRunError.message : "Save preview failed"}`);
     } finally {
       setDryRunningApprovalId(null);
     }
@@ -744,7 +785,7 @@ export function CMOChatPanel({
     }
 
     setWritingApprovalId(approvalId);
-    setWriteStatusMessage("Vault write pending...");
+    setWriteStatusMessage("Saving...");
     setError(null);
 
     try {
@@ -764,11 +805,11 @@ export function CMOChatPanel({
 
       setSessionId(payload.data.id);
       setMessages(payload.data.messages);
-      setWriteStatusMessage("Vault write receipt recorded.");
+      setWriteStatusMessage("Saved.");
       onSessionCreated?.(payload.data.id);
     } catch (writeError) {
       setWriteStatusMessage(null);
-      setError(`Write failed: ${writeError instanceof Error ? writeError.message : "Vault write failed"}`);
+      setError(`Save failed: ${writeError instanceof Error ? writeError.message : "Save failed"}`);
     } finally {
       setWritingApprovalId(null);
     }
@@ -788,52 +829,31 @@ export function CMOChatPanel({
       return null;
     }
 
-    const targetPreview = previewText(result.target_preview);
-    const frontmatterPreview = previewText(result.frontmatter_preview);
-    const bodyPreview = previewText(result.body_preview);
     const planAllowed = result.write_allowed && !(result.errors?.length);
+    const semanticState = dryRunSemanticState(result);
 
     return (
       <div className="mt-3 space-y-3 rounded-lg border border-blue-100 bg-white px-3 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={result.conflict || result.errors?.length ? "red" : planAllowed ? "green" : "orange"}>{result.status ?? "completed"}</Badge>
-          <Badge variant="blue">dry_run=true</Badge>
-          <Badge variant="slate">vault_write_performed=false</Badge>
-          <Badge variant={planAllowed ? "green" : "orange"}>write_allowed={String(planAllowed)}</Badge>
+          <Badge variant={semanticState.variant}>{semanticState.label}</Badge>
+          <Badge variant={planAllowed ? "green" : "orange"}>{planAllowed ? "Ready to save" : "Needs review before saving."}</Badge>
         </div>
-        {targetPreview ? (
-          <div>
-            <div className="text-xs font-bold uppercase text-slate-500">Target path preview</div>
-            <pre className="mt-1 max-h-32 overflow-auto rounded bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-50">{targetPreview}</pre>
-          </div>
-        ) : null}
-        {frontmatterPreview ? (
-          <div>
-            <div className="text-xs font-bold uppercase text-slate-500">Frontmatter preview</div>
-            <pre className="mt-1 max-h-40 overflow-auto rounded bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-50">{frontmatterPreview}</pre>
-          </div>
-        ) : null}
-        {bodyPreview ? (
-          <div>
-            <div className="text-xs font-bold uppercase text-slate-500">Body preview</div>
-            <pre className="mt-1 max-h-56 overflow-auto rounded bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-50">{bodyPreview}</pre>
-          </div>
-        ) : null}
+        <p className="text-sm leading-6 text-slate-600">{semanticState.detail}</p>
         {result.warnings?.length ? (
           <div className="rounded border border-orange-100 bg-orange-50 px-3 py-2 text-xs leading-5 text-orange-800">
-            {result.warnings.join(" | ")}
+            Needs review before saving.
           </div>
         ) : null}
         {result.errors?.length ? (
           <div className="rounded border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-800">
-            {result.errors.join(" | ")}
+            Save not available.
           </div>
         ) : null}
         {canWrite ? (
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" size="sm" variant="outline" disabled={Boolean(writingApprovalId)} onClick={() => void writeVaultUpdate(approvalId)}>
               {writingApprovalId === approvalId ? <icons.RefreshCw className="animate-spin" /> : <icons.Check />}
-              Write to Vault
+              Save Draft
             </Button>
           </div>
         ) : null}
@@ -845,34 +865,22 @@ export function CMOChatPanel({
     if (!result) {
       return null;
     }
+    const semanticState = writeResultSemanticState(result);
 
     return (
       <div className="mt-3 space-y-3 rounded-lg border border-emerald-100 bg-emerald-50/60 px-3 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={result.conflict || result.errors?.length ? "red" : result.deduped ? "blue" : "green"}>
-            {result.conflict ? "conflict" : result.deduped ? "Already written" : result.status ?? "completed"}
-          </Badge>
-          <Badge variant={result.vault_write_performed ? "green" : "slate"}>vault_write_performed={String(result.vault_write_performed)}</Badge>
-          {result.gbrain_index === false ? <Badge variant="slate">gbrain_index=false</Badge> : null}
-          {result.promotion_performed === false ? <Badge variant="slate">promotion_performed=false</Badge> : null}
+          <Badge variant={semanticState.variant}>{semanticState.label}</Badge>
         </div>
-        {result.vault_path ? (
-          <div>
-            <div className="text-xs font-bold uppercase text-slate-500">Vault path</div>
-            <pre className="mt-1 overflow-auto rounded bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-50">{result.vault_path}</pre>
-          </div>
-        ) : null}
-        {result.content_hash ? (
-          <div className="break-all text-xs font-semibold text-slate-600">content_hash: {result.content_hash}</div>
-        ) : null}
+        <p className="text-sm leading-6 text-slate-600">{semanticState.detail}</p>
         {result.warnings?.length ? (
           <div className="rounded border border-orange-100 bg-orange-50 px-3 py-2 text-xs leading-5 text-orange-800">
-            {result.warnings.join(" | ")}
+            Needs review before saving.
           </div>
         ) : null}
         {result.errors?.length ? (
           <div className="rounded border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-800">
-            {result.errors.join(" | ")}
+            Save failed.
           </div>
         ) : null}
       </div>
@@ -891,7 +899,7 @@ export function CMOChatPanel({
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2 text-xs font-bold uppercase text-slate-500">
             <icons.Database className="size-4" />
-            Suggested Vault Updates
+            Suggested Updates
           </div>
           <Badge variant="orange">draft</Badge>
           <Badge variant="slate">{candidates.length}</Badge>
@@ -944,13 +952,13 @@ export function CMOChatPanel({
                     {approvalId ? (
                       <Button type="button" size="sm" variant="outline" disabled={Boolean(dryRunningApprovalId)} onClick={() => void previewVaultWrite(approvalId)}>
                         {dryRunBusy ? <icons.RefreshCw className="animate-spin" /> : <icons.Database />}
-                        Preview Vault Write
+                        Preview Save
                       </Button>
                     ) : null}
                     {canWrite ? (
                       <Button type="button" size="sm" variant="outline" disabled={Boolean(writingApprovalId)} onClick={() => void writeVaultUpdate(approvalId)}>
                         {writeBusy ? <icons.RefreshCw className="animate-spin" /> : <icons.Check />}
-                        Write to Vault
+                        Save Draft
                       </Button>
                     ) : null}
                   </div>
@@ -980,7 +988,7 @@ export function CMOChatPanel({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge title={runtimeStatus ?? "not_checked"} variant={runtimeStatusVariant(runtimeStatus)}>{runtimeStatusLabel(runtimeStatus)}</Badge>
-            <Badge variant={selectedQualitySummary.missingCount ? "orange" : "green"}>Vault-backed workspace context enabled</Badge>
+            <Badge variant={selectedQualitySummary.missingCount ? "orange" : "green"}>Using approved workspace context.</Badge>
             <Button variant="outline" size="sm" onClick={focusChat}>
               <icons.MessageSquare />
               Start CMO Session

@@ -105,6 +105,12 @@ export interface HermesCmoChatV11Response {
     content: string;
     [key: string]: unknown;
   };
+  user_visible?: {
+    answer?: string;
+    semantic_state?: unknown;
+    vault_internals_hidden?: boolean;
+    [key: string]: unknown;
+  };
   artifacts_out: Record<string, unknown>[];
   suggested_session_summary_update?: unknown;
   suggested_vault_updates: Record<string, unknown>[];
@@ -615,6 +621,10 @@ export function normalizeHermesCmoChatV11Response(payload: unknown, request: Her
 
   const answer = isRecord(response.answer) ? response.answer : {};
   const content = typeof answer.content === "string" ? answer.content.trim() : "";
+  const userVisible = isRecord(response.user_visible) ? response.user_visible : null;
+  const userVisibleAnswer = typeof userVisible?.answer === "string" && userVisible.answer.trim()
+    ? compactText(userVisible.answer, MAX_MESSAGE_CHARS)
+    : "";
   const sideEffects = sideEffectsAreSafe(response.side_effects ?? payload.side_effects);
   const artifactsOut = sanitizeHermesCmoChatV11Records(response.artifacts_out);
   const suggestedVaultUpdates = sanitizeHermesCmoChatV11Records(response.suggested_vault_updates, MAX_SUGGESTED_VAULT_UPDATES);
@@ -648,6 +658,15 @@ export function normalizeHermesCmoChatV11Response(payload: unknown, request: Her
       ...answer,
       content,
     },
+    ...(userVisible
+      ? {
+          user_visible: {
+            ...(safeRecord(userVisible, 8_000) ?? {}),
+            ...(userVisibleAnswer ? { answer: userVisibleAnswer } : {}),
+            ...(typeof userVisible.vault_internals_hidden === "boolean" ? { vault_internals_hidden: userVisible.vault_internals_hidden } : {}),
+          },
+        }
+      : {}),
     artifacts_out: artifactsOut,
     ...(response.suggested_session_summary_update !== undefined
       ? { suggested_session_summary_update: response.suggested_session_summary_update }
@@ -841,7 +860,7 @@ export function mapHermesCmoChatV11ToChatResult(
   suggestedVaultUpdates: Record<string, unknown>[];
 } {
   return {
-    answer: response.answer.content,
+    answer: response.user_visible?.answer?.trim() || response.answer.content,
     assumptions: [],
     suggestedActions: [],
     runtimeStatus: response.status === "completed" ? "live" : "runtime_error",

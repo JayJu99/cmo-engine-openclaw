@@ -682,6 +682,11 @@ try {
       mode: "cmo.chat",
       status: "completed",
       answer: { content: "Hermes chat v1.1 answer." },
+      user_visible: {
+        answer: "User-visible answer without storage internals.",
+        semantic_state: { save_state: "needs_review" },
+        vault_internals_hidden: true,
+      },
       artifacts_out: [{ type: "analysis", artifact_id: "artifact_2", summary: "Stored in session only." }],
       suggested_session_summary_update: "CMO recommended tightening onboarding proof.",
       suggested_vault_updates: [{ type: "session_summary", statement: "Draft only; do not persist to Vault." }],
@@ -710,7 +715,7 @@ try {
         source_auto_save: false,
       },
     });
-    assert.equal(chatV11Mapped.answer, "Hermes chat v1.1 answer.");
+    assert.equal(chatV11Mapped.answer, "User-visible answer without storage internals.");
     assert.equal(chatV11Mapped.metadata.endpoint_kind, "agent_chat");
     assert.equal(chatV11Mapped.metadata.runtime_kind, "ai_agent");
     assert.equal(chatV11Mapped.metadata.requested_endpoint, "/agents/cmo/chat");
@@ -726,6 +731,23 @@ try {
     assert.equal(chatV11Mapped.metadata.suggested_vault_updates_count, 1);
     assert.equal(chatV11Mapped.metadata.state_contract.schema_version, "cmo.chat.state_contract.v1");
     assert.equal(chatV11Mapped.metadata.state_contract.content, undefined, "state_contract raw content must not persist");
+
+    const chatV11MappedWithoutUserVisible = chatV11.mapHermesCmoChatV11ToChatResult(chatV11Request, {
+      schema_version: "hermes.cmo.chat.response.v1_1",
+      mode: "cmo.chat",
+      status: "completed",
+      answer: { content: "Fallback answer content." },
+      artifacts_out: [],
+      suggested_vault_updates: [],
+      contract_warnings: [],
+      contract_warnings_count: 0,
+      artifacts_out_count: 0,
+      artifact_refs_count: 0,
+      decisions_count: 0,
+      suggested_vault_updates_count: 0,
+      side_effects: chatV11Mapped.metadata.side_effects,
+    });
+    assert.equal(chatV11MappedWithoutUserVisible.answer, "Fallback answer content.");
 
     const baseChatV11Response = {
       schema_version: "hermes.cmo.chat.response.v1_1",
@@ -2223,13 +2245,18 @@ try {
     assert.doesNotMatch(suggestedVaultWriteRouteSource, /indexChat|Supabase|supabase|gbrain|memory_mutation/);
 
     const cmoChatPanelSource = await readFile(path.join(rootDir, "src", "components", "cmo-apps", "cmo-chat-panel.tsx"), "utf8");
-    assert.match(cmoChatPanelSource, /Suggested Vault Updates/);
+    assert.match(cmoChatPanelSource, /Suggested Updates/);
     assert.match(cmoChatPanelSource, /Approve/);
     assert.match(cmoChatPanelSource, /Reject/);
     assert.match(cmoChatPanelSource, /Defer/);
-    assert.match(cmoChatPanelSource, /Preview Vault Write/);
-    assert.match(cmoChatPanelSource, /Write to Vault/);
-    assert.match(cmoChatPanelSource, /Already written/);
+    assert.match(cmoChatPanelSource, /Preview Save/);
+    assert.match(cmoChatPanelSource, /Save Draft/);
+    assert.match(cmoChatPanelSource, /Preview ready\./);
+    assert.match(cmoChatPanelSource, /Saved\./);
+    assert.match(cmoChatPanelSource, /Already saved\./);
+    assert.match(cmoChatPanelSource, /Save failed\./);
+    assert.match(cmoChatPanelSource, /Needs review before saving\./);
+    assert.match(cmoChatPanelSource, /Using approved workspace context\./);
     assert.match(cmoChatPanelSource, /writeVaultUpdate/);
     assert.match(cmoChatPanelSource, /\/api\/cmo\/sessions\/suggested-vault-updates\/write/);
     assert.match(cmoChatPanelSource, /\/api\/cmo\/sessions\/suggested-vault-updates\/review/);
@@ -2250,17 +2277,19 @@ try {
     assert.match(cmoChatPanelSource, /dryRunResult\.vault_write_performed === false/);
     assert.match(cmoChatPanelSource, /!writeResult\?\.conflict/);
     assert.match(cmoChatPanelSource, /canWrite \? \(/);
-    assert.match(cmoChatPanelSource, /target_preview/);
-    assert.match(cmoChatPanelSource, /frontmatter_preview/);
-    assert.match(cmoChatPanelSource, /body_preview/);
-    assert.match(cmoChatPanelSource, /dry_run=true/);
-    assert.match(cmoChatPanelSource, /vault_write_performed=false/);
+    assert.match(cmoChatPanelSource, /dryRunSemanticState/);
+    assert.match(cmoChatPanelSource, /writeResultSemanticState/);
     assert.match(cmoChatPanelSource, /const planAllowed = result\.write_allowed && !\(result\.errors\?\.length\)/);
-    assert.match(cmoChatPanelSource, /write_allowed=\{String\(planAllowed\)\}/);
-    assert.match(cmoChatPanelSource, /vault_path/);
-    assert.match(cmoChatPanelSource, /content_hash/);
-    assert.match(cmoChatPanelSource, /gbrain_index=false/);
-    assert.match(cmoChatPanelSource, /promotion_performed=false/);
+    assert.doesNotMatch(cmoChatPanelSource, /const targetPreview =/);
+    assert.doesNotMatch(cmoChatPanelSource, /const frontmatterPreview =/);
+    assert.doesNotMatch(cmoChatPanelSource, /const bodyPreview =/);
+    assert.doesNotMatch(cmoChatPanelSource, /dry_run=true/);
+    assert.doesNotMatch(cmoChatPanelSource, /vault_write_performed=false/);
+    assert.doesNotMatch(cmoChatPanelSource, /write_allowed=\{String\(planAllowed\)\}/);
+    assert.doesNotMatch(cmoChatPanelSource, /result\.vault_path/);
+    assert.doesNotMatch(cmoChatPanelSource, /result\.content_hash/);
+    assert.doesNotMatch(cmoChatPanelSource, /result\.gbrain_index/);
+    assert.doesNotMatch(cmoChatPanelSource, /result\.promotion_performed/);
     assert.match(cmoChatPanelSource, /recordString\(candidate, \["kind", "type"\]\)/);
     assert.match(cmoChatPanelSource, /recordString\(candidate, \["subject", "title", "name"\]\)/);
     assert.match(cmoChatPanelSource, /recordString\(candidate, \["summary", "statement", "description"\]\)/);
