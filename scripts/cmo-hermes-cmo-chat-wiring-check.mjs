@@ -2614,6 +2614,34 @@ try {
     assert.match(appChatStoreSource, /sessionLocalResearchResultFromHermesResult/);
     assert.match(appChatStoreSource, /mergeSessionLocalResearchResults/);
     assert.match(appChatStoreSource, /sessionLocalResearchResults/);
+    assert.match(appChatStoreSource, /userDisplayName/);
+    assert.match(appChatStoreSource, /userSlug/);
+
+    const userMetadataSource = await readFile(path.join(cmoDir, "user-metadata.ts"), "utf8");
+    assert.match(userMetadataSource, /normalizeCmoRuntimeUserIdentity/);
+    assert.match(userMetadataSource, /UNKNOWN_RUNTIME_USER_SLUG = "unknown_user"/);
+    assert.match(userMetadataSource, /buildCmoRuntimeUserPath/);
+    assert.match(userMetadataSource, /90 Runtime\/Raw Activity/);
+    assert.match(userMetadataSource, /90 Runtime\/Daily Notes/);
+    assert.match(userMetadataSource, /90 Runtime\/Weekly Notes/);
+    assert.match(userMetadataSource, /90 Runtime\/Monthly Rollups/);
+    assert.match(userMetadataSource, /withoutUserPrefix/);
+
+    const authSource = await readFile(path.join(cmoDir, "auth.ts"), "utf8");
+    assert.match(authSource, /userSlug: string \| null/);
+    assert.match(authSource, /\["user_display_name", "display_name", "full_name", "name"\]/);
+    assert.match(authSource, /\["user_slug", "profile_slug", "slug"\]/);
+
+    const sourceAcquisitionSource = await readFile(path.join(cmoDir, "source-acquisition", "index.ts"), "utf8");
+    assert.match(sourceAcquisitionSource, /normalizeCmoRuntimeUserIdentity/);
+    assert.match(sourceAcquisitionSource, /user_slug: runtimeUser\.user_slug/);
+    assert.match(sourceAcquisitionSource, /email: runtimeUser\.email/);
+
+    const vaultAutoCaptureSource = await readFile(path.join(cmoDir, "vault-auto-capture.ts"), "utf8");
+    assert.match(vaultAutoCaptureSource, /normalizeCmoRuntimeUserIdentity/);
+    assert.match(vaultAutoCaptureSource, /userSlug: runtimeUser\.user_slug/);
+    assert.match(vaultAutoCaptureSource, /user_display_name: runtimeUser\.user_display_name/);
+    assert.doesNotMatch(vaultAutoCaptureSource, /userSlug: ctx\.request\.workspaceId|userSlug: ctx\.request\.appId|userSlug: ctx\.userIdentity\?\.organizationId/);
 
     const mapperSource = await readFile(path.join(cmoDir, "hermes-cmo-chat-mapper.ts"), "utf8");
     assert.match(mapperSource, /sessionLocalResearchResultArtifacts/);

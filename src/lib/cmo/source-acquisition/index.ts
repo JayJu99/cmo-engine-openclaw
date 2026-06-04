@@ -3,7 +3,7 @@ import { lookup } from "dns/promises";
 import { isIP } from "net";
 
 import type { CmoRuntimeContext, CmoSourceReviewContext } from "@/lib/cmo/app-workspace-types";
-import type { CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
+import { normalizeCmoRuntimeUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { buildSourceIngestionPackage } from "@/lib/cmo/vault-agent-source-ingestion";
 import type { SourceIngestionPackage, SourceIngestionSourceType } from "@/lib/cmo/vault-agent-contracts";
 
@@ -836,14 +836,17 @@ export function buildVaultIngestionPackage(
 }
 
 export function buildRuntimeContext(input: { now?: Date; nowIso?: string; userIdentity?: CmoServerUserIdentity } = {}): CmoRuntimeContext {
-  const userDisplayName = input.userIdentity?.userEmail?.trim() || input.userIdentity?.createdByEmail?.trim();
+  const runtimeUser = normalizeCmoRuntimeUserIdentity(input.userIdentity);
 
   return {
     now_iso: input.nowIso ?? input.now?.toISOString() ?? new Date().toISOString(),
     timezone: CMO_RUNTIME_TIMEZONE,
     timezone_label: CMO_RUNTIME_TIMEZONE_LABEL,
     locale: CMO_RUNTIME_LOCALE,
-    ...(userDisplayName ? { user_display_name: userDisplayName } : {}),
+    ...(runtimeUser.user_id ? { user_id: runtimeUser.user_id } : {}),
+    user_slug: runtimeUser.user_slug,
+    ...(runtimeUser.user_display_name ? { user_display_name: runtimeUser.user_display_name } : {}),
+    ...(runtimeUser.email ? { email: runtimeUser.email } : {}),
   };
 }
 
@@ -853,7 +856,10 @@ export function buildRuntimeContextText(context: CmoRuntimeContext): string {
     `timezone: ${context.timezone}`,
     `timezone_label: ${context.timezone_label}`,
     `locale: ${context.locale}`,
+    context.user_id ? `user_id: ${context.user_id}` : "",
+    context.user_slug ? `user_slug: ${context.user_slug}` : "",
     context.user_display_name ? `user_display_name: ${context.user_display_name}` : "",
+    context.email ? `email: ${context.email}` : "",
   ].filter(Boolean).join("\n");
 }
 

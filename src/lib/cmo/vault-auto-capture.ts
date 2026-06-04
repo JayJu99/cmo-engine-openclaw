@@ -4,7 +4,7 @@ import { buildCapturePreviewEvent } from "./vault-capture-preview";
 import { extractCaptureTestMarker } from "./vault-capture-paths";
 import { cmoEngineVaultRoot, saveCaptureToCmoEngineVault } from "./vault-capture-writer";
 import type { CMOAppChatRequest, CMOChatSession } from "./app-workspace-types";
-import type { CmoServerUserIdentity } from "./user-metadata";
+import { normalizeCmoRuntimeUserIdentity, type CmoServerUserIdentity } from "./user-metadata";
 import type { CMOVaultCaptureEvent, CMOVaultCaptureEventType, CMOVaultSourceClass } from "./vault-capture-types";
 
 interface AutoCaptureContext {
@@ -221,6 +221,16 @@ export async function autoCaptureTurnOnce(ctx: AutoCaptureContext): Promise<Auto
   const authMode = ctx.userIdentity?.authMode ?? ctx.session.authMode;
   const userId = ctx.userIdentity?.userId ?? ctx.session.userId;
   const userEmail = ctx.userIdentity?.userEmail ?? ctx.session.userEmail;
+  const runtimeUser = normalizeCmoRuntimeUserIdentity({
+    authMode: authMode ?? "legacy",
+    userId,
+    userEmail,
+    userDisplayName: ctx.userIdentity?.userDisplayName,
+    userSlug: ctx.userIdentity?.userSlug,
+    organizationId: ctx.userIdentity?.organizationId ?? ctx.session.organizationId,
+    createdByUserId: ctx.userIdentity?.createdByUserId ?? ctx.session.createdByUserId,
+    createdByEmail: ctx.userIdentity?.createdByEmail ?? ctx.session.createdByEmail,
+  });
   const event = buildCapturePreviewEvent({
     appId: ctx.request.appId,
     workspaceId: ctx.request.appId,
@@ -229,6 +239,9 @@ export async function autoCaptureTurnOnce(ctx: AutoCaptureContext): Promise<Auto
     authMode,
     userId,
     userEmail,
+    userSlug: runtimeUser.user_slug,
+    userDisplayName: runtimeUser.user_display_name,
+    email: runtimeUser.email,
     organizationId: ctx.userIdentity?.organizationId ?? ctx.session.organizationId,
     createdByUserId: ctx.userIdentity?.createdByUserId ?? ctx.session.createdByUserId,
     createdByEmail: ctx.userIdentity?.createdByEmail ?? ctx.session.createdByEmail,
@@ -263,6 +276,9 @@ export async function autoCaptureTurnOnce(ctx: AutoCaptureContext): Promise<Auto
       runtime_provider: ctx.runtimeProvider,
       runtime_agent: ctx.runtimeAgent,
       auth_mode: authMode,
+      user_slug: runtimeUser.user_slug,
+      user_display_name: runtimeUser.user_display_name,
+      email: runtimeUser.email,
       source_user_message_id: ctx.sourceUserMessageId,
     },
   };

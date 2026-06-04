@@ -63,6 +63,9 @@ export interface CMOVaultCaptureEvent {
   authMode?: CMOVaultCaptureAuthMode;
   userId?: string;
   userEmail?: string;
+  userSlug?: string;
+  userDisplayName?: string;
+  email?: string;
   organizationId?: string;
   createdByUserId?: string;
   createdByEmail?: string;

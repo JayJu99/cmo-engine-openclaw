@@ -12,6 +12,7 @@ export interface CmoCurrentUser {
   id: string;
   email: string | null;
   displayName: string | null;
+  userSlug: string | null;
   user: User;
 }
 
@@ -36,6 +37,7 @@ export type CmoRequestUserContext =
       userId: string;
       email: string | null;
       displayName: string | null;
+      userSlug: string | null;
       isAuthenticated: true;
     }
   | CmoLegacyOwnerContext
@@ -58,6 +60,17 @@ export function getAuthFeatureFlags(): CmoAuthFeatureFlags {
   };
 }
 
+function metadataString(metadata: Record<string, unknown> | null | undefined, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = metadata?.[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
 export async function getCurrentUser(): Promise<CmoCurrentUser | null> {
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase.auth.getUser();
@@ -69,10 +82,9 @@ export async function getCurrentUser(): Promise<CmoCurrentUser | null> {
   return {
     id: data.user.id,
     email: data.user.email ?? null,
-    displayName:
-      typeof data.user.user_metadata?.name === "string"
-        ? data.user.user_metadata.name
-        : null,
+    displayName: metadataString(data.user.user_metadata, ["user_display_name", "display_name", "full_name", "name"]),
+    userSlug: metadataString(data.user.user_metadata, ["user_slug", "profile_slug", "slug"])
+      ?? metadataString(data.user.app_metadata, ["user_slug", "profile_slug", "slug"]),
     user: data.user,
   };
 }
@@ -123,6 +135,7 @@ export async function getOptionalRequestUser(): Promise<CmoRequestUserContext> {
     userId: user.id,
     email: user.email,
     displayName: user.displayName,
+    userSlug: user.userSlug,
     isAuthenticated: true,
   };
 }
@@ -139,6 +152,7 @@ export async function requireRequestUserIfAuthRequired(): Promise<CmoRequestUser
     userId: user.id,
     email: user.email,
     displayName: user.displayName,
+    userSlug: user.userSlug,
     isAuthenticated: true,
   };
 }
@@ -164,6 +178,8 @@ export async function getServerUserIdentity(): Promise<CmoServerUserIdentity> {
     return supabaseUserIdentity({
       userId: context.userId,
       userEmail: context.email,
+      userDisplayName: context.displayName,
+      userSlug: context.userSlug,
     });
   }
 

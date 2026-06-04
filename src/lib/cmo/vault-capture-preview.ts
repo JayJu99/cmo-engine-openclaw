@@ -16,6 +16,9 @@ export interface CMOVaultCapturePreviewInput {
   authMode?: "supabase" | "legacy";
   userId?: string;
   userEmail?: string;
+  userSlug?: string;
+  userDisplayName?: string;
+  email?: string;
   organizationId?: string;
   createdByUserId?: string;
   createdByEmail?: string;
@@ -150,6 +153,9 @@ export function buildCapturePreviewEvent(input: CMOVaultCapturePreviewInput): CM
     authMode: input.authMode,
     userId: input.userId,
     userEmail: input.userEmail,
+    userSlug: input.userSlug,
+    userDisplayName: input.userDisplayName,
+    email: input.email,
     organizationId: input.organizationId,
     createdByUserId: input.createdByUserId,
     createdByEmail: input.createdByEmail,

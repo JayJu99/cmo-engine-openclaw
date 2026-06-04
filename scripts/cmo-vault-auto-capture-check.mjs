@@ -1,18 +1,51 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import ts from "typescript";
 
 const tempVault = mkdtempSync(join(tmpdir(), "cmo-engine-vault-auto-"));
+const tempBuild = mkdtempSync(join(tmpdir(), "cmo-engine-vault-auto-build-"));
 process.env.CMO_ENGINE_VAULT_PATH = tempVault;
 
-const { autoCaptureTurnOnce } = await import("../src/lib/cmo/vault-auto-capture.ts");
-const { buildManualCapturePreview } = await import("../src/lib/cmo/vault-capture-preview.ts");
-const { __vaultCaptureWriterTest } = await import("../src/lib/cmo/vault-capture-writer.ts");
-const { applyServerUserIdentity } = await import("../src/lib/cmo/user-metadata.ts");
+function transpileCmoModule(filename) {
+  const source = readFileSync(join("src", "lib", "cmo", filename), "utf8");
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.CommonJS,
+      esModuleInterop: true,
+      importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
+    },
+    fileName: filename,
+  }).outputText;
+  writeFileSync(join(tempBuild, filename.replace(/\.ts$/, ".js")), output);
+}
+
+for (const filename of [
+  "user-metadata.ts",
+  "vault-auto-capture.ts",
+  "vault-capture-preview.ts",
+  "vault-capture-writer.ts",
+  "vault-capture-paths.ts",
+  "vault-capture-renderer.ts",
+  "vault-capture-redaction.ts",
+  "vault-capture-types.ts",
+]) {
+  transpileCmoModule(filename);
+}
+
+writeFileSync(join(tempBuild, "supabase-indexing.js"), "exports.indexVaultCapture = async function indexVaultCapture() { return { ok: true, skipped: true }; };\n");
+
+const requireFromBuild = createRequire(join(tempBuild, "entry.js"));
+const { autoCaptureTurnOnce } = requireFromBuild("./vault-auto-capture.js");
+const { buildManualCapturePreview } = requireFromBuild("./vault-capture-preview.js");
+const { __vaultCaptureWriterTest } = requireFromBuild("./vault-capture-writer.js");
+const { applyServerUserIdentity } = requireFromBuild("./user-metadata.js");
 
 function request(message = "generic") { return { workspaceId: "holdstation", appId: "holdstation-mini-app", appName: "Holdstation Mini App", message, topic: message }; }
-const serverIdentity = { authMode: "supabase", userId: "00000000-0000-4000-8000-000000000005", userEmail: "owner@example.test", createdByUserId: "00000000-0000-4000-8000-000000000005", createdByEmail: "owner@example.test" };
+const serverIdentity = { authMode: "supabase", userId: "00000000-0000-4000-8000-000000000005", userEmail: "jay@example.test", userDisplayName: "Jay", userSlug: "user_jay", createdByUserId: "00000000-0000-4000-8000-000000000005", createdByEmail: "jay@example.test" };
 const browserLikeEchoAnswer = "## Echo Output\n\n### Post 1\nLaunch the Mini App activation loop.\n\n### Post 2\nMake the next user journey obvious.";
 function session(id, topic = "Holdstation Mini App") { return { id: `session_${id}`, appId: "holdstation-mini-app", appName: "Holdstation Mini App", topic, authMode: serverIdentity.authMode, userId: serverIdentity.userId, userEmail: serverIdentity.userEmail, createdByUserId: serverIdentity.createdByUserId, createdByEmail: serverIdentity.createdByEmail, messages: [], contextUsed: [], missingContext: [], status: "completed", createdAt: "2026-05-25T17:00:00Z", updatedAt: "2026-05-25T17:00:00Z", isDevelopmentFallback: false, isRuntimeFallback: false, runtimeStatus: "live", runtimeMode: "live", contextQualitySummary: { selectedCount: 0, existingCount: 0, missingCount: 0, confirmedCount: 0, draftCount: 0, placeholderCount: 0 }, assumptions: [], suggestedActions: [], savedToVault: false }; }
 function md(relativePath) { return readFileSync(join(tempVault, relativePath), "utf8"); }
@@ -35,7 +68,8 @@ assert.doesNotMatch(fanoutTrend.relativePath ?? "", /06 Trend Signals\/Last30Day
 assert.equal(readdirSync(join(tempVault, ".cmo-auto-capture-index")).filter((name) => name.startsWith("turn_session_fanout_user_fanout")).length, 1);
 
 let text = md(echo.relativePath);
-assert.match(text, /auto-capture/); assert.match(text, /raw-capture/); assert.doesNotMatch(text, /capture-preview/); assert.match(text, /auth_mode: "supabase"/); assert.match(text, /user_id: "00000000-0000-4000-8000-000000000005"/); assert.match(text, /user_email: "owner@example.test"/); assert.match(text, /source_user_message_id: "user_echo"/); assert.match(text, /visibility: "workspace"/); assert.match(text, /capture_origin: "auto"/); assert.match(text, /gbrain_status: "pending"/);
+assert.match(text, /auto-capture/); assert.match(text, /raw-capture/); assert.doesNotMatch(text, /capture-preview/); assert.match(text, /auth_mode: "supabase"/); assert.match(text, /user_id: "00000000-0000-4000-8000-000000000005"/); assert.match(text, /user_email: "jay@example.test"/); assert.match(text, /user_slug: "jay"/); assert.match(text, /user_display_name: "Jay"/); assert.match(text, /email: "jay@example.test"/); assert.match(text, /source_user_message_id: "user_echo"/); assert.match(text, /visibility: "workspace"/); assert.match(text, /capture_origin: "auto"/); assert.match(text, /gbrain_status: "pending"/);
+assert.doesNotMatch(text, /user_slug: "holdstation"|user_slug: "user_jay"/);
 assert.equal(readdirSync(join(tempVault, ".cmo-auto-capture-index")).filter((name) => name.includes("msg_echo")).length, 1);
 
 const echoByCommand = await capture("echo_command", "/echo Write 2 short X posts about Holdstation Mini App activation.", "Draft 1: X post copy without explicit Echo marker");
@@ -74,4 +108,5 @@ assert.match(previewRoute, /applyServerUserIdentity/);
 assert.match(saveRoute, /getServerUserIdentity/);
 assert.match(saveRoute, /applyServerUserIdentity/);
 rmSync(tempVault, { recursive: true, force: true });
+rmSync(tempBuild, { recursive: true, force: true });
 console.log("CMO vault auto-capture checks passed using temp vault:", tempVault);

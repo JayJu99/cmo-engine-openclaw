@@ -126,6 +126,10 @@ try {
     fetchPublicUrl,
   } = requireFromScript(join(dist, "source-acquisition", "index.js"));
   const {
+    buildCmoRuntimeUserPath,
+    normalizeCmoRuntimeUserIdentity,
+  } = requireFromScript(join(dist, "user-metadata.js"));
+  const {
     buildSourceAnswerContext,
     buildSourceQualityReport,
     querySessionLocalSource,
@@ -732,13 +736,91 @@ try {
       authMode: "supabase",
       userId: "user_123",
       userEmail: "jay@example.test",
+      userDisplayName: "Jay",
+      userSlug: "user_jay",
     },
   });
   assert.equal(runtimeContext.now_iso, "2026-05-31T01:02:03.000Z");
   assert.equal(runtimeContext.timezone, "Asia/Ho_Chi_Minh");
   assert.equal(runtimeContext.timezone_label, "Vietnam time");
   assert.equal(runtimeContext.locale, "vi-VN");
-  assert.equal(runtimeContext.user_display_name, "jay@example.test");
+  assert.equal(runtimeContext.user_id, "user_123");
+  assert.equal(runtimeContext.user_slug, "jay");
+  assert.equal(runtimeContext.user_display_name, "Jay");
+  assert.equal(runtimeContext.email, "jay@example.test");
+
+  const jayRuntimeUser = normalizeCmoRuntimeUserIdentity({
+    authMode: "supabase",
+    userId: "00000000-0000-4000-8000-000000000005",
+    userEmail: "jay@example.test",
+    userDisplayName: "Jay",
+    userSlug: "user_jay",
+  });
+  assert.equal(jayRuntimeUser.user_id, "00000000-0000-4000-8000-000000000005");
+  assert.equal(jayRuntimeUser.user_slug, "jay");
+  assert.equal(jayRuntimeUser.user_display_name, "Jay");
+  assert.equal(jayRuntimeUser.email, "jay@example.test");
+  assert.equal(normalizeCmoRuntimeUserIdentity({
+    authMode: "supabase",
+    userId: "04acf682-1111-4000-8000-000000000005",
+    userSlug: "jay",
+  }).user_slug, "jay");
+  assert.equal(normalizeCmoRuntimeUserIdentity({
+    authMode: "supabase",
+    userId: "04acf682-1111-4000-8000-000000000005",
+    userEmail: "jay@example.com",
+    userDisplayName: "Colliding Name",
+  }).user_slug, "jay");
+  assert.equal(normalizeCmoRuntimeUserIdentity({
+    authMode: "supabase",
+    userDisplayName: "Jay",
+  }).user_slug, "jay");
+  assert.equal(normalizeCmoRuntimeUserIdentity({
+    authMode: "supabase",
+    userId: "04acf682-1111-4000-8000-000000000005",
+    userDisplayName: "Jay",
+  }).user_slug, "jay-04acf682");
+  assert.equal(normalizeCmoRuntimeUserIdentity({
+    authMode: "supabase",
+    userId: "04acf682-1111-4000-8000-000000000005",
+  }).user_slug, "04acf682");
+
+  const missingRuntimeUser = normalizeCmoRuntimeUserIdentity({ authMode: "legacy" });
+  assert.equal(missingRuntimeUser.user_slug, "unknown_user");
+  assert.equal(buildCmoRuntimeUserPath({
+    kind: "raw_activity",
+    workspaceId: "hold-pay",
+    userIdentity: { authMode: "supabase", userEmail: "jay@example.test", userDisplayName: "Jay", userSlug: "user_jay" },
+    now: "2026-06-04T01:02:03.000Z",
+  }), "90 Runtime/Raw Activity/hold-pay/jay/2026-06-04/");
+  assert.equal(buildCmoRuntimeUserPath({
+    kind: "daily_notes",
+    workspaceId: "hold-pay",
+    userIdentity: { authMode: "supabase", userEmail: "jay@example.test", userDisplayName: "Jay" },
+    now: "2026-06-04T01:02:03.000Z",
+  }), "90 Runtime/Daily Notes/hold-pay/jay/2026-06-04.md");
+  assert.doesNotMatch(buildCmoRuntimeUserPath({
+    kind: "monthly_rollups",
+    workspaceId: "hold-pay",
+    userIdentity: { authMode: "supabase", userEmail: "jay@example.test", userDisplayName: "Jay", userSlug: "user_jay" },
+    now: "2026-06-04T01:02:03.000Z",
+  }), /holdstation|user_jay/);
+  assert.equal(buildCmoRuntimeUserPath({
+    kind: "raw_activity",
+    workspaceId: "hold-pay",
+    userIdentity: { authMode: "supabase", userId: "04acf682-1111-4000-8000-000000000005", userDisplayName: "Jay" },
+    now: "2026-06-04T01:02:03.000Z",
+  }), "90 Runtime/Raw Activity/hold-pay/jay-04acf682/2026-06-04/");
+  assert.doesNotMatch(buildCmoRuntimeUserPath({
+    kind: "raw_activity",
+    workspaceId: "hold-pay",
+    userIdentity: { authMode: "supabase", userId: "04acf682-1111-4000-8000-000000000005", userDisplayName: "Jay" },
+    now: "2026-06-04T01:02:03.000Z",
+  }), /04acf682-1111-4000-8000-000000000005/);
+  assert.equal(normalizeCmoRuntimeUserIdentity({
+    authMode: "supabase",
+    organizationId: "holdstation",
+  }).user_slug, "unknown_user");
 
   const appChatStoreSource = readFileSync("src/lib/cmo/app-chat-store.ts", "utf8");
   assert.match(appChatStoreSource, /buildSourceReviewContextFromMessage/);

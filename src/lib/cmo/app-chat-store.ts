@@ -2235,11 +2235,13 @@ function rawCaptureErrorForAutoCapture(result: AutoCaptureResult): string | unde
   return result.error ?? result.skipReason;
 }
 
-function messageUserMetadata(identity: CmoServerUserIdentity): Pick<CMOChatMessage, "authMode" | "userId" | "userEmail"> {
+function messageUserMetadata(identity: CmoServerUserIdentity): Pick<CMOChatMessage, "authMode" | "userId" | "userEmail" | "userDisplayName" | "userSlug"> {
   return {
     authMode: identity.authMode,
     ...(identity.userId ? { userId: identity.userId } : {}),
     ...(identity.userEmail ? { userEmail: identity.userEmail } : {}),
+    ...(identity.userDisplayName ? { userDisplayName: identity.userDisplayName } : {}),
+    ...(identity.userSlug ? { userSlug: identity.userSlug } : {}),
   };
 }
 
@@ -2296,6 +2298,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             authMode: normalizeAuthMode(message.authMode),
             userId: normalizeOptionalString(message.userId),
             userEmail: normalizeOptionalString(message.userEmail),
+            userDisplayName: normalizeOptionalString(message.userDisplayName),
+            userSlug: normalizeOptionalString(message.userSlug),
             sourceUserId: normalizeOptionalString(message.sourceUserId),
             sourceUserEmail: normalizeOptionalString(message.sourceUserEmail),
             sourceUserMessageId: normalizeOptionalString(message.sourceUserMessageId),
@@ -2398,6 +2402,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     authMode: normalizeAuthMode(value.authMode),
     userId: normalizeOptionalString(value.userId),
     userEmail: normalizeOptionalString(value.userEmail),
+    userDisplayName: normalizeOptionalString(value.userDisplayName),
+    userSlug: normalizeOptionalString(value.userSlug),
     organizationId: normalizeOptionalString(value.organizationId),
     createdByUserId: normalizeOptionalString(value.createdByUserId),
     createdByEmail: normalizeOptionalString(value.createdByEmail),
@@ -3220,6 +3226,8 @@ export async function createAppChatSession(
     authMode: continuedSession?.authMode ?? userIdentity.authMode,
     userId: continuedSession?.userId ?? userIdentity.userId,
     userEmail: continuedSession?.userEmail ?? userIdentity.userEmail,
+    userDisplayName: continuedSession?.userDisplayName ?? userIdentity.userDisplayName,
+    userSlug: continuedSession?.userSlug ?? userIdentity.userSlug,
     organizationId: continuedSession?.organizationId ?? userIdentity.organizationId,
     createdByUserId: continuedSession?.createdByUserId ?? userIdentity.createdByUserId,
     createdByEmail: continuedSession?.createdByEmail ?? userIdentity.createdByEmail,

@@ -635,7 +635,10 @@ export interface CmoRuntimeContext {
   timezone: string;
   timezone_label: string;
   locale: string;
+  user_id?: string;
+  user_slug?: string;
   user_display_name?: string;
+  email?: string;
 }
 
 export interface CmoSourceReviewContext {
@@ -1079,6 +1082,8 @@ export interface CMOChatMessage {
   authMode?: CmoAuthMode;
   userId?: string;
   userEmail?: string;
+  userDisplayName?: string;
+  userSlug?: string;
   sourceUserId?: string;
   sourceUserEmail?: string;
   sourceUserMessageId?: string;
@@ -1215,6 +1220,8 @@ export interface CMOChatSession {
   authMode?: CmoAuthMode;
   userId?: string;
   userEmail?: string;
+  userDisplayName?: string;
+  userSlug?: string;
   organizationId?: string;
   createdByUserId?: string;
   createdByEmail?: string;
@@ -1406,6 +1413,8 @@ export interface RawCaptureRequest {
   authMode?: CmoAuthMode;
   userId?: string;
   userEmail?: string;
+  userDisplayName?: string;
+  userSlug?: string;
   organizationId?: string;
   createdByUserId?: string;
   createdByEmail?: string;
