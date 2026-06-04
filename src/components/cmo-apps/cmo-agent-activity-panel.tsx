@@ -219,6 +219,12 @@ function toolMetadataRows(message: CMOChatMessage | undefined, existingAgents: S
     }));
 }
 
+function toolAgentFromRow(row: ActivityRow): "surf" | "echo" | null {
+  if (row.label === "Surf Agent") return "surf";
+  if (row.label === "Echo Agent") return "echo";
+  return null;
+}
+
 function activityRows(message: CMOChatMessage | undefined, running: boolean): ActivityRow[] {
   if (running) {
     return [
@@ -238,44 +244,59 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
   const hasDelegationEvents = delegationEvents.length > 0;
   const delegationOutcomes = delegationOutcomeSets(events, delegations);
   const hasFriendlyTools = friendlyToolsUsed(message).length > 0;
+  const hasSpecialistWork = hasDelegationEvents || delegations.length > 0 || hasFriendlyTools;
 
-  if (firstCmoEvent || events.length > 0 || delegations.length > 0 || hasFriendlyTools || message?.currentStep || message?.hermesCmoMetadata?.currentStep || message?.cmoRunStatus) {
+  if (hasSpecialistWork) {
     rows.push({
-      key: "cmo-running",
-      label: "CMO",
-      status: statusFromCmoRun(message?.cmoRunStatus) === "failed" || statusFromCmoRun(message?.cmoRunStatus) === "timed_out" ? "running" : "completed",
+      key: "cmo-analyzing",
+      label: "CMO analyzing",
+      status: "completed",
     });
   }
 
   rows.push(
-    ...delegationEvents.map((event, index): ActivityRow => ({
-      key: `${event.eventId}-${index}`,
-      label: eventLabel(event),
-      status: displayStatusForEvent(event, delegationOutcomes),
-    })),
+    ...delegationEvents
+      .filter((event) => event.sourceAgent === "echo" || event.sourceAgent === "surf")
+      .map((event, index): ActivityRow => ({
+        key: `${event.eventId}-${index}`,
+        label: eventLabel(event),
+        status: displayStatusForEvent(event, delegationOutcomes),
+      })),
   );
 
   rows.push(...delegationRows(delegations, hasDelegationEvents));
 
-  if (rows.length > 0) {
-    const existingAgents = new Set(
-      rows
-        .map((row) => row.label === "Surf Agent" ? "surf" : row.label === "Echo Agent" ? "echo" : null)
-        .filter((agent): agent is "surf" | "echo" => Boolean(agent)),
-    );
-    rows.push(...toolMetadataRows(message, existingAgents));
-    const runStatus = statusFromCmoRun(message?.cmoRunStatus);
-    const finalStatus = runStatus === "failed" || runStatus === "timed_out"
-      ? runStatus
-      : rows.some((row) => row.status === "failed" || row.status === "timed_out")
-        ? "failed"
-        : "completed";
+  const existingAgents = new Set(
+    rows
+      .map(toolAgentFromRow)
+      .filter((agent): agent is "surf" | "echo" => Boolean(agent)),
+  );
+  rows.push(...toolMetadataRows(message, existingAgents));
 
+  const runStatus = statusFromCmoRun(message?.cmoRunStatus);
+  const finalStatus = runStatus === "failed" || runStatus === "timed_out"
+    ? runStatus
+    : rows.some((row) => row.status === "failed" || row.status === "timed_out")
+      ? "failed"
+      : "completed";
+
+  if (rows.length > 0) {
     rows.push({
-      key: "cmo-completed",
-      label: "CMO",
+      key: "cmo-final-answer",
+      label: "CMO final answer",
       status: finalStatus,
     });
+    return rows;
+  }
+
+  if (firstCmoEvent || events.length > 0 || message?.currentStep || message?.hermesCmoMetadata?.currentStep || message?.cmoRunStatus) {
+    return [
+      {
+        key: "cmo-completed",
+        label: "CMO",
+        status: finalStatus,
+      },
+    ];
   }
 
   return rows;

@@ -56,14 +56,19 @@ assert.match(mapperSource, /traceSummary\.tools_used/, "mapper must read tool_tr
 
 assert.match(activityPanelSource, /Surf Agent/, "activity timeline must render Surf with a friendly label");
 assert.match(activityPanelSource, /Echo Agent/, "activity timeline must render Echo with a friendly label");
+assert.match(activityPanelSource, /CMO analyzing/, "specialist timelines must label the initial CMO row distinctly");
+assert.match(activityPanelSource, /CMO final answer/, "specialist timelines must label the final CMO row distinctly");
 assert.match(activityPanelSource, /friendlyToolsUsed/, "activity timeline must derive rows from safe tool metadata");
 assert.match(activityPanelSource, /cmo_call_surf/, "activity timeline must map cmo_call_surf metadata");
 assert.match(activityPanelSource, /cmo_call_echo/, "activity timeline must map cmo_call_echo metadata");
 assert.match(activityPanelSource, /toolMetadataRows/, "activity timeline must render completed specialist rows from terminal tool metadata");
 assert.match(activityPanelSource, /hasFriendlyTools/, "activity timeline must render even when only terminal tool metadata is present");
+assert.match(activityPanelSource, /hasSpecialistWork/, "activity timeline must distinguish specialist runs from strategy-only runs");
+assert.match(activityPanelSource, /toolAgentFromRow/, "activity timeline must dedupe specialist rows before adding terminal metadata rows");
 assert.match(activityPanelSource, /statusLabel/, "activity timeline must use product-friendly status labels");
 assert.doesNotMatch(activityPanelSource, /label:\s*["'`]cmo_call_(surf|echo)/, "activity timeline labels must not expose raw tool names");
 assert.doesNotMatch(activityPanelSource, /<Badge[^>]*>\{row\.status\}<\/Badge>/, "activity timeline must not expose raw internal status text");
+assert.doesNotMatch(activityPanelSource, /key:\s*"cmo-running"[\s\S]*key:\s*"cmo-completed"[\s\S]*key:\s*"cmo-final-answer"/, "activity timeline must not render duplicated generic CMO completed rows");
 
 assert.match(appChatStoreSource, /const toolsUsed = normalizeStringList\(value\.toolsUsed\)/, "session normalizer must preserve camelCase toolsUsed");
 assert.match(appChatStoreSource, /const toolsUsedSnake = normalizeStringList\(value\.tools_used\)/, "session normalizer must preserve snake_case tools_used");
@@ -103,6 +108,8 @@ console.log(JSON.stringify({
     "pending placeholder excluded from replay",
     "Surf Agent activity mapping",
     "Echo Agent activity mapping",
+    "distinct CMO analyzing/final rows",
+    "strategy-only single CMO row",
     "raw tool names hidden from timeline labels",
     "terminal tools_used metadata preserved",
     "composer draft survives refresh and failed submit",
@@ -124,6 +131,8 @@ console.log(JSON.stringify({
     researchRendersSurfAgent: true,
     copyRendersEchoAgent: true,
     strategyOnlySpecialistRows: false,
+    duplicateGenericCmoCompletedRows: false,
+    specialistTimelineLabels: ["CMO analyzing", "Surf/Echo Agent", "CMO final answer"],
     rawToolNamesHidden: true,
     liveSpecialistRunningStateAvailable: false,
     liveSpecialistRunningStateNote: "Current Product metadata exposes pending/running CMO status and terminal tools_used; true live Surf/Echo running rows require Hermes progress events.",
