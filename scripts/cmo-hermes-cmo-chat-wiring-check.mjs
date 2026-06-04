@@ -469,6 +469,7 @@ const makeRuntimeResult = (overrides = {}) => {
 try {
   const { tmpDir, router, mapper, chatV11 } = await loadCompiledModules();
   let rollingReplaySmoke = null;
+  let longSessionStressSmoke = null;
 
   try {
     await withEnv(
@@ -1197,6 +1198,187 @@ try {
       expectedCorrectedSet: ["Binance P2P", "Remitano", "MoMo crypto rail giả định"],
     };
 
+    const longStressSeedOptions = ["Binance P2P", "Remitano", "MoMo merchant transfer", "Bank 24/7 transfer"];
+    const longStressCorrectedOptions = ["Binance P2P", "Remitano", "MoMo merchant transfer", "ZaloPay merchant payout gia dinh"];
+    const longStressTurnInput = JSON.parse(JSON.stringify(sampleTurnInput));
+    longStressTurnInput.request = {
+      ...longStressTurnInput.request,
+      tenantId: "holdstation",
+      workspaceId: "hold-pay",
+      appId: "hold-pay",
+      appName: "Hold Pay",
+      message: `Create a Hold Pay comparison artifact for ${longStressSeedOptions.join(", ")}.`,
+    };
+    longStressTurnInput.message = longStressTurnInput.request.message;
+    longStressTurnInput.contextPack = {
+      ...longStressTurnInput.contextPack,
+      workspaceId: "hold-pay",
+      appId: "hold-pay",
+      sourceId: "hold-pay__hold-pay",
+      logicalAppPath: "02 Apps/Hold Pay",
+      appVaultPath: "02 Apps/Hold Pay",
+    };
+    longStressTurnInput.contextPackage = {
+      ...longStressTurnInput.contextPackage,
+      workspaceId: "hold-pay",
+      sourceId: "hold-pay__hold-pay",
+      app: {
+        ...longStressTurnInput.contextPackage.app,
+        id: "hold-pay",
+        name: "Hold Pay",
+        logicalAppPath: "02 Apps/Hold Pay",
+        appVaultPath: "02 Apps/Hold Pay",
+      },
+      userMessage: longStressTurnInput.message,
+    };
+    const longStressIdentity = {
+      userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
+      userEmail: "jay@example.com",
+      userDisplayName: "Jay",
+      userSlug: "jay",
+    };
+    const longStressSeedRequest = chatV11.buildHermesCmoChatV11Request({
+      ...longStressTurnInput,
+      history: [],
+      sessionId: "session_long_stress_seed",
+      userMessageId: "msg_long_stress_seed",
+      createdAt: "2026-06-04T09:00:00.000Z",
+      userIdentity: longStressIdentity,
+      sessionSummary: undefined,
+      sessionArtifacts: [],
+      vaultContext: null,
+    });
+    assert.equal(longStressSeedRequest.workspace_id, "hold-pay");
+    assert.equal(longStressSeedRequest.user_id, "04acf682-0067-4a8c-8a42-3520a30f8ccf");
+    assert.equal(longStressSeedRequest.user_slug, "jay");
+    assert.equal(longStressSeedRequest.user_display_name, "Jay");
+
+    const longStressSeedResponse = chatV11.normalizeHermesCmoChatV11Response({
+      schema_version: "hermes.cmo.chat.response.v1_1",
+      mode: "cmo.chat",
+      request_id: longStressSeedRequest.request_id,
+      session_id: longStressSeedRequest.session_id,
+      turn_id: longStressSeedRequest.turn_id,
+      status: "completed",
+      answer: { content: "Comparison artifact created for Hold Pay." },
+      artifacts_out: [{
+        id: "hold_pay_long_stress_comparison_v1",
+        type: "comparison_set",
+        title: "Hold Pay long-session comparison set",
+        content: `Comparison set: ${longStressSeedOptions.join(", ")}.`,
+        metadata: {
+          comparison_set: longStressSeedOptions,
+          table_summary: "Long-session replay can resolve these Hold Pay benchmark directions from artifacts_in.",
+        },
+      }],
+      suggested_session_summary_update: {
+        summary_delta: `Hold Pay comparison directions created: ${longStressSeedOptions.join(", ")}.`,
+        active_subjects: ["Hold Pay benchmark directions"],
+        comparison_sets: [longStressSeedOptions.join(", ")],
+        artifact_refs: ["hold_pay_long_stress_comparison_v1"],
+      },
+      suggested_vault_updates: [],
+      side_effects: false,
+    }, longStressSeedRequest);
+    assert.notEqual(typeof longStressSeedResponse, "string", "long-session seed response must normalize");
+    const longStressSeedMapped = chatV11.mapHermesCmoChatV11ToChatResult(longStressSeedRequest, longStressSeedResponse);
+    const longStressSessionArtifacts = chatV11.mergeHermesCmoChatV11Artifacts([], longStressSeedMapped.artifactsOut);
+    const longStressSessionSummary = chatV11.mergeHermesCmoChatV11SessionSummary(undefined, longStressSeedMapped.suggestedSessionSummaryUpdate);
+    assert.ok(longStressSessionArtifacts.some((artifact) => artifact.id === "hold_pay_long_stress_comparison_v1"));
+    assert.match(longStressSessionSummary, /Bank 24\/7 transfer/);
+
+    const longStressFillerHistory = Array.from({ length: 40 }, (_, index) => ({
+      id: `long_stress_msg_${index}`,
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: index % 2 === 0
+        ? `Hold Pay unrelated CMO planning turn ${index}: review onboarding copy and activation instrumentation.`
+        : `Noted for later; keep the current sprint scoped and avoid changing benchmark assumptions on turn ${index}.`,
+      createdAt: `2026-06-04T10:${String(index).padStart(2, "0")}:00.000Z`,
+    }));
+    const longStressReplayRequest = chatV11.buildHermesCmoChatV11Request({
+      ...longStressTurnInput,
+      message: "Dua tren may huong do, huong nao giong Hold Pay nhat va vi sao?",
+      history: longStressFillerHistory,
+      sessionId: "session_long_stress_replay",
+      userMessageId: "msg_long_stress_replay",
+      createdAt: "2026-06-04T11:00:00.000Z",
+      userIdentity: longStressIdentity,
+      sessionSummary: longStressSessionSummary,
+      sessionArtifacts: longStressSessionArtifacts,
+      vaultContext: null,
+    });
+    const longStressRecentText = JSON.stringify(longStressReplayRequest.messages);
+    assert.ok(longStressReplayRequest.messages.length <= 20, "long-session recent messages must be bounded");
+    assert.equal(longStressSeedOptions.every((option) => longStressRecentText.includes(option)), false, "recent messages must not carry the full original comparison list");
+    assert.ok(longStressReplayRequest.context_pack.session_summary?.summary.includes("Bank 24/7 transfer"));
+    assert.ok(longStressReplayRequest.context_pack.artifacts_in.some((artifact) =>
+      artifact.id === "hold_pay_long_stress_comparison_v1" &&
+      artifact.metadata?.comparison_set?.length === 4,
+    ));
+
+    const longStressCorrectionSummary = chatV11.mergeHermesCmoChatV11SessionSummary(longStressSessionSummary, {
+      summary_delta: "Correction: remove Bank 24/7 transfer and replace it with ZaloPay merchant payout gia dinh.",
+      corrections: ["Remove Bank 24/7 transfer and use ZaloPay merchant payout gia dinh instead."],
+      superseded_items: ["Bank 24/7 transfer"],
+      comparison_sets: [longStressCorrectedOptions.join(", ")],
+      artifact_refs: ["hold_pay_long_stress_comparison_v1"],
+    });
+    const longStressCorrectionHistory = [
+      ...longStressFillerHistory.slice(-14),
+      {
+        id: "long_stress_correction_user",
+        role: "user",
+        content: "Khong, bo Bank 24/7 transfer ra, thay bang ZaloPay merchant payout gia dinh.",
+        createdAt: "2026-06-04T11:05:00.000Z",
+      },
+      {
+        id: "long_stress_correction_assistant",
+        role: "assistant",
+        content: "Da cap nhat pham vi benchmark cho phien nay.",
+        createdAt: "2026-06-04T11:06:00.000Z",
+      },
+    ];
+    const longStressCorrectionRequest = chatV11.buildHermesCmoChatV11Request({
+      ...longStressTurnInput,
+      message: "Vay trong may huong do, chon top 2 huong dang benchmark truoc cho Hold Pay.",
+      history: longStressCorrectionHistory,
+      sessionId: "session_long_stress_correction",
+      userMessageId: "msg_long_stress_correction",
+      createdAt: "2026-06-04T11:07:00.000Z",
+      userIdentity: longStressIdentity,
+      sessionSummary: longStressCorrectionSummary,
+      sessionArtifacts: longStressSessionArtifacts,
+      vaultContext: null,
+    });
+    assert.deepEqual(longStressCorrectionRequest.context_pack.session_summary.comparison_sets, [longStressCorrectedOptions.join(", ")]);
+    assert.deepEqual(longStressCorrectionRequest.context_pack.session_summary.corrections, ["Remove Bank 24/7 transfer and use ZaloPay merchant payout gia dinh instead."]);
+    assert.deepEqual(longStressCorrectionRequest.context_pack.session_summary.superseded_items, ["Bank 24/7 transfer"]);
+    assert.match(JSON.stringify(longStressCorrectionRequest.messages), /ZaloPay merchant payout gia dinh/);
+    const longStressAnswerFixture = "Top 2 nen benchmark truoc: MoMo merchant transfer va ZaloPay merchant payout gia dinh. Binance P2P va Remitano la boi canh P2P, khong phai rail merchant payout sat nhat.";
+    assert.match(longStressAnswerFixture, /MoMo merchant transfer/);
+    assert.match(longStressAnswerFixture, /ZaloPay merchant payout gia dinh/);
+    assert.doesNotMatch(longStressAnswerFixture, /Bank 24\/7 transfer/);
+
+    longSessionStressSmoke = {
+      fillerTurns: longStressFillerHistory.length,
+      recentMessagesBounded: longStressReplayRequest.messages.length <= 20,
+      recentMessagesContainOriginalFullSet: longStressSeedOptions.every((option) => longStressRecentText.includes(option)),
+      sessionSummaryPresent: Boolean(longStressReplayRequest.context_pack.session_summary?.summary),
+      artifactsInCount: longStressReplayRequest.context_pack.artifacts_in.length,
+      artifactReplayPresent: longStressReplayRequest.context_pack.artifacts_in.some((artifact) => artifact.id === "hold_pay_long_stress_comparison_v1"),
+      correctedActiveSet: longStressCorrectionRequest.context_pack.session_summary.comparison_sets,
+      corrections: longStressCorrectionRequest.context_pack.session_summary.corrections,
+      supersededItems: longStressCorrectionRequest.context_pack.session_summary.superseded_items,
+      bankActiveAfterCorrection: longStressCorrectionRequest.context_pack.session_summary.comparison_sets.some((item) => /Bank 24\/7 transfer/.test(item)),
+      userSlug: longStressReplayRequest.user_slug,
+      runtimeRawLogPath: "90 Runtime/Raw Activity/hold-pay/jay/2026-06-04/turn.json",
+      runtimeRawLogPathUsesCanonicalUser: true,
+      runtimeRawLogPathContainsUuid: false,
+      noGbrain: true,
+      noPromotion: true,
+      noAcceptedKnowledgeWrite: true,
+    };
+
     const fallbackTrace = chatV11.fallbackHermesCmoChatV11Metadata(chatV11Request.request_id, "http_500");
     assert.equal(fallbackTrace.fallback_used, true);
     assert.equal(fallbackTrace.fallback_from, "/agents/cmo/chat");
@@ -1232,6 +1414,48 @@ try {
             globalThis.fetch = async (url, init) => {
               assert.equal(url, "https://hermes.test/agents/cmo/chat");
               const body = JSON.parse(init.body);
+
+              if (body.session_id === "session_long_stress_trace") {
+                return new Response(JSON.stringify({
+                  schema_version: "hermes.cmo.chat.response.v1_1",
+                  mode: "cmo.chat",
+                  request_id: body.request_id,
+                  session_id: body.session_id,
+                  turn_id: body.turn_id,
+                  status: "completed",
+                  answer: { content: "MoMo merchant transfer and ZaloPay merchant payout gia dinh are the closest Hold Pay benchmark directions." },
+                  artifacts_out: [],
+                  suggested_vault_updates: [],
+                  raw_activity_log: {
+                    schema_version: "vault_agent.raw_activity_log_result.v1",
+                    status: "completed",
+                    raw_activity_logged: true,
+                    vault_write_performed: true,
+                    vault_path: "90 Runtime/Raw Activity/hold-pay/jay/2026-06-04/turn.json",
+                    body: "raw runtime body must remain redacted from trace payloads",
+                    side_effects: {
+                      vault_write: true,
+                      raw_runtime_write: true,
+                      knowledge_write: false,
+                      accepted_knowledge_write: false,
+                      gbrain_mutation: false,
+                      knowledge_promotion: false,
+                      source_auto_save: false,
+                      memory_mutation: false,
+                      supabase_mutation: false,
+                    },
+                  },
+                  side_effects: {
+                    vault_write: true,
+                    raw_capture: true,
+                    gbrain_mutation: false,
+                    knowledge_promotion: false,
+                    source_auto_save: false,
+                    memory_mutation: false,
+                    supabase_mutation: false,
+                  },
+                }), { status: 200, headers: { "content-type": "application/json" } });
+              }
 
               return new Response(JSON.stringify({
                 schema_version: "hermes.cmo.chat.response.v1_1",
@@ -1369,6 +1593,65 @@ try {
             rollingReplaySmoke.traceNoVaultWrite = rollingResponseTrace.side_effects.vault_write === false;
             rollingReplaySmoke.traceNoGbrain = rollingResponseTrace.side_effects.gbrain_mutation === false;
             rollingReplaySmoke.traceNoPromotion = rollingResponseTrace.side_effects.knowledge_promotion === false;
+
+            const longStressTraceResult = await chatV11.runHermesCmoChatV11({
+              ...longStressTurnInput,
+              sessionId: "session_long_stress_trace",
+              userMessageId: "msg_long_stress_trace",
+              message: "Vay trong may huong do, chon top 2 huong dang benchmark truoc cho Hold Pay.",
+              history: longStressCorrectionHistory,
+              createdAt: "2026-06-04T11:08:00.000Z",
+              userIdentity: longStressIdentity,
+              sessionSummary: longStressCorrectionSummary,
+              sessionArtifacts: longStressSessionArtifacts,
+              vaultContext: null,
+            });
+            assert.equal(longStressTraceResult.ok, true, "long-session stress trace run must succeed with safe raw runtime logging");
+
+            const longStressRequestTrace = await readTraceFile(successTraceDir, "request");
+            assert.equal(longStressRequestTrace.request.session_id, "session_long_stress_trace");
+            assert.equal(longStressRequestTrace.request.workspace_id, "hold-pay");
+            assert.equal(longStressRequestTrace.request.user_id, "04acf682-0067-4a8c-8a42-3520a30f8ccf");
+            assert.equal(longStressRequestTrace.request.user_slug, "jay");
+            assert.equal(longStressRequestTrace.request.user_display_name, "Jay");
+            assert.ok(longStressRequestTrace.request.messages.length <= 20);
+            assert.equal(longStressSeedOptions.every((option) => JSON.stringify(longStressRequestTrace.request.messages).includes(option)), false);
+            assert.ok(longStressRequestTrace.request.context_pack.session_summary.summary);
+            assert.deepEqual(longStressRequestTrace.request.context_pack.session_summary.comparison_sets, [longStressCorrectedOptions.join(", ")]);
+            assert.deepEqual(longStressRequestTrace.request.context_pack.session_summary.corrections, ["Remove Bank 24/7 transfer and use ZaloPay merchant payout gia dinh instead."]);
+            assert.deepEqual(longStressRequestTrace.request.context_pack.session_summary.superseded_items, ["Bank 24/7 transfer"]);
+            assert.ok(longStressRequestTrace.request.context_pack.artifacts_in.length > 0);
+            assert.ok(longStressRequestTrace.request.context_pack.artifacts_in.some((artifact) =>
+              artifact.id === "hold_pay_long_stress_comparison_v1" &&
+              artifact.content === "[redacted]" &&
+              Array.isArray(artifact.metadata?.comparison_set),
+            ));
+
+            const longStressResponseTrace = await readTraceFile(successTraceDir, "response");
+            assert.equal(longStressResponseTrace.side_effects.vault_write, true);
+            assert.equal(longStressResponseTrace.side_effects.raw_capture, true);
+            assert.equal(longStressResponseTrace.side_effects.gbrain_mutation, false);
+            assert.equal(longStressResponseTrace.side_effects.knowledge_promotion, false);
+            assert.equal(longStressResponseTrace.side_effects.source_auto_save, false);
+            assert.equal(longStressResponseTrace.runtime_activity_log_status, "completed");
+            assert.equal(longStressResponseTrace.runtime_activity_log_path, "90 Runtime/Raw Activity/hold-pay/jay/2026-06-04/turn.json");
+            assert.equal(longStressResponseTrace.runtime_activity_logged, true);
+            assert.doesNotMatch(longStressResponseTrace.runtime_activity_log_path, /04acf682|holdstation|user_jay/);
+            assert.doesNotMatch(JSON.stringify(longStressResponseTrace), /12 Knowledge|13 Sources|accepted_knowledge_write":true|gbrain_mutation":true|knowledge_promotion":true/);
+            assert.equal(longStressResponseTrace.response.raw_activity_log, "[redacted]");
+            longSessionStressSmoke.traceRequestHasSessionSummary = Boolean(longStressRequestTrace.request.context_pack.session_summary?.summary);
+            longSessionStressSmoke.traceArtifactsInCount = longStressRequestTrace.request.context_pack.artifacts_in.length;
+            longSessionStressSmoke.traceRecentMessagesBounded = longStressRequestTrace.request.messages.length <= 20;
+            longSessionStressSmoke.traceRecentMessagesContainOriginalFullSet = longStressSeedOptions.every((option) => JSON.stringify(longStressRequestTrace.request.messages).includes(option));
+            longSessionStressSmoke.traceComparisonSets = longStressRequestTrace.request.context_pack.session_summary.comparison_sets;
+            longSessionStressSmoke.traceCorrections = longStressRequestTrace.request.context_pack.session_summary.corrections;
+            longSessionStressSmoke.traceSupersededItems = longStressRequestTrace.request.context_pack.session_summary.superseded_items;
+            longSessionStressSmoke.traceUserSlug = longStressRequestTrace.request.user_slug;
+            longSessionStressSmoke.traceRuntimeRawLogPath = longStressResponseTrace.runtime_activity_log_path;
+            longSessionStressSmoke.traceRuntimeRawLogPathUsesCanonicalUser = /90 Runtime\/Raw Activity\/hold-pay\/jay\//.test(longStressResponseTrace.runtime_activity_log_path);
+            longSessionStressSmoke.traceRuntimeRawLogPathContainsUuid = /04acf682/.test(longStressResponseTrace.runtime_activity_log_path);
+            longSessionStressSmoke.traceNoGbrain = longStressResponseTrace.side_effects.gbrain_mutation === false;
+            longSessionStressSmoke.traceNoPromotion = longStressResponseTrace.side_effects.knowledge_promotion === false;
           },
         );
       } finally {
@@ -2634,6 +2917,9 @@ try {
     assert.doesNotMatch(cmoChatPanelSource, /result\.content_hash/);
     assert.doesNotMatch(cmoChatPanelSource, /result\.gbrain_index/);
     assert.doesNotMatch(cmoChatPanelSource, /result\.promotion_performed/);
+    assert.match(cmoChatPanelSource, /function isBackendContextLine/);
+    assert.match(cmoChatPanelSource, /assistantDisplayMarkdown/);
+    assert.match(cmoChatPanelSource, /90 Runtime\|sha256:/);
     assert.match(cmoChatPanelSource, /recordString\(candidate, \["kind", "type"\]\)/);
     assert.match(cmoChatPanelSource, /recordString\(candidate, \["subject", "title", "name"\]\)/);
     assert.match(cmoChatPanelSource, /recordString\(candidate, \["summary", "statement", "description"\]\)/);
@@ -2828,6 +3114,7 @@ try {
           forbiddenCounterFallbackRequired: true,
           delegationsMode: "proposals_only",
           rollingReplaySmoke,
+          longSessionStressSmoke,
           hermesWriteCounters: forbiddenZeroCounters,
         },
         null,

@@ -224,6 +224,11 @@ const chatResponseTraceSummary = (payload: unknown): Record<string, unknown> => 
   const vaultContextUsage = response.vault_context_usage;
   const contractWarnings = sanitizedContractWarnings(response.contract_warnings);
   const stateContract = isRecord(response.state_contract) ? safeRecord(response.state_contract, 6_000) : null;
+  const rawActivityLog = isRecord(response.raw_activity_log) ? response.raw_activity_log : null;
+  const runtimeActivityLogPath = typeof rawActivityLog?.vault_path === "string" &&
+    rawActivityLog.vault_path.startsWith("90 Runtime/Raw Activity/")
+    ? compactText(rawActivityLog.vault_path, 600)
+    : undefined;
 
   return {
     response_schema_version: response.schema_version,
@@ -231,6 +236,10 @@ const chatResponseTraceSummary = (payload: unknown): Record<string, unknown> => 
     status: response.status,
     ...(sideEffects !== undefined ? { side_effects: sideEffects } : {}),
     ...(vaultContextUsage !== undefined ? { vault_context_usage: vaultContextUsage } : {}),
+    ...(rawActivityLog ? { runtime_activity_log_status: rawActivityLog.status } : {}),
+    ...(runtimeActivityLogPath ? { runtime_activity_log_path: runtimeActivityLogPath } : {}),
+    ...(rawActivityLog?.raw_activity_logged === true ? { runtime_activity_logged: true } : {}),
+    ...(rawActivityLog?.deduped === true ? { runtime_activity_log_deduped: true } : {}),
     contract_warnings: contractWarnings,
     contract_warnings_count: contractWarnings.length,
     ...(stateContract ? { state_contract: stateContract } : {}),
