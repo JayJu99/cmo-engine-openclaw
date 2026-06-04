@@ -11,6 +11,7 @@ import type {
   CMOChatMessage,
   CMOChatSession,
   CMORuntimeStatus,
+  CmoAsyncToolRunStatus,
   CmoAuthMode,
   CmoDecisionLabel,
   CmoProductRenderSource,
@@ -2235,6 +2236,37 @@ function rawCaptureErrorForAutoCapture(result: AutoCaptureResult): string | unde
   return result.error ?? result.skipReason;
 }
 
+function normalizeCmoRunStatus(value: unknown): CmoAsyncToolRunStatus | undefined {
+  return value === "pending" || value === "running" || value === "completed" || value === "failed" || value === "timed_out"
+    ? value
+    : undefined;
+}
+
+function pendingToolRunAnswer(): string {
+  return [
+    "CMO is working...",
+    "",
+    "Researching signals...",
+    "Synthesizing answer...",
+  ].join("\n");
+}
+
+function failedToolRunAnswer(): string {
+  return "CMO could not complete the research run. Try narrowing the request or retry.";
+}
+
+function shouldStartAsyncHermesCmoToolRun(endpointKind: string): boolean {
+  return endpointKind === "tool_execute";
+}
+
+function isTimedOutHermesError(reason: string): boolean {
+  return /timed out|timeout|AbortError/i.test(reason);
+}
+
+function safeCmoRunToolsUsed(agentsUsed: HermesCmoAgentUsed[] | undefined): HermesCmoAgentUsed[] | undefined {
+  return agentsUsed?.filter((agent) => agent === "cmo" || agent === "surf" || agent === "echo");
+}
+
 function messageUserMetadata(identity: CmoServerUserIdentity): Pick<CMOChatMessage, "authMode" | "userId" | "userEmail" | "userDisplayName" | "userSlug"> {
   return {
     authMode: identity.authMode,
@@ -2332,6 +2364,14 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             delegationsMode: normalizeHermesCmoDelegationsMode(message.delegationsMode),
             vaultAgentDryRun: normalizeVaultAgentDryRunMetadata(message.vaultAgentDryRun),
             vaultAgentContextPack: normalizeVaultAgentContextPackMetadata(message.vaultAgentContextPack),
+            cmoRunStatus: normalizeCmoRunStatus(message.cmoRunStatus),
+            cmoRunEndpoint: message.cmoRunEndpoint === "/agents/cmo/tool-execute" ? message.cmoRunEndpoint : undefined,
+            cmoRunToolsUsed: Array.isArray(message.cmoRunToolsUsed)
+              ? message.cmoRunToolsUsed.map(normalizeHermesCmoAgentUsed).filter((agent): agent is HermesCmoAgentUsed => Boolean(agent))
+              : undefined,
+            cmoRunStartedAt: normalizeOptionalString(message.cmoRunStartedAt),
+            cmoRunCompletedAt: normalizeOptionalString(message.cmoRunCompletedAt),
+            cmoRunDurationMs: normalizeOptionalNonNegativeNumber(message.cmoRunDurationMs),
             contextUsedCount: typeof message.contextUsedCount === "number" && Number.isFinite(message.contextUsedCount) ? Math.max(0, Math.floor(message.contextUsedCount)) : undefined,
             graphHintCount: typeof message.graphHintCount === "number" && Number.isFinite(message.graphHintCount) ? Math.max(0, Math.floor(message.graphHintCount)) : undefined,
             indexedContextStatus: normalizeIndexedContextStatus(message.indexedContextStatus),
@@ -2409,7 +2449,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     createdByEmail: normalizeOptionalString(value.createdByEmail),
     messages,
     contextUsed,
-    status: value.status === "running" || value.status === "failed" ? value.status : "completed",
+    status: value.status === "pending" || value.status === "running" || value.status === "failed" || value.status === "timed_out" ? value.status : "completed",
     createdAt: stringValue(value.createdAt, new Date(0).toISOString()),
     updatedAt: stringValue(value.updatedAt, new Date(0).toISOString()),
     isDevelopmentFallback: value.isDevelopmentFallback === true,
@@ -2446,6 +2486,14 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode),
     vaultAgentDryRun: normalizeVaultAgentDryRunMetadata(value.vaultAgentDryRun),
     vaultAgentContextPack: normalizeVaultAgentContextPackMetadata(value.vaultAgentContextPack),
+    cmoRunStatus: normalizeCmoRunStatus(value.cmoRunStatus),
+    cmoRunEndpoint: value.cmoRunEndpoint === "/agents/cmo/tool-execute" ? value.cmoRunEndpoint : undefined,
+    cmoRunToolsUsed: Array.isArray(value.cmoRunToolsUsed)
+      ? value.cmoRunToolsUsed.map(normalizeHermesCmoAgentUsed).filter((agent): agent is HermesCmoAgentUsed => Boolean(agent))
+      : undefined,
+    cmoRunStartedAt: normalizeOptionalString(value.cmoRunStartedAt),
+    cmoRunCompletedAt: normalizeOptionalString(value.cmoRunCompletedAt),
+    cmoRunDurationMs: normalizeOptionalNonNegativeNumber(value.cmoRunDurationMs),
     missingContext,
     contextDiagnostics,
     contextQualitySummary: normalizeContextQualitySummary(value.contextQualitySummary ?? contextDiagnostics, [...contextUsed, ...missingContext]),
@@ -2712,6 +2760,370 @@ export async function createAppChatSession(
   const vaultUpdateApprovalEvents = continuedSession?.vaultUpdateApprovalEvents ?? [];
   const vaultUpdateDryRunResults = continuedSession?.vaultUpdateDryRunResults ?? [];
   const vaultUpdateWriteResults = continuedSession?.vaultUpdateWriteResults ?? [];
+
+  if (shouldStartAsyncHermesCmoToolRun(hermesCmoRoute.endpointKind)) {
+    const pendingAnswer = pendingToolRunAnswer();
+    const pendingDecisionLayer = buildDecisionLayer({
+      workspaceId: request.workspaceId,
+      appId: request.appId,
+      sourceId: contextPackage.sourceId,
+      sessionId,
+      createdAt: now,
+      answer: pendingAnswer,
+      runtimeAssumptions: [],
+      runtimeSuggestedActions: [],
+    });
+    const pendingTimingMetadata = {
+      requestReceivedAt,
+      ...(typeof timing.authDurationMs === "number" ? { authDurationMs: Math.max(0, Math.floor(timing.authDurationMs)) } : {}),
+      sessionResolutionDurationMs,
+      contextPackBuildDurationMs,
+      indexedContextBuildDurationMs,
+      totalDurationMs: Date.now() - requestStartedMs,
+      contextSourceCount,
+      contextCharLength,
+      indexedSupplementCharLength,
+    };
+    const pendingSession: CMOChatSession = {
+      id: sessionId,
+      appId: request.appId,
+      appName: request.appName,
+      topic: continuedSession?.topic || request.topic || request.message.slice(0, 96),
+      authMode: continuedSession?.authMode ?? userIdentity.authMode,
+      userId: continuedSession?.userId ?? userIdentity.userId,
+      userEmail: continuedSession?.userEmail ?? userIdentity.userEmail,
+      userDisplayName: continuedSession?.userDisplayName ?? userIdentity.userDisplayName,
+      userSlug: continuedSession?.userSlug ?? userIdentity.userSlug,
+      organizationId: continuedSession?.organizationId ?? userIdentity.organizationId,
+      createdByUserId: continuedSession?.createdByUserId ?? userIdentity.createdByUserId,
+      createdByEmail: continuedSession?.createdByEmail ?? userIdentity.createdByEmail,
+      status: "pending",
+      createdAt: continuedSession?.createdAt ?? now,
+      updatedAt: now,
+      contextUsed,
+      missingContext,
+      assumptions: [],
+      suggestedActions: [],
+      isDevelopmentFallback: false,
+      isRuntimeFallback: false,
+      runtimeStatus: "live",
+      runtimeMode: "live",
+      attemptedRuntimeMode: "live",
+      runtimeLabel: "Hermes CMO async tool orchestration",
+      runtimeProvider: "hermes",
+      runtimeAgent: "cmo",
+      productRenderSource: "hermes_cmo",
+      hermesRequestSent: true,
+      calledHermesCmo: true,
+      hermesCmoStatus: "live",
+      delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+      cmoRunStatus: "pending",
+      cmoRunEndpoint: "/agents/cmo/tool-execute",
+      cmoRunStartedAt: now,
+      runtimeContext,
+      ...(sourceReviewContext ? { sourceReviewContext } : {}),
+      ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
+      sessionLocalSources,
+      sessionLocalResearchResults,
+      ...(activeSourceId ? { activeSourceId } : {}),
+      ...(sessionSummary ? { sessionSummary } : {}),
+      ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
+      ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
+      ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
+      ...(vaultUpdateDryRunResults.length ? { vaultUpdateDryRunResults } : {}),
+      ...(vaultUpdateWriteResults.length ? { vaultUpdateWriteResults } : {}),
+      contextDiagnostics,
+      contextQualitySummary,
+      graphHints,
+      graphHintCount,
+      graphStatus,
+      indexedContextStatus,
+      indexedContextSourcesCount,
+      ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
+      ...pendingTimingMetadata,
+      decisionLayer: pendingDecisionLayer,
+      rawCaptureStatus: "pending",
+      messages: [
+        ...(continuedSession?.messages ?? []),
+        {
+          id: messageId,
+          role: "user",
+          content: request.message,
+          createdAt: now,
+          ...messageUserMetadata(userIdentity),
+          runtimeContext,
+          ...(sourceReviewContext ? { sourceReviewContext } : {}),
+          ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
+          sessionLocalResearchResults,
+        },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: pendingAnswer,
+          createdAt: now,
+          ...assistantSourceMetadata(userIdentity, messageId),
+          runtimeMode: "live",
+          runtimeStatus: "live",
+          runtimeProvider: "hermes",
+          runtimeAgent: "cmo",
+          productRenderSource: "hermes_cmo",
+          hermesRequestSent: true,
+          calledHermesCmo: true,
+          hermesCmoStatus: "live",
+          delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+          cmoRunStatus: "pending",
+          cmoRunEndpoint: "/agents/cmo/tool-execute",
+          cmoRunStartedAt: now,
+          runtimeContext,
+          ...(sourceReviewContext ? { sourceReviewContext } : {}),
+          ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
+          sessionLocalSources,
+          sessionLocalResearchResults,
+          contextUsedCount: contextUsed.length,
+          graphHintCount,
+          indexedContextStatus,
+          indexedContextSourcesCount,
+          ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
+          ...pendingTimingMetadata,
+        },
+      ],
+    };
+
+    await writeJsonFile(sessionPath(sessionId), pendingSession);
+
+    const completeAsyncHermesCmoToolRun = async () => {
+      const runningAt = new Date().toISOString();
+      await writeJsonFile(sessionPath(sessionId), {
+        ...pendingSession,
+        status: "running",
+        updatedAt: runningAt,
+        cmoRunStatus: "running",
+        messages: pendingSession.messages.map((message) => message.id === assistantId ? { ...message, cmoRunStatus: "running" } : message),
+      });
+
+      const runStartedMs = Date.now();
+      const runStartedAt = runningAt;
+      let finalSession: CMOChatSession;
+
+      try {
+        const hermesRequest = mapCmoChatToHermesCmoRequest({
+          contextPack: contextPackage.contextPack,
+          contextPackage,
+          message: request.message,
+          history: continuedSession?.messages ?? [],
+          request,
+          contextUsed,
+          missingContext,
+          sessionId,
+          userMessageId: messageId,
+          createdAt: now,
+          userIdentity,
+        });
+        const hermesResult = await runHermesCmoRuntime(hermesRequest);
+        const counterValidation = validateHermesCmoChatCounters(hermesResult);
+
+        if (!counterValidation.ok) {
+          throw new Error(counterValidation.errorReason ?? "invalid_counters_schema");
+        }
+
+        const mappedHermesResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesResult));
+        const completedAt = new Date().toISOString();
+        const durationMs = Date.now() - runStartedMs;
+        const toolsUsed = safeCmoRunToolsUsed(mappedHermesResult.hermesCmoMetadata.agentsUsed);
+        const completedResearchResults = mergeSessionLocalResearchResults(
+          sessionLocalResearchResults,
+          sessionLocalResearchResultFromHermesResult({
+            hermesResult,
+            tenantId: requestTenantId,
+            workspaceId: request.workspaceId,
+            appId: request.appId,
+            userId: requestUserId,
+            sessionId,
+            turnId: messageId,
+            createdAt: now,
+            userQuestion: request.message,
+          }),
+        );
+        const completedDecisionLayer = buildDecisionLayer({
+          workspaceId: request.workspaceId,
+          appId: request.appId,
+          sourceId: contextPackage.sourceId,
+          sessionId,
+          createdAt: completedAt,
+          answer: mappedHermesResult.answer,
+          runtimeAssumptions: mappedHermesResult.assumptions,
+          runtimeSuggestedActions: mappedHermesResult.suggestedActions,
+        });
+        const completionMetadata = {
+          liveAttemptStartedAt: runStartedAt,
+          liveAttemptDurationMs: durationMs,
+          totalDurationMs: Date.now() - requestStartedMs,
+          cmoRunStatus: "completed" as const,
+          cmoRunEndpoint: "/agents/cmo/tool-execute" as const,
+          ...(toolsUsed?.length ? { cmoRunToolsUsed: toolsUsed } : {}),
+          cmoRunStartedAt: runStartedAt,
+          cmoRunCompletedAt: completedAt,
+          cmoRunDurationMs: durationMs,
+        };
+
+        finalSession = {
+          ...pendingSession,
+          status: "completed",
+          updatedAt: completedAt,
+          assumptions: mappedHermesResult.assumptions,
+          suggestedActions: mappedHermesResult.suggestedActions,
+          isDevelopmentFallback: mappedHermesResult.isDevelopmentFallback,
+          isRuntimeFallback: mappedHermesResult.isRuntimeFallback,
+          runtimeStatus: mappedHermesResult.runtimeStatus,
+          runtimeMode: mappedHermesResult.runtimeMode,
+          runtimeLabel: mappedHermesResult.runtimeLabel,
+          runtimeProvider: mappedHermesResult.runtimeProvider,
+          runtimeAgent: mappedHermesResult.runtimeAgent,
+          hermesCmoStatus: mappedHermesResult.hermesCmoStatus,
+          hermesCmoCounters: mappedHermesResult.hermesCmoCounters,
+          hermesCmoMetadata: mappedHermesResult.hermesCmoMetadata,
+          strategyMode: mappedHermesResult.hermesCmoMetadata.strategyMode,
+          mainBottleneck: mappedHermesResult.hermesCmoMetadata.mainBottleneck,
+          decisionLabel: mappedHermesResult.hermesCmoMetadata.decisionLabel,
+          currentStep: mappedHermesResult.hermesCmoMetadata.currentStep,
+          activityEvents: mappedHermesResult.hermesCmoMetadata.activityEvents,
+          delegationSummary: mappedHermesResult.hermesCmoMetadata.delegationSummary,
+          agentsUsed: mappedHermesResult.hermesCmoMetadata.agentsUsed,
+          surfCalls: mappedHermesResult.hermesCmoMetadata.surfCalls,
+          echoCalls: mappedHermesResult.hermesCmoMetadata.echoCalls,
+          forbiddenCounters: mappedHermesResult.hermesCmoMetadata.forbiddenCounters,
+          delegationsMode: mappedHermesResult.delegationsMode,
+          sessionLocalResearchResults: completedResearchResults,
+          decisionLayer: completedDecisionLayer,
+          rawCaptureStatus: "pending",
+          ...completionMetadata,
+          messages: pendingSession.messages.map((message) => message.id === assistantId ? {
+            ...message,
+            content: mappedHermesResult.answer,
+            runtimeStatus: mappedHermesResult.runtimeStatus,
+            runtimeMode: mappedHermesResult.runtimeMode,
+            runtimeProvider: mappedHermesResult.runtimeProvider,
+            runtimeAgent: mappedHermesResult.runtimeAgent,
+            hermesCmoStatus: mappedHermesResult.hermesCmoStatus,
+            hermesCmoCounters: mappedHermesResult.hermesCmoCounters,
+            hermesCmoMetadata: mappedHermesResult.hermesCmoMetadata,
+            strategyMode: mappedHermesResult.hermesCmoMetadata.strategyMode,
+            mainBottleneck: mappedHermesResult.hermesCmoMetadata.mainBottleneck,
+            decisionLabel: mappedHermesResult.hermesCmoMetadata.decisionLabel,
+            currentStep: mappedHermesResult.hermesCmoMetadata.currentStep,
+            activityEvents: mappedHermesResult.hermesCmoMetadata.activityEvents,
+            delegationSummary: mappedHermesResult.hermesCmoMetadata.delegationSummary,
+            agentsUsed: mappedHermesResult.hermesCmoMetadata.agentsUsed,
+            surfCalls: mappedHermesResult.hermesCmoMetadata.surfCalls,
+            echoCalls: mappedHermesResult.hermesCmoMetadata.echoCalls,
+            forbiddenCounters: mappedHermesResult.hermesCmoMetadata.forbiddenCounters,
+            delegationsMode: mappedHermesResult.delegationsMode,
+            sessionLocalResearchResults: completedResearchResults,
+            ...completionMetadata,
+          } : message),
+        };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "Hermes CMO tool run failed.";
+        const completedAt = new Date().toISOString();
+        const durationMs = Date.now() - runStartedMs;
+        const runStatus: CmoAsyncToolRunStatus = isTimedOutHermesError(reason) ? "timed_out" : "failed";
+        const safeAnswer = failedToolRunAnswer();
+        const failedDecisionLayer = buildDecisionLayer({
+          workspaceId: request.workspaceId,
+          appId: request.appId,
+          sourceId: contextPackage.sourceId,
+          sessionId,
+          createdAt: completedAt,
+          answer: safeAnswer,
+          runtimeAssumptions: [],
+          runtimeSuggestedActions: [],
+        });
+        const failureMetadata = {
+          liveAttemptStartedAt: runStartedAt,
+          liveAttemptDurationMs: durationMs,
+          totalDurationMs: Date.now() - requestStartedMs,
+          cmoRunStatus: runStatus,
+          cmoRunEndpoint: "/agents/cmo/tool-execute" as const,
+          cmoRunStartedAt: runStartedAt,
+          cmoRunCompletedAt: completedAt,
+          cmoRunDurationMs: durationMs,
+        };
+
+        finalSession = {
+          ...pendingSession,
+          status: runStatus,
+          updatedAt: completedAt,
+          runtimeStatus: "runtime_error",
+          runtimeMode: "configured_but_unreachable",
+          runtimeError: reason,
+          runtimeErrorReason: runStatus === "timed_out" ? "timeout" : "execution_error",
+          productFallbackReason: "async_tool_run_failed",
+          hermesCmoErrorReason: reason,
+          decisionLayer: failedDecisionLayer,
+          rawCaptureStatus: "pending",
+          ...failureMetadata,
+          messages: pendingSession.messages.map((message) => message.id === assistantId ? {
+            ...message,
+            content: safeAnswer,
+            runtimeStatus: "runtime_error",
+            runtimeMode: "configured_but_unreachable",
+            runtimeErrorReason: runStatus === "timed_out" ? "timeout" : "execution_error",
+            productFallbackReason: "async_tool_run_failed",
+            hermesCmoErrorReason: reason,
+            ...failureMetadata,
+          } : message),
+        };
+      }
+
+      await writeJsonFile(sessionPath(sessionId), finalSession);
+    };
+
+    void completeAsyncHermesCmoToolRun().catch((error) => {
+      console.warn("[cmo-app-chat] Async Hermes CMO tool run failed after pending response.", {
+        appId: request.appId,
+        sessionId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    });
+
+    return {
+      messageId: assistantId,
+      sessionId,
+      status: "pending",
+      answer: pendingAnswer,
+      assumptions: [],
+      suggestedActions: [],
+      contextUsed,
+      missingContext,
+      isDevelopmentFallback: false,
+      isRuntimeFallback: false,
+      runtimeStatus: "live",
+      runtimeMode: "live",
+      attemptedRuntimeMode: "live",
+      runtimeLabel: "Hermes CMO async tool orchestration",
+      runtimeProvider: "hermes",
+      runtimeAgent: "cmo",
+      productRenderSource: "hermes_cmo",
+      hermesRequestSent: true,
+      calledHermesCmo: true,
+      hermesCmoStatus: "live",
+      delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+      cmoRunStatus: "pending",
+      cmoRunEndpoint: "/agents/cmo/tool-execute",
+      cmoRunStartedAt: now,
+      contextDiagnostics,
+      contextQualitySummary,
+      graphHints,
+      graphHintCount,
+      graphStatus,
+      indexedContextStatus,
+      indexedContextSourcesCount,
+      ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
+      ...pendingTimingMetadata,
+      decisionLayer: pendingDecisionLayer,
+      rawCaptureStatus: "pending",
+    };
+  }
 
   if (hermesCmoChatV11Requested) {
     const hermesStartedAt = new Date().toISOString();

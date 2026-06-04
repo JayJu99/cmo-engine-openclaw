@@ -1186,7 +1186,7 @@ const startServer = async () => {
           }
 
           if (m44eExternalResearchFixture && cmoCallCount === 1) {
-            assert.equal(url.pathname, "/agents/cmo/execute");
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
             assert.equal(body.user_message, body.intent?.user_message);
             assert.equal(body.message, body.intent?.user_message);
             assert.equal(body.input?.user_message, body.intent?.user_message);
@@ -1251,7 +1251,7 @@ const startServer = async () => {
           }
 
           if (m44eSurfSafeFailFixture && cmoCallCount === 1) {
-            assert.equal(url.pathname, "/agents/cmo/execute");
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
             assert.equal(body.constraints?.allowSurfExecution, true);
             assert.deepEqual(body.constraints?.allowed_agents, ["echo", "surf"]);
             assert.equal(body.constraints?.execution_boundary?.surf_execution_allowed, true);
@@ -1309,7 +1309,7 @@ const startServer = async () => {
           }
 
           if (m44e6ResearchFollowupFixture) {
-            assert.equal(url.pathname, "/agents/cmo/execute");
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
             assert.equal(body.constraints?.allowSurfExecution, false);
             assert.equal(body.constraints?.delegations_mode, "proposals_only");
             assert.equal(body.source_acquisition?.research_followup_requested, undefined);
@@ -1980,7 +1980,7 @@ const startServer = async () => {
         }
 
         if (body.request_id === "req_m44e_external_research_active_source" && cmoCallCount === 2) {
-          assert.equal(url.pathname, "/agents/cmo/execute");
+          assert.equal(url.pathname, "/agents/cmo/tool-execute");
           assert.equal(body.context_pack?.artifacts_in?.at(-1)?.type, "cmo_engine_delegation_results");
           writeJson(
             response,
@@ -4140,8 +4140,8 @@ try {
 
     const surfCallsBeforeExternalResearch = server.calls.surfUnified;
     const m44eExternalResearchResult = await runHermesCmoRuntime(m44eExternalResearchRequest("req_m44e_external_research_active_source"));
-    assert.equal(m44eExternalResearchResult.hermesCmoAgentPath, "/agents/cmo/execute");
-    assert.equal(m44eExternalResearchResult.hermesCmoEndpointKind, "execute");
+    assert.equal(m44eExternalResearchResult.hermesCmoAgentPath, "/agents/cmo/tool-execute");
+    assert.equal(m44eExternalResearchResult.hermesCmoEndpointKind, "tool_execute");
     assert.equal(m44eExternalResearchResult.response.answer_basis.mode, "external_research");
     assert.equal(m44eExternalResearchResult.response.structured_output?.classification, "external_research");
     assert.match(m44eExternalResearchResult.response.answer?.body ?? "", /Surf-backed answer/);
@@ -4174,8 +4174,8 @@ try {
     assert.equal(m44eSurfRequest.sourceContext?.active_source_url, "https://feeback.org");
 
     const m44eSurfSafeFailResult = await runHermesCmoRuntime(m44eExternalResearchRequest("req_m44e_surf_safe_failure"));
-    assert.equal(m44eSurfSafeFailResult.hermesCmoAgentPath, "/agents/cmo/execute");
-    assert.equal(m44eSurfSafeFailResult.hermesCmoEndpointKind, "execute");
+    assert.equal(m44eSurfSafeFailResult.hermesCmoAgentPath, "/agents/cmo/tool-execute");
+    assert.equal(m44eSurfSafeFailResult.hermesCmoEndpointKind, "tool_execute");
     assert.equal(m44eSurfSafeFailResult.surfCalls, 1);
     assert.equal(m44eSurfSafeFailResult.delegationSummary[0].mode, "surf.default");
     assert.equal(m44eSurfSafeFailResult.delegationSummary[0].status, "failed");
@@ -4187,8 +4187,8 @@ try {
     assert.match(m44eSurfSafeFailResult.response.answer?.body ?? "", /surf_contract_missing_query/);
 
     const m44e6ResearchFollowupTableResult = await runHermesCmoRuntime(m44e6ResearchFollowupRequest("req_m44e6_research_followup_table"));
-    assert.equal(m44e6ResearchFollowupTableResult.hermesCmoAgentPath, "/agents/cmo/execute");
-    assert.equal(m44e6ResearchFollowupTableResult.hermesCmoEndpointKind, "execute");
+    assert.equal(m44e6ResearchFollowupTableResult.hermesCmoAgentPath, "/agents/cmo/tool-execute");
+    assert.equal(m44e6ResearchFollowupTableResult.hermesCmoEndpointKind, "tool_execute");
     assert.equal(m44e6ResearchFollowupTableResult.surfCalls, 0);
     assert.equal(m44e6ResearchFollowupTableResult.response.answer_basis.schema_version, "cmo.answer_basis.v1");
     assert.equal(m44e6ResearchFollowupTableResult.response.answer_basis.mode, "session_research_artifact");
@@ -4208,7 +4208,7 @@ try {
         "Trong 5 bên đó, bên nào giống Hold Pay nhất nếu xét merchant payout API + local fiat rail?",
       ),
     );
-    assert.equal(m44e6ResearchFollowupRankResult.hermesCmoAgentPath, "/agents/cmo/execute");
+    assert.equal(m44e6ResearchFollowupRankResult.hermesCmoAgentPath, "/agents/cmo/tool-execute");
     assert.equal(m44e6ResearchFollowupRankResult.surfCalls, 0);
     assert.equal(m44e6ResearchFollowupRankResult.response.answer_basis.mode, "session_research_artifact");
     assert.equal(m44e6ResearchFollowupRankResult.response.context_resolution?.semantic_intent?.primary, "research_followup");

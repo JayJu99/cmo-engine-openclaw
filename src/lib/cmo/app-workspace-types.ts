@@ -1077,6 +1077,8 @@ export type CMORuntimeStatus =
   | "runtime_error"
   | "not_configured";
 
+export type CmoAsyncToolRunStatus = "pending" | "running" | "completed" | "failed" | "timed_out";
+
 export interface CMOChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -1117,6 +1119,12 @@ export interface CMOChatMessage {
   delegationsMode?: HermesCmoDelegationsMode;
   vaultAgentDryRun?: VaultAgentDryRunMetadata;
   vaultAgentContextPack?: VaultAgentContextPackMetadata;
+  cmoRunStatus?: CmoAsyncToolRunStatus;
+  cmoRunEndpoint?: "/agents/cmo/tool-execute";
+  cmoRunToolsUsed?: HermesCmoAgentUsed[];
+  cmoRunStartedAt?: string;
+  cmoRunCompletedAt?: string;
+  cmoRunDurationMs?: number;
   contextUsedCount?: number;
   graphHintCount?: number;
   indexedContextStatus?: CmoIndexedContextStatus;
@@ -1230,7 +1238,7 @@ export interface CMOChatSession {
   createdByEmail?: string;
   messages: CMOChatMessage[];
   contextUsed: VaultNoteRef[];
-  status: "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "timed_out";
   createdAt: string;
   updatedAt: string;
   isDevelopmentFallback?: boolean;
@@ -1265,6 +1273,12 @@ export interface CMOChatSession {
   delegationsMode?: HermesCmoDelegationsMode;
   vaultAgentDryRun?: VaultAgentDryRunMetadata;
   vaultAgentContextPack?: VaultAgentContextPackMetadata;
+  cmoRunStatus?: CmoAsyncToolRunStatus;
+  cmoRunEndpoint?: "/agents/cmo/tool-execute";
+  cmoRunToolsUsed?: HermesCmoAgentUsed[];
+  cmoRunStartedAt?: string;
+  cmoRunCompletedAt?: string;
+  cmoRunDurationMs?: number;
   missingContext?: VaultNoteRef[];
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
@@ -1330,7 +1344,7 @@ export interface CMOAppChatRequest {
 export interface CMOAppChatResponse {
   messageId: string;
   sessionId: string;
-  status: "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "timed_out";
   answer: string;
   assumptions: string[];
   suggestedActions: Array<{
@@ -1369,6 +1383,12 @@ export interface CMOAppChatResponse {
   forbiddenCounters?: HermesCmoForbiddenCounters;
   platformPersistenceSummary?: HermesCmoPlatformPersistenceSummary;
   delegationsMode?: HermesCmoDelegationsMode;
+  cmoRunStatus?: CmoAsyncToolRunStatus;
+  cmoRunEndpoint?: "/agents/cmo/tool-execute";
+  cmoRunToolsUsed?: HermesCmoAgentUsed[];
+  cmoRunStartedAt?: string;
+  cmoRunCompletedAt?: string;
+  cmoRunDurationMs?: number;
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
   graphHints?: ContextGraphHint[];

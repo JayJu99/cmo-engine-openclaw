@@ -131,7 +131,7 @@ export function getCmoHermesCmoToolEndpoint(): string {
 }
 
 export function getCmoHermesCmoToolTimeoutMs(): number {
-  return positiveIntEnv("CMO_HERMES_CMO_TOOL_TIMEOUT_MS", 90_000);
+  return positiveIntEnv("CMO_HERMES_CMO_TOOL_TIMEOUT_MS", 240_000);
 }
 
 export function getCmoVaultAgentHandoffMode(): CmoVaultAgentHandoffMode {

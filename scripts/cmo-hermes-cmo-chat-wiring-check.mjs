@@ -517,6 +517,9 @@ try {
 
     await withEnv(
       {
+        CMO_HERMES_CMO_CHAT_ENABLED: "true",
+        CMO_HERMES_CMO_CANARY_APPS: "hold-pay",
+        CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED: "true",
         CMO_HERMES_CMO_CHAT_V11_ENABLED: "true",
         CMO_HERMES_CMO_CHAT_V11_CANARY_APPS: "hold-pay",
         CMO_HERMES_CMO_CHAT_V11_FALLBACK_ENABLED: "true",
@@ -571,7 +574,7 @@ try {
           appId: "hold-pay",
           message: "/surf Research merchant payout API positioning for Hold Pay",
         });
-        assert.equal(surfResearchIntent.endpoint, "/agents/cmo/chat", "routeIntent surf_research must not override Hold Pay v1.1 canary chat");
+        assert.equal(surfResearchIntent.endpoint, "/agents/cmo/chat", "routeIntent surf_research must stay on v1.1 chat until tool-chat canary is enabled");
         assert.equal(surfResearchIntent.endpointKind, "agent_chat");
 
         const forcedFallback = router.resolveHermesCmoChatRoute({
@@ -3199,7 +3202,7 @@ try {
     assert.match(hermesRuntimeSource, /user_message: userMessage/);
     assert.match(hermesRuntimeSource, /input: \{/);
     assert.match(hermesRuntimeSource, /externalResearchTextPattern/);
-    assert.match(hermesRuntimeSource, /toolChatCanaryEnabled \|\| \(toolEndpointEnabled && !externalResearch && requestIsSourceBackedOrSeeking/);
+    assert.match(hermesRuntimeSource, /toolChatCanaryEnabled \|\| \(toolEndpointEnabled && \(externalResearch \|\| requestIsSourceBackedOrSeeking/);
     assert.match(hermesRuntimeSource, /isCmoHermesCmoToolChatEnabled/);
     assert.match(hermesRuntimeSource, /getCmoHermesCmoToolChatCanaryApps/);
     assert.match(hermesRuntimeSource, /toolEndpointRequest/);

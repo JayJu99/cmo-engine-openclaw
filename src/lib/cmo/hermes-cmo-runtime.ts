@@ -1293,7 +1293,7 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest): HermesCmoAge
   const toolChatCanaryEnabled = isCmoHermesCmoToolChatEnabled() &&
     appIsConfiguredCanary(request.workspace.app_id, getCmoHermesCmoToolChatCanaryApps());
   const externalResearch = requestIsExternalResearch(request);
-  const useToolEndpoint = toolChatCanaryEnabled || (toolEndpointEnabled && !externalResearch && requestIsSourceBackedOrSeeking(request));
+  const useToolEndpoint = toolChatCanaryEnabled || (toolEndpointEnabled && (externalResearch || requestIsSourceBackedOrSeeking(request)));
   const configuredToolEndpoint = getCmoHermesCmoToolEndpoint();
   const endpointPath = useToolEndpoint ? endpointPathFromConfig(configuredToolEndpoint) : HERMES_CMO_AGENT_PATH;
   const timeoutMs = useToolEndpoint ? getCmoHermesCmoToolTimeoutMs() : hermesTimeoutMs();
