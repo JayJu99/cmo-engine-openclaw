@@ -12,8 +12,8 @@ const mapperSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "her
 const runtimeSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-runtime.ts"), "utf8");
 const routerSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-chat-router.ts"), "utf8");
 const vaultAutoCaptureSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "vault-auto-capture.ts"), "utf8");
-const vaultAgentHandoffSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "vault-agent-handoff-builder.ts"), "utf8");
 const pendingToolRunAnswerSource = appChatStoreSource.match(/function pendingToolRunAnswer\(\): string \{[\s\S]*?\n\}/)?.[0] ?? "";
+const rawActivityRequestSource = appChatStoreSource.match(/function asyncRawActivityLogRequest[\s\S]*?async function readHermesRawActivityJson/)?.[0] ?? "";
 const asyncRawActivityHookSource = appChatStoreSource.match(/async function attachAsyncToolRunRawActivityLog[\s\S]*?function asyncToolRunReplayHistory/)?.[0] ?? "";
 const chatPanelSource = await readFile(path.join(rootDir, "src", "components", "cmo-apps", "cmo-chat-panel.tsx"), "utf8");
 const sendMessagePreSuccessSource = chatPanelSource.match(/async function sendMessage\(\) \{[\s\S]*?const response = await readJsonResponse/)?.[0] ?? "";
@@ -57,17 +57,23 @@ assert.match(appChatStoreSource, /message\.id === pendingAssistantId/, "async re
 assert.match(appChatStoreSource, /content: mappedHermesResult\.answer/, "stored assistant session content must use the final mapped CMO answer");
 assert.match(appChatStoreSource, /CMO could not complete the research run\. Try narrowing the request or retry\./, "failure/timed-out final copy must be safe and natural");
 assert.doesNotMatch(appChatStoreSource, /JSON\.stringify\(hermesResult\.response\)|JSON\.stringify\(mappedHermesResult\)/, "normal UI must not stringify raw Hermes/Surf/Echo JSON");
+assert.match(appChatStoreSource, /VAULT_AGENT_RAW_ACTIVITY_LOG_ENDPOINT = "\/agents\/vault-agent\/raw-activity-log"/, "async raw logging must target the raw activity runtime endpoint");
+assert.match(appChatStoreSource, /vault_agent\.raw_activity_log\.request\.v1/, "async raw logging must build the raw activity request schema");
 assert.match(appChatStoreSource, /attachAsyncToolRunRawActivityLog/, "async completion must attach raw activity logging metadata");
 assert.match(appChatStoreSource, /finalSession\.status === "completed"[\s\S]*attachAsyncToolRunRawActivityLog/, "raw activity logging must only run for completed async tool runs");
-assert.match(asyncRawActivityHookSource, /runVaultAgentDryRunHandoff/, "async raw logging must reuse the Vault Agent turn-log handoff path");
+assert.match(asyncRawActivityHookSource, /callVaultAgentRawActivityLog/, "async raw logging must call the raw activity endpoint");
+assert.doesNotMatch(asyncRawActivityHookSource, /runVaultAgentDryRunHandoff|autoCaptureTurnOnce|write-turn-log|Turn Logs|03 Sessions/, "async raw logging must not use legacy turn-log handoff or auto-capture");
 assert.match(asyncRawActivityHookSource, /input\.session\.status !== "completed"[\s\S]*return input\.session/, "raw logging helper must skip non-terminal pending/running runs");
-assert.match(asyncRawActivityHookSource, /vaultAgentDryRunMetadataForPersistence\(asyncRawActivityHandoff\)/, "async raw logging must persist sanitized handoff metadata only");
-assert.match(asyncRawActivityHookSource, /rawCapturePath = asyncRawActivityMetadata\.vault_target_path \?\? asyncRawActivityMetadata\.dry_run_target_path/, "async raw logging must persist the Vault Agent target path");
+assert.match(asyncRawActivityHookSource, /rawCapturePath = receipt\.vault_path/, "async raw logging must persist the raw activity runtime path");
 assert.match(asyncRawActivityHookSource, /catch \(error\)[\s\S]*rawCaptureStatus: "failed"/, "raw logging failure must be stored as metadata");
 assert.doesNotMatch(asyncRawActivityHookSource, /throw error|throw new Error/, "raw logging failure must not break final async answer");
-assert.match(vaultAgentHandoffSource, /workspace_id:\s*vaultWorkspaceIdForRequest\(input\.request\)/, "Vault Agent turn package must target the selected workspace id");
-assert.match(vaultAgentHandoffSource, /no_auto_promote:\s*true/, "Vault Agent turn package must keep no_auto_promote true");
-assert.match(vaultAgentHandoffSource, /gbrain_called:\s*false/, "Vault Agent write metadata must not call GBrain");
+assert.match(rawActivityRequestSource, /workspace_id: input\.request\.workspaceId/, "raw activity payload must target the selected workspace id");
+assert.match(rawActivityRequestSource, /activity_text: `User: \$\{input\.request\.message\}\\n\\nCMO: \$\{input\.answer\}`/, "raw activity payload must include user prompt and final CMO answer");
+assert.match(rawActivityRequestSource, /source_endpoint: "\/agents\/cmo\/tool-execute"/, "raw activity link metadata must preserve source endpoint");
+assert.match(rawActivityRequestSource, /cmo_run_endpoint: "\/agents\/cmo\/tool-execute"/, "raw activity link metadata must preserve CMO run endpoint");
+assert.match(appChatStoreSource, /receipt\.deduped === true/, "deduped raw activity receipt must be accepted");
+assert.match(appChatStoreSource, /receipt\.knowledge_write === true[\s\S]*receipt\.accepted_knowledge_write === true[\s\S]*receipt\.promotion_performed === true[\s\S]*receipt\.gbrain_indexed === true/, "raw activity receipt must reject forbidden mutation signals");
+assert.doesNotMatch(rawActivityRequestSource, /html|raw_html|source_text|extracted_text|ocr_text|pdf_text|fetched_content|source_auto_save|knowledge_promotion/, "raw activity request path must not pass forbidden extraction/source fields");
 assert.match(vaultAutoCaptureSource, /workspaceId:\s*ctx\.request\.workspaceId/, "legacy auto-capture must use selected workspace id, not app/tenant fallback");
 assert.doesNotMatch(vaultAutoCaptureSource, /workspaceId:\s*ctx\.request\.appId/, "legacy auto-capture must not target workspace from app id");
 
@@ -143,9 +149,9 @@ console.log(JSON.stringify({
     "terminal tools_used metadata preserved",
     "composer draft survives refresh and failed submit",
     "normal sync tool timeout remains configurable",
-    "completed async tool run triggers raw activity handoff",
-    "pending/running async tool runs skip raw activity handoff",
-    "raw activity handoff failure is metadata-only",
+    "completed async tool run calls raw activity endpoint",
+    "pending/running async tool runs skip raw activity endpoint",
+    "raw activity endpoint failure is metadata-only",
     "raw activity package uses selected workspace id",
   ],
   defaults: {
@@ -176,7 +182,7 @@ console.log(JSON.stringify({
     sendDisabledOnlyForEmptyInputOrActiveSubmit: true,
   },
   asyncRawActivitySmoke: {
-    completedRunTriggersVaultAgentTurnLogHandoff: true,
+    completedRunCallsRawActivityLogEndpoint: true,
     nonTerminalRunsSkipped: true,
     failureDoesNotBreakFinalAnswer: true,
     aionTargetPathPrefix: "90 Runtime/Raw Activity/aion/jay/",

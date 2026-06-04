@@ -88,7 +88,7 @@ import {
 } from "@/lib/cmo/config";
 import { indexChatMessages, indexChatSession, type CmoIndexResult } from "@/lib/cmo/supabase-indexing";
 import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/lib/cmo/indexed-context-canary";
-import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
+import { legacyUserIdentity, normalizeCmoRuntimeUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { buildRuntimeContext, buildSourceReviewContextFromMessage } from "@/lib/cmo/source-acquisition";
 import {
@@ -114,6 +114,7 @@ const MAX_VAULT_UPDATE_DRY_RUN_RESULTS = 40;
 const MAX_VAULT_UPDATE_WRITE_RESULTS = 40;
 const VAULT_AGENT_APPROVED_WRITE_DRY_RUN_ENDPOINT = "/agents/vault-agent/approved-write-dry-run";
 const VAULT_AGENT_APPROVED_WRITE_ENDPOINT = "/agents/vault-agent/approved-write";
+const VAULT_AGENT_RAW_ACTIVITY_LOG_ENDPOINT = "/agents/vault-agent/raw-activity-log";
 
 export interface CmoAppChatTimingInput {
   requestReceivedAt?: string;
@@ -2250,26 +2251,6 @@ function rawCaptureErrorForAutoCapture(result: AutoCaptureResult): string | unde
   return result.error ?? result.skipReason;
 }
 
-function rawCaptureStatusForVaultAgentHandoff(metadata?: VaultAgentDryRunMetadata): CMOChatSession["rawCaptureStatus"] {
-  if (!metadata) {
-    return undefined;
-  }
-
-  if (metadata.vault_handoff_status === "completed") {
-    return "saved";
-  }
-
-  if (metadata.vault_handoff_status === "failed" || metadata.vault_handoff_status === "rejected") {
-    return "failed";
-  }
-
-  return "pending";
-}
-
-function rawCaptureErrorForVaultAgentHandoff(metadata?: VaultAgentDryRunMetadata): string | undefined {
-  return metadata?.vault_handoff_errors?.[0] ?? metadata?.vault_errors?.[0];
-}
-
 function normalizeCmoRunStatus(value: unknown): CmoAsyncToolRunStatus | undefined {
   return value === "pending" || value === "running" || value === "completed" || value === "failed" || value === "timed_out"
     ? value
@@ -2286,6 +2267,191 @@ function failedToolRunAnswer(): string {
 
 function shouldStartAsyncHermesCmoToolRun(endpointKind: string): boolean {
   return endpointKind === "tool_execute";
+}
+
+interface VaultAgentRawActivityLogRequest {
+  schema_version: "vault_agent.raw_activity_log.request.v1";
+  workspace_id: string;
+  user_id: string;
+  supabase_user_id?: string;
+  user_slug?: string;
+  user_display_name?: string;
+  email?: string;
+  session_id: string;
+  event_id: string;
+  created_at: string;
+  activity_text: string;
+  link_metadata: Array<Record<string, string>>;
+}
+
+interface VaultAgentRawActivityLogReceipt {
+  schema_version?: string;
+  status?: string;
+  raw_activity_logged?: boolean;
+  vault_write_performed?: boolean;
+  vault_path?: string;
+  deduped?: boolean;
+  knowledge_write?: boolean;
+  accepted_knowledge_write?: boolean;
+  promotion_performed?: boolean;
+  gbrain_indexed?: boolean;
+  errors?: unknown;
+  warnings?: unknown;
+}
+
+function asyncRawActivityLogRequest(input: {
+  request: CMOAppChatRequest;
+  session: CMOChatSession;
+  userIdentity: CmoServerUserIdentity;
+  userMessageId: string;
+  assistantMessageId: string;
+  answer: string;
+  createdAt: string;
+}): VaultAgentRawActivityLogRequest {
+  const runtimeUser = normalizeCmoRuntimeUserIdentity(input.userIdentity);
+  const userId = input.userIdentity.userId ?? input.session.userId ?? runtimeUser.user_id ?? "unknown_user";
+
+  return {
+    schema_version: "vault_agent.raw_activity_log.request.v1",
+    workspace_id: input.request.workspaceId,
+    user_id: userId,
+    ...(input.userIdentity.userId ? { supabase_user_id: input.userIdentity.userId } : {}),
+    user_slug: runtimeUser.user_slug,
+    ...(runtimeUser.user_display_name ? { user_display_name: runtimeUser.user_display_name } : {}),
+    ...(runtimeUser.email ? { email: runtimeUser.email } : {}),
+    session_id: input.session.id,
+    event_id: input.assistantMessageId,
+    created_at: input.createdAt,
+    activity_text: `User: ${input.request.message}\n\nCMO: ${input.answer}`,
+    link_metadata: [
+      {
+        source_endpoint: "/agents/cmo/tool-execute",
+        cmo_run_endpoint: "/agents/cmo/tool-execute",
+        turn_id: input.userMessageId,
+        run_id: input.assistantMessageId,
+      },
+    ],
+  };
+}
+
+async function readHermesRawActivityJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+
+  if (!text.trim()) {
+    throw new Error("Hermes Vault Agent raw-activity-log returned an empty response.");
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error("Hermes Vault Agent raw-activity-log returned malformed JSON.");
+  }
+}
+
+function normalizeRawActivityReceipt(value: unknown): VaultAgentRawActivityLogReceipt {
+  const payload = isRecord(value) && isRecord(value.raw_activity_log) ? value.raw_activity_log : value;
+
+  if (!isRecord(payload)) {
+    throw new Error("Hermes Vault Agent raw-activity-log response was malformed.");
+  }
+
+  const receipt: VaultAgentRawActivityLogReceipt = {
+    schema_version: typeof payload.schema_version === "string" ? payload.schema_version : undefined,
+    status: typeof payload.status === "string" ? payload.status : undefined,
+    raw_activity_logged: typeof payload.raw_activity_logged === "boolean" ? payload.raw_activity_logged : undefined,
+    vault_write_performed: typeof payload.vault_write_performed === "boolean" ? payload.vault_write_performed : undefined,
+    vault_path: typeof payload.vault_path === "string" ? payload.vault_path : undefined,
+    deduped: typeof payload.deduped === "boolean" ? payload.deduped : undefined,
+    knowledge_write: typeof payload.knowledge_write === "boolean" ? payload.knowledge_write : undefined,
+    accepted_knowledge_write: typeof payload.accepted_knowledge_write === "boolean" ? payload.accepted_knowledge_write : undefined,
+    promotion_performed: typeof payload.promotion_performed === "boolean" ? payload.promotion_performed : undefined,
+    gbrain_indexed: typeof payload.gbrain_indexed === "boolean" ? payload.gbrain_indexed : undefined,
+    errors: payload.errors,
+    warnings: payload.warnings,
+  };
+
+  const completed = receipt.status === "completed";
+  const logged = receipt.raw_activity_logged === true;
+  const deduped = receipt.deduped === true;
+
+  if (!completed || (!logged && !deduped)) {
+    throw new Error("Hermes Vault Agent raw-activity-log did not complete.");
+  }
+
+  if (logged) {
+    if (receipt.vault_write_performed !== true) {
+      throw new Error("Hermes Vault Agent raw-activity-log missing vault_write_performed=true.");
+    }
+
+    if (!receipt.vault_path?.startsWith("90 Runtime/Raw Activity/")) {
+      throw new Error("Hermes Vault Agent raw-activity-log returned an unsafe vault_path.");
+    }
+  }
+
+  if (receipt.vault_path && !receipt.vault_path.startsWith("90 Runtime/Raw Activity/")) {
+    throw new Error("Hermes Vault Agent raw-activity-log returned an unsafe vault_path.");
+  }
+
+  if (deduped && receipt.vault_write_performed !== false) {
+    throw new Error("Hermes Vault Agent raw-activity-log dedupe receipt must not perform a write.");
+  }
+
+  if (
+    receipt.knowledge_write === true ||
+    receipt.accepted_knowledge_write === true ||
+    receipt.promotion_performed === true ||
+    receipt.gbrain_indexed === true
+  ) {
+    throw new Error("Hermes Vault Agent raw-activity-log reported a forbidden mutation.");
+  }
+
+  return receipt;
+}
+
+async function callVaultAgentRawActivityLog(requestEnvelope: VaultAgentRawActivityLogRequest): Promise<VaultAgentRawActivityLogReceipt> {
+  const baseUrl = getCmoHermesBaseUrl();
+  const apiKey = getCmoHermesApiKey();
+  const timeoutMs = getCmoHermesTimeoutMs();
+
+  if (!baseUrl) {
+    throw new Error("CMO_HERMES_BASE_URL is not configured.");
+  }
+
+  if (!apiKey) {
+    throw new Error("CMO_HERMES_API_KEY is not configured.");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${baseUrl}${VAULT_AGENT_RAW_ACTIVITY_LOG_ENDPOINT}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(requestEnvelope),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const payload = await readHermesRawActivityJson(response);
+
+    if (!response.ok) {
+      throw new Error(`Hermes Vault Agent raw-activity-log failed with HTTP ${response.status}.`);
+    }
+
+    return normalizeRawActivityReceipt(payload);
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("Hermes Vault Agent raw-activity-log request timed out.");
+    }
+
+    throw error instanceof Error ? error : new Error("Hermes Vault Agent raw-activity-log failed.");
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function attachAsyncToolRunRawActivityLog(input: {
@@ -2307,43 +2473,20 @@ async function attachAsyncToolRunRawActivityLog(input: {
   }
 
   try {
-    const asyncRawActivityHandoff = await runVaultAgentDryRunHandoff({
-      request: input.request,
-      session: input.session,
-      userIdentity: input.userIdentity,
-      userMessageId: input.userMessageId,
-      assistantMessageId: input.assistantMessageId,
-      answer: input.answer,
-      createdAt: input.createdAt,
-      activityEvents: input.activityEvents,
-      delegationSummary: input.delegationSummary,
-      agentsUsed: input.agentsUsed,
-      surfCalls: input.surfCalls,
-      echoCalls: input.echoCalls,
-    });
-    const asyncRawActivityMetadata = vaultAgentDryRunMetadataForPersistence(asyncRawActivityHandoff);
-
-    if (!asyncRawActivityMetadata) {
-      return input.session;
-    }
-
-    const rawCaptureStatus = rawCaptureStatusForVaultAgentHandoff(asyncRawActivityMetadata);
-    const rawCaptureError = rawCaptureErrorForVaultAgentHandoff(asyncRawActivityMetadata);
-    const rawCapturePath = asyncRawActivityMetadata.vault_target_path ?? asyncRawActivityMetadata.dry_run_target_path;
+    const requestEnvelope = asyncRawActivityLogRequest(input);
+    const receipt = await callVaultAgentRawActivityLog(requestEnvelope);
+    const rawCapturePath = receipt.vault_path;
+    const rawCaptureStatus: CMOChatSession["rawCaptureStatus"] = "saved";
 
     return {
       ...input.session,
       ...(rawCapturePath ? { rawCapturePath } : {}),
-      ...(rawCaptureStatus ? { rawCaptureStatus } : {}),
-      ...(rawCaptureError ? { rawCaptureError } : {}),
-      vaultAgentDryRun: asyncRawActivityMetadata,
+      rawCaptureStatus,
       messages: input.session.messages.map((message) =>
         message.id === input.assistantMessageId ? {
           ...message,
           ...(rawCapturePath ? { rawCapturePath } : {}),
-          ...(rawCaptureStatus ? { rawCaptureStatus } : {}),
-          ...(rawCaptureError ? { rawCaptureError } : {}),
-          vaultAgentDryRun: asyncRawActivityMetadata,
+          rawCaptureStatus,
         } : message,
       ),
     };
