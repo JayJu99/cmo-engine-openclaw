@@ -283,6 +283,10 @@ interface HermesCmoAgentConfig {
   toolEndpointEnabled: boolean;
 }
 
+interface HermesCmoRuntimeOptions {
+  toolTimeoutMs?: number;
+}
+
 interface HermesCmoLivePayload {
   response: HermesCmoRuntimeResponse;
   activityEvents: HermesCmoRuntimeActivityEvent[];
@@ -1286,7 +1290,11 @@ const requestIsSourceBackedOrSeeking = (request: HermesCmoRuntimeRequest): boole
   );
 };
 
-const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest): HermesCmoAgentConfig => {
+const positiveTimeoutOverride = (value: unknown): number | undefined => {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+};
+
+const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: HermesCmoRuntimeOptions = {}): HermesCmoAgentConfig => {
   const baseUrl = process.env.CMO_HERMES_BASE_URL?.trim().replace(/\/+$/g, "") ?? "";
   const apiKey = process.env.CMO_HERMES_API_KEY?.trim() ?? "";
   const toolEndpointEnabled = isCmoHermesCmoToolExecuteEnabled();
@@ -1296,7 +1304,7 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest): HermesCmoAge
   const useToolEndpoint = toolChatCanaryEnabled || (toolEndpointEnabled && (externalResearch || requestIsSourceBackedOrSeeking(request)));
   const configuredToolEndpoint = getCmoHermesCmoToolEndpoint();
   const endpointPath = useToolEndpoint ? endpointPathFromConfig(configuredToolEndpoint) : HERMES_CMO_AGENT_PATH;
-  const timeoutMs = useToolEndpoint ? getCmoHermesCmoToolTimeoutMs() : hermesTimeoutMs();
+  const timeoutMs = useToolEndpoint ? positiveTimeoutOverride(options.toolTimeoutMs) ?? getCmoHermesCmoToolTimeoutMs() : hermesTimeoutMs();
 
   if (!envEnabled(process.env.CMO_HERMES_EXECUTION_ENABLED)) {
     throw new Error("CMO_HERMES_EXECUTION_ENABLED must be true for the live-only Hermes CMO runtime.");
@@ -2694,7 +2702,7 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
   }
 };
 
-export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRuntimeResult> {
+export async function runHermesCmoRuntime(request: unknown, options: HermesCmoRuntimeOptions = {}): Promise<HermesCmoRuntimeResult> {
   if (!validateHermesCmoRuntimeRequest(request)) {
     throw new Error("Invalid hermes.cmo.request.v1 input for M1 Hermes CMO runtime.");
   }
@@ -2708,7 +2716,7 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
   let outboundRequest = buildHermesCmoLiveRequest(request, {
     orchestrationEnabled,
   });
-  const initialConfig = selectedHermesCmoConfig(outboundRequest);
+  const initialConfig = selectedHermesCmoConfig(outboundRequest, options);
   outboundRequest = initialConfig.endpointKind === "tool_execute" ? toolEndpointRequest(outboundRequest) : outboundRequest;
 
   if (!validateHermesCmoRuntimeRequest(outboundRequest)) {
@@ -2753,7 +2761,7 @@ export async function runHermesCmoRuntime(request: unknown): Promise<HermesCmoRu
       throw new Error("M1 Hermes CMO runtime produced an invalid synthesis hermes.cmo.request.v1 envelope.");
     }
 
-    const synthesisConfig = selectedHermesCmoConfig(synthesisRequest);
+    const synthesisConfig = selectedHermesCmoConfig(synthesisRequest, options);
     const outboundSynthesisRequest = synthesisConfig.endpointKind === "tool_execute" ? toolEndpointRequest(synthesisRequest) : synthesisRequest;
     const synthesisPayload = await callHermesCmoAgent(outboundSynthesisRequest, synthesisConfig);
     return extractLiveResponsePayload(

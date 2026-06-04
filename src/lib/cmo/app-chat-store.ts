@@ -79,7 +79,13 @@ import {
 } from "@/lib/cmo/hermes-cmo-chat-v11";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
-import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs, getCmoVaultAgentHandoffMode } from "@/lib/cmo/config";
+import {
+  getCmoHermesApiKey,
+  getCmoHermesBaseUrl,
+  getCmoHermesCmoAsyncToolRunTimeoutMs,
+  getCmoHermesTimeoutMs,
+  getCmoVaultAgentHandoffMode,
+} from "@/lib/cmo/config";
 import { indexChatMessages, indexChatSession, type CmoIndexResult } from "@/lib/cmo/supabase-indexing";
 import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/lib/cmo/indexed-context-canary";
 import { legacyUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
@@ -2372,6 +2378,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             cmoRunStartedAt: normalizeOptionalString(message.cmoRunStartedAt),
             cmoRunCompletedAt: normalizeOptionalString(message.cmoRunCompletedAt),
             cmoRunDurationMs: normalizeOptionalNonNegativeNumber(message.cmoRunDurationMs),
+            cmoRunTimeoutMs: normalizeOptionalNonNegativeNumber(message.cmoRunTimeoutMs),
             contextUsedCount: typeof message.contextUsedCount === "number" && Number.isFinite(message.contextUsedCount) ? Math.max(0, Math.floor(message.contextUsedCount)) : undefined,
             graphHintCount: typeof message.graphHintCount === "number" && Number.isFinite(message.graphHintCount) ? Math.max(0, Math.floor(message.graphHintCount)) : undefined,
             indexedContextStatus: normalizeIndexedContextStatus(message.indexedContextStatus),
@@ -2494,6 +2501,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     cmoRunStartedAt: normalizeOptionalString(value.cmoRunStartedAt),
     cmoRunCompletedAt: normalizeOptionalString(value.cmoRunCompletedAt),
     cmoRunDurationMs: normalizeOptionalNonNegativeNumber(value.cmoRunDurationMs),
+    cmoRunTimeoutMs: normalizeOptionalNonNegativeNumber(value.cmoRunTimeoutMs),
     missingContext,
     contextDiagnostics,
     contextQualitySummary: normalizeContextQualitySummary(value.contextQualitySummary ?? contextDiagnostics, [...contextUsed, ...missingContext]),
@@ -2762,6 +2770,7 @@ export async function createAppChatSession(
   const vaultUpdateWriteResults = continuedSession?.vaultUpdateWriteResults ?? [];
 
   if (shouldStartAsyncHermesCmoToolRun(hermesCmoRoute.endpointKind)) {
+    const asyncToolRunTimeoutMs = getCmoHermesCmoAsyncToolRunTimeoutMs();
     const pendingAnswer = pendingToolRunAnswer();
     const pendingDecisionLayer = buildDecisionLayer({
       workspaceId: request.workspaceId,
@@ -2820,6 +2829,7 @@ export async function createAppChatSession(
       cmoRunStatus: "pending",
       cmoRunEndpoint: "/agents/cmo/tool-execute",
       cmoRunStartedAt: now,
+      cmoRunTimeoutMs: asyncToolRunTimeoutMs,
       runtimeContext,
       ...(sourceReviewContext ? { sourceReviewContext } : {}),
       ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
@@ -2874,6 +2884,7 @@ export async function createAppChatSession(
           cmoRunStatus: "pending",
           cmoRunEndpoint: "/agents/cmo/tool-execute",
           cmoRunStartedAt: now,
+          cmoRunTimeoutMs: asyncToolRunTimeoutMs,
           runtimeContext,
           ...(sourceReviewContext ? { sourceReviewContext } : {}),
           ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
@@ -2898,7 +2909,8 @@ export async function createAppChatSession(
         status: "running",
         updatedAt: runningAt,
         cmoRunStatus: "running",
-        messages: pendingSession.messages.map((message) => message.id === assistantId ? { ...message, cmoRunStatus: "running" } : message),
+        cmoRunTimeoutMs: asyncToolRunTimeoutMs,
+        messages: pendingSession.messages.map((message) => message.id === assistantId ? { ...message, cmoRunStatus: "running", cmoRunTimeoutMs: asyncToolRunTimeoutMs } : message),
       });
 
       const runStartedMs = Date.now();
@@ -2919,7 +2931,7 @@ export async function createAppChatSession(
           createdAt: now,
           userIdentity,
         });
-        const hermesResult = await runHermesCmoRuntime(hermesRequest);
+        const hermesResult = await runHermesCmoRuntime(hermesRequest, { toolTimeoutMs: asyncToolRunTimeoutMs });
         const counterValidation = validateHermesCmoChatCounters(hermesResult);
 
         if (!counterValidation.ok) {
@@ -2964,6 +2976,7 @@ export async function createAppChatSession(
           cmoRunStartedAt: runStartedAt,
           cmoRunCompletedAt: completedAt,
           cmoRunDurationMs: durationMs,
+          cmoRunTimeoutMs: asyncToolRunTimeoutMs,
         };
 
         finalSession = {
@@ -3047,6 +3060,7 @@ export async function createAppChatSession(
           cmoRunStartedAt: runStartedAt,
           cmoRunCompletedAt: completedAt,
           cmoRunDurationMs: durationMs,
+          cmoRunTimeoutMs: asyncToolRunTimeoutMs,
         };
 
         finalSession = {
@@ -3111,6 +3125,7 @@ export async function createAppChatSession(
       cmoRunStatus: "pending",
       cmoRunEndpoint: "/agents/cmo/tool-execute",
       cmoRunStartedAt: now,
+      cmoRunTimeoutMs: asyncToolRunTimeoutMs,
       contextDiagnostics,
       contextQualitySummary,
       graphHints,

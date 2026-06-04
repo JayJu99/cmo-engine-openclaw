@@ -1125,6 +1125,7 @@ export interface CMOChatMessage {
   cmoRunStartedAt?: string;
   cmoRunCompletedAt?: string;
   cmoRunDurationMs?: number;
+  cmoRunTimeoutMs?: number;
   contextUsedCount?: number;
   graphHintCount?: number;
   indexedContextStatus?: CmoIndexedContextStatus;
@@ -1279,6 +1280,7 @@ export interface CMOChatSession {
   cmoRunStartedAt?: string;
   cmoRunCompletedAt?: string;
   cmoRunDurationMs?: number;
+  cmoRunTimeoutMs?: number;
   missingContext?: VaultNoteRef[];
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
