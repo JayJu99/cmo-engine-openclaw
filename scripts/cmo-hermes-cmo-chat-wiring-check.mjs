@@ -520,6 +520,8 @@ try {
         CMO_HERMES_CMO_CHAT_V11_ENABLED: "true",
         CMO_HERMES_CMO_CHAT_V11_CANARY_APPS: "hold-pay",
         CMO_HERMES_CMO_CHAT_V11_FALLBACK_ENABLED: "true",
+        CMO_HERMES_CMO_TOOL_CHAT_ENABLED: "false",
+        CMO_HERMES_CMO_TOOL_CHAT_CANARY_APPS: undefined,
       },
       async () => {
         assert.equal(
@@ -528,12 +530,12 @@ try {
           "v1.1 canary flag is intentionally independent from legacy CMO_HERMES_CMO_CHAT_ENABLED",
         );
 
-        const holdPayMarketResearch = router.resolveHermesCmoChatRoute({
+        const normalChatWithoutToolCanary = router.resolveHermesCmoChatRoute({
           appId: "hold-pay",
           message: "Research the merchant payout API market and tell me where Hold Pay should focus.",
         });
-        assert.equal(holdPayMarketResearch.endpoint, "/agents/cmo/chat", "Hold Pay normal market research must route to /agents/cmo/chat");
-        assert.equal(holdPayMarketResearch.endpointKind, "agent_chat");
+        assert.equal(normalChatWithoutToolCanary.endpoint, "/agents/cmo/chat", "Hold Pay normal chat without tool-chat canary must route to /agents/cmo/chat");
+        assert.equal(normalChatWithoutToolCanary.endpointKind, "agent_chat");
 
         const holdPayCasual = router.resolveHermesCmoChatRoute({
           appId: "hold-pay",
