@@ -12,6 +12,8 @@ const mapperSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "her
 const runtimeSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-runtime.ts"), "utf8");
 const routerSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-chat-router.ts"), "utf8");
 const pendingToolRunAnswerSource = appChatStoreSource.match(/function pendingToolRunAnswer\(\): string \{[\s\S]*?\n\}/)?.[0] ?? "";
+const chatPanelSource = await readFile(path.join(rootDir, "src", "components", "cmo-apps", "cmo-chat-panel.tsx"), "utf8");
+const sendMessagePreSuccessSource = chatPanelSource.match(/async function sendMessage\(\) \{[\s\S]*?const response = await readJsonResponse/)?.[0] ?? "";
 
 assert.match(
   appWorkspaceTypesSource,
@@ -50,6 +52,7 @@ assert.match(mapperSource, /messages: recentConversationMessages\(input\.history
 assert.match(mapperSource, /const MAX_REPLAY_MESSAGES = 16/, "recent message replay must be bounded");
 assert.match(mapperSource, /isPendingToolRunPlaceholder/, "request mapper must filter pending assistant placeholders");
 assert.match(mapperSource, /CMO is working/, "pending placeholder content must be excluded from semantic replay");
+assert.match(mapperSource, /traceSummary\.tools_used/, "mapper must read tool_trace_summary.tools_used fallback");
 
 assert.match(activityPanelSource, /Surf Agent/, "activity timeline must render Surf with a friendly label");
 assert.match(activityPanelSource, /Echo Agent/, "activity timeline must render Echo with a friendly label");
@@ -57,9 +60,18 @@ assert.match(activityPanelSource, /friendlyToolsUsed/, "activity timeline must d
 assert.match(activityPanelSource, /cmo_call_surf/, "activity timeline must map cmo_call_surf metadata");
 assert.match(activityPanelSource, /cmo_call_echo/, "activity timeline must map cmo_call_echo metadata");
 assert.match(activityPanelSource, /toolMetadataRows/, "activity timeline must render completed specialist rows from terminal tool metadata");
+assert.match(activityPanelSource, /hasFriendlyTools/, "activity timeline must render even when only terminal tool metadata is present");
 assert.match(activityPanelSource, /statusLabel/, "activity timeline must use product-friendly status labels");
 assert.doesNotMatch(activityPanelSource, /label:\s*["'`]cmo_call_(surf|echo)/, "activity timeline labels must not expose raw tool names");
 assert.doesNotMatch(activityPanelSource, /<Badge[^>]*>\{row\.status\}<\/Badge>/, "activity timeline must not expose raw internal status text");
+
+assert.match(appChatStoreSource, /const toolsUsed = normalizeStringList\(value\.toolsUsed\)/, "session normalizer must preserve camelCase toolsUsed");
+assert.match(appChatStoreSource, /const toolsUsedSnake = normalizeStringList\(value\.tools_used\)/, "session normalizer must preserve snake_case tools_used");
+assert.match(appChatStoreSource, /cmo_call_surf_used/, "session normalizer must preserve cmo_call_surf_used");
+assert.match(appChatStoreSource, /cmo_call_echo_used/, "session normalizer must preserve cmo_call_echo_used");
+assert.doesNotMatch(sendMessagePreSuccessSource, /setInput\(""\)/, "composer draft must not be cleared before successful submit response");
+assert.match(chatPanelSource, /setInput\(""\);\s*setSessionId\(response\.sessionId\)/, "composer draft should clear only after successful submit response");
+assert.match(chatPanelSource, /disabled=\{!input\.trim\(\) \|\| isSending\}/, "Send button must only be disabled for empty input or active submit");
 
 assert.match(configSource, /getCmoHermesCmoAsyncToolRunTimeoutMs/, "async background timeout config getter must exist");
 assert.match(configSource, /CMO_HERMES_CMO_ASYNC_TOOL_RUN_TIMEOUT_MS/, "async background timeout env flag must exist");
@@ -92,6 +104,8 @@ console.log(JSON.stringify({
     "Surf Agent activity mapping",
     "Echo Agent activity mapping",
     "raw tool names hidden from timeline labels",
+    "terminal tools_used metadata preserved",
+    "composer draft survives refresh and failed submit",
     "normal sync tool timeout remains configurable",
   ],
   defaults: {
@@ -113,5 +127,10 @@ console.log(JSON.stringify({
     rawToolNamesHidden: true,
     liveSpecialistRunningStateAvailable: false,
     liveSpecialistRunningStateNote: "Current Product metadata exposes pending/running CMO status and terminal tools_used; true live Surf/Echo running rows require Hermes progress events.",
+  },
+  composerStabilitySmoke: {
+    draftClearedOnlyAfterSubmitSuccess: true,
+    pollingDoesNotClearDraft: true,
+    sendDisabledOnlyForEmptyInputOrActiveSubmit: true,
   },
 }, null, 2));

@@ -237,8 +237,9 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
   const delegationEvents = events.filter((event) => event.userVisible && (event.type === "delegation.started" || event.type === "delegation.completed"));
   const hasDelegationEvents = delegationEvents.length > 0;
   const delegationOutcomes = delegationOutcomeSets(events, delegations);
+  const hasFriendlyTools = friendlyToolsUsed(message).length > 0;
 
-  if (firstCmoEvent || events.length > 0 || delegations.length > 0 || message?.currentStep || message?.hermesCmoMetadata?.currentStep || message?.cmoRunStatus) {
+  if (firstCmoEvent || events.length > 0 || delegations.length > 0 || hasFriendlyTools || message?.currentStep || message?.hermesCmoMetadata?.currentStep || message?.cmoRunStatus) {
     rows.push({
       key: "cmo-running",
       label: "CMO",

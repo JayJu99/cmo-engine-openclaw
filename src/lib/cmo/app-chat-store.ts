@@ -2004,6 +2004,8 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
   const agentsUsed = Array.isArray(value.agentsUsed)
     ? value.agentsUsed.map(normalizeHermesCmoAgentUsed).filter((agent): agent is HermesCmoAgentUsed => Boolean(agent))
     : undefined;
+  const toolsUsed = normalizeStringList(value.toolsUsed);
+  const toolsUsedSnake = normalizeStringList(value.tools_used);
   const platformPersistenceSummary = normalizeHermesCmoPlatformPersistenceSummary(value.platformPersistenceSummary);
   const contractWarnings = normalizeContractWarnings(value.contract_warnings);
   const stateContract = normalizeStateContractMetadata(value.state_contract);
@@ -2043,6 +2045,7 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
       ? { hermesEndpointTimeoutMs: Math.max(0, Math.floor(value.hermesEndpointTimeoutMs)) }
       : {}),
     ...(typeof value.hermesToolEndpointEnabled === "boolean" ? { hermesToolEndpointEnabled: value.hermesToolEndpointEnabled } : {}),
+    ...(value.tool_capable_cmo === true ? { tool_capable_cmo: true } : {}),
     ...(sideEffects !== undefined ? { sideEffects, side_effects: sideEffects } : {}),
     ...(value.vault_context_usage !== undefined ? { vault_context_usage: value.vault_context_usage } : {}),
     ...(contractWarnings ? { contract_warnings: contractWarnings, contract_warnings_count: contractWarnings.length } : {}),
@@ -2094,6 +2097,11 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     forbiddenCounters,
     requestId,
     responseStatus,
+    ...(toolsUsed.length ? { toolsUsed } : {}),
+    ...(toolsUsedSnake.length ? { tools_used: toolsUsedSnake } : toolsUsed.length ? { tools_used: toolsUsed } : {}),
+    ...(value.cmo_call_surf_used === true ? { cmo_call_surf_used: true } : {}),
+    ...(value.cmo_call_echo_used === true ? { cmo_call_echo_used: true } : {}),
+    ...(typeof value.toolReadsCount === "number" && Number.isFinite(value.toolReadsCount) ? { toolReadsCount: Math.max(0, Math.floor(value.toolReadsCount)) } : {}),
     ...(normalizeStrategyMode(value.strategyMode) ? { strategyMode: normalizeStrategyMode(value.strategyMode) } : {}),
     ...(stringValue(value.mainBottleneck) ? { mainBottleneck: stringValue(value.mainBottleneck) } : {}),
     ...(normalizeDecisionLabel(value.decisionLabel) ? { decisionLabel: normalizeDecisionLabel(value.decisionLabel) } : {}),

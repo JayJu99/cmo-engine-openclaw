@@ -678,7 +678,6 @@ export function CMOChatPanel({
         createdAt: nowIso(),
       },
     ]);
-    setInput("");
     setIsSending(true);
     setPendingAssistantMessageId(pendingAssistantId);
     setPendingStartedAt(pendingStartedMs);
@@ -712,6 +711,7 @@ export function CMOChatPanel({
         }),
       );
 
+      setInput("");
       setSessionId(response.sessionId);
       setRuntimeStatus(response.runtimeStatus);
       setRuntimeErrorReason(response.runtimeErrorReason ?? null);

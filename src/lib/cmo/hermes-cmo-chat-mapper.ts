@@ -788,9 +788,13 @@ function contextResolutionFromResponse(response: HermesCmoRuntimeResponse): Reco
 }
 
 function toolsUsedFromResponse(response: HermesCmoRuntimeResponse): string[] {
-  return Array.isArray(response.tools_used)
-    ? response.tools_used.filter((tool): tool is string => typeof tool === "string" && tool.trim().length > 0)
-    : [];
+  const traceSummary = isRecord(response.tool_trace_summary) ? response.tool_trace_summary : {};
+  const tools = [
+    ...(Array.isArray(response.tools_used) ? response.tools_used : []),
+    ...(Array.isArray(traceSummary.tools_used) ? traceSummary.tools_used : []),
+  ].filter((tool): tool is string => typeof tool === "string" && tool.trim().length > 0);
+
+  return Array.from(new Set(tools));
 }
 
 function toolReadsCountFromResponse(response: HermesCmoRuntimeResponse, activityEvents: HermesCmoActivityEventSummary[]): number | undefined {
