@@ -46,6 +46,18 @@ export interface HermesCmoChatRequestInput extends CmoRuntimeTurnInput {
   };
 }
 
+const MAX_REPLAY_MESSAGES = 16;
+const MAX_REPLAY_MESSAGE_CHARS = 4000;
+
+interface HermesCmoReplayMessage {
+  role: "user" | "assistant";
+  content: string;
+  message_id: string;
+  created_at: string;
+}
+
+type ReplayableCmoChatMessage = CMOChatMessage & { role: "user" | "assistant" };
+
 export interface HermesCmoCounterValidation {
   ok: boolean;
   counters?: HermesCmoSafetyCounters;
@@ -80,6 +92,36 @@ function compactText(value: string, maxChars = 1200): string {
   return compact.length > maxChars ? `${compact.slice(0, maxChars - 3).trimEnd()}...` : compact;
 }
 
+function compactMultilineText(value: string, maxChars = MAX_REPLAY_MESSAGE_CHARS): string {
+  const compact = value
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return compact.length > maxChars ? `${compact.slice(0, maxChars - 3).trimEnd()}...` : compact;
+}
+
+function isPendingToolRunPlaceholder(message: CMOChatMessage): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+
+  if (message.cmoRunStatus === "pending" || message.cmoRunStatus === "running") {
+    return true;
+  }
+
+  return /^CMO is working\.\.\.\s+Researching signals\.\.\.\s+Synthesizing answer\.\.\.$/i.test(compactText(message.content, 220));
+}
+
+function replayableChatHistory(history: CMOChatMessage[]): ReplayableCmoChatMessage[] {
+  return history.filter((message): message is ReplayableCmoChatMessage =>
+    (message.role === "user" || message.role === "assistant") &&
+    message.content.trim().length > 0 &&
+    !isPendingToolRunPlaceholder(message)
+  );
+}
+
 function contextItemSnapshot(item: ContextItem): Record<string, unknown> {
   return {
     id: item.id,
@@ -112,8 +154,7 @@ function noteSnapshot(note: CMOContextNote): Record<string, unknown> {
 }
 
 function recentSessionSummary(history: CMOChatMessage[]): string | null {
-  const recent = history
-    .filter((message) => message.role === "user" || message.role === "assistant")
+  const recent = replayableChatHistory(history)
     .slice(-6)
     .map((message) => `${message.role}: ${compactText(message.content, 360)}`)
     .join("\n");
@@ -122,8 +163,7 @@ function recentSessionSummary(history: CMOChatMessage[]): string | null {
 }
 
 function recentChatContext(history: CMOChatMessage[]): Record<string, unknown>[] {
-  return history
-    .filter((message) => message.role === "user" || message.role === "assistant")
+  return replayableChatHistory(history)
     .slice(-6)
     .map((message, index) => ({
       id: `recent_chat_${index + 1}_${message.id}`,
@@ -143,6 +183,17 @@ function recentChatContext(history: CMOChatMessage[]): Record<string, unknown>[]
       truncated: false,
       inclusionReason: "Recent chat turn for follow-up intent resolution.",
       contextQuality: "confirmed",
+    }));
+}
+
+function recentConversationMessages(history: CMOChatMessage[]): HermesCmoReplayMessage[] {
+  return replayableChatHistory(history)
+    .slice(-MAX_REPLAY_MESSAGES)
+    .map((message) => ({
+      role: message.role,
+      content: compactMultilineText(message.content),
+      message_id: message.id,
+      created_at: message.createdAt,
     }));
 }
 
@@ -427,6 +478,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       user_message: input.message,
       explicit_command: null,
     },
+    messages: recentConversationMessages(input.history),
     context_pack: {
       current_priority: currentPriority,
       selected_context: [...input.contextPackage.selectedContext.map(noteSnapshot), ...recentChatContext(input.history)],

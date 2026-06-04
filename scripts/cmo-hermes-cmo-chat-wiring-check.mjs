@@ -2084,6 +2084,72 @@ try {
     assert.match(priorAssistantContext.content, /POST 3:/);
     assert.equal(priorAssistantContext.full_content, priorAssistantContext.content);
     assert.equal(priorAssistantContext.truncated, false);
+    const priorAssistantMessage = hermesRequest.messages.find((message) => message.role === "assistant");
+    assert.ok(priorAssistantMessage, "tool-capable request must include prior assistant content in bounded messages");
+    assert.match(priorAssistantMessage.content, /POST 2:/);
+    const option2ReplayPrompt = "Giữ ý chính của option 2, nhưng sửa tone thân thiện hơn, bớt corporate, vẫn giữ cảm giác đáng tin.";
+    const option2ReplayRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...sampleTurnInput,
+      message: option2ReplayPrompt,
+      history: [
+        {
+          id: "msg_option_user_1",
+          role: "user",
+          content: "Viết giúp mình 4 biến thể notification ngắn để onboarding merchant cho Hold Pay.",
+          createdAt: "2026-06-04T08:00:00.000Z",
+        },
+        {
+          id: "msg_option_assistant_1",
+          role: "assistant",
+          content: [
+            "1. Hoàn tất thiết lập Hold Pay",
+            "Cập nhật thông tin cửa hàng để bắt đầu nhận thanh toán nhanh hơn.",
+            "",
+            "2. Bắt đầu dùng Hold Pay",
+            "Cập nhật thông tin merchant để Hold Pay hỗ trợ quy trình thanh toán cho cửa hàng của bạn.",
+            "",
+            "3. Sẵn sàng nhận thanh toán",
+            "Bổ sung thông tin cần thiết để Hold Pay hỗ trợ cửa hàng vận hành mượt hơn.",
+            "",
+            "4. Kích hoạt trải nghiệm thanh toán",
+            "Hoàn thiện hồ sơ merchant để bắt đầu dùng Hold Pay cho các giao dịch hằng ngày.",
+          ].join("\n"),
+          createdAt: "2026-06-04T08:00:10.000Z",
+          cmoRunStatus: "completed",
+        },
+        {
+          id: "msg_option_user_2",
+          role: "user",
+          content: option2ReplayPrompt,
+          createdAt: "2026-06-04T08:01:00.000Z",
+        },
+        {
+          id: "msg_option_pending",
+          role: "assistant",
+          content: "CMO is working...\n\nResearching signals...\nSynthesizing answer...",
+          createdAt: "2026-06-04T08:01:01.000Z",
+          cmoRunStatus: "pending",
+        },
+      ],
+      request: {
+        ...sampleTurnInput.request,
+        message: option2ReplayPrompt,
+      },
+      sessionId: "session_option_replay",
+      userMessageId: "msg_option_user_2",
+      createdAt: "2026-06-04T08:01:00.000Z",
+      userIdentity: {
+        userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
+        userEmail: "jay@example.com",
+        userDisplayName: "Jay",
+        userSlug: "jay",
+      },
+    });
+    assert.ok(option2ReplayRequest.messages.length > 0, "option 2 follow-up request must include recent messages");
+    assert.ok(option2ReplayRequest.messages.some((message) => message.role === "assistant" && /2\. Bắt đầu dùng Hold Pay/.test(message.content)), "option 2 follow-up request must include previous assistant options");
+    assert.ok(option2ReplayRequest.messages.some((message) => message.role === "user" && /Giữ ý chính của option 2/.test(message.content)), "option 2 follow-up request must include current user rewrite request");
+    assert.ok(!option2ReplayRequest.messages.some((message) => /CMO is working|Researching signals|Synthesizing answer/.test(message.content)), "pending assistant placeholder must not be replayed as semantic context");
+    assert.ok(option2ReplayRequest.context_pack.selected_context.some((item) => item?.kind === "recent_chat_message" && item?.role === "assistant" && /2\. Bắt đầu dùng Hold Pay/.test(item.content)), "selected_context must also carry prior assistant option content");
     assert.equal(hermesRequest.constraints.allowSubAgentExecution, false);
     assert.equal(hermesRequest.constraints.allowSurfExecution, false);
     assert.equal(hermesRequest.constraints.allowEchoExecution, false);

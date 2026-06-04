@@ -2265,6 +2265,28 @@ function shouldStartAsyncHermesCmoToolRun(endpointKind: string): boolean {
   return endpointKind === "tool_execute";
 }
 
+function asyncToolRunReplayHistory(messages: CMOChatMessage[], pendingAssistantId: string): CMOChatMessage[] {
+  return messages.filter((message) => {
+    if (message.id === pendingAssistantId) {
+      return false;
+    }
+
+    if (message.role !== "user" && message.role !== "assistant") {
+      return false;
+    }
+
+    if (!message.content.trim()) {
+      return false;
+    }
+
+    if (message.role === "assistant" && (message.cmoRunStatus === "pending" || message.cmoRunStatus === "running")) {
+      return false;
+    }
+
+    return !/^CMO is working\.\.\.\s+Researching signals\.\.\.\s+Synthesizing answer\.\.\.$/i.test(message.content.replace(/\s+/g, " ").trim());
+  });
+}
+
 function isTimedOutHermesError(reason: string): boolean {
   return /timed out|timeout|AbortError/i.test(reason);
 }
@@ -2922,7 +2944,7 @@ export async function createAppChatSession(
           contextPack: contextPackage.contextPack,
           contextPackage,
           message: request.message,
-          history: continuedSession?.messages ?? [],
+          history: asyncToolRunReplayHistory(pendingSession.messages, assistantId),
           request,
           contextUsed,
           missingContext,

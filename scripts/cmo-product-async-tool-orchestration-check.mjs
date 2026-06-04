@@ -7,6 +7,7 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const appChatStoreSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "app-chat-store.ts"), "utf8");
 const appWorkspaceTypesSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "app-workspace-types.ts"), "utf8");
 const configSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "config.ts"), "utf8");
+const mapperSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-chat-mapper.ts"), "utf8");
 const runtimeSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-runtime.ts"), "utf8");
 const routerSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-chat-router.ts"), "utf8");
 
@@ -36,8 +37,16 @@ assert.match(appChatStoreSource, /getCmoHermesCmoAsyncToolRunTimeoutMs/, "async 
 assert.match(appChatStoreSource, /const asyncToolRunTimeoutMs = getCmoHermesCmoAsyncToolRunTimeoutMs\(\)/, "async branch must calculate dedicated background timeout");
 assert.match(appChatStoreSource, /cmoRunTimeoutMs: asyncToolRunTimeoutMs/, "async timeout must be persisted in session/message metadata");
 assert.match(appChatStoreSource, /runHermesCmoRuntime\(hermesRequest,\s*\{\s*toolTimeoutMs: asyncToolRunTimeoutMs\s*\}\)/, "background Hermes run must use dedicated async timeout");
+assert.match(appChatStoreSource, /function asyncToolRunReplayHistory/, "async branch must build explicit replay history");
+assert.match(appChatStoreSource, /history: asyncToolRunReplayHistory\(pendingSession\.messages,\s*assistantId\)/, "async Hermes request must replay prior completed turns plus current user turn");
+assert.match(appChatStoreSource, /message\.id === pendingAssistantId/, "async replay must exclude the pending placeholder assistant message");
 assert.match(appChatStoreSource, /CMO could not complete the research run\. Try narrowing the request or retry\./, "failure/timed-out final copy must be safe and natural");
 assert.doesNotMatch(appChatStoreSource, /JSON\.stringify\(hermesResult\.response\)|JSON\.stringify\(mappedHermesResult\)/, "normal UI must not stringify raw Hermes/Surf/Echo JSON");
+
+assert.match(mapperSource, /messages: recentConversationMessages\(input\.history\)/, "tool-capable Hermes request must include bounded recent messages");
+assert.match(mapperSource, /const MAX_REPLAY_MESSAGES = 16/, "recent message replay must be bounded");
+assert.match(mapperSource, /isPendingToolRunPlaceholder/, "request mapper must filter pending assistant placeholders");
+assert.match(mapperSource, /CMO is working/, "pending placeholder content must be excluded from semantic replay");
 
 assert.match(configSource, /getCmoHermesCmoAsyncToolRunTimeoutMs/, "async background timeout config getter must exist");
 assert.match(configSource, /CMO_HERMES_CMO_ASYNC_TOOL_RUN_TIMEOUT_MS/, "async background timeout env flag must exist");
@@ -65,11 +74,19 @@ console.log(JSON.stringify({
     "async background timeout wired",
     "async timeout persisted",
     "background Hermes call uses async timeout override",
+    "async tool run replays bounded recent messages",
+    "pending placeholder excluded from replay",
     "normal sync tool timeout remains configurable",
   ],
   defaults: {
     asyncToolRunTimeoutMs: 300000,
     asyncToolRunTimeoutGreaterThan90000: true,
     normalSyncToolTimeoutUnchanged: true,
+  },
+  option2ReplaySmoke: {
+    boundedRecentMessages: true,
+    previousAssistantFinalAnswerIncluded: true,
+    currentUserFollowupIncluded: true,
+    pendingPlaceholderExcluded: true,
   },
 }, null, 2));

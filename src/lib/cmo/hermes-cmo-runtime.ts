@@ -113,6 +113,12 @@ export interface HermesCmoRuntimeRequest {
     explicit_command?: string | null;
     [key: string]: unknown;
   };
+  messages?: Array<{
+    role: "user" | "assistant";
+    content: string;
+    message_id?: string;
+    created_at?: string;
+  }>;
   context_pack: {
     current_priority: unknown[];
     selected_context: unknown[];
