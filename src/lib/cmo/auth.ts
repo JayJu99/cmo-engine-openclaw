@@ -6,7 +6,13 @@ import {
   isCmoAuthRequired,
 } from "@/lib/supabase/config";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { cmoRuntimeUserSlugFromProfile, legacyUserIdentity, supabaseUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
+import {
+  cmoRuntimeUserDisplayNameFromProfile,
+  cmoRuntimeUserSlugFromProfile,
+  legacyUserIdentity,
+  supabaseUserIdentity,
+  type CmoServerUserIdentity,
+} from "@/lib/cmo/user-metadata";
 
 export interface CmoCurrentUser {
   id: string;
@@ -117,15 +123,21 @@ export async function getCurrentUser(): Promise<CmoCurrentUser | null> {
   const authEmail = data.user.email ?? null;
   const email = profileEmail ?? authEmail;
   const profileDisplayName = profileString(profile?.display_name);
-  const displayName = profileDisplayName
-    ?? metadataString(data.user.user_metadata, ["user_display_name", "display_name", "full_name", "name"]);
+  const metadataDisplayName = metadataString(data.user.user_metadata, ["full_name", "name", "display_name", "user_display_name"]);
+  const displayName = cmoRuntimeUserDisplayNameFromProfile({
+    profileDisplayName,
+    metadataDisplayName,
+    email,
+    userId: data.user.id,
+  }) ?? null;
   const userSlug = profileDisplayName
     ? cmoRuntimeUserSlugFromProfile({
-        profileDisplayName,
+        profileDisplayName: displayName ?? profileDisplayName,
         email,
         userId: data.user.id,
       })
     : cmoRuntimeUserSlugFromProfile({
+        profileDisplayName: displayName,
         email,
         userId: data.user.id,
       });

@@ -105,6 +105,7 @@ const loadCompiledModules = async () => {
     router: requireFromTmp(routerOut),
     mapper: requireFromTmp(mapperOut),
     chatV11: requireFromTmp(chatV11Out),
+    userMetadata: requireFromTmp(userMetadataOut),
   };
 };
 
@@ -467,10 +468,13 @@ const makeRuntimeResult = (overrides = {}) => {
 };
 
 try {
-  const { tmpDir, router, mapper, chatV11 } = await loadCompiledModules();
+  const { tmpDir, router, mapper, chatV11, userMetadata } = await loadCompiledModules();
+  const rolloutWorkspaceIds = ["holdstation-mini-app", "aion", "feeback", "winance", "hold-pay", "holdstation-wallet"];
   let rollingReplaySmoke = null;
   let longSessionStressSmoke = null;
   let toolOrchestrationSmoke = null;
+  let allWorkspaceToolChatRoutes = null;
+  let runtimeUserIdentitySmoke = null;
 
   try {
     await withEnv(
@@ -499,7 +503,7 @@ try {
         CMO_HERMES_CMO_CANARY_APPS: "*",
       },
       async () => {
-        for (const appId of ["holdstation-mini-app", "aion", "feeback", "winance", "hold-pay", "holdstation-wallet"]) {
+        for (const appId of rolloutWorkspaceIds) {
           assert.equal(router.shouldUseHermesCmoChat(appId), true, `wildcard canary must select Hermes CMO for ${appId}`);
         }
       },
@@ -646,6 +650,168 @@ try {
         assert.equal(nonCanary.reason, "v11_disabled_or_non_canary");
       },
     );
+
+    await withEnv(
+      {
+        CMO_HERMES_CMO_CHAT_V11_ENABLED: "true",
+        CMO_HERMES_CMO_CHAT_V11_CANARY_APPS: "*",
+        CMO_HERMES_CMO_TOOL_CHAT_ENABLED: "true",
+        CMO_HERMES_CMO_TOOL_CHAT_CANARY_APPS: "*",
+      },
+      async () => {
+        allWorkspaceToolChatRoutes = {};
+        for (const appId of rolloutWorkspaceIds) {
+          assert.equal(router.shouldUseHermesCmoToolChat(appId), true, `tool-chat wildcard must enable ${appId}`);
+          const route = router.resolveHermesCmoChatRoute({
+            appId,
+            message: "So sanh giup minh 3 tin hieu thi truong gan day va rut ra uu tien chien luoc.",
+          });
+          assert.equal(route.endpoint, "/agents/cmo/tool-execute", `${appId} must route to tool-capable CMO under wildcard rollout`);
+          assert.equal(route.reason, "tool_chat_canary");
+          allWorkspaceToolChatRoutes[appId] = route.endpoint;
+        }
+      },
+    );
+
+    await withEnv(
+      {
+        CMO_HERMES_CMO_CHAT_V11_ENABLED: "true",
+        CMO_HERMES_CMO_CHAT_V11_CANARY_APPS: "*",
+        CMO_HERMES_CMO_TOOL_CHAT_ENABLED: "false",
+        CMO_HERMES_CMO_TOOL_CHAT_CANARY_APPS: "*",
+      },
+      async () => {
+        const route = router.resolveHermesCmoChatRoute({
+          appId: "aion",
+          message: "Viet 3 bien the notification onboarding merchant.",
+        });
+        assert.equal(route.endpoint, "/agents/cmo/chat", "disabled tool-chat flag must keep normal v1.1 chat route");
+        assert.equal(route.reason, "v11_canary_chat");
+      },
+    );
+
+    await withEnv(
+      {
+        CMO_HERMES_CMO_CHAT_V11_ENABLED: "true",
+        CMO_HERMES_CMO_CHAT_V11_CANARY_APPS: "*",
+        CMO_HERMES_CMO_TOOL_CHAT_ENABLED: "true",
+        CMO_HERMES_CMO_TOOL_CHAT_CANARY_APPS: "hold-pay",
+      },
+      async () => {
+        const route = router.resolveHermesCmoChatRoute({
+          appId: "aion",
+          message: "Viet 3 bien the notification onboarding merchant.",
+        });
+        assert.equal(route.endpoint, "/agents/cmo/chat", "non-tool canary app must not route to /tool-execute");
+        assert.equal(route.reason, "v11_canary_chat");
+      },
+    );
+
+    const profileJayDisplayName = userMetadata.cmoRuntimeUserDisplayNameFromProfile({
+      profileDisplayName: "Jay",
+      email: "lequockhuong0601@gmail.com",
+      userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
+    });
+    assert.equal(profileJayDisplayName, "Jay");
+    assert.equal(
+      userMetadata.cmoRuntimeUserSlugFromProfile({
+        profileDisplayName: profileJayDisplayName,
+        email: "lequockhuong0601@gmail.com",
+        userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
+      }),
+      "jay",
+      "profile display_name Jay must derive canonical user_slug jay",
+    );
+
+    const emailDerivedDisplayName = userMetadata.cmoRuntimeUserDisplayNameFromProfile({
+      email: "alice@example.com",
+      userId: "11111111-2222-4333-8444-555555555555",
+    });
+    assert.equal(emailDerivedDisplayName, "Alice");
+    assert.equal(
+      userMetadata.cmoRuntimeUserSlugFromProfile({
+        profileDisplayName: emailDerivedDisplayName,
+        email: "alice@example.com",
+        userId: "11111111-2222-4333-8444-555555555555",
+      }),
+      "alice",
+      "missing display_name with email alice@example.com must derive slug alice",
+    );
+
+    assert.equal(
+      userMetadata.cmoRuntimeUserDisplayNameFromProfile({
+        profileDisplayName: "alice@example.com",
+        metadataDisplayName: "Alice Nguyen",
+        email: "alice@example.com",
+      }),
+      "Alice Nguyen",
+      "email-like profile display_name must be ignored in favor of safe metadata name",
+    );
+    assert.equal(
+      userMetadata.cmoRuntimeUserDisplayNameFromProfile({
+        userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
+      }),
+      "User 04acf682",
+      "missing profile/email must derive a safe display name from short UUID",
+    );
+    assert.equal(
+      userMetadata.normalizeCmoRuntimeUserIdentity({
+        authMode: "supabase",
+        userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
+        userDisplayName: "Jay",
+      }).user_slug,
+      "jay-04acf682",
+      "display-name-only runtime identity with user id must include short id suffix",
+    );
+    assert.equal(
+      userMetadata.normalizeCmoRuntimeUserIdentity({
+        authMode: "supabase",
+        organizationId: "holdstation",
+      }).user_slug,
+      "unknown_user",
+      "runtime identity must not fall back to organization/tenant/workspace names",
+    );
+    for (const workspaceId of rolloutWorkspaceIds) {
+      const rawRuntimePath = userMetadata.buildCmoRuntimeUserPath({
+        kind: "raw_activity",
+        workspaceId,
+        userIdentity: {
+          authMode: "supabase",
+          userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
+          userEmail: "lequockhuong0601@gmail.com",
+          userDisplayName: "Jay",
+          userSlug: "jay",
+        },
+        now: "2026-06-05T01:02:03.000Z",
+      });
+      assert.equal(rawRuntimePath, `90 Runtime/Raw Activity/${workspaceId}/jay/2026-06-05/`);
+      assert.doesNotMatch(rawRuntimePath, /holdstation\/jay|user_jay|04acf682-0067-4a8c-8a42-3520a30f8ccf/);
+    }
+    runtimeUserIdentitySmoke = {
+      profileJayDisplayName,
+      profileJaySlug: "jay",
+      emailDerivedDisplayName,
+      emailDerivedSlug: "alice",
+      duplicateDisplayNameFallbackSlug: "jay-04acf682",
+      missingIdentitySlug: "unknown_user",
+      rawRuntimePaths: Object.fromEntries(
+        rolloutWorkspaceIds.map((workspaceId) => [
+          workspaceId,
+          userMetadata.buildCmoRuntimeUserPath({
+            kind: "raw_activity",
+            workspaceId,
+            userIdentity: {
+              authMode: "supabase",
+              userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
+              userEmail: "lequockhuong0601@gmail.com",
+              userDisplayName: "Jay",
+              userSlug: "jay",
+            },
+            now: "2026-06-05T01:02:03.000Z",
+          }),
+        ]),
+      ),
+    };
 
     const hermesRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...sampleTurnInput,
@@ -3352,15 +3518,19 @@ try {
     assert.match(userMetadataSource, /90 Runtime\/Weekly Notes/);
     assert.match(userMetadataSource, /90 Runtime\/Monthly Rollups/);
     assert.match(userMetadataSource, /withoutUserPrefix/);
+    assert.match(userMetadataSource, /cmoRuntimeUserDisplayNameFromProfile/);
+    assert.match(userMetadataSource, /User \$\{suffix\}/);
 
     const authSource = await readFile(path.join(cmoDir, "auth.ts"), "utf8");
     assert.match(authSource, /userSlug: string \| null/);
     assert.match(authSource, /\.from\("profiles"\)/);
     assert.match(authSource, /\.select\("id,email,display_name"\)/);
     assert.match(authSource, /profileDisplayName/);
+    assert.match(authSource, /metadataDisplayName/);
+    assert.match(authSource, /cmoRuntimeUserDisplayNameFromProfile/);
     assert.match(authSource, /cmoRuntimeUserSlugFromProfile/);
     assert.doesNotMatch(authSource, /\.select\("id,email,display_name,slug"\)/);
-    assert.match(authSource, /\["user_display_name", "display_name", "full_name", "name"\]/);
+    assert.match(authSource, /\["full_name", "name", "display_name", "user_display_name"\]/);
 
     const sourceAcquisitionSource = await readFile(path.join(cmoDir, "source-acquisition", "index.ts"), "utf8");
     assert.match(sourceAcquisitionSource, /normalizeCmoRuntimeUserIdentity/);
@@ -3460,6 +3630,8 @@ try {
           mappedExistingChatShape: true,
           forbiddenCounterFallbackRequired: true,
           delegationsMode: "proposals_only",
+          allWorkspaceToolChatRoutes,
+          runtimeUserIdentitySmoke,
           rollingReplaySmoke,
           longSessionStressSmoke,
           toolOrchestrationSmoke,

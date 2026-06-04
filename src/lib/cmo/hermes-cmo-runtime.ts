@@ -1159,9 +1159,10 @@ const envEnabled = (value: string | undefined) =>
   value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "yes";
 
 const appIsConfiguredCanary = (appId: string, canaryApps: string[]): boolean => {
-  const normalizedAppId = appId.trim();
+  const normalizedAppId = appId.trim().toLowerCase();
+  const normalizedCanaryApps = canaryApps.map((value) => value.trim().toLowerCase());
 
-  return Boolean(normalizedAppId) && (canaryApps.includes("*") || canaryApps.includes(normalizedAppId));
+  return Boolean(normalizedAppId) && (normalizedCanaryApps.includes("*") || normalizedCanaryApps.includes(normalizedAppId));
 };
 
 const hermesTimeoutMs = () => {

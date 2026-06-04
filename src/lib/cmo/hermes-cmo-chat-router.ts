@@ -36,9 +36,10 @@ export interface HermesCmoChatRouteResolution {
 }
 
 function appIsCanary(appId: string, canaryApps: string[]): boolean {
-  const normalizedAppId = appId.trim();
+  const normalizedAppId = appId.trim().toLowerCase();
+  const normalizedCanaryApps = canaryApps.map((value) => value.trim().toLowerCase());
 
-  return Boolean(normalizedAppId) && (canaryApps.includes("*") || canaryApps.includes(normalizedAppId));
+  return Boolean(normalizedAppId) && (normalizedCanaryApps.includes("*") || normalizedCanaryApps.includes(normalizedAppId));
 }
 
 export function shouldUseHermesCmoChat(appId: string): boolean {

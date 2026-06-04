@@ -47,6 +47,13 @@ function shortUserId(userId?: string | null): string | undefined {
   return normalized?.slice(0, 8);
 }
 
+function displayNameCandidate(value?: string | null): string | undefined {
+  const compacted = compactString(value);
+  if (!compacted) return undefined;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(compacted)) return undefined;
+  return compacted;
+}
+
 function displayNameFromEmail(email?: string | null): string | undefined {
   const localPart = emailLocalPart(email);
   if (!localPart) return undefined;
@@ -55,6 +62,11 @@ function displayNameFromEmail(email?: string | null): string | undefined {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function displayNameFromUserId(userId?: string | null): string | undefined {
+  const suffix = shortUserId(userId);
+  return suffix ? `User ${suffix}` : undefined;
 }
 
 export function cmoRuntimeUserSlug(value?: string | null): string | undefined {
@@ -85,9 +97,21 @@ export function cmoRuntimeUserSlugFromProfile(input: {
     ?? UNKNOWN_RUNTIME_USER_SLUG;
 }
 
+export function cmoRuntimeUserDisplayNameFromProfile(input: {
+  profileDisplayName?: string | null;
+  metadataDisplayName?: string | null;
+  email?: string | null;
+  userId?: string | null;
+}): string | undefined {
+  return displayNameCandidate(input.profileDisplayName)
+    ?? displayNameCandidate(input.metadataDisplayName)
+    ?? displayNameFromEmail(input.email)
+    ?? displayNameFromUserId(input.userId);
+}
+
 export function normalizeCmoRuntimeUserIdentity(identity?: Partial<CmoRuntimeUserIdentityInput> | null): CmoRuntimeUserIdentity {
   const email = compactString(identity?.userEmail) ?? compactString(identity?.createdByEmail);
-  const displayName = compactString(identity?.userDisplayName) ?? displayNameFromEmail(email);
+  const displayName = displayNameCandidate(identity?.userDisplayName) ?? displayNameFromEmail(email);
   const explicitSlug = cmoRuntimeUserSlug(identity?.userSlug);
   const emailSlug = cmoRuntimeUserSlug(emailLocalPart(email));
   const displayNameSlug = cmoRuntimeUserSlug(displayName);
