@@ -818,8 +818,8 @@ export interface HermesCmoChatMetadata {
   fallback_to?: string;
   hermesEndpointTimeoutMs?: number;
   hermesToolEndpointEnabled?: boolean;
-  sideEffects?: false | Record<string, false>;
-  side_effects?: false | Record<string, false>;
+  sideEffects?: false | Record<string, boolean>;
+  side_effects?: false | Record<string, boolean>;
   write_side_effects?: false | Record<string, boolean>;
   vault_context_usage?: unknown;
   contract_warnings?: string[];

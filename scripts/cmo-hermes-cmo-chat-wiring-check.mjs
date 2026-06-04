@@ -853,7 +853,96 @@ try {
         vault_write: true,
       },
     }, chatV11Request);
-    assert.equal(unsafeVaultWrite, "unsafe_response:side_effects", "vault_write=true must be rejected");
+    assert.equal(unsafeVaultWrite, "unsafe_response:side_effects", "vault_write=true without raw_activity_log must be rejected");
+
+    const safeRawRuntimeLogReceipt = {
+      schema_version: "vault_agent.raw_activity_log_result.v1",
+      status: "completed",
+      raw_activity_logged: true,
+      vault_write_performed: true,
+      vault_path: "90 Runtime/Raw Activity/hold-pay/jay/2026-06-04/turn.json",
+      side_effects: {
+        vault_write: true,
+        raw_runtime_write: true,
+        knowledge_write: false,
+        accepted_knowledge_write: false,
+        gbrain_mutation: false,
+        knowledge_promotion: false,
+        source_auto_save: false,
+        memory_mutation: false,
+        supabase_mutation: false,
+      },
+    };
+    const safeRawRuntimeLogging = chatV11.normalizeHermesCmoChatV11Response({
+      ...baseChatV11Response,
+      raw_activity_log: safeRawRuntimeLogReceipt,
+      side_effects: {
+        vault_write: true,
+        raw_capture: true,
+      },
+    }, chatV11Request);
+    assert.notEqual(safeRawRuntimeLogging, "unsafe_response:side_effects", "safe raw runtime activity logging must be accepted");
+    assert.equal(safeRawRuntimeLogging.side_effects.vault_write, true);
+    assert.equal(safeRawRuntimeLogging.side_effects.raw_capture, true);
+    assert.equal(safeRawRuntimeLogging.side_effects.knowledge_promotion, false);
+    assert.equal(safeRawRuntimeLogging.side_effects.source_auto_save, false);
+    assert.equal(safeRawRuntimeLogging.side_effects.gbrain_mutation, false);
+
+    const safeRawRuntimeDeduped = chatV11.normalizeHermesCmoChatV11Response({
+      ...baseChatV11Response,
+      raw_activity_log: {
+        schema_version: "vault_agent.raw_activity_log_result.v1",
+        status: "completed",
+        deduped: true,
+        vault_write_performed: false,
+        vault_path: "90 Runtime/Raw Activity/hold-pay/jay/2026-06-04/turn.json",
+        side_effects: {
+          knowledge_write: false,
+          accepted_knowledge_write: false,
+          gbrain_mutation: false,
+          knowledge_promotion: false,
+          source_auto_save: false,
+          memory_mutation: false,
+          supabase_mutation: false,
+        },
+      },
+      side_effects: {
+        vault_write: true,
+        raw_capture: true,
+      },
+    }, chatV11Request);
+    assert.notEqual(safeRawRuntimeDeduped, "unsafe_response:side_effects", "deduped raw runtime activity logging must be accepted");
+
+    const rawRuntimeLogOutside90Runtime = chatV11.normalizeHermesCmoChatV11Response({
+      ...baseChatV11Response,
+      raw_activity_log: {
+        ...safeRawRuntimeLogReceipt,
+        vault_path: "12 Knowledge/Hold Pay/unsafe.md",
+      },
+      side_effects: {
+        vault_write: true,
+        raw_capture: true,
+      },
+    }, chatV11Request);
+    assert.equal(rawRuntimeLogOutside90Runtime, "unsafe_response:side_effects", "raw_activity_log outside 90 Runtime/Raw Activity must be rejected");
+
+    for (const unsafeReceiptSideEffect of ["gbrain_mutation", "knowledge_promotion", "source_auto_save", "accepted_knowledge_write"]) {
+      const unsafeReceipt = chatV11.normalizeHermesCmoChatV11Response({
+        ...baseChatV11Response,
+        raw_activity_log: {
+          ...safeRawRuntimeLogReceipt,
+          side_effects: {
+            ...safeRawRuntimeLogReceipt.side_effects,
+            [unsafeReceiptSideEffect]: true,
+          },
+        },
+        side_effects: {
+          vault_write: true,
+          raw_capture: true,
+        },
+      }, chatV11Request);
+      assert.equal(unsafeReceipt, "unsafe_response:side_effects", `raw_activity_log with ${unsafeReceiptSideEffect}=true must be rejected`);
+    }
 
     const unsafeSurfExecution = chatV11.normalizeHermesCmoChatV11Response({
       ...baseChatV11Response,
@@ -2597,6 +2686,11 @@ try {
     assert.match(hermesChatV11Source, /writeHermesCmoChatV11Trace\(request, "response"/);
     assert.match(hermesChatV11Source, /writeHermesCmoChatV11Trace\(request, "error"/);
     assert.match(hermesChatV11Source, /writeHermesCmoChatV11FallbackTrace/);
+    assert.match(hermesChatV11Source, /vault_agent\.raw_activity_log_result\.v1/);
+    assert.match(hermesChatV11Source, /90 Runtime\/Raw Activity\//);
+    assert.match(hermesChatV11Source, /rawActivityLogReceiptIsSafe/);
+    assert.match(hermesChatV11Source, /accepted_knowledge_write/);
+    assert.match(hermesChatV11Source, /raw_runtime_write/);
 
     const delegationExecutorSource = await readFile(path.join(cmoDir, "hermes-cmo-delegation-executor.ts"), "utf8");
     assert.match(delegationExecutorSource, /workspace_id: input\.workspaceId/);
@@ -2651,8 +2745,8 @@ try {
     const workspaceTypesSource = await readFile(path.join(cmoDir, "app-workspace-types.ts"), "utf8");
     assert.match(workspaceTypesSource, /sourceMode\?: "cmo\.default" \| "cmo\.tool_capable" \| HermesCmoExecutableMode/);
     assert.match(workspaceTypesSource, /CmoSessionLocalResearchResult/);
-    assert.match(workspaceTypesSource, /sideEffects\?: false \| Record<string, false>/);
-    assert.match(workspaceTypesSource, /side_effects\?: false \| Record<string, false>/);
+    assert.match(workspaceTypesSource, /sideEffects\?: false \| Record<string, boolean>/);
+    assert.match(workspaceTypesSource, /side_effects\?: false \| Record<string, boolean>/);
     assert.match(workspaceTypesSource, /write_side_effects\?: false \| Record<string, boolean>/);
     assert.match(workspaceTypesSource, /requested_endpoint\?: string/);
     assert.match(workspaceTypesSource, /write_source_endpoint\?: "\/agents\/cmo\/chat"/);

@@ -26,6 +26,9 @@ const SIDE_EFFECT_KEYS = [
   "executed_vault_agent",
   "vault_context_retrieval",
   "vault_write",
+  "raw_runtime_write",
+  "knowledge_write",
+  "accepted_knowledge_write",
   "memory_mutation",
   "gbrain_mutation",
   "source_auto_save",
@@ -40,7 +43,7 @@ const SIDE_EFFECT_KEYS = [
 ] as const;
 const SIDE_EFFECT_KEY_SET = new Set<string>(SIDE_EFFECT_KEYS);
 
-type HermesCmoChatV11SideEffects = Record<(typeof SIDE_EFFECT_KEYS)[number], false>;
+type HermesCmoChatV11SideEffects = Record<(typeof SIDE_EFFECT_KEYS)[number], boolean>;
 
 export interface HermesCmoChatV11RequestInput extends HermesCmoChatRequestInput {
   sessionSummary?: string;
@@ -690,7 +693,71 @@ function emptySideEffects(): HermesCmoChatV11SideEffects {
   return Object.fromEntries(SIDE_EFFECT_KEYS.map((key) => [key, false])) as HermesCmoChatV11SideEffects;
 }
 
-function sideEffectsAreSafe(value: unknown): HermesCmoChatV11SideEffects | null {
+function rawActivityLogSideEffectsAreSafe(value: unknown, requiresWrite: boolean): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (requiresWrite && (value.vault_write !== true || value.raw_runtime_write !== true)) {
+    return false;
+  }
+
+  for (const key of [
+    "knowledge_write",
+    "accepted_knowledge_write",
+    "gbrain_mutation",
+    "knowledge_promotion",
+    "source_auto_save",
+    "memory_mutation",
+    "supabase_mutation",
+  ]) {
+    if (value[key] !== false) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function rawActivityLogReceiptIsSafe(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (value.schema_version !== "vault_agent.raw_activity_log_result.v1" || value.status !== "completed") {
+    return false;
+  }
+
+  const rawActivityLogged = value.raw_activity_logged === true;
+  const deduped = value.deduped === true;
+
+  if (!rawActivityLogged && !deduped) {
+    return false;
+  }
+
+  if (rawActivityLogged) {
+    if (
+      value.vault_write_performed !== true ||
+      typeof value.vault_path !== "string" ||
+      !value.vault_path.startsWith("90 Runtime/Raw Activity/") ||
+      !rawActivityLogSideEffectsAreSafe(value.side_effects, true)
+    ) {
+      return false;
+    }
+  }
+
+  if (!rawActivityLogged && deduped && value.vault_write_performed !== false) {
+    return false;
+  }
+
+  if (typeof value.vault_path === "string" && !value.vault_path.startsWith("90 Runtime/Raw Activity/")) {
+    return false;
+  }
+
+  return rawActivityLogSideEffectsAreSafe(value.side_effects, rawActivityLogged);
+}
+
+function sideEffectsAreSafe(value: unknown, rawActivityLog: unknown): HermesCmoChatV11SideEffects | null {
   if (value === undefined || value === false) {
     return emptySideEffects();
   }
@@ -699,8 +766,22 @@ function sideEffectsAreSafe(value: unknown): HermesCmoChatV11SideEffects | null 
     return null;
   }
 
+  const rawActivityLogIsSafe = rawActivityLogReceiptIsSafe(rawActivityLog);
+  const normalized = emptySideEffects();
+
   for (const key of SIDE_EFFECT_KEYS) {
-    if (value[key] !== undefined && value[key] !== false) {
+    const item = value[key];
+
+    if (item === undefined || item === false) {
+      continue;
+    }
+
+    if ((key === "vault_write" || key === "raw_capture" || key === "raw_runtime_write") && item === true && rawActivityLogIsSafe) {
+      normalized[key] = true;
+      continue;
+    }
+
+    if (item !== false) {
       return null;
     }
   }
@@ -710,12 +791,16 @@ function sideEffectsAreSafe(value: unknown): HermesCmoChatV11SideEffects | null 
   }
 
   for (const [key, nested] of Object.entries(value)) {
-    if (/^(vault|memory|gbrain|supabase|session|raw_capture|repo|publish|knowledge_promotion|source_auto_save|executed_|kanban|openclaw)/i.test(key) && nested !== false) {
+    if ((key === "vault_write" || key === "raw_capture" || key === "raw_runtime_write") && nested === true && rawActivityLogIsSafe) {
+      continue;
+    }
+
+    if (/^(vault|memory|gbrain|supabase|session|raw_capture|raw_runtime_write|repo|publish|knowledge|source_auto_save|executed_|kanban|openclaw)/i.test(key) && nested !== false) {
       return null;
     }
   }
 
-  return emptySideEffects();
+  return normalized;
 }
 
 function unsafeTopLevelMutation(payload: Record<string, unknown>): string | null {
@@ -756,7 +841,7 @@ export function normalizeHermesCmoChatV11Response(payload: unknown, request: Her
   const userVisibleAnswer = typeof userVisible?.answer === "string" && userVisible.answer.trim()
     ? compactText(userVisible.answer, MAX_MESSAGE_CHARS)
     : "";
-  const sideEffects = sideEffectsAreSafe(response.side_effects ?? payload.side_effects);
+  const sideEffects = sideEffectsAreSafe(response.side_effects ?? payload.side_effects, response.raw_activity_log ?? payload.raw_activity_log);
   const artifactsOut = sanitizeHermesCmoChatV11Records(response.artifacts_out, MAX_ARTIFACTS, { allowTopLevelContent: true });
   const suggestedVaultUpdates = sanitizeHermesCmoChatV11Records(response.suggested_vault_updates, MAX_SUGGESTED_VAULT_UPDATES);
   const contractWarnings = sanitizedContractWarnings(response.contract_warnings);
@@ -866,7 +951,7 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
 function baseMetadata(input: {
   requestId: string;
   responseStatus: string;
-  sideEffects?: false | Record<string, false>;
+  sideEffects?: false | Record<string, boolean>;
   fallbackUsed: boolean;
   fallbackReason?: string;
   vaultContextUsage?: unknown;
