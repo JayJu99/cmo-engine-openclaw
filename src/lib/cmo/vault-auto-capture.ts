@@ -230,7 +230,7 @@ export async function autoCaptureTurnOnce(ctx: AutoCaptureContext): Promise<Auto
   });
   const event = buildCapturePreviewEvent({
     appId: ctx.request.appId,
-    workspaceId: ctx.request.appId,
+    workspaceId: ctx.request.workspaceId,
     sessionId: ctx.session.id,
     messageId: ctx.assistantMessageId,
     authMode,

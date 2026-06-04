@@ -3541,6 +3541,8 @@ try {
     assert.match(vaultAutoCaptureSource, /normalizeCmoRuntimeUserIdentity/);
     assert.match(vaultAutoCaptureSource, /userSlug: runtimeUser\.user_slug/);
     assert.match(vaultAutoCaptureSource, /user_display_name: runtimeUser\.user_display_name/);
+    assert.match(vaultAutoCaptureSource, /workspaceId:\s*ctx\.request\.workspaceId/);
+    assert.doesNotMatch(vaultAutoCaptureSource, /workspaceId:\s*ctx\.request\.appId/);
     assert.doesNotMatch(vaultAutoCaptureSource, /userSlug: ctx\.request\.workspaceId|userSlug: ctx\.request\.appId|userSlug: ctx\.userIdentity\?\.organizationId/);
 
     const mapperSource = await readFile(path.join(cmoDir, "hermes-cmo-chat-mapper.ts"), "utf8");

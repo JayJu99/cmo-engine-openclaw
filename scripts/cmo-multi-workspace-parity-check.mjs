@@ -77,6 +77,10 @@ try {
   const contextHandoff = source("src/lib/cmo/vault-agent-context-pack-handoff.ts");
   assert.match(contextHandoff, /workspace_id:\s*vaultWorkspaceIdForRequest\(input\.request\)/, "Vault context-pack request must send selected workspace_id");
 
+  const vaultAutoCapture = source("src/lib/cmo/vault-auto-capture.ts");
+  assert.match(vaultAutoCapture, /workspaceId:\s*ctx\.request\.workspaceId/, "raw auto-capture must use selected workspaceId for runtime paths");
+  assert.doesNotMatch(vaultAutoCapture, /workspaceId:\s*ctx\.request\.appId/, "raw auto-capture must not borrow appId as workspaceId");
+
   const runtime = source("src/lib/cmo/runtime.ts");
   assert.match(runtime, /vaultAgentContextPackStatus/, "fallback runtime must receive Vault Agent context-pack status");
   assert.match(runtime, /accepted workspace sources or goals/, "empty-context greeting must ask for source or goal");

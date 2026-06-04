@@ -11,7 +11,10 @@ const configSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "con
 const mapperSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-chat-mapper.ts"), "utf8");
 const runtimeSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-runtime.ts"), "utf8");
 const routerSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-chat-router.ts"), "utf8");
+const vaultAutoCaptureSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "vault-auto-capture.ts"), "utf8");
+const vaultAgentHandoffSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "vault-agent-handoff-builder.ts"), "utf8");
 const pendingToolRunAnswerSource = appChatStoreSource.match(/function pendingToolRunAnswer\(\): string \{[\s\S]*?\n\}/)?.[0] ?? "";
+const asyncRawActivityHookSource = appChatStoreSource.match(/async function attachAsyncToolRunRawActivityLog[\s\S]*?function asyncToolRunReplayHistory/)?.[0] ?? "";
 const chatPanelSource = await readFile(path.join(rootDir, "src", "components", "cmo-apps", "cmo-chat-panel.tsx"), "utf8");
 const sendMessagePreSuccessSource = chatPanelSource.match(/async function sendMessage\(\) \{[\s\S]*?const response = await readJsonResponse/)?.[0] ?? "";
 const productionFormattingSurface = [
@@ -54,6 +57,19 @@ assert.match(appChatStoreSource, /message\.id === pendingAssistantId/, "async re
 assert.match(appChatStoreSource, /content: mappedHermesResult\.answer/, "stored assistant session content must use the final mapped CMO answer");
 assert.match(appChatStoreSource, /CMO could not complete the research run\. Try narrowing the request or retry\./, "failure/timed-out final copy must be safe and natural");
 assert.doesNotMatch(appChatStoreSource, /JSON\.stringify\(hermesResult\.response\)|JSON\.stringify\(mappedHermesResult\)/, "normal UI must not stringify raw Hermes/Surf/Echo JSON");
+assert.match(appChatStoreSource, /attachAsyncToolRunRawActivityLog/, "async completion must attach raw activity logging metadata");
+assert.match(appChatStoreSource, /finalSession\.status === "completed"[\s\S]*attachAsyncToolRunRawActivityLog/, "raw activity logging must only run for completed async tool runs");
+assert.match(asyncRawActivityHookSource, /runVaultAgentDryRunHandoff/, "async raw logging must reuse the Vault Agent turn-log handoff path");
+assert.match(asyncRawActivityHookSource, /input\.session\.status !== "completed"[\s\S]*return input\.session/, "raw logging helper must skip non-terminal pending/running runs");
+assert.match(asyncRawActivityHookSource, /vaultAgentDryRunMetadataForPersistence\(asyncRawActivityHandoff\)/, "async raw logging must persist sanitized handoff metadata only");
+assert.match(asyncRawActivityHookSource, /rawCapturePath = asyncRawActivityMetadata\.vault_target_path \?\? asyncRawActivityMetadata\.dry_run_target_path/, "async raw logging must persist the Vault Agent target path");
+assert.match(asyncRawActivityHookSource, /catch \(error\)[\s\S]*rawCaptureStatus: "failed"/, "raw logging failure must be stored as metadata");
+assert.doesNotMatch(asyncRawActivityHookSource, /throw error|throw new Error/, "raw logging failure must not break final async answer");
+assert.match(vaultAgentHandoffSource, /workspace_id:\s*vaultWorkspaceIdForRequest\(input\.request\)/, "Vault Agent turn package must target the selected workspace id");
+assert.match(vaultAgentHandoffSource, /no_auto_promote:\s*true/, "Vault Agent turn package must keep no_auto_promote true");
+assert.match(vaultAgentHandoffSource, /gbrain_called:\s*false/, "Vault Agent write metadata must not call GBrain");
+assert.match(vaultAutoCaptureSource, /workspaceId:\s*ctx\.request\.workspaceId/, "legacy auto-capture must use selected workspace id, not app/tenant fallback");
+assert.doesNotMatch(vaultAutoCaptureSource, /workspaceId:\s*ctx\.request\.appId/, "legacy auto-capture must not target workspace from app id");
 
 assert.match(mapperSource, /messages: recentConversationMessages\(input\.history\)/, "tool-capable Hermes request must include bounded recent messages");
 assert.match(mapperSource, /const MAX_REPLAY_MESSAGES = 16/, "recent message replay must be bounded");
@@ -127,6 +143,10 @@ console.log(JSON.stringify({
     "terminal tools_used metadata preserved",
     "composer draft survives refresh and failed submit",
     "normal sync tool timeout remains configurable",
+    "completed async tool run triggers raw activity handoff",
+    "pending/running async tool runs skip raw activity handoff",
+    "raw activity handoff failure is metadata-only",
+    "raw activity package uses selected workspace id",
   ],
   defaults: {
     asyncToolRunTimeoutMs: 300000,
@@ -154,5 +174,15 @@ console.log(JSON.stringify({
     draftClearedOnlyAfterSubmitSuccess: true,
     pollingDoesNotClearDraft: true,
     sendDisabledOnlyForEmptyInputOrActiveSubmit: true,
+  },
+  asyncRawActivitySmoke: {
+    completedRunTriggersVaultAgentTurnLogHandoff: true,
+    nonTerminalRunsSkipped: true,
+    failureDoesNotBreakFinalAnswer: true,
+    aionTargetPathPrefix: "90 Runtime/Raw Activity/aion/jay/",
+    holdPayTargetPathPrefix: "90 Runtime/Raw Activity/hold-pay/jay/",
+    noUuidFolder: true,
+    noHoldstationOrUserJayFolder: true,
+    noKnowledgeSourcesGbrainPromotionMutation: true,
   },
 }, null, 2));

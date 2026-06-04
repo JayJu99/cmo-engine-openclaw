@@ -2250,6 +2250,26 @@ function rawCaptureErrorForAutoCapture(result: AutoCaptureResult): string | unde
   return result.error ?? result.skipReason;
 }
 
+function rawCaptureStatusForVaultAgentHandoff(metadata?: VaultAgentDryRunMetadata): CMOChatSession["rawCaptureStatus"] {
+  if (!metadata) {
+    return undefined;
+  }
+
+  if (metadata.vault_handoff_status === "completed") {
+    return "saved";
+  }
+
+  if (metadata.vault_handoff_status === "failed" || metadata.vault_handoff_status === "rejected") {
+    return "failed";
+  }
+
+  return "pending";
+}
+
+function rawCaptureErrorForVaultAgentHandoff(metadata?: VaultAgentDryRunMetadata): string | undefined {
+  return metadata?.vault_handoff_errors?.[0] ?? metadata?.vault_errors?.[0];
+}
+
 function normalizeCmoRunStatus(value: unknown): CmoAsyncToolRunStatus | undefined {
   return value === "pending" || value === "running" || value === "completed" || value === "failed" || value === "timed_out"
     ? value
@@ -2266,6 +2286,83 @@ function failedToolRunAnswer(): string {
 
 function shouldStartAsyncHermesCmoToolRun(endpointKind: string): boolean {
   return endpointKind === "tool_execute";
+}
+
+async function attachAsyncToolRunRawActivityLog(input: {
+  request: CMOAppChatRequest;
+  session: CMOChatSession;
+  userIdentity: CmoServerUserIdentity;
+  userMessageId: string;
+  assistantMessageId: string;
+  answer: string;
+  createdAt: string;
+  activityEvents?: HermesCmoActivityEventSummary[];
+  delegationSummary?: HermesCmoDelegationSummaryItem[];
+  agentsUsed?: HermesCmoAgentUsed[];
+  surfCalls?: number;
+  echoCalls?: number;
+}): Promise<CMOChatSession> {
+  if (input.session.status !== "completed") {
+    return input.session;
+  }
+
+  try {
+    const asyncRawActivityHandoff = await runVaultAgentDryRunHandoff({
+      request: input.request,
+      session: input.session,
+      userIdentity: input.userIdentity,
+      userMessageId: input.userMessageId,
+      assistantMessageId: input.assistantMessageId,
+      answer: input.answer,
+      createdAt: input.createdAt,
+      activityEvents: input.activityEvents,
+      delegationSummary: input.delegationSummary,
+      agentsUsed: input.agentsUsed,
+      surfCalls: input.surfCalls,
+      echoCalls: input.echoCalls,
+    });
+    const asyncRawActivityMetadata = vaultAgentDryRunMetadataForPersistence(asyncRawActivityHandoff);
+
+    if (!asyncRawActivityMetadata) {
+      return input.session;
+    }
+
+    const rawCaptureStatus = rawCaptureStatusForVaultAgentHandoff(asyncRawActivityMetadata);
+    const rawCaptureError = rawCaptureErrorForVaultAgentHandoff(asyncRawActivityMetadata);
+    const rawCapturePath = asyncRawActivityMetadata.vault_target_path ?? asyncRawActivityMetadata.dry_run_target_path;
+
+    return {
+      ...input.session,
+      ...(rawCapturePath ? { rawCapturePath } : {}),
+      ...(rawCaptureStatus ? { rawCaptureStatus } : {}),
+      ...(rawCaptureError ? { rawCaptureError } : {}),
+      vaultAgentDryRun: asyncRawActivityMetadata,
+      messages: input.session.messages.map((message) =>
+        message.id === input.assistantMessageId ? {
+          ...message,
+          ...(rawCapturePath ? { rawCapturePath } : {}),
+          ...(rawCaptureStatus ? { rawCaptureStatus } : {}),
+          ...(rawCaptureError ? { rawCaptureError } : {}),
+          vaultAgentDryRun: asyncRawActivityMetadata,
+        } : message,
+      ),
+    };
+  } catch (error) {
+    const rawCaptureError = error instanceof Error ? error.message : "Async raw activity logging failed.";
+
+    return {
+      ...input.session,
+      rawCaptureStatus: "failed",
+      rawCaptureError,
+      messages: input.session.messages.map((message) =>
+        message.id === input.assistantMessageId ? {
+          ...message,
+          rawCaptureStatus: "failed",
+          rawCaptureError,
+        } : message,
+      ),
+    };
+  }
 }
 
 function asyncToolRunReplayHistory(messages: CMOChatMessage[], pendingAssistantId: string): CMOChatMessage[] {
@@ -3112,6 +3209,23 @@ export async function createAppChatSession(
             ...failureMetadata,
           } : message),
         };
+      }
+
+      if (finalSession.status === "completed") {
+        finalSession = await attachAsyncToolRunRawActivityLog({
+          request,
+          session: finalSession,
+          userIdentity,
+          userMessageId: messageId,
+          assistantMessageId: assistantId,
+          answer: finalSession.messages.find((message) => message.id === assistantId)?.content ?? "",
+          createdAt: finalSession.updatedAt,
+          activityEvents: finalSession.activityEvents,
+          delegationSummary: finalSession.delegationSummary,
+          agentsUsed: finalSession.agentsUsed,
+          surfCalls: finalSession.surfCalls,
+          echoCalls: finalSession.echoCalls,
+        });
       }
 
       await writeJsonFile(sessionPath(sessionId), finalSession);
