@@ -106,6 +106,14 @@ export function isCmoHermesCmoChatV11FallbackEnabled(): boolean {
   return booleanEnv("CMO_HERMES_CMO_CHAT_V11_FALLBACK_ENABLED", false);
 }
 
+export function isCmoHermesCmoToolChatEnabled(): boolean {
+  return booleanEnv("CMO_HERMES_CMO_TOOL_CHAT_ENABLED", false);
+}
+
+export function getCmoHermesCmoToolChatCanaryApps(): string[] {
+  return commaSeparatedEnv("CMO_HERMES_CMO_TOOL_CHAT_CANARY_APPS");
+}
+
 export function isCmoHermesCmoOrchestrationEnabled(): boolean {
   return booleanEnv("CMO_HERMES_CMO_ORCHESTRATION_ENABLED", false);
 }

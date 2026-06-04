@@ -959,6 +959,8 @@ function metadataFromHermes(
   const toolReadsCount = toolReadsCountFromResponse(result.response, activityEvents);
   const contextResolution = contextResolutionFromResponse(result.response);
   const answerBasis = isRecord(result.response.answer_basis) ? result.response.answer_basis : {};
+  const cmoCallSurfUsed = toolsUsed.includes("cmo_call_surf") || executedCounts.surfCalls > 0;
+  const cmoCallEchoUsed = toolsUsed.includes("cmo_call_echo") || executedCounts.echoCalls > 0;
 
   return {
     runtimeMode: "hermes_cmo",
@@ -968,8 +970,12 @@ function metadataFromHermes(
     productRenderSource: "hermes_cmo",
     selectedHermesEndpoint: result.hermesCmoAgentPath,
     hermesEndpointKind: result.hermesCmoEndpointKind,
+    endpoint_kind: result.hermesCmoEndpointKind,
+    runtime_kind: "ai_agent",
+    requested_endpoint: result.hermesCmoAgentPath,
     hermesEndpointTimeoutMs: result.hermesCmoEndpointTimeoutMs,
     hermesToolEndpointEnabled: result.hermesCmoToolEndpointEnabled,
+    ...(result.hermesCmoEndpointKind === "tool_execute" ? { tool_capable_cmo: true } : {}),
     ...(result.sideEffects !== undefined ? { sideEffects: result.sideEffects } : {}),
     delegationsMode: delegationSummary.length > 0 ? HERMES_CMO_BOUNDED_DELEGATIONS : HERMES_CMO_PROPOSALS_ONLY,
     counters,
@@ -977,6 +983,8 @@ function metadataFromHermes(
     requestId: result.response.request_id,
     responseStatus: result.response.status,
     ...(toolsUsed.length > 0 ? { toolsUsed, tools_used: toolsUsed } : {}),
+    ...(cmoCallSurfUsed ? { cmo_call_surf_used: true } : {}),
+    ...(cmoCallEchoUsed ? { cmo_call_echo_used: true } : {}),
     ...(toolReadsCount !== undefined ? { toolReadsCount } : {}),
     ...(Object.keys(contextResolution).length > 0 ? { contextResolution, context_resolution: contextResolution } : {}),
     ...(Object.keys(answerBasis).length > 0 ? { answerBasis, answer_basis: answerBasis } : {}),

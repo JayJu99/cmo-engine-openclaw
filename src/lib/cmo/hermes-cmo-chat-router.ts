@@ -2,9 +2,11 @@ import { routeIntentForMessage, type CmoRouteIntent } from "@/lib/cmo/app-routin
 import {
   getCmoHermesCmoCanaryApps,
   getCmoHermesCmoChatV11CanaryApps,
+  getCmoHermesCmoToolChatCanaryApps,
   isCmoHermesCmoChatEnabled,
   isCmoHermesCmoChatV11Enabled,
   isCmoHermesCmoChatV11FallbackEnabled,
+  isCmoHermesCmoToolChatEnabled,
 } from "@/lib/cmo/config";
 
 export const HERMES_CMO_EXECUTE_ENDPOINT = "/agents/cmo/execute" as const;
@@ -27,8 +29,10 @@ export interface HermesCmoChatRouteResolution {
   routeIntent: CmoRouteIntent;
   v11Enabled: boolean;
   v11Canary: boolean;
+  toolChatEnabled: boolean;
+  toolChatCanary: boolean;
   fallbackEnabled: boolean;
-  reason: "forced_fallback" | "source_or_tool_task" | "v11_canary_chat" | "v11_disabled_or_non_canary";
+  reason: "forced_fallback" | "source_or_tool_task" | "tool_chat_canary" | "v11_canary_chat" | "v11_disabled_or_non_canary";
 }
 
 function appIsCanary(appId: string, canaryApps: string[]): boolean {
@@ -53,10 +57,16 @@ export function shouldUseHermesCmoChatV11(appId: string): boolean {
   return isCmoHermesCmoChatV11Enabled() && appIsCanary(appId, getCmoHermesCmoChatV11CanaryApps());
 }
 
+export function shouldUseHermesCmoToolChat(appId: string): boolean {
+  return isCmoHermesCmoToolChatEnabled() && appIsCanary(appId, getCmoHermesCmoToolChatCanaryApps());
+}
+
 export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): HermesCmoChatRouteResolution {
   const routeIntent = routeIntentForMessage(input.message);
   const v11Enabled = isCmoHermesCmoChatV11Enabled();
   const v11Canary = appIsCanary(input.appId, getCmoHermesCmoChatV11CanaryApps());
+  const toolChatEnabled = isCmoHermesCmoToolChatEnabled();
+  const toolChatCanary = appIsCanary(input.appId, getCmoHermesCmoToolChatCanaryApps());
   const fallbackEnabled = isCmoHermesCmoChatV11FallbackEnabled();
 
   if (input.forceFallback) {
@@ -67,6 +77,8 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
       routeIntent,
       v11Enabled,
       v11Canary,
+      toolChatEnabled,
+      toolChatCanary,
       fallbackEnabled,
       reason: "forced_fallback",
     };
@@ -80,8 +92,25 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
       routeIntent,
       v11Enabled,
       v11Canary,
+      toolChatEnabled,
+      toolChatCanary,
       fallbackEnabled,
       reason: "source_or_tool_task",
+    };
+  }
+
+  if (toolChatEnabled && toolChatCanary) {
+    return {
+      endpoint: HERMES_CMO_TOOL_EXECUTE_ENDPOINT,
+      endpointKind: "tool_execute",
+      requestedEndpoint: HERMES_CMO_TOOL_EXECUTE_ENDPOINT,
+      routeIntent,
+      v11Enabled,
+      v11Canary,
+      toolChatEnabled,
+      toolChatCanary,
+      fallbackEnabled,
+      reason: "tool_chat_canary",
     };
   }
 
@@ -93,6 +122,8 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
       routeIntent,
       v11Enabled,
       v11Canary,
+      toolChatEnabled,
+      toolChatCanary,
       fallbackEnabled,
       reason: "v11_canary_chat",
     };
@@ -105,6 +136,8 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
     routeIntent,
     v11Enabled,
     v11Canary,
+    toolChatEnabled,
+    toolChatCanary,
     fallbackEnabled,
     reason: "v11_disabled_or_non_canary",
   };

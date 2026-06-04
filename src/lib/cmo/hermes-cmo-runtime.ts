@@ -4,8 +4,10 @@ import path from "path";
 import {
   getCmoHermesCmoMaxDelegations,
   getCmoHermesCmoToolEndpoint,
+  getCmoHermesCmoToolChatCanaryApps,
   getCmoHermesCmoToolTimeoutMs,
   isCmoHermesCmoOrchestrationEnabled,
+  isCmoHermesCmoToolChatEnabled,
   isCmoHermesCmoToolExecuteEnabled,
 } from "./config";
 import {
@@ -1146,6 +1148,12 @@ const specialistResultArtifact = (execution: HermesCmoDelegationExecution): Reco
 const envEnabled = (value: string | undefined) =>
   value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "yes";
 
+const appIsConfiguredCanary = (appId: string, canaryApps: string[]): boolean => {
+  const normalizedAppId = appId.trim();
+
+  return Boolean(normalizedAppId) && (canaryApps.includes("*") || canaryApps.includes(normalizedAppId));
+};
+
 const hermesTimeoutMs = () => {
   const value = Number.parseInt(process.env.CMO_HERMES_TIMEOUT_MS ?? "240000", 10);
 
@@ -1282,8 +1290,10 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest): HermesCmoAge
   const baseUrl = process.env.CMO_HERMES_BASE_URL?.trim().replace(/\/+$/g, "") ?? "";
   const apiKey = process.env.CMO_HERMES_API_KEY?.trim() ?? "";
   const toolEndpointEnabled = isCmoHermesCmoToolExecuteEnabled();
+  const toolChatCanaryEnabled = isCmoHermesCmoToolChatEnabled() &&
+    appIsConfiguredCanary(request.workspace.app_id, getCmoHermesCmoToolChatCanaryApps());
   const externalResearch = requestIsExternalResearch(request);
-  const useToolEndpoint = toolEndpointEnabled && !externalResearch && requestIsSourceBackedOrSeeking(request);
+  const useToolEndpoint = toolChatCanaryEnabled || (toolEndpointEnabled && !externalResearch && requestIsSourceBackedOrSeeking(request));
   const configuredToolEndpoint = getCmoHermesCmoToolEndpoint();
   const endpointPath = useToolEndpoint ? endpointPathFromConfig(configuredToolEndpoint) : HERMES_CMO_AGENT_PATH;
   const timeoutMs = useToolEndpoint ? getCmoHermesCmoToolTimeoutMs() : hermesTimeoutMs();
@@ -1306,7 +1316,7 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest): HermesCmoAge
     endpointKind: useToolEndpoint ? "tool_execute" : "execute",
     apiKey,
     timeoutMs,
-    toolEndpointEnabled,
+    toolEndpointEnabled: toolEndpointEnabled || toolChatCanaryEnabled,
   };
 };
 

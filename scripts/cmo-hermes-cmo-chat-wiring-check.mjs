@@ -470,6 +470,7 @@ try {
   const { tmpDir, router, mapper, chatV11 } = await loadCompiledModules();
   let rollingReplaySmoke = null;
   let longSessionStressSmoke = null;
+  let toolOrchestrationSmoke = null;
 
   try {
     await withEnv(
@@ -542,6 +543,13 @@ try {
         assert.equal(holdPayCasual.endpointKind, "agent_chat");
         assert.equal(holdPayCasual.fallbackEnabled, true);
 
+        const toolChatDisabledByDefault = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "Viết giúp mình 3 biến thể notification ngắn cho Hold Pay.",
+        });
+        assert.equal(toolChatDisabledByDefault.endpoint, "/agents/cmo/chat", "tool-chat route must stay disabled until its own flag is enabled");
+        assert.equal(toolChatDisabledByDefault.reason, "v11_canary_chat");
+
         const nonCanary = router.resolveHermesCmoChatRoute({
           appId: "holdstation-mini-app",
           message: "What should CMO do next?",
@@ -571,6 +579,66 @@ try {
         });
         assert.equal(forcedFallback.endpoint, "/agents/cmo/execute", "forceFallback must route to /execute");
         assert.equal(forcedFallback.endpointKind, "execute");
+      },
+    );
+
+    await withEnv(
+      {
+        CMO_HERMES_CMO_CHAT_V11_ENABLED: "true",
+        CMO_HERMES_CMO_CHAT_V11_CANARY_APPS: "hold-pay",
+        CMO_HERMES_CMO_TOOL_CHAT_ENABLED: "true",
+        CMO_HERMES_CMO_TOOL_CHAT_CANARY_APPS: "hold-pay",
+      },
+      async () => {
+        assert.equal(router.shouldUseHermesCmoToolChat("hold-pay"), true, "Hold Pay must be eligible for tool-capable CMO chat canary");
+        assert.equal(router.shouldUseHermesCmoToolChat("aion"), false, "non-canary apps must not enter tool-capable CMO chat");
+
+        const researchToolChat = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "So sánh giúp mình 3 tín hiệu thị trường gần đây liên quan đến cash-in/cash-out hoặc P2P UX.",
+        });
+        assert.equal(researchToolChat.endpoint, "/agents/cmo/tool-execute");
+        assert.equal(researchToolChat.endpointKind, "tool_execute");
+        assert.equal(researchToolChat.reason, "tool_chat_canary");
+
+        const copyToolChat = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "Viết giúp mình 3 biến thể notification ngắn để onboarding merchant cho Hold Pay.",
+        });
+        assert.equal(copyToolChat.endpoint, "/agents/cmo/tool-execute");
+        assert.equal(copyToolChat.endpointKind, "tool_execute");
+        assert.equal(copyToolChat.reason, "tool_chat_canary");
+
+        const strategyToolChat = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "Dựa trên bối cảnh hiện tại thôi, không cần kiểm chứng thị trường mới: Hold Pay nên ưu tiên merchant payout UX hay consumer P2P UX trước?",
+        });
+        assert.equal(strategyToolChat.endpoint, "/agents/cmo/tool-execute");
+        assert.equal(strategyToolChat.endpointKind, "tool_execute");
+        assert.equal(strategyToolChat.reason, "tool_chat_canary");
+
+        const explicitSourceTool = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "Use the active source artifact to answer this.",
+          hasSourceOrToolTask: true,
+        });
+        assert.equal(explicitSourceTool.endpoint, "/agents/cmo/tool-execute");
+        assert.equal(explicitSourceTool.reason, "source_or_tool_task");
+
+        const forcedFallback = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "What should CMO do next?",
+          forceFallback: true,
+        });
+        assert.equal(forcedFallback.endpoint, "/agents/cmo/execute");
+        assert.equal(forcedFallback.reason, "forced_fallback");
+
+        const nonCanary = router.resolveHermesCmoChatRoute({
+          appId: "aion",
+          message: "Viết notification onboarding merchant.",
+        });
+        assert.equal(nonCanary.endpoint, "/agents/cmo/execute");
+        assert.equal(nonCanary.reason, "v11_disabled_or_non_canary");
       },
     );
 
@@ -2385,6 +2453,194 @@ try {
     assert.equal(externalResearchMapped.hermesCmoMetadata.surfCalls, 1);
     assert.deepEqual(externalResearchMapped.hermesCmoMetadata.agentsUsed, ["cmo", "surf"]);
 
+    const toolChatBase = makeRuntimeResult({
+      hermesCmoAgentPath: "/agents/cmo/tool-execute",
+      hermesCmoEndpointKind: "tool_execute",
+      hermesCmoEndpointTimeoutMs: 90000,
+      hermesCmoToolEndpointEnabled: true,
+      sideEffects: false,
+    });
+    const toolChatResearchMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...toolChatBase,
+      response: {
+        ...toolChatBase.response,
+        schema_version: "hermes.cmo.tool_response.v1",
+        mode: "cmo.tool_capable",
+        answer_basis: {
+          ...toolChatBase.response.answer_basis,
+          mode: "external_research",
+        },
+        answer: {
+          format: "markdown",
+          title: "Tin hieu thi truong",
+          summary: "CMO tong hop tin hieu lien quan cash-in/cash-out va P2P UX.",
+          decision: "KEEP",
+          body: "Ba tin hieu dang chu y: cash-in can nhanh va it buoc, cash-out can minh bach trang thai, va P2P UX can giam ma sat tin cay. Hold Pay nen uu tien merchant payout UX truoc vi sat voi loi hua van hanh va de tao bang chung hon.",
+        },
+        structured_output: {
+          classification: "external_research",
+          response_style: "research_answer",
+          tool_policy: "cmo_internal_tools",
+        },
+        tools_used: ["cmo_call_surf"],
+      },
+      delegationSummary: [
+        {
+          delegationKey: "surf:cmo_call_surf",
+          delegationId: "del_tool_chat_surf",
+          targetAgent: "surf",
+          mode: "surf.default",
+          objective: "Gather recent market signals for Hold Pay.",
+          status: "completed",
+          summary: "Surf returned market-signal evidence for CMO synthesis.",
+          response: {
+            schema_version: "surf.response.v1",
+            raw_json: { should_not_leak: true },
+          },
+        },
+      ],
+      safety_counters: {
+        ...toolChatBase.safety_counters,
+        surfCalls: 1,
+      },
+      surfCalls: 1,
+      agentsUsed: ["cmo", "surf"],
+    });
+    assert.equal(toolChatResearchMapped.hermesCmoMetadata.endpoint_kind, "tool_execute");
+    assert.equal(toolChatResearchMapped.hermesCmoMetadata.requested_endpoint, "/agents/cmo/tool-execute");
+    assert.equal(toolChatResearchMapped.hermesCmoMetadata.tool_capable_cmo, true);
+    assert.equal(toolChatResearchMapped.hermesCmoMetadata.cmo_call_surf_used, true);
+    assert.deepEqual(toolChatResearchMapped.hermesCmoMetadata.tools_used, ["cmo_call_surf"]);
+    assert.equal(toolChatResearchMapped.hermesCmoMetadata.surfCalls, 1);
+    assert.equal(toolChatResearchMapped.hermesCmoMetadata.echoCalls, 0);
+    assert.deepEqual(toolChatResearchMapped.hermesCmoMetadata.forbiddenCounters, forbiddenZeroCounters);
+    assert.equal(toolChatResearchMapped.hermesCmoMetadata.sideEffects, false);
+    assert.match(toolChatResearchMapped.answer, /Hold Pay nen uu tien merchant payout UX/);
+    assert.doesNotMatch(toolChatResearchMapped.answer, /cmo_call_surf|Surf returned|tools_used|raw_json|schema_version|\{|\}/i);
+
+    const toolChatCopyMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...toolChatBase,
+      response: {
+        ...toolChatBase.response,
+        schema_version: "hermes.cmo.tool_response.v1",
+        mode: "cmo.tool_capable",
+        answer_basis: {
+          ...toolChatBase.response.answer_basis,
+          mode: "native_conversation",
+        },
+        answer: {
+          format: "markdown",
+          title: "Notification variants",
+          summary: "Echo-assisted copy variants.",
+          decision: "KEEP",
+          body: "1. Ket noi merchant voi dong tien vao-ra ro rang trong vai phut.\n2. Theo doi payout cua cua hang minh bach, de xu ly, khong can thao tac thua.\n3. Bat dau nhan va chuyen tien cho merchant nhanh hon voi trai nghiem Hold Pay.",
+        },
+        structured_output: {
+          classification: "native_conversation",
+          response_style: "native_conversation",
+          tool_policy: "cmo_internal_tools",
+        },
+        tools_used: ["cmo_call_echo"],
+      },
+      delegationSummary: [
+        {
+          delegationKey: "echo:cmo_call_echo",
+          delegationId: "del_tool_chat_echo",
+          targetAgent: "echo",
+          mode: "echo.default",
+          objective: "Draft merchant onboarding notifications.",
+          status: "completed",
+          summary: "Echo returned notification variants.",
+          response: {
+            schema_version: "echo.response.v1",
+            raw_json: { should_not_leak: true },
+          },
+        },
+      ],
+      safety_counters: {
+        ...toolChatBase.safety_counters,
+        echoCalls: 1,
+      },
+      echoCalls: 1,
+      agentsUsed: ["cmo", "echo"],
+    });
+    assert.equal(toolChatCopyMapped.hermesCmoMetadata.endpoint_kind, "tool_execute");
+    assert.equal(toolChatCopyMapped.hermesCmoMetadata.cmo_call_echo_used, true);
+    assert.deepEqual(toolChatCopyMapped.hermesCmoMetadata.tools_used, ["cmo_call_echo"]);
+    assert.equal(toolChatCopyMapped.hermesCmoMetadata.surfCalls, 0);
+    assert.equal(toolChatCopyMapped.hermesCmoMetadata.echoCalls, 1);
+    assert.deepEqual(toolChatCopyMapped.hermesCmoMetadata.forbiddenCounters, forbiddenZeroCounters);
+    assert.equal(toolChatCopyMapped.hermesCmoMetadata.sideEffects, false);
+    assert.match(toolChatCopyMapped.answer, /1\./);
+    assert.match(toolChatCopyMapped.answer, /2\./);
+    assert.match(toolChatCopyMapped.answer, /3\./);
+    assert.doesNotMatch(toolChatCopyMapped.answer, /cmo_call_echo|Echo returned|tools_used|raw_json|schema_version|\{|\}/i);
+
+    const toolChatStrategyMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...toolChatBase,
+      response: {
+        ...toolChatBase.response,
+        schema_version: "hermes.cmo.tool_response.v1",
+        mode: "cmo.tool_capable",
+        answer_basis: {
+          ...toolChatBase.response.answer_basis,
+          mode: "fully_grounded",
+        },
+        answer: {
+          format: "markdown",
+          title: "Strategic priority",
+          summary: "Use current context only.",
+          decision: "KEEP",
+          body: "Neu chi dua tren boi canh hien tai, Hold Pay nen uu tien merchant payout UX truoc. Huong nay gan voi niem tin van hanh, co the do luong bang thoi gian xu ly va ty le loi, va tao nen ly do ro rang de merchant quay lai.",
+        },
+        structured_output: {
+          classification: "strategy_only",
+          response_style: "strategy_answer",
+          tool_policy: "none",
+        },
+        tools_used: [],
+      },
+      delegationSummary: [],
+      safety_counters: { ...expectedCounters },
+      surfCalls: 0,
+      echoCalls: 0,
+      agentsUsed: ["cmo"],
+    });
+    assert.equal(toolChatStrategyMapped.hermesCmoMetadata.endpoint_kind, "tool_execute");
+    assert.equal(toolChatStrategyMapped.hermesCmoMetadata.tool_capable_cmo, true);
+    assert.equal(toolChatStrategyMapped.hermesCmoMetadata.cmo_call_surf_used, undefined);
+    assert.equal(toolChatStrategyMapped.hermesCmoMetadata.cmo_call_echo_used, undefined);
+    assert.equal(toolChatStrategyMapped.hermesCmoMetadata.surfCalls, 0);
+    assert.equal(toolChatStrategyMapped.hermesCmoMetadata.echoCalls, 0);
+    assert.equal(toolChatStrategyMapped.hermesCmoMetadata.tools_used, undefined);
+    assert.deepEqual(toolChatStrategyMapped.hermesCmoMetadata.forbiddenCounters, forbiddenZeroCounters);
+    assert.equal(toolChatStrategyMapped.hermesCmoMetadata.sideEffects, false);
+    assert.match(toolChatStrategyMapped.answer, /merchant payout UX/);
+    assert.doesNotMatch(toolChatStrategyMapped.answer, /cmo_call_surf|cmo_call_echo|tools_used|raw_json|schema_version|\{|\}/i);
+
+    const noForbiddenToolOrchestrationSideEffects = [
+      toolChatResearchMapped,
+      toolChatCopyMapped,
+      toolChatStrategyMapped,
+    ].every((result) => Object.entries(forbiddenZeroCounters).every(([key, value]) =>
+      result.hermesCmoMetadata.forbiddenCounters?.[key] === value,
+    ));
+    toolOrchestrationSmoke = {
+      routeCanaryEndpoint: "/agents/cmo/tool-execute",
+      researchUsesSurf: toolChatResearchMapped.hermesCmoMetadata.cmo_call_surf_used === true,
+      copyUsesEcho: toolChatCopyMapped.hermesCmoMetadata.cmo_call_echo_used === true,
+      strategyUsesNoSpecialist: toolChatStrategyMapped.hermesCmoMetadata.surfCalls === 0 && toolChatStrategyMapped.hermesCmoMetadata.echoCalls === 0,
+      researchAnswerHidesToolMechanics: !/cmo_call_surf|tools_used|raw_json|schema_version|\{|\}/i.test(toolChatResearchMapped.answer),
+      copyAnswerHidesToolMechanics: !/cmo_call_echo|tools_used|raw_json|schema_version|\{|\}/i.test(toolChatCopyMapped.answer),
+      strategyAnswerHidesToolMechanics: !/cmo_call_surf|cmo_call_echo|tools_used|raw_json|schema_version|\{|\}/i.test(toolChatStrategyMapped.answer),
+      noForbiddenSideEffects: noForbiddenToolOrchestrationSideEffects,
+      rawRuntimePathUsesCanonicalUser: longSessionStressSmoke?.runtimeRawLogPathUsesCanonicalUser === true,
+      rawRuntimePathContainsUuid: longSessionStressSmoke?.runtimeRawLogPathContainsUuid === true,
+    };
+    assert.equal(toolOrchestrationSmoke.noForbiddenSideEffects, true);
+    assert.equal(toolOrchestrationSmoke.rawRuntimePathUsesCanonicalUser, true);
+    assert.equal(toolOrchestrationSmoke.rawRuntimePathContainsUuid, false);
+
     const researchFollowupMapped = mapper.mapHermesCmoResponseToChatResult({
       ...makeRuntimeResult(),
       response: {
@@ -2941,7 +3197,9 @@ try {
     assert.match(hermesRuntimeSource, /user_message: userMessage/);
     assert.match(hermesRuntimeSource, /input: \{/);
     assert.match(hermesRuntimeSource, /externalResearchTextPattern/);
-    assert.match(hermesRuntimeSource, /toolEndpointEnabled && !externalResearch && requestIsSourceBackedOrSeeking/);
+    assert.match(hermesRuntimeSource, /toolChatCanaryEnabled \|\| \(toolEndpointEnabled && !externalResearch && requestIsSourceBackedOrSeeking/);
+    assert.match(hermesRuntimeSource, /isCmoHermesCmoToolChatEnabled/);
+    assert.match(hermesRuntimeSource, /getCmoHermesCmoToolChatCanaryApps/);
     assert.match(hermesRuntimeSource, /toolEndpointRequest/);
     assert.match(hermesRuntimeSource, /user_message: userMessage/);
     assert.match(hermesRuntimeSource, /message: userMessage/);
@@ -3040,6 +3298,13 @@ try {
     assert.match(mapperSource, /sessionLocalResearchResultArtifacts/);
     assert.match(mapperSource, /research_context/);
     assert.match(mapperSource, /research_followup_requested/);
+    assert.match(mapperSource, /cmo_call_surf/);
+    assert.match(mapperSource, /cmo_call_echo/);
+    assert.match(mapperSource, /tool_capable_cmo/);
+
+    const configSource = await readFile(path.join(cmoDir, "config.ts"), "utf8");
+    assert.match(configSource, /CMO_HERMES_CMO_TOOL_CHAT_ENABLED/);
+    assert.match(configSource, /CMO_HERMES_CMO_TOOL_CHAT_CANARY_APPS/);
 
     const workspaceTypesSource = await readFile(path.join(cmoDir, "app-workspace-types.ts"), "utf8");
     assert.match(workspaceTypesSource, /sourceMode\?: "cmo\.default" \| "cmo\.tool_capable" \| HermesCmoExecutableMode/);
@@ -3048,6 +3313,9 @@ try {
     assert.match(workspaceTypesSource, /side_effects\?: false \| Record<string, boolean>/);
     assert.match(workspaceTypesSource, /write_side_effects\?: false \| Record<string, boolean>/);
     assert.match(workspaceTypesSource, /requested_endpoint\?: string/);
+    assert.match(workspaceTypesSource, /tool_capable_cmo\?: boolean/);
+    assert.match(workspaceTypesSource, /cmo_call_surf_used\?: boolean/);
+    assert.match(workspaceTypesSource, /cmo_call_echo_used\?: boolean/);
     assert.match(workspaceTypesSource, /write_source_endpoint\?: "\/agents\/cmo\/chat"/);
     assert.match(workspaceTypesSource, /vault_agent_write\?: boolean/);
     assert.match(workspaceTypesSource, /review_status: CmoVaultUpdateReviewAction/);
@@ -3115,6 +3383,7 @@ try {
           delegationsMode: "proposals_only",
           rollingReplaySmoke,
           longSessionStressSmoke,
+          toolOrchestrationSmoke,
           hermesWriteCounters: forbiddenZeroCounters,
         },
         null,

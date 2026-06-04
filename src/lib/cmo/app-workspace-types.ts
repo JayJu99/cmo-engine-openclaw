@@ -850,6 +850,9 @@ export interface HermesCmoChatMetadata {
   responseStatus: string;
   toolsUsed?: string[];
   tools_used?: string[];
+  tool_capable_cmo?: boolean;
+  cmo_call_surf_used?: boolean;
+  cmo_call_echo_used?: boolean;
   toolReadsCount?: number;
   contextResolution?: Record<string, unknown>;
   context_resolution?: Record<string, unknown>;
