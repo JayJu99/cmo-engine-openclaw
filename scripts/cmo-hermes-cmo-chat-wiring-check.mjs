@@ -84,10 +84,12 @@ const loadCompiledModules = async () => {
   const mapperOut = path.join(tmpDir, "hermes-cmo-chat-mapper.js");
   const chatV11Out = path.join(tmpDir, "hermes-cmo-chat-v11.js");
   const sessionWorkingMemoryOut = path.join(tmpDir, "session-working-memory.js");
+  const userMetadataOut = path.join(tmpDir, "user-metadata.js");
 
   await transpile(path.join(cmoDir, "config.ts"), configOut);
   await transpile(path.join(cmoDir, "app-routing-intent.ts"), appRoutingIntentOut);
   await transpile(path.join(cmoDir, "session-working-memory.ts"), sessionWorkingMemoryOut);
+  await transpile(path.join(cmoDir, "user-metadata.ts"), userMetadataOut);
   await transpile(path.join(cmoDir, "hermes-cmo-chat-router.ts"), routerOut, (output) =>
     output
       .replace('require("@/lib/cmo/config")', 'require("./config.js")')
@@ -577,8 +579,10 @@ try {
       userMessageId: "msg_001",
       createdAt: "2026-05-28T11:00:00.000Z",
       userIdentity: {
-        userId: "user_h6",
+        userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
         userEmail: "jay@example.com",
+        userDisplayName: "Jay",
+        userSlug: "jay",
       },
     });
 
@@ -625,8 +629,10 @@ try {
       userMessageId: "msg_001",
       createdAt: "2026-05-28T11:00:00.000Z",
       userIdentity: {
-        userId: "user_h6",
+        userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
         userEmail: "jay@example.com",
+        userDisplayName: "Jay",
+        userSlug: "jay",
       },
       sessionSummary: "Prior session summary: activation proof was the bottleneck.",
       sessionArtifacts: [{ type: "prior_artifact", artifact_id: "artifact_1", summary: "Prior artifact survives across turns." }],
@@ -639,7 +645,10 @@ try {
     assert.equal(chatV11Request.schema_version, "hermes.cmo.chat.request.v1_1");
     assert.equal(chatV11Request.tenant_id, "holdstation");
     assert.equal(chatV11Request.workspace_id, "holdstation-mini-app");
-    assert.equal(chatV11Request.user_id, "user_h6");
+    assert.equal(chatV11Request.user_id, "04acf682-0067-4a8c-8a42-3520a30f8ccf");
+    assert.equal(chatV11Request.user_slug, "jay");
+    assert.equal(chatV11Request.user_display_name, "Jay");
+    assert.equal(chatV11Request.email, "jay@example.com");
     assert.equal(chatV11Request.intent.user_message, "Review activation plan.");
     assert.ok(Array.isArray(chatV11Request.messages) && chatV11Request.messages.length >= 2, "/chat request must include recent messages");
     assert.ok(chatV11Request.messages.length <= 20, "/chat request messages must be capped");
@@ -2723,8 +2732,12 @@ try {
 
     const authSource = await readFile(path.join(cmoDir, "auth.ts"), "utf8");
     assert.match(authSource, /userSlug: string \| null/);
+    assert.match(authSource, /\.from\("profiles"\)/);
+    assert.match(authSource, /\.select\("id,email,display_name"\)/);
+    assert.match(authSource, /profileDisplayName/);
+    assert.match(authSource, /cmoRuntimeUserSlugFromProfile/);
+    assert.doesNotMatch(authSource, /\.select\("id,email,display_name,slug"\)/);
     assert.match(authSource, /\["user_display_name", "display_name", "full_name", "name"\]/);
-    assert.match(authSource, /\["user_slug", "profile_slug", "slug"\]/);
 
     const sourceAcquisitionSource = await readFile(path.join(cmoDir, "source-acquisition", "index.ts"), "utf8");
     assert.match(sourceAcquisitionSource, /normalizeCmoRuntimeUserIdentity/);

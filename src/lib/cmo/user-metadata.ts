@@ -24,6 +24,8 @@ export interface CmoRuntimeUserIdentity {
   email?: string;
 }
 
+export type CmoRuntimeUserIdentityInput = Pick<CmoServerUserIdentity, "userId" | "userEmail" | "userDisplayName" | "userSlug" | "createdByEmail">;
+
 export type CmoRuntimeUserPathKind = "raw_activity" | "daily_notes" | "weekly_notes" | "monthly_rollups";
 
 const UNKNOWN_RUNTIME_USER_SLUG = "unknown_user";
@@ -70,7 +72,20 @@ export function cmoRuntimeUserSlug(value?: string | null): string | undefined {
   return withoutUserPrefix || normalized;
 }
 
-export function normalizeCmoRuntimeUserIdentity(identity?: CmoServerUserIdentity | null): CmoRuntimeUserIdentity {
+export function cmoRuntimeUserSlugFromProfile(input: {
+  profileSlug?: string | null;
+  profileDisplayName?: string | null;
+  email?: string | null;
+  userId?: string | null;
+}): string {
+  return cmoRuntimeUserSlug(input.profileSlug)
+    ?? cmoRuntimeUserSlug(input.profileDisplayName)
+    ?? cmoRuntimeUserSlug(emailLocalPart(input.email))
+    ?? shortUserId(input.userId)
+    ?? UNKNOWN_RUNTIME_USER_SLUG;
+}
+
+export function normalizeCmoRuntimeUserIdentity(identity?: Partial<CmoRuntimeUserIdentityInput> | null): CmoRuntimeUserIdentity {
   const email = compactString(identity?.userEmail) ?? compactString(identity?.createdByEmail);
   const displayName = compactString(identity?.userDisplayName) ?? displayNameFromEmail(email);
   const explicitSlug = cmoRuntimeUserSlug(identity?.userSlug);
@@ -108,7 +123,7 @@ function isoWeek(input: Date): string {
 export function buildCmoRuntimeUserPath(input: {
   kind: CmoRuntimeUserPathKind;
   workspaceId: string;
-  userIdentity?: CmoServerUserIdentity | null;
+  userIdentity?: Partial<CmoRuntimeUserIdentityInput> | null;
   now?: Date | string;
 }): string {
   const date = input.now instanceof Date ? input.now : new Date(input.now ?? Date.now());

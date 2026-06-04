@@ -127,6 +127,7 @@ try {
   } = requireFromScript(join(dist, "source-acquisition", "index.js"));
   const {
     buildCmoRuntimeUserPath,
+    cmoRuntimeUserSlugFromProfile,
     normalizeCmoRuntimeUserIdentity,
   } = requireFromScript(join(dist, "user-metadata.js"));
   const {
@@ -780,6 +781,18 @@ try {
     userId: "04acf682-1111-4000-8000-000000000005",
     userDisplayName: "Jay",
   }).user_slug, "jay-04acf682");
+  assert.equal(cmoRuntimeUserSlugFromProfile({
+    profileDisplayName: "Jay",
+    email: "different@example.com",
+    userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
+  }), "jay");
+  assert.equal(cmoRuntimeUserSlugFromProfile({
+    email: "jay@example.com",
+    userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
+  }), "jay");
+  assert.equal(cmoRuntimeUserSlugFromProfile({
+    userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
+  }), "04acf682");
   assert.equal(normalizeCmoRuntimeUserIdentity({
     authMode: "supabase",
     userId: "04acf682-1111-4000-8000-000000000005",

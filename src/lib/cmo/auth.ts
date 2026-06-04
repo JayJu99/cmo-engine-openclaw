@@ -6,13 +6,14 @@ import {
   isCmoAuthRequired,
 } from "@/lib/supabase/config";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { legacyUserIdentity, supabaseUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
+import { cmoRuntimeUserSlugFromProfile, legacyUserIdentity, supabaseUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 
 export interface CmoCurrentUser {
   id: string;
   email: string | null;
   displayName: string | null;
   userSlug: string | null;
+  profileEmail: string | null;
   user: User;
 }
 
@@ -38,6 +39,7 @@ export type CmoRequestUserContext =
       email: string | null;
       displayName: string | null;
       userSlug: string | null;
+      profileEmail: string | null;
       isAuthenticated: true;
     }
   | CmoLegacyOwnerContext
@@ -71,6 +73,37 @@ function metadataString(metadata: Record<string, unknown> | null | undefined, ke
   return null;
 }
 
+interface CmoProfileIdentityRow {
+  id?: unknown;
+  email?: unknown;
+  display_name?: unknown;
+}
+
+function profileString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+async function getProfileIdentity(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  userId: string,
+): Promise<CmoProfileIdentityRow | null> {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id,email,display_name")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (error) {
+    console.warn("[cmo-auth] Failed to load profile identity; falling back to auth user metadata.", {
+      userId,
+      reason: error.message,
+    });
+    return null;
+  }
+
+  return data;
+}
+
 export async function getCurrentUser(): Promise<CmoCurrentUser | null> {
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase.auth.getUser();
@@ -79,12 +112,30 @@ export async function getCurrentUser(): Promise<CmoCurrentUser | null> {
     return null;
   }
 
+  const profile = await getProfileIdentity(supabase, data.user.id);
+  const profileEmail = profileString(profile?.email);
+  const authEmail = data.user.email ?? null;
+  const email = profileEmail ?? authEmail;
+  const profileDisplayName = profileString(profile?.display_name);
+  const displayName = profileDisplayName
+    ?? metadataString(data.user.user_metadata, ["user_display_name", "display_name", "full_name", "name"]);
+  const userSlug = profileDisplayName
+    ? cmoRuntimeUserSlugFromProfile({
+        profileDisplayName,
+        email,
+        userId: data.user.id,
+      })
+    : cmoRuntimeUserSlugFromProfile({
+        email,
+        userId: data.user.id,
+      });
+
   return {
     id: data.user.id,
-    email: data.user.email ?? null,
-    displayName: metadataString(data.user.user_metadata, ["user_display_name", "display_name", "full_name", "name"]),
-    userSlug: metadataString(data.user.user_metadata, ["user_slug", "profile_slug", "slug"])
-      ?? metadataString(data.user.app_metadata, ["user_slug", "profile_slug", "slug"]),
+    email,
+    displayName,
+    userSlug,
+    profileEmail,
     user: data.user,
   };
 }
@@ -136,6 +187,7 @@ export async function getOptionalRequestUser(): Promise<CmoRequestUserContext> {
     email: user.email,
     displayName: user.displayName,
     userSlug: user.userSlug,
+    profileEmail: user.profileEmail,
     isAuthenticated: true,
   };
 }
@@ -153,6 +205,7 @@ export async function requireRequestUserIfAuthRequired(): Promise<CmoRequestUser
     email: user.email,
     displayName: user.displayName,
     userSlug: user.userSlug,
+    profileEmail: user.profileEmail,
     isAuthenticated: true,
   };
 }

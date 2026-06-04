@@ -5,6 +5,7 @@ import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs } from "
 import type { CMOAppChatResponse, CMOChatMessage, HermesCmoChatMetadata } from "./app-workspace-types";
 import { mapCmoChatToHermesCmoRequest, type HermesCmoChatRequestInput } from "./hermes-cmo-chat-mapper";
 import { HERMES_CMO_CHAT_V11_ENDPOINT } from "./hermes-cmo-chat-router";
+import { normalizeCmoRuntimeUserIdentity } from "./user-metadata";
 
 const CHAT_REQUEST_SCHEMA = "hermes.cmo.chat.request.v1_1" as const;
 const CHAT_RESPONSE_SCHEMA = "hermes.cmo.chat.response.v1_1" as const;
@@ -82,6 +83,9 @@ export interface HermesCmoChatV11Request {
   workspace_id: string;
   app_id: string;
   user_id: string;
+  user_slug: string;
+  user_display_name?: string;
+  email?: string;
   intent: {
     user_message: string;
   };
@@ -902,6 +906,7 @@ export function normalizeHermesCmoChatV11Response(payload: unknown, request: Her
 
 export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput): HermesCmoChatV11Request {
   const legacyRequest = mapCmoChatToHermesCmoRequest(input);
+  const runtimeUser = normalizeCmoRuntimeUserIdentity(input.userIdentity);
   const artifactsIn = sanitizeHermesCmoChatV11Records([
     ...(Array.isArray(legacyRequest.context_pack.artifacts_in) ? legacyRequest.context_pack.artifacts_in : []),
     ...(input.sessionArtifacts ?? []),
@@ -921,6 +926,9 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
     workspace_id: input.request.workspaceId,
     app_id: input.request.appId,
     user_id: userId(input),
+    user_slug: runtimeUser.user_slug,
+    ...(runtimeUser.user_display_name ? { user_display_name: runtimeUser.user_display_name } : {}),
+    ...(runtimeUser.email ? { email: runtimeUser.email } : {}),
     intent: {
       user_message: input.message,
     },

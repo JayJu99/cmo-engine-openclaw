@@ -222,13 +222,10 @@ export async function autoCaptureTurnOnce(ctx: AutoCaptureContext): Promise<Auto
   const userId = ctx.userIdentity?.userId ?? ctx.session.userId;
   const userEmail = ctx.userIdentity?.userEmail ?? ctx.session.userEmail;
   const runtimeUser = normalizeCmoRuntimeUserIdentity({
-    authMode: authMode ?? "legacy",
     userId,
     userEmail,
     userDisplayName: ctx.userIdentity?.userDisplayName,
     userSlug: ctx.userIdentity?.userSlug,
-    organizationId: ctx.userIdentity?.organizationId ?? ctx.session.organizationId,
-    createdByUserId: ctx.userIdentity?.createdByUserId ?? ctx.session.createdByUserId,
     createdByEmail: ctx.userIdentity?.createdByEmail ?? ctx.session.createdByEmail,
   });
   const event = buildCapturePreviewEvent({
