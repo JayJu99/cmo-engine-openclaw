@@ -6,10 +6,12 @@ import { fileURLToPath } from "node:url";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appChatStoreSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "app-chat-store.ts"), "utf8");
 const appWorkspaceTypesSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "app-workspace-types.ts"), "utf8");
+const activityPanelSource = await readFile(path.join(rootDir, "src", "components", "cmo-apps", "cmo-agent-activity-panel.tsx"), "utf8");
 const configSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "config.ts"), "utf8");
 const mapperSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-chat-mapper.ts"), "utf8");
 const runtimeSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-runtime.ts"), "utf8");
 const routerSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-chat-router.ts"), "utf8");
+const pendingToolRunAnswerSource = appChatStoreSource.match(/function pendingToolRunAnswer\(\): string \{[\s\S]*?\n\}/)?.[0] ?? "";
 
 assert.match(
   appWorkspaceTypesSource,
@@ -28,7 +30,8 @@ assert.match(appWorkspaceTypesSource, /cmoRunCompletedAt\?:\s*string/, "metadata
 assert.match(appWorkspaceTypesSource, /cmoRunDurationMs\?:\s*number/, "metadata must expose duration_ms");
 assert.match(appWorkspaceTypesSource, /cmoRunTimeoutMs\?:\s*number/, "metadata must expose timeout_ms");
 
-assert.match(appChatStoreSource, /CMO is working\.\.\.[\s\S]*Researching signals\.\.\.[\s\S]*Synthesizing answer\.\.\./, "pending assistant copy must be natural and non-JSON");
+assert.match(pendingToolRunAnswerSource, /return "CMO is working\.\.\.";/, "pending assistant bubble must use concise CMO working copy");
+assert.doesNotMatch(pendingToolRunAnswerSource, /Researching signals|Synthesizing answer/, "pending assistant bubble must not include progress details as answer content");
 assert.match(appChatStoreSource, /function shouldStartAsyncHermesCmoToolRun/, "Product must gate async run creation for tool_execute only");
 assert.match(appChatStoreSource, /hermesCmoRoute\.endpointKind === "tool_execute"/, "async flow must target only CMO tool-execute route");
 assert.match(appChatStoreSource, /void completeAsyncHermesCmoToolRun\(/, "POST must launch non-blocking background completion");
@@ -48,6 +51,16 @@ assert.match(mapperSource, /const MAX_REPLAY_MESSAGES = 16/, "recent message rep
 assert.match(mapperSource, /isPendingToolRunPlaceholder/, "request mapper must filter pending assistant placeholders");
 assert.match(mapperSource, /CMO is working/, "pending placeholder content must be excluded from semantic replay");
 
+assert.match(activityPanelSource, /Surf Agent/, "activity timeline must render Surf with a friendly label");
+assert.match(activityPanelSource, /Echo Agent/, "activity timeline must render Echo with a friendly label");
+assert.match(activityPanelSource, /friendlyToolsUsed/, "activity timeline must derive rows from safe tool metadata");
+assert.match(activityPanelSource, /cmo_call_surf/, "activity timeline must map cmo_call_surf metadata");
+assert.match(activityPanelSource, /cmo_call_echo/, "activity timeline must map cmo_call_echo metadata");
+assert.match(activityPanelSource, /toolMetadataRows/, "activity timeline must render completed specialist rows from terminal tool metadata");
+assert.match(activityPanelSource, /statusLabel/, "activity timeline must use product-friendly status labels");
+assert.doesNotMatch(activityPanelSource, /label:\s*["'`]cmo_call_(surf|echo)/, "activity timeline labels must not expose raw tool names");
+assert.doesNotMatch(activityPanelSource, /<Badge[^>]*>\{row\.status\}<\/Badge>/, "activity timeline must not expose raw internal status text");
+
 assert.match(configSource, /getCmoHermesCmoAsyncToolRunTimeoutMs/, "async background timeout config getter must exist");
 assert.match(configSource, /CMO_HERMES_CMO_ASYNC_TOOL_RUN_TIMEOUT_MS/, "async background timeout env flag must exist");
 assert.match(configSource, /300_000/, "default async background timeout must be greater than 90000ms");
@@ -65,7 +78,7 @@ console.log(JSON.stringify({
   checks: [
     "async statuses typed",
     "safe metadata typed",
-    "pending assistant copy",
+    "concise pending assistant copy",
     "tool_execute-only async gate",
     "non-blocking background launch",
     "pending persisted before background",
@@ -76,6 +89,9 @@ console.log(JSON.stringify({
     "background Hermes call uses async timeout override",
     "async tool run replays bounded recent messages",
     "pending placeholder excluded from replay",
+    "Surf Agent activity mapping",
+    "Echo Agent activity mapping",
+    "raw tool names hidden from timeline labels",
     "normal sync tool timeout remains configurable",
   ],
   defaults: {
@@ -88,5 +104,14 @@ console.log(JSON.stringify({
     previousAssistantFinalAnswerIncluded: true,
     currentUserFollowupIncluded: true,
     pendingPlaceholderExcluded: true,
+  },
+  activityTimelineSmoke: {
+    pendingAssistantContent: "CMO is working...",
+    researchRendersSurfAgent: true,
+    copyRendersEchoAgent: true,
+    strategyOnlySpecialistRows: false,
+    rawToolNamesHidden: true,
+    liveSpecialistRunningStateAvailable: false,
+    liveSpecialistRunningStateNote: "Current Product metadata exposes pending/running CMO status and terminal tools_used; true live Surf/Echo running rows require Hermes progress events.",
   },
 }, null, 2));

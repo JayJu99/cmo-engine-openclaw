@@ -2249,12 +2249,7 @@ function normalizeCmoRunStatus(value: unknown): CmoAsyncToolRunStatus | undefine
 }
 
 function pendingToolRunAnswer(): string {
-  return [
-    "CMO is working...",
-    "",
-    "Researching signals...",
-    "Synthesizing answer...",
-  ].join("\n");
+  return "CMO is working...";
 }
 
 function failedToolRunAnswer(): string {
@@ -2283,7 +2278,7 @@ function asyncToolRunReplayHistory(messages: CMOChatMessage[], pendingAssistantI
       return false;
     }
 
-    return !/^CMO is working\.\.\.\s+Researching signals\.\.\.\s+Synthesizing answer\.\.\.$/i.test(message.content.replace(/\s+/g, " ").trim());
+    return !/^CMO is working\.\.\.(?:\s+Researching signals\.\.\.\s+Synthesizing answer\.\.\.)?$/i.test(message.content.replace(/\s+/g, " ").trim());
   });
 }
 

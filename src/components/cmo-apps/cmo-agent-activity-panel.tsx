@@ -7,7 +7,7 @@ import type {
 } from "@/lib/cmo/app-workspace-types";
 import { cn } from "@/lib/utils";
 
-type ActivityStatus = "running" | "waiting" | "completed" | "failed" | "skipped";
+type ActivityStatus = "running" | "waiting" | "completed" | "failed" | "timed_out" | "skipped";
 
 interface ActivityRow {
   key: string;
@@ -23,26 +23,26 @@ interface CmoAgentActivityPanelProps {
 }
 
 function normalizeStatus(value: string | undefined, fallback: ActivityStatus): ActivityStatus {
-  if (value === "running" || value === "waiting" || value === "completed" || value === "failed" || value === "skipped") {
-    return value;
+  if (value === "running" || value === "waiting" || value === "completed" || value === "failed" || value === "timed_out" || value === "skipped") {
+    return value === "timed_out" ? "timed_out" : value;
   }
 
   return fallback;
 }
 
 function agentLabel(agent: "cmo" | "echo" | "surf" | undefined): string {
-  if (agent === "surf") return "Surf";
-  if (agent === "echo") return "Echo";
+  if (agent === "surf") return "Surf Agent";
+  if (agent === "echo") return "Echo Agent";
   return "CMO";
 }
 
 function eventLabel(event: HermesCmoActivityEventSummary): string {
   if (event.type === "delegation.started") {
-    return `Calling ${agentLabel(event.sourceAgent)}`;
+    return agentLabel(event.sourceAgent);
   }
 
   if (event.type === "delegation.completed") {
-    return event.status === "failed" ? `${agentLabel(event.sourceAgent)} failed` : `${agentLabel(event.sourceAgent)} completed`;
+    return agentLabel(event.sourceAgent);
   }
 
   if (event.type === "clarification.required" || event.type === "clarification.asked") {
@@ -50,14 +50,14 @@ function eventLabel(event: HermesCmoActivityEventSummary): string {
   }
 
   if (event.type === "run.failed") {
-    return "CMO failed";
+    return "CMO";
   }
 
   if (event.type === "run.completed" || event.type === "cmo.run.completed") {
-    return "CMO synthesizing final answer";
+    return "CMO";
   }
 
-  return "CMO analyzing";
+  return "CMO";
 }
 
 function delegationMatchKey(agent: "echo" | "surf" | undefined, mode: string | undefined): string | null {
@@ -152,28 +152,80 @@ function delegationRows(delegations: HermesCmoDelegationSummaryItem[], hasDelega
     return [
       {
         key: `delegation-call-${delegation.delegationId}-${index}`,
-        label: `Calling ${label}`,
+        label,
         status: status === "failed" ? "completed" : status,
-        detail: delegation.objective,
       },
       {
         key: `delegation-result-${delegation.delegationId}-${index}`,
-        label: status === "failed" ? `${label} failed` : `${label} completed`,
+        label,
         status,
-        detail: delegation.failureReason ?? delegation.summary,
       },
     ];
   });
+}
+
+function statusFromCmoRun(value: CMOChatMessage["cmoRunStatus"] | undefined): ActivityStatus | null {
+  if (value === "pending" || value === "running") return "running";
+  if (value === "completed") return "completed";
+  if (value === "failed") return "failed";
+  if (value === "timed_out") return "timed_out";
+  return null;
+}
+
+function friendlyToolsUsed(message: CMOChatMessage | undefined): Array<"surf" | "echo"> {
+  const rawTools = [
+    ...(message?.cmoRunToolsUsed ?? []),
+    ...(message?.agentsUsed ?? []),
+    ...(message?.hermesCmoMetadata?.agentsUsed ?? []),
+    ...(message?.hermesCmoMetadata?.toolsUsed ?? []),
+    ...(message?.hermesCmoMetadata?.tools_used ?? []),
+  ];
+  const tools = new Set<"surf" | "echo">();
+
+  if (message?.hermesCmoMetadata?.cmo_call_surf_used === true) {
+    tools.add("surf");
+  }
+
+  if (message?.hermesCmoMetadata?.cmo_call_echo_used === true) {
+    tools.add("echo");
+  }
+
+  rawTools.forEach((tool) => {
+    if (tool === "surf" || tool === "cmo_call_surf") {
+      tools.add("surf");
+    }
+
+    if (tool === "echo" || tool === "cmo_call_echo") {
+      tools.add("echo");
+    }
+  });
+
+  return Array.from(tools);
+}
+
+function toolMetadataRows(message: CMOChatMessage | undefined, existingAgents: Set<"surf" | "echo">): ActivityRow[] {
+  const runStatus = statusFromCmoRun(message?.cmoRunStatus);
+
+  if (runStatus !== "completed" && runStatus !== "failed" && runStatus !== "timed_out") {
+    return [];
+  }
+
+  return friendlyToolsUsed(message)
+    .filter((agent) => !existingAgents.has(agent))
+    .map((agent) => ({
+      key: `tool-metadata-${agent}`,
+      label: agentLabel(agent),
+      status: runStatus === "completed" ? "completed" : runStatus,
+    }));
 }
 
 function activityRows(message: CMOChatMessage | undefined, running: boolean): ActivityRow[] {
   if (running) {
     return [
       {
-        key: "optimistic-cmo-analyzing",
-        label: "CMO analyzing",
+        key: "optimistic-cmo-running",
+        label: "CMO",
         status: "running",
-        detail: "Preparing the CMO runtime request.",
       },
     ];
   }
@@ -186,12 +238,11 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
   const hasDelegationEvents = delegationEvents.length > 0;
   const delegationOutcomes = delegationOutcomeSets(events, delegations);
 
-  if (firstCmoEvent || events.length > 0 || delegations.length > 0 || message?.currentStep || message?.hermesCmoMetadata?.currentStep) {
+  if (firstCmoEvent || events.length > 0 || delegations.length > 0 || message?.currentStep || message?.hermesCmoMetadata?.currentStep || message?.cmoRunStatus) {
     rows.push({
-      key: "cmo-analyzing",
-      label: "CMO analyzing",
-      status: "completed",
-      detail: firstCmoEvent?.message,
+      key: "cmo-running",
+      label: "CMO",
+      status: statusFromCmoRun(message?.cmoRunStatus) === "failed" || statusFromCmoRun(message?.cmoRunStatus) === "timed_out" ? "running" : "completed",
     });
   }
 
@@ -200,21 +251,29 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
       key: `${event.eventId}-${index}`,
       label: eventLabel(event),
       status: displayStatusForEvent(event, delegationOutcomes),
-      detail: event.message,
     })),
   );
 
   rows.push(...delegationRows(delegations, hasDelegationEvents));
 
   if (rows.length > 0) {
-    const currentStep = message?.currentStep ?? message?.hermesCmoMetadata?.currentStep;
-    const finalStatus = rows.some((row) => row.status === "failed") ? "failed" : "completed";
+    const existingAgents = new Set(
+      rows
+        .map((row) => row.label === "Surf Agent" ? "surf" : row.label === "Echo Agent" ? "echo" : null)
+        .filter((agent): agent is "surf" | "echo" => Boolean(agent)),
+    );
+    rows.push(...toolMetadataRows(message, existingAgents));
+    const runStatus = statusFromCmoRun(message?.cmoRunStatus);
+    const finalStatus = runStatus === "failed" || runStatus === "timed_out"
+      ? runStatus
+      : rows.some((row) => row.status === "failed" || row.status === "timed_out")
+        ? "failed"
+        : "completed";
 
     rows.push({
-      key: "cmo-synthesizing",
-      label: "CMO synthesizing final answer",
+      key: "cmo-completed",
+      label: "CMO",
       status: finalStatus,
-      detail: currentStep,
     });
   }
 
@@ -224,6 +283,7 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
 function statusVariant(status: ActivityStatus): "green" | "orange" | "red" | "slate" | "blue" {
   if (status === "completed") return "green";
   if (status === "failed") return "red";
+  if (status === "timed_out") return "red";
   if (status === "running") return "blue";
   if (status === "waiting") return "orange";
   return "slate";
@@ -232,9 +292,14 @@ function statusVariant(status: ActivityStatus): "green" | "orange" | "red" | "sl
 function statusIcon(status: ActivityStatus) {
   if (status === "completed") return <icons.CheckCircle2 className="size-3.5" />;
   if (status === "failed") return <icons.AlertTriangle className="size-3.5" />;
+  if (status === "timed_out") return <icons.AlertTriangle className="size-3.5" />;
   if (status === "running") return <icons.RefreshCw className="size-3.5 animate-spin" />;
   if (status === "waiting") return <icons.Clock3 className="size-3.5" />;
   return <icons.Activity className="size-3.5" />;
+}
+
+function statusLabel(status: ActivityStatus): string {
+  return status === "timed_out" ? "timed out" : status;
 }
 
 function formatDuration(ms: number | null | undefined): string | null {
@@ -251,6 +316,7 @@ function formatDuration(ms: number | null | undefined): string | null {
 
 function overallStatus(rows: ActivityRow[], running: boolean): ActivityStatus {
   if (running) return "running";
+  if (rows.some((row) => row.status === "timed_out")) return "timed_out";
   if (rows.some((row) => row.status === "failed")) return "failed";
   if (rows.some((row) => row.status === "waiting")) return "waiting";
   return rows.length > 0 ? "completed" : "skipped";
@@ -266,8 +332,12 @@ export function CmoAgentActivityPanel({ message, running = false, elapsedMs = nu
   const status = overallStatus(rows, running);
   const duration = formatDuration(running ? elapsedMs : message?.totalDurationMs ?? message?.liveAttemptDurationMs);
   const currentStep = running
-    ? "CMO analyzing"
-    : message?.currentStep ?? message?.hermesCmoMetadata?.currentStep ?? rows[rows.length - 1]?.label;
+    ? "CMO running"
+    : rows[rows.length - 1]?.status === "timed_out"
+      ? "CMO timed out"
+      : rows[rows.length - 1]?.status === "failed"
+        ? "CMO failed"
+        : "CMO completed";
 
   return (
     <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
@@ -283,7 +353,7 @@ export function CmoAgentActivityPanel({ message, running = false, elapsedMs = nu
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {duration ? <span className="text-xs font-semibold text-slate-500">{duration}</span> : null}
-          <Badge variant={statusVariant(status)}>{status}</Badge>
+          <Badge variant={statusVariant(status)}>{statusLabel(status)}</Badge>
         </div>
       </div>
 
@@ -305,7 +375,7 @@ export function CmoAgentActivityPanel({ message, running = false, elapsedMs = nu
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-bold text-slate-900">{row.label}</span>
-                <Badge className="px-2 py-0.5" variant={statusVariant(row.status)}>{row.status}</Badge>
+                <Badge className="px-2 py-0.5" variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
               </div>
               {row.detail ? <div className="mt-0.5 line-clamp-2 text-xs leading-5 text-slate-600">{row.detail}</div> : null}
             </div>

@@ -111,7 +111,7 @@ function isPendingToolRunPlaceholder(message: CMOChatMessage): boolean {
     return true;
   }
 
-  return /^CMO is working\.\.\.\s+Researching signals\.\.\.\s+Synthesizing answer\.\.\.$/i.test(compactText(message.content, 220));
+  return /^CMO is working\.\.\.(?:\s+Researching signals\.\.\.\s+Synthesizing answer\.\.\.)?$/i.test(compactText(message.content, 220));
 }
 
 function replayableChatHistory(history: CMOChatMessage[]): ReplayableCmoChatMessage[] {
