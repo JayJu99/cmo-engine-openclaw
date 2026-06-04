@@ -1384,11 +1384,12 @@ export interface CMOAppChatResponse {
   platformPersistenceSummary?: HermesCmoPlatformPersistenceSummary;
   delegationsMode?: HermesCmoDelegationsMode;
   cmoRunStatus?: CmoAsyncToolRunStatus;
-  cmoRunEndpoint?: "/agents/cmo/tool-execute";
-  cmoRunToolsUsed?: HermesCmoAgentUsed[];
+  cmoRunEndpoint?: string;
+  cmoRunToolsUsed?: string[];
   cmoRunStartedAt?: string;
   cmoRunCompletedAt?: string;
   cmoRunDurationMs?: number;
+  cmoRunTimeoutMs?: number;
   contextDiagnostics?: CMOContextDiagnostics;
   contextQualitySummary?: CMOContextQualitySummary;
   graphHints?: ContextGraphHint[];

@@ -23,6 +23,9 @@ import type {
 } from "@/lib/cmo/app-workspace-types";
 import { cn } from "@/lib/utils";
 
+const CMO_ASYNC_POLL_INTERVAL_MS = 3_000;
+const CMO_ASYNC_POLL_MAX_MS = 10 * 60 * 1000;
+
 async function readJsonResponse<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as unknown;
 
@@ -42,6 +45,25 @@ function nowIso() {
 
 function messageId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function isActiveCmoRunStatus(value: unknown): value is "pending" | "running" {
+  return value === "pending" || value === "running";
+}
+
+function isTerminalCmoRunStatus(value: unknown): value is "completed" | "failed" | "timed_out" {
+  return value === "completed" || value === "failed" || value === "timed_out";
+}
+
+function latestAssistantMessage(messages: CMOChatMessage[]): CMOChatMessage | undefined {
+  return [...messages].reverse().find((message) => message.role === "assistant");
+}
+
+function latestAssistantRunStartedAt(messages: CMOChatMessage[]): number {
+  const assistant = latestAssistantMessage(messages);
+  const startedAt = Date.parse(assistant?.cmoRunStartedAt ?? assistant?.createdAt ?? "");
+
+  return Number.isFinite(startedAt) ? startedAt : Date.now();
 }
 
 function recordString(record: Record<string, unknown>, keys: string[]): string {
@@ -417,9 +439,12 @@ export function CMOChatPanel({
   const [writeStatusMessage, setWriteStatusMessage] = useState<string | null>(null);
   const [writingApprovalId, setWritingApprovalId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const asyncPollTimerRef = useRef<number | null>(null);
+  const asyncPollStartedAtRef = useRef<number | null>(null);
   const selectedQualitySummary = contextBrief.contextQualitySummary;
   const visibleMessages = messages.length ? messages : selectedSession?.messages ?? [];
   const activeDisplaySessionId = activeSessionId ?? sessionId ?? selectedSession?.id ?? null;
+  const latestVisibleCmoRunStatus = latestAssistantMessage(visibleMessages)?.cmoRunStatus;
 
   useEffect(() => {
     let isMounted = true;
@@ -512,9 +537,15 @@ export function CMOChatPanel({
       setReviewStatusMessage(null);
       setDryRunStatusMessage(null);
       setWriteStatusMessage(null);
-      setPendingAssistantMessageId(null);
-      setPendingStartedAt(null);
-      setPendingElapsedMs(0);
+      const latestAssistant = latestAssistantMessage(selectedSession.messages);
+      if (isActiveCmoRunStatus(latestAssistant?.cmoRunStatus)) {
+        setPendingAssistantMessageId(latestAssistant?.id ?? null);
+        setPendingStartedAt(latestAssistantRunStartedAt(selectedSession.messages));
+      } else {
+        setPendingAssistantMessageId(null);
+        setPendingStartedAt(null);
+        setPendingElapsedMs(0);
+      }
     }, 0);
 
     return () => window.clearTimeout(timeout);
@@ -531,6 +562,92 @@ export function CMOChatPanel({
 
     return () => window.clearInterval(interval);
   }, [pendingStartedAt]);
+
+  useEffect(() => {
+    if (!activeDisplaySessionId || !isActiveCmoRunStatus(latestVisibleCmoRunStatus)) {
+      if (asyncPollTimerRef.current) {
+        window.clearTimeout(asyncPollTimerRef.current);
+        asyncPollTimerRef.current = null;
+      }
+      asyncPollStartedAtRef.current = null;
+      return;
+    }
+
+    let cancelled = false;
+    asyncPollStartedAtRef.current ??= Date.now();
+
+    const pollSession = async () => {
+      if (cancelled || !activeDisplaySessionId) {
+        return;
+      }
+
+      const elapsedMs = Date.now() - (asyncPollStartedAtRef.current ?? Date.now());
+      if (elapsedMs > CMO_ASYNC_POLL_MAX_MS) {
+        setPendingAssistantMessageId(null);
+        setPendingStartedAt(null);
+        setSendStatus("CMO run polling timed out. Refresh sessions to check the latest result.");
+        return;
+      }
+
+      try {
+        const payload = await readJsonResponse<{ data: CMOChatSession[] }>(
+          await fetch(`/api/apps/${app.id}/sessions?limit=20`, { cache: "no-store" }),
+        );
+        const refreshedSession = payload.data.find((session) => session.id === activeDisplaySessionId);
+
+        if (!refreshedSession || cancelled) {
+          asyncPollTimerRef.current = window.setTimeout(() => void pollSession(), CMO_ASYNC_POLL_INTERVAL_MS);
+          return;
+        }
+
+        const latestAssistant = latestAssistantMessage(refreshedSession.messages);
+
+        setSessionId(refreshedSession.id);
+        setMessages(refreshedSession.messages);
+        setRuntimeStatus(refreshedSession.runtimeStatus ?? initialRuntimeStatus);
+        setRuntimeErrorReason(refreshedSession.runtimeErrorReason ?? null);
+        onSessionCreated?.(refreshedSession.id);
+
+        if (isActiveCmoRunStatus(latestAssistant?.cmoRunStatus)) {
+          setPendingAssistantMessageId(latestAssistant?.id ?? null);
+          setPendingStartedAt(latestAssistantRunStartedAt(refreshedSession.messages));
+          setSendStatus("CMO is working...");
+          asyncPollTimerRef.current = window.setTimeout(() => void pollSession(), CMO_ASYNC_POLL_INTERVAL_MS);
+          return;
+        }
+
+        if (isTerminalCmoRunStatus(latestAssistant?.cmoRunStatus)) {
+          setPendingAssistantMessageId(null);
+          setPendingStartedAt(null);
+          setPendingElapsedMs(0);
+          setIsSending(false);
+          setError(latestAssistant.cmoRunStatus === "completed" ? null : "CMO could not complete the run.");
+          setSendStatus(latestAssistant.cmoRunStatus === "completed" ? "CMO response received from live Hermes CMO." : "CMO run finished with a safe failure response.");
+          asyncPollStartedAtRef.current = null;
+          return;
+        }
+
+        setPendingAssistantMessageId(null);
+        setPendingStartedAt(null);
+        setPendingElapsedMs(0);
+        asyncPollStartedAtRef.current = null;
+      } catch {
+        if (!cancelled) {
+          asyncPollTimerRef.current = window.setTimeout(() => void pollSession(), CMO_ASYNC_POLL_INTERVAL_MS);
+        }
+      }
+    };
+
+    asyncPollTimerRef.current = window.setTimeout(() => void pollSession(), CMO_ASYNC_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      if (asyncPollTimerRef.current) {
+        window.clearTimeout(asyncPollTimerRef.current);
+        asyncPollTimerRef.current = null;
+      }
+    };
+  }, [activeDisplaySessionId, app.id, initialRuntimeStatus, latestVisibleCmoRunStatus, onSessionCreated]);
 
   async function sendMessage() {
     const question = input.trim();
@@ -571,6 +688,8 @@ export function CMOChatPanel({
     setRuntimeStatus(null);
     setRuntimeErrorReason(null);
 
+    let keepPendingRun = false;
+
     try {
       const response = await readJsonResponse<CMOAppChatResponse>(
         await fetch("/api/cmo/chat", {
@@ -596,6 +715,7 @@ export function CMOChatPanel({
       setSessionId(response.sessionId);
       setRuntimeStatus(response.runtimeStatus);
       setRuntimeErrorReason(response.runtimeErrorReason ?? null);
+      keepPendingRun = isActiveCmoRunStatus(response.cmoRunStatus);
       setError(response.status === "failed" ? response.runtimeError || "CMO runtime returned an error." : null);
       setSendStatus(
         response.runtimeProvider === "dashboard" && response.runtimeAgent === "decision-review"
@@ -643,6 +763,11 @@ export function CMOChatPanel({
                 forbiddenCounters: response.forbiddenCounters,
                 platformPersistenceSummary: response.platformPersistenceSummary,
                 delegationsMode: response.delegationsMode,
+                cmoRunStatus: response.cmoRunStatus,
+                cmoRunStartedAt: response.cmoRunStartedAt,
+                cmoRunCompletedAt: response.cmoRunCompletedAt,
+                cmoRunDurationMs: response.cmoRunDurationMs,
+                cmoRunTimeoutMs: response.cmoRunTimeoutMs,
                 contextUsedCount: response.contextUsed.length,
                 graphHintCount: response.graphHintCount ?? response.graphHints?.length ?? 0,
                 requestReceivedAt: response.requestReceivedAt,
@@ -669,6 +794,13 @@ export function CMOChatPanel({
         ),
       );
       onSessionCreated?.(response.sessionId);
+      if (keepPendingRun) {
+        setPendingAssistantMessageId(response.messageId);
+        setPendingStartedAt(Number.isFinite(Date.parse(response.cmoRunStartedAt ?? ""))
+          ? Date.parse(response.cmoRunStartedAt ?? "")
+          : pendingStartedMs);
+        setSendStatus("CMO is working...");
+      }
     } catch (sendError) {
       setRuntimeStatus("runtime_error");
       setSendStatus(null);
@@ -685,8 +817,10 @@ export function CMOChatPanel({
       );
     } finally {
       setIsSending(false);
-      setPendingAssistantMessageId(null);
-      setPendingStartedAt(null);
+      if (!keepPendingRun) {
+        setPendingAssistantMessageId(null);
+        setPendingStartedAt(null);
+      }
     }
   }
 
