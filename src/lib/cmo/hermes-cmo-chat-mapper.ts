@@ -864,6 +864,8 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
     classification === "source_answer" ||
     classification === "save_to_vault";
   const transformed = isSourceTransform && result ? sourceTransformAnswerFromDelegations(result) : null;
+  const responseMode = typeof response.mode === "string" ? response.mode : "";
+  const isToolCapableCmo = responseMode === "cmo.tool_capable" || result?.hermesCmoEndpointKind === "tool_execute";
 
   if (transformed) {
     return transformed;
@@ -871,6 +873,10 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
 
   const answer = response.answer;
   const body = answer.body.trim();
+
+  if (isToolCapableCmo) {
+    return body || answer.summary.trim();
+  }
 
   if (isSourceTransform || isNativeConversation || isResearchFollowup || isSessionResearchArtifact) {
     return body || answer.summary.trim();

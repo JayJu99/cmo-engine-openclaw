@@ -14,6 +14,12 @@ const routerSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "her
 const pendingToolRunAnswerSource = appChatStoreSource.match(/function pendingToolRunAnswer\(\): string \{[\s\S]*?\n\}/)?.[0] ?? "";
 const chatPanelSource = await readFile(path.join(rootDir, "src", "components", "cmo-apps", "cmo-chat-panel.tsx"), "utf8");
 const sendMessagePreSuccessSource = chatPanelSource.match(/async function sendMessage\(\) \{[\s\S]*?const response = await readJsonResponse/)?.[0] ?? "";
+const productionFormattingSurface = [
+  appChatStoreSource,
+  mapperSource,
+  activityPanelSource,
+  chatPanelSource,
+].join("\n");
 
 assert.match(
   appWorkspaceTypesSource,
@@ -45,6 +51,7 @@ assert.match(appChatStoreSource, /runHermesCmoRuntime\(hermesRequest,\s*\{\s*too
 assert.match(appChatStoreSource, /function asyncToolRunReplayHistory/, "async branch must build explicit replay history");
 assert.match(appChatStoreSource, /history: asyncToolRunReplayHistory\(pendingSession\.messages,\s*assistantId\)/, "async Hermes request must replay prior completed turns plus current user turn");
 assert.match(appChatStoreSource, /message\.id === pendingAssistantId/, "async replay must exclude the pending placeholder assistant message");
+assert.match(appChatStoreSource, /content: mappedHermesResult\.answer/, "stored assistant session content must use the final mapped CMO answer");
 assert.match(appChatStoreSource, /CMO could not complete the research run\. Try narrowing the request or retry\./, "failure/timed-out final copy must be safe and natural");
 assert.doesNotMatch(appChatStoreSource, /JSON\.stringify\(hermesResult\.response\)|JSON\.stringify\(mappedHermesResult\)/, "normal UI must not stringify raw Hermes/Surf/Echo JSON");
 
@@ -53,6 +60,9 @@ assert.match(mapperSource, /const MAX_REPLAY_MESSAGES = 16/, "recent message rep
 assert.match(mapperSource, /isPendingToolRunPlaceholder/, "request mapper must filter pending assistant placeholders");
 assert.match(mapperSource, /CMO is working/, "pending placeholder content must be excluded from semantic replay");
 assert.match(mapperSource, /traceSummary\.tools_used/, "mapper must read tool_trace_summary.tools_used fallback");
+assert.match(mapperSource, /isToolCapableCmo/, "tool-capable CMO answers must preserve the Hermes answer body");
+assert.match(mapperSource, /return body \|\| answer\.summary\.trim\(\)/, "tool-capable CMO answer mapping must return body without Product templating");
+assert.doesNotMatch(productionFormattingSurface, /Option\s+[12]|option\s+2|Giữ ý chính|Bắt đầu dùng Hold Pay|push notification/i, "production code must not include keyword-specific answer formatting");
 
 assert.match(activityPanelSource, /Surf Agent/, "activity timeline must render Surf with a friendly label");
 assert.match(activityPanelSource, /Echo Agent/, "activity timeline must render Echo with a friendly label");
@@ -106,6 +116,9 @@ console.log(JSON.stringify({
     "background Hermes call uses async timeout override",
     "async tool run replays bounded recent messages",
     "pending placeholder excluded from replay",
+    "stored assistant content equals mapped final answer",
+    "tool-capable answer body preserved",
+    "no keyword-specific answer formatting",
     "Surf Agent activity mapping",
     "Echo Agent activity mapping",
     "distinct CMO analyzing/final rows",

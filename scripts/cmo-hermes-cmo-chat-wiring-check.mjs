@@ -2531,6 +2531,7 @@ try {
       hermesCmoToolEndpointEnabled: true,
       sideEffects: false,
     });
+    const toolChatResearchBody = "Ba tin hieu dang chu y: cash-in can nhanh va it buoc, cash-out can minh bach trang thai, va P2P UX can giam ma sat tin cay. Hold Pay nen uu tien merchant payout UX truoc vi sat voi loi hua van hanh va de tao bang chung hon.";
     const toolChatResearchMapped = mapper.mapHermesCmoResponseToChatResult({
       ...toolChatBase,
       response: {
@@ -2546,7 +2547,7 @@ try {
           title: "Tin hieu thi truong",
           summary: "CMO tong hop tin hieu lien quan cash-in/cash-out va P2P UX.",
           decision: "KEEP",
-          body: "Ba tin hieu dang chu y: cash-in can nhanh va it buoc, cash-out can minh bach trang thai, va P2P UX can giam ma sat tin cay. Hold Pay nen uu tien merchant payout UX truoc vi sat voi loi hua van hanh va de tao bang chung hon.",
+          body: toolChatResearchBody,
         },
         structured_output: {
           classification: "external_research",
@@ -2586,9 +2587,11 @@ try {
     assert.equal(toolChatResearchMapped.hermesCmoMetadata.echoCalls, 0);
     assert.deepEqual(toolChatResearchMapped.hermesCmoMetadata.forbiddenCounters, forbiddenZeroCounters);
     assert.equal(toolChatResearchMapped.hermesCmoMetadata.sideEffects, false);
+    assert.equal(toolChatResearchMapped.answer, toolChatResearchBody);
     assert.match(toolChatResearchMapped.answer, /Hold Pay nen uu tien merchant payout UX/);
     assert.doesNotMatch(toolChatResearchMapped.answer, /cmo_call_surf|Surf returned|tools_used|raw_json|schema_version|\{|\}/i);
 
+    const toolChatCopyBody = "1. Ket noi merchant voi dong tien vao-ra ro rang trong vai phut.\n2. Theo doi payout cua cua hang minh bach, de xu ly, khong can thao tac thua.\n3. Bat dau nhan va chuyen tien cho merchant nhanh hon voi trai nghiem Hold Pay.";
     const toolChatCopyMapped = mapper.mapHermesCmoResponseToChatResult({
       ...toolChatBase,
       response: {
@@ -2604,7 +2607,7 @@ try {
           title: "Notification variants",
           summary: "Echo-assisted copy variants.",
           decision: "KEEP",
-          body: "1. Ket noi merchant voi dong tien vao-ra ro rang trong vai phut.\n2. Theo doi payout cua cua hang minh bach, de xu ly, khong can thao tac thua.\n3. Bat dau nhan va chuyen tien cho merchant nhanh hon voi trai nghiem Hold Pay.",
+          body: toolChatCopyBody,
         },
         structured_output: {
           classification: "native_conversation",
@@ -2642,9 +2645,11 @@ try {
     assert.equal(toolChatCopyMapped.hermesCmoMetadata.echoCalls, 1);
     assert.deepEqual(toolChatCopyMapped.hermesCmoMetadata.forbiddenCounters, forbiddenZeroCounters);
     assert.equal(toolChatCopyMapped.hermesCmoMetadata.sideEffects, false);
+    assert.equal(toolChatCopyMapped.answer, toolChatCopyBody);
     assert.match(toolChatCopyMapped.answer, /1\./);
     assert.match(toolChatCopyMapped.answer, /2\./);
     assert.match(toolChatCopyMapped.answer, /3\./);
+    assert.deepEqual([...toolChatCopyMapped.answer.matchAll(/(^|\n)(\d+)\./g)].map((match) => match[2]), ["1", "2", "3"]);
     assert.doesNotMatch(toolChatCopyMapped.answer, /cmo_call_echo|Echo returned|tools_used|raw_json|schema_version|\{|\}/i);
 
     const toolChatStrategyMapped = mapper.mapHermesCmoResponseToChatResult({
@@ -2701,6 +2706,9 @@ try {
       researchUsesSurf: toolChatResearchMapped.hermesCmoMetadata.cmo_call_surf_used === true,
       copyUsesEcho: toolChatCopyMapped.hermesCmoMetadata.cmo_call_echo_used === true,
       strategyUsesNoSpecialist: toolChatStrategyMapped.hermesCmoMetadata.surfCalls === 0 && toolChatStrategyMapped.hermesCmoMetadata.echoCalls === 0,
+      researchAnswerEqualsHermesBody: toolChatResearchMapped.answer === toolChatResearchBody,
+      copyAnswerEqualsHermesBody: toolChatCopyMapped.answer === toolChatCopyBody,
+      copyNumberedListMarkers: [...toolChatCopyMapped.answer.matchAll(/(^|\n)(\d+)\./g)].map((match) => match[2]),
       researchAnswerHidesToolMechanics: !/cmo_call_surf|tools_used|raw_json|schema_version|\{|\}/i.test(toolChatResearchMapped.answer),
       copyAnswerHidesToolMechanics: !/cmo_call_echo|tools_used|raw_json|schema_version|\{|\}/i.test(toolChatCopyMapped.answer),
       strategyAnswerHidesToolMechanics: !/cmo_call_surf|cmo_call_echo|tools_used|raw_json|schema_version|\{|\}/i.test(toolChatStrategyMapped.answer),
