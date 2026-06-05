@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 const DOC_TYPES = [
   ["audience", "audience", "project-audience.md", "Audience"],
@@ -77,8 +77,10 @@ function acceptedNote({ workspaceId, projectName, type, title, sourcePath, body 
 }
 
 function writeIfRequested({ write, vaultRoot, relativePath, content }) {
-  const absolutePath = resolve(vaultRoot, relativePath);
-  if (!absolutePath.startsWith(`${resolve(vaultRoot)}/`) && absolutePath !== resolve(vaultRoot)) {
+  const resolvedVaultRoot = resolve(vaultRoot);
+  const absolutePath = resolve(resolvedVaultRoot, relativePath);
+  const pathWithinVault = relative(resolvedVaultRoot, absolutePath);
+  if (pathWithinVault.startsWith("..") || isAbsolute(pathWithinVault)) {
     throw new Error(`Refusing unsafe path: ${relativePath}`);
   }
   if (write) {
