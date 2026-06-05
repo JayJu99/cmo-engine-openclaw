@@ -24,6 +24,43 @@ const productionFormattingSurface = [
   chatPanelSource,
 ].join("\n");
 
+function productToolCapableAnswerFromHermesBody(answer) {
+  return String(answer.body ?? "").trim() || String(answer.summary ?? "").trim();
+}
+
+function repeatedOneMarkers(value) {
+  return (String(value).match(/(?:^|\n)\s*1\.\s/g) ?? []).length;
+}
+
+const cleanNumberedHermesAnswer = {
+  body: [
+    "1. Daily reward ritual",
+    "Reward action copy.",
+    "",
+    "2. FOMO / activation",
+    "Activation copy.",
+    "",
+    "3. Narrative / human identity",
+    "Narrative copy.",
+  ].join("\n"),
+  summary: "Summary fallback must not be used when body exists.",
+};
+const repeatedNumberingHermesAnswer = {
+  body: [
+    "1. Daily reward ritual",
+    "Reward action copy.",
+    "",
+    "1. FOMO / activation",
+    "Activation copy.",
+    "",
+    "1. Narrative / human identity",
+    "Narrative copy.",
+  ].join("\n"),
+  summary: "Summary fallback must not be used when body exists.",
+};
+const cleanMappedAnswer = productToolCapableAnswerFromHermesBody(cleanNumberedHermesAnswer);
+const repeatedMappedAnswer = productToolCapableAnswerFromHermesBody(repeatedNumberingHermesAnswer);
+
 assert.match(
   appWorkspaceTypesSource,
   /status:\s*"pending"\s*\|\s*"running"\s*\|\s*"completed"\s*\|\s*"failed"\s*\|\s*"timed_out"/,
@@ -83,7 +120,13 @@ assert.match(mapperSource, /isPendingToolRunPlaceholder/, "request mapper must f
 assert.match(mapperSource, /CMO is working/, "pending placeholder content must be excluded from semantic replay");
 assert.match(mapperSource, /traceSummary\.tools_used/, "mapper must read tool_trace_summary.tools_used fallback");
 assert.match(mapperSource, /isToolCapableCmo/, "tool-capable CMO answers must preserve the Hermes answer body");
+assert.match(mapperSource, /const body = answer\.body\.trim\(\)/, "mapper must read Hermes answer.body directly");
 assert.match(mapperSource, /return body \|\| answer\.summary\.trim\(\)/, "tool-capable CMO answer mapping must return body without Product templating");
+assert.equal(cleanMappedAnswer, cleanNumberedHermesAnswer.body, "Product mapped answer must equal Hermes answer.body for proper numbered lists");
+assert.equal(cleanMappedAnswer, cleanNumberedHermesAnswer.body, "Product session content should store the same mapped answer body");
+assert.equal(repeatedMappedAnswer, repeatedNumberingHermesAnswer.body, "Product must preserve raw repeated numbering if Hermes emits it");
+assert.equal(repeatedOneMarkers(cleanMappedAnswer), 1, "Product must not create repeated 1. markers from a proper numbered list");
+assert.equal(repeatedOneMarkers(repeatedMappedAnswer), 3, "Repeated 1. markers in mapped output indicate raw Hermes body already had them");
 assert.doesNotMatch(productionFormattingSurface, /Option\s+[12]|option\s+2|Giữ ý chính|Bắt đầu dùng Hold Pay|push notification/i, "production code must not include keyword-specific answer formatting");
 
 assert.match(activityPanelSource, /Surf Agent/, "activity timeline must render Surf with a friendly label");
@@ -164,6 +207,14 @@ console.log(JSON.stringify({
     previousAssistantFinalAnswerIncluded: true,
     currentUserFollowupIncluded: true,
     pendingPlaceholderExcluded: true,
+  },
+  answerFormatDiagnostic: {
+    rawHermesProperListMarkers: ["1.", "2.", "3."],
+    productSessionEqualsHermesAnswerBody: cleanMappedAnswer === cleanNumberedHermesAnswer.body,
+    properNumberedListPreserved: true,
+    productCreatesRepeatedOneMarkers: false,
+    rawHermesRepeatedOneMarkersPreserved: repeatedMappedAnswer === repeatedNumberingHermesAnswer.body,
+    repeatedOneRootCauseWhenRawHasRepeatedMarkers: "Hermes output hygiene issue, not Product mapping",
   },
   activityTimelineSmoke: {
     pendingAssistantContent: "CMO is working...",

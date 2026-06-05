@@ -23,7 +23,7 @@ interface ProjectContextImportCardProps {
 interface ConfirmReceipt {
   schema_version?: string;
   status?: string;
-  deduped?: boolean;
+  deduped?: boolean | Record<string, unknown> | unknown[];
   conflict?: boolean;
   workspace_id?: string;
   app_id?: string;
@@ -31,9 +31,10 @@ interface ConfirmReceipt {
   source_count?: number;
   accepted_count?: number;
   deduped_count?: number;
-  source_paths?: string[];
-  accepted_paths?: string[];
-  target_paths?: string[];
+  source_paths?: unknown;
+  accepted_paths?: unknown;
+  target_paths?: unknown;
+  results?: unknown[];
   warnings?: string[];
   errors?: string[];
   vault_write_performed?: boolean;
@@ -54,7 +55,82 @@ type ImportStatus = "idle" | "reading" | "previewing" | "confirming" | "complete
 const allowedMarkdownMimeTypes = new Set(["text/markdown", "text/plain", ""]);
 
 function receiptList(values: unknown): string[] {
-  return Array.isArray(values) ? values.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [];
+  if (Array.isArray(values)) {
+    return values.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  }
+
+  if (typeof values === "object" && values !== null) {
+    return Object.values(values).filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  }
+
+  return [];
+}
+
+function finiteCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function pathCount(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.filter((item) => typeof item === "string" && item.trim().length > 0).length;
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return Object.keys(value).length;
+  }
+
+  return 0;
+}
+
+function resultPathCount(results: unknown, key: "source_path" | "accepted_path"): number {
+  if (!Array.isArray(results)) {
+    return 0;
+  }
+
+  return results.filter((result) => typeof result === "object" && result !== null && typeof (result as Record<string, unknown>)[key] === "string").length;
+}
+
+function dedupedMapCount(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.filter((item) => item === true || (typeof item === "object" && item !== null && (item as Record<string, unknown>).deduped === true)).length;
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return Object.values(value).filter((item) => item === true || (typeof item === "object" && item !== null && (item as Record<string, unknown>).deduped === true)).length;
+  }
+
+  return 0;
+}
+
+function resultDedupedCount(results: unknown): number {
+  if (!Array.isArray(results)) {
+    return 0;
+  }
+
+  return results.filter((result) => typeof result === "object" && result !== null && (result as Record<string, unknown>).deduped === true).length;
+}
+
+export function projectContextReceiptCounts(receipt: ConfirmReceipt | null): { sourceCount: number; acceptedCount: number; dedupedCount: number } {
+  if (!receipt) {
+    return {
+      sourceCount: 0,
+      acceptedCount: 0,
+      dedupedCount: 0,
+    };
+  }
+
+  const sourcePathCount = pathCount(receipt.source_paths);
+  const acceptedPathCount = pathCount(receipt.accepted_paths);
+  const resultSourceCount = resultPathCount(receipt.results, "source_path");
+  const resultAcceptedCount = resultPathCount(receipt.results, "accepted_path");
+  const resultDeduped = resultDedupedCount(receipt.results);
+  const mappedDeduped = dedupedMapCount(receipt.deduped);
+
+  return {
+    sourceCount: finiteCount(receipt.source_count) ?? (sourcePathCount || resultSourceCount),
+    acceptedCount: finiteCount(receipt.accepted_count) ?? (acceptedPathCount || resultAcceptedCount),
+    dedupedCount: finiteCount(receipt.deduped_count) ?? (resultDeduped || mappedDeduped),
+  };
 }
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
@@ -104,6 +180,7 @@ export function ProjectContextImportCard({ app, onImported }: ProjectContextImpo
   const previewErrors = previewReceipt?.errors ?? [];
   const confirmErrors = confirmReceipt?.errors ?? [];
   const confirmWarnings = confirmReceipt?.warnings ?? [];
+  const receiptCounts = projectContextReceiptCounts(confirmReceipt);
   const hasDetectedFiles = Boolean(previewReceipt?.detected.length);
   const hasBlockingConflict = Boolean(previewReceipt?.conflicts.length);
   const hasPreviewErrors = previewErrors.length > 0;
@@ -372,9 +449,9 @@ export function ProjectContextImportCard({ app, onImported }: ProjectContextImpo
             {confirmReceipt.deduped ? <Badge variant="blue">deduped</Badge> : null}
           </div>
           <div className="mt-3 grid gap-2 text-xs font-semibold leading-5 text-emerald-900 md:grid-cols-3">
-            <div>Source count: {confirmReceipt.source_count ?? "unknown"}</div>
-            <div>Accepted count: {confirmReceipt.accepted_count ?? "unknown"}</div>
-            <div>Deduped count: {confirmReceipt.deduped_count ?? "unknown"}</div>
+            <div>Source count: {receiptCounts.sourceCount}</div>
+            <div>Accepted count: {receiptCounts.acceptedCount}</div>
+            <div>Deduped count: {receiptCounts.dedupedCount}</div>
           </div>
           {confirmReceiptPaths(confirmReceipt).length ? (
             <div className="mt-3 grid gap-1 text-xs font-semibold leading-5 text-emerald-900">
