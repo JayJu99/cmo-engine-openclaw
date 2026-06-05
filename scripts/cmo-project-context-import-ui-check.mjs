@@ -79,8 +79,9 @@ assert.doesNotMatch(componentSource, /Eggs Vault|eggs-vault|Holdstation Mini App
 assert.match(registrySource, /workspaceId: "feeback"/, "Feeback workspace naming must remain intentional");
 assert.match(registrySource, /aliases: \["feedback"\]/, "Feedback alias must remain intact");
 
-const { projectContextReceiptCounts } = loadTsxModule(componentPath);
+const { projectContextReceiptCounts, projectContextReceiptState } = loadTsxModule(componentPath);
 assert.equal(typeof projectContextReceiptCounts, "function", "receipt count helper must be exported for checks");
+assert.equal(typeof projectContextReceiptState, "function", "receipt state helper must be exported for checks");
 assert.deepEqual(
   projectContextReceiptCounts({
     source_count: 5,
@@ -114,6 +115,7 @@ assert.deepEqual(
       {
         source_path: "13 Sources/Source Notes/aion/project-context/audience.md",
         accepted_path: "12 Knowledge/Workspace Lessons/aion/project-audience.md",
+        status: "deduped",
         deduped: true,
       },
       {
@@ -125,6 +127,66 @@ assert.deepEqual(
   }),
   { sourceCount: 2, acceptedCount: 2, dedupedCount: 1 },
   "receipt counts must fall back to results[] paths and deduped flags",
+);
+assert.deepEqual(
+  projectContextReceiptCounts({
+    results: [
+      {
+        source_path: "13 Sources/Source Notes/aion/project-context/audience.md",
+        accepted_path: "12 Knowledge/Workspace Lessons/aion/project-audience.md",
+        status: "deduped",
+      },
+    ],
+  }),
+  { sourceCount: 1, acceptedCount: 1, dedupedCount: 1 },
+  "receipt counts must count results[].status=deduped",
+);
+assert.deepEqual(
+  projectContextReceiptState({
+    status: "completed",
+    write_performed: false,
+    results: [
+      {
+        status: "deduped",
+        deduped: true,
+        source_path: "13 Sources/Source Notes/aion/project-context/audience.md",
+        accepted_path: "12 Knowledge/Workspace Lessons/aion/project-audience.md",
+      },
+    ],
+  }),
+  {
+    label: "Already up to date",
+    detail: "Matching project context already exists. No files were created or updated.",
+    isDedupeOnly: true,
+  },
+  "completed write_performed=false dedupe receipts must render as Already up to date",
+);
+assert.deepEqual(
+  projectContextReceiptState({
+    status: "completed",
+    write_performed: true,
+    source_count: 1,
+    accepted_count: 1,
+  }),
+  {
+    label: "Import completed",
+    detail: "Project context import completed through Vault Agent.",
+    isDedupeOnly: false,
+  },
+  "created/updated receipts must still render as completed imports",
+);
+assert.deepEqual(
+  projectContextReceiptState({
+    status: "conflict",
+    conflict: true,
+    errors: ["changed_content_conflict"],
+  }),
+  {
+    label: "Conflict",
+    detail: "Some files changed existing project context. Review before overwriting.",
+    isDedupeOnly: false,
+  },
+  "conflict receipts must still render conflict details",
 );
 
 console.log(JSON.stringify({
@@ -139,6 +201,8 @@ console.log(JSON.stringify({
   pathFallbackCountMapping: true,
   resultsFallbackCountMapping: true,
   dedupedCountMapping: true,
+  dedupeOnlyRendering: "Already up to date",
+  createdUpdatedCountLabels: "Updated source count / Updated accepted count",
   conflictGuard: true,
   feebackNamingUnchanged: true,
 }, null, 2));

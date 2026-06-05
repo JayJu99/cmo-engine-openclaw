@@ -6,16 +6,21 @@ export const HERMES_VAULT_AGENT_IMPORT_PROJECT_CONTEXT_ENDPOINT = "/agents/vault
 export interface ProjectContextImportReceipt {
   schema_version?: string;
   status?: string;
-  deduped?: boolean;
+  deduped?: boolean | Record<string, unknown> | unknown[];
   conflict?: boolean;
   workspace_id?: string;
   app_id?: string;
   project_name?: string;
   source_count?: number;
   accepted_count?: number;
+  deduped_count?: number;
+  source_paths?: unknown;
+  accepted_paths?: unknown;
   target_paths?: unknown;
+  results?: unknown[];
   warnings?: string[];
   errors?: string[];
+  write_performed?: boolean;
   vault_write_performed?: boolean;
   gbrain_called?: boolean;
   promotion_performed?: boolean;
@@ -57,16 +62,23 @@ function normalizeReceipt(value: unknown): ProjectContextImportReceipt | undefin
   return {
     schema_version: stringValue(receipt.schema_version),
     status: stringValue(receipt.status),
-    deduped: receipt.deduped === true,
+    deduped: receipt.deduped === true || isRecord(receipt.deduped) || Array.isArray(receipt.deduped)
+      ? receipt.deduped as boolean | Record<string, unknown> | unknown[]
+      : undefined,
     conflict: receipt.conflict === true || receipt.status === "conflict",
     workspace_id: stringValue(receipt.workspace_id),
     app_id: stringValue(receipt.app_id),
     project_name: stringValue(receipt.project_name),
     source_count: nonNegativeNumber(receipt.source_count),
     accepted_count: nonNegativeNumber(receipt.accepted_count),
+    deduped_count: nonNegativeNumber(receipt.deduped_count),
+    source_paths: receipt.source_paths,
+    accepted_paths: receipt.accepted_paths,
     target_paths: receipt.target_paths,
+    results: Array.isArray(receipt.results) ? receipt.results.slice(0, 50) : undefined,
     warnings: stringList(receipt.warnings),
     errors: stringList(receipt.errors),
+    write_performed: typeof receipt.write_performed === "boolean" ? receipt.write_performed : undefined,
     vault_write_performed: typeof receipt.vault_write_performed === "boolean" ? receipt.vault_write_performed : undefined,
     gbrain_called: receipt.gbrain_called === true,
     promotion_performed: receipt.promotion_performed === true,

@@ -37,6 +37,7 @@ interface ConfirmReceipt {
   results?: unknown[];
   warnings?: string[];
   errors?: string[];
+  write_performed?: boolean;
   vault_write_performed?: boolean;
   gbrain_called?: boolean;
   promotion_performed?: boolean;
@@ -107,7 +108,14 @@ function resultDedupedCount(results: unknown): number {
     return 0;
   }
 
-  return results.filter((result) => typeof result === "object" && result !== null && (result as Record<string, unknown>).deduped === true).length;
+  return results.filter((result) => {
+    if (typeof result !== "object" || result === null) {
+      return false;
+    }
+
+    const record = result as Record<string, unknown>;
+    return record.deduped === true || record.status === "deduped";
+  }).length;
 }
 
 export function projectContextReceiptCounts(receipt: ConfirmReceipt | null): { sourceCount: number; acceptedCount: number; dedupedCount: number } {
@@ -130,6 +138,43 @@ export function projectContextReceiptCounts(receipt: ConfirmReceipt | null): { s
     sourceCount: finiteCount(receipt.source_count) ?? (sourcePathCount || resultSourceCount),
     acceptedCount: finiteCount(receipt.accepted_count) ?? (acceptedPathCount || resultAcceptedCount),
     dedupedCount: finiteCount(receipt.deduped_count) ?? (resultDeduped || mappedDeduped),
+  };
+}
+
+export function projectContextReceiptState(receipt: ConfirmReceipt | null): { label: string; detail: string; isDedupeOnly: boolean } {
+  const counts = projectContextReceiptCounts(receipt);
+  const completed = receipt?.status === "completed";
+  const noWrite = receipt?.write_performed === false || receipt?.vault_write_performed === false;
+  const isDedupeOnly = Boolean(completed && noWrite && counts.dedupedCount > 0);
+
+  if (isDedupeOnly) {
+    return {
+      label: "Already up to date",
+      detail: "Matching project context already exists. No files were created or updated.",
+      isDedupeOnly: true,
+    };
+  }
+
+  if (receipt?.conflict || receipt?.status === "conflict") {
+    return {
+      label: "Conflict",
+      detail: "Some files changed existing project context. Review before overwriting.",
+      isDedupeOnly: false,
+    };
+  }
+
+  if (completed) {
+    return {
+      label: "Import completed",
+      detail: "Project context import completed through Vault Agent.",
+      isDedupeOnly: false,
+    };
+  }
+
+  return {
+    label: receipt?.status ?? "Import receipt",
+    detail: "Project context import receipt is available.",
+    isDedupeOnly: false,
   };
 }
 
@@ -181,11 +226,13 @@ export function ProjectContextImportCard({ app, onImported }: ProjectContextImpo
   const confirmErrors = confirmReceipt?.errors ?? [];
   const confirmWarnings = confirmReceipt?.warnings ?? [];
   const receiptCounts = projectContextReceiptCounts(confirmReceipt);
+  const receiptState = projectContextReceiptState(confirmReceipt);
   const hasDetectedFiles = Boolean(previewReceipt?.detected.length);
   const hasBlockingConflict = Boolean(previewReceipt?.conflicts.length);
   const hasPreviewErrors = previewErrors.length > 0;
   const isBusy = status === "reading" || status === "previewing" || status === "confirming";
-  const canConfirm = Boolean(previewReceipt) && hasDetectedFiles && !hasBlockingConflict && !hasPreviewErrors && !isBusy;
+  const importCompleted = status === "completed" && Boolean(confirmReceipt);
+  const canConfirm = Boolean(previewReceipt) && hasDetectedFiles && !hasBlockingConflict && !hasPreviewErrors && !isBusy && !importCompleted;
 
   function buildRequestPayload(mode: "preview" | "confirm", requestFiles: ProjectContextImportFile[]) {
     return {
@@ -446,11 +493,13 @@ export function ProjectContextImportCard({ app, onImported }: ProjectContextImpo
           <div className="flex flex-wrap items-center gap-2">
             <div className="font-bold text-emerald-950">Import receipt</div>
             <Badge variant={confirmReceipt.conflict ? "red" : confirmReceipt.status === "completed" ? "green" : "orange"}>{confirmReceipt.status ?? "unknown"}</Badge>
-            {confirmReceipt.deduped ? <Badge variant="blue">deduped</Badge> : null}
+            {receiptCounts.dedupedCount > 0 ? <Badge variant="blue">deduped</Badge> : null}
           </div>
+          <div className="mt-2 text-sm font-bold text-emerald-950">{receiptState.label}</div>
+          <p className="mt-1 text-sm font-semibold leading-6 text-emerald-900">{receiptState.detail}</p>
           <div className="mt-3 grid gap-2 text-xs font-semibold leading-5 text-emerald-900 md:grid-cols-3">
-            <div>Source count: {receiptCounts.sourceCount}</div>
-            <div>Accepted count: {receiptCounts.acceptedCount}</div>
+            {!receiptState.isDedupeOnly ? <div>Updated source count: {receiptCounts.sourceCount}</div> : null}
+            {!receiptState.isDedupeOnly ? <div>Updated accepted count: {receiptCounts.acceptedCount}</div> : null}
             <div>Deduped count: {receiptCounts.dedupedCount}</div>
           </div>
           {confirmReceiptPaths(confirmReceipt).length ? (
@@ -475,7 +524,7 @@ export function ProjectContextImportCard({ app, onImported }: ProjectContextImpo
       <div className="mt-5 flex flex-wrap items-center gap-3">
         <Button type="button" onClick={() => void confirmImport()} disabled={!canConfirm}>
           {status === "confirming" ? <icons.RefreshCw className="animate-spin" /> : <icons.Check />}
-          Import as project context
+          {importCompleted ? "Import again after file changes" : "Import as project context"}
         </Button>
         <CardDescription>{canConfirm ? "Preview is ready to import." : "Preview valid project context files before importing."}</CardDescription>
       </div>

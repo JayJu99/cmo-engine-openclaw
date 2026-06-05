@@ -176,15 +176,31 @@ try {
   global.fetch = async () => new Response(JSON.stringify({
     schema_version: "project_context_import.receipt.v1",
     status: "completed",
-    deduped: true,
+    write_performed: false,
+    deduped: {
+      audience: true,
+    },
     workspace_id: "aion",
     app_id: "aion",
+    results: [
+      {
+        doc_type: "audience",
+        status: "deduped",
+        deduped: true,
+        conflict: false,
+        source_path: "13 Sources/Source Notes/aion/project-context/audience.md",
+        accepted_path: "12 Knowledge/Workspace Lessons/aion/project-audience.md",
+      },
+    ],
     warnings: ["deduped"],
     errors: [],
   }), { status: 200 });
   const deduped = await importProjectContextViaVaultAgent(validation.request);
   assert.equal(deduped.ok, true);
-  assert.equal(deduped.receipt.deduped, true);
+  assert.deepEqual(deduped.receipt.deduped, { audience: true });
+  assert.equal(deduped.receipt.write_performed, false);
+  assert.equal(deduped.receipt.results.length, 1);
+  assert.equal(deduped.receipt.results[0].status, "deduped");
 
   global.fetch = async () => new Response(JSON.stringify({
     schema_version: "project_context_import.receipt.v1",
