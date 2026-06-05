@@ -66,6 +66,7 @@ function acceptedNote({ workspaceId, projectName, type, title, sourcePath, body 
   return `${frontmatter({
     record_type: "workspace_knowledge",
     workspace_id: workspaceId,
+    scope: "workspace",
     truth_status: "accepted",
     review_status: "accepted",
     visibility: "workspace",

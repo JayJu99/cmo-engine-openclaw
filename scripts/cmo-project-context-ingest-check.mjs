@@ -61,6 +61,7 @@ try {
   assert.match(sourceAudience, /source_type: project_context/);
   assert.match(acceptedAudience, /record_type: workspace_knowledge/);
   assert.match(acceptedAudience, /workspace_id: eggs-vault/);
+  assert.match(acceptedAudience, /scope: workspace/);
   assert.match(acceptedAudience, /truth_status: accepted/);
   assert.match(acceptedAudience, /review_status: accepted/);
   assert.match(acceptedAudience, /visibility: workspace/);
