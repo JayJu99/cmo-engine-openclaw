@@ -15,6 +15,7 @@ import { AppMemorySection } from "@/components/cmo-apps/app-memory-section";
 import { CMOChatPanel } from "@/components/cmo-apps/cmo-chat-panel";
 import { ContextBriefCard } from "@/components/cmo-apps/context-brief-card";
 import { PromotionCandidatesSection } from "@/components/cmo-apps/promotion-candidates-section";
+import { ProjectContextImportCard } from "@/components/cmo-apps/project-context-import-card";
 import type { AppWorkspaceState } from "@/lib/cmo/vault-files";
 import type {
   AppPlanType,
@@ -2284,6 +2285,8 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
           </div>
 
           <div className="space-y-6">
+            <ProjectContextImportCard app={app} onImported={refreshWorkspaceAfterMemoryChange} />
+
             <SectionCard title="Backend Status" icon={<icons.ShieldCheck />}>
               <div className="grid gap-3">
                 <StatusChipCard label="Context" badge={contextStatus} variant={contextStatusVariant(contextStatus)} detail="Resolved automatically" />
