@@ -144,6 +144,24 @@ function stripFrontmatter(content: string): string {
   return content.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
 }
 
+function parseFrontmatter(content: string): Record<string, string> {
+  const match = content.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+
+  if (!match) {
+    return {};
+  }
+
+  const frontmatter: Record<string, string> = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*?)\s*$/);
+    if (field) {
+      frontmatter[field[1]] = field[2].replace(/^['"]|['"]$/g, "");
+    }
+  }
+
+  return frontmatter;
+}
+
 function compactText(value: string, limit = 700): string {
   const compacted = stripFrontmatter(value)
     .split(/\r?\n/)
@@ -267,6 +285,83 @@ function physicalAppPath(app: AppWorkspace, fileName = ""): string {
 
 function logicalAppPath(app: AppWorkspace, fileName = ""): string {
   return fileName ? `${app.logicalAppPath}/${fileName}` : app.logicalAppPath;
+}
+
+async function projectContextItem(app: AppWorkspace, workspaceId: string, maxItemChars: number): Promise<ContextItem> {
+  const basePath = `12 Knowledge/Workspace Lessons/${workspaceId}`;
+  let entries: string[] = [];
+
+  try {
+    const dirents = await readdir(vaultFilePath(basePath), { withFileTypes: true });
+    entries = dirents
+      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md"))
+      .map((entry) => entry.name)
+      .sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const accepted = [] as Array<{ title: string; path: string; content: string }>;
+  for (const fileName of entries) {
+    const relativePath = `${basePath}/${fileName}`;
+    const content = await readVaultText(relativePath);
+    if (!content) {
+      continue;
+    }
+    const frontmatter = parseFrontmatter(content);
+    const isAcceptedProjectContext =
+      frontmatter.record_type === "workspace_knowledge" &&
+      frontmatter.workspace_id === workspaceId &&
+      frontmatter.truth_status === "accepted" &&
+      frontmatter.review_status === "accepted" &&
+      frontmatter.visibility === "workspace" &&
+      frontmatter.source_type === "project_context";
+
+    if (!isAcceptedProjectContext) {
+      continue;
+    }
+
+    const title = fileName
+      .replace(/\.md$/i, "")
+      .replace(/^project-/, "Project ")
+      .replace(/-/g, " ")
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+    accepted.push({ title, path: relativePath, content });
+  }
+
+  const sections = accepted.map((entry) => [
+    `## ${entry.title}`,
+    `Source: ${entry.path}`,
+    "Status: accepted workspace project context",
+    "",
+    stripFrontmatter(entry.content),
+  ].join("\n"));
+  const combined = sections.join("\n\n");
+  const limited = limitedContent(combined, maxItemChars);
+  const exists = accepted.length > 0;
+  const quality = exists ? "confirmed" : "missing";
+
+  return {
+    id: `${app.id}-project-context`,
+    kind: "project_context",
+    title: "Accepted Project Context",
+    source: {
+      sourceId: app.sourceId,
+      type: "vault_bundle",
+      label: basePath,
+      path: basePath,
+    },
+    inclusionReason: "Accepted workspace project context is included from the active workspace only.",
+    exists,
+    content: limited.content,
+    contentPreview: exists ? compactText(combined, 700) : `No accepted project context found at ${basePath}.`,
+    contextQuality: quality,
+    tokenEstimate: tokenEstimate(limited.content),
+    truncated: limited.truncated,
+    itemCount: accepted.length,
+  };
 }
 
 async function priorityItem(app: AppWorkspace, maxItemChars: number): Promise<ContextItem> {
@@ -684,7 +779,7 @@ async function businessMetricsItem(app: AppWorkspace, maxItemChars: number): Pro
       sourceId: app.sourceId,
       type: "business_metrics_json",
       label: "Dune Business Metrics",
-      path: "data/cmo-dashboard/business-metrics/holdstation-mini-app/dune",
+      path: `data/cmo-dashboard/business-metrics/${app.id}/dune`,
     },
     inclusionReason: "App-scoped Dune / Worldchain business metrics are included from cmo.business-metrics.v1 JSON when available.",
     exists: true,
@@ -1194,6 +1289,7 @@ function contextBrief(app: AppWorkspace, contextPack: ContextPack): CMOContextBr
     promotion_candidates: "Memory Candidates",
     business_metrics: "Business Metrics",
     indexed_context_supplement: "Indexed Context Supplement",
+    project_context: "Project Context",
   };
 
   return {
@@ -1238,6 +1334,7 @@ export async function buildContextPack(options: BuildContextPackOptions): Promis
   const runtimeMode = options.runtimeMode ?? "fallback";
   const canonicalItems = [
     await priorityItem(app, maxItemChars),
+    await projectContextItem(app, workspaceId, maxItemChars),
     await appMemoryItem(app, maxItemChars),
     await latestSessionsItem(app, maxItemChars),
     await promotionCandidatesItem(app, maxItemChars),

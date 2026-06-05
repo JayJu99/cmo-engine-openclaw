@@ -102,6 +102,7 @@ function includedContextLabels(input: CmoRuntimeTurnInput): string[] {
     promotion_candidates: "Memory Candidates",
     business_metrics: "Business Metrics",
     indexed_context_supplement: "Indexed Context Supplement",
+    project_context: "Project Context",
   };
 
   return input.contextPack.items

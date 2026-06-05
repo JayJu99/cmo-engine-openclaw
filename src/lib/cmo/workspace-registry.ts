@@ -63,6 +63,17 @@ export const workspaceRegistry: WorkspaceRegistryEntry[] = [
   },
   {
     tenantId: "holdstation",
+    workspaceId: "eggs-vault",
+    appId: "eggs-vault",
+    route: "/apps/eggs-vault",
+    sourceId: buildSourceId("eggs-vault", "eggs-vault"),
+    logicalAppPath: "Apps/Eggs Vault",
+    physicalAppVaultPath: "02 Apps/World Mini App/Eggs Vault",
+    appVaultPath: "Apps/Eggs Vault",
+    physicalVaultPath: "02 Apps/World Mini App/Eggs Vault",
+  },
+  {
+    tenantId: "holdstation",
     workspaceId: "hold-pay",
     appId: "hold-pay",
     route: "/apps/hold-pay",

@@ -62,6 +62,28 @@ function normalized(message: string): string {
   return message.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
+function projectContextFromRequest(request: CMOAppChatRequest) {
+  const workspaceId = request.workspaceId || request.appId;
+  const notes = request.context.selectedNotes
+    .filter((note) => note.selected !== false && note.exists !== false)
+    .filter((note) => !note.path || note.path.includes(`/Workspace Lessons/${workspaceId}/`) || note.path.includes(`/${workspaceId}/`))
+    .map((note) => ({
+      title: note.title,
+      path: note.path,
+      reason: note.reason,
+      preview: note.contentPreview,
+      context_quality: note.contextQuality,
+    }))
+    .filter((note) => note.preview || note.path);
+
+  return {
+    workspace_id: workspaceId,
+    app_id: request.appId,
+    app_name: request.appName,
+    selected_project_context: notes,
+  };
+}
+
 function explicitWebResearch(message: string): boolean {
   const text = normalized(message);
   const publicSourceIntent = /\b(find public sources?|public sources?|public information|public examples?|official docs?|official documentation|official pages?|web research|research public|search web|find sources?|sources? about|browse|urls?|links?|website|docs?|documentation)\b/.test(text);
@@ -125,14 +147,15 @@ function extractMaxResults(topic: string): number {
   return Number.isFinite(value) && value > 0 ? value : 5;
 }
 
-function buildDirectSurfXBrief(topic: string): HermesSurfXBrief {
+function buildDirectSurfXBrief(request: CMOAppChatRequest, topic: string): HermesSurfXBrief {
+  const projectContext = projectContextFromRequest(request);
   return {
     handoff_id: `direct_surf_x_${Date.now()}`,
     source_agent: "jay",
     target_agent: "surf",
     research_mode: "x_search",
     mode: "direct_jay",
-    workspace: "holdstation-mini-app",
+    workspace: projectContext.workspace_id,
     topic,
     objective: `Search X read-only for recent public posts about ${topic} and structure social signal for CMO.`,
     timeframe: extractXTimeframe(topic),
@@ -147,6 +170,10 @@ function buildDirectSurfXBrief(topic: string): HermesSurfXBrief {
     source_context: {
       raw_request: topic,
       origin: "cmo_engine_direct_surf_x_command",
+      workspace_id: projectContext.workspace_id,
+      app_id: projectContext.app_id,
+      app_name: projectContext.app_name,
+      delegation_context: projectContext,
     },
     return_to: "cmo_engine",
     max_turns: 1,
@@ -159,14 +186,15 @@ function extractInputMaterial(objective: string): string[] {
   return [labeled || objective].filter(Boolean);
 }
 
-function buildDirectLast30DaysBrief(topic: string): HermesSurfLast30DaysBrief {
+function buildDirectLast30DaysBrief(request: CMOAppChatRequest, topic: string): HermesSurfLast30DaysBrief {
+  const projectContext = projectContextFromRequest(request);
   return {
     handoff_id: `direct_surf_last30days_${Date.now()}`,
     source_agent: "jay",
     target_agent: "surf",
     research_mode: "last30days",
     mode: "direct_jay",
-    workspace: "holdstation-mini-app",
+    workspace: projectContext.workspace_id,
     topic,
     objective: `Search Reddit, HackerNews, and Polymarket only for last-30-days community trend signals about ${topic}.`,
     timeframe: "last 30 days",
@@ -186,23 +214,28 @@ function buildDirectLast30DaysBrief(topic: string): HermesSurfLast30DaysBrief {
     source_context: {
       raw_request: topic,
       origin: "cmo_engine_direct_trend_command",
+      workspace_id: projectContext.workspace_id,
+      app_id: projectContext.app_id,
+      app_name: projectContext.app_name,
+      delegation_context: projectContext,
     },
     return_to: "cmo_engine",
     max_turns: 1,
   };
 }
 
-function buildDirectSurfBrief(objective: string): HermesSurfBrief {
+export function buildDirectSurfBrief(request: CMOAppChatRequest, objective: string): HermesSurfBrief {
   const allowWebResearch = explicitWebResearch(objective);
   const maxSources = extractMaxSources(objective) ?? (allowWebResearch ? 5 : undefined);
   const sourceTargets = extractNamedTargets(objective);
+  const projectContext = projectContextFromRequest(request);
 
   return {
     handoff_id: `direct_surf_${Date.now()}`,
     source_agent: "jay",
     target_agent: "surf",
     mode: "direct_jay",
-    workspace: "holdstation-mini-app",
+    workspace: projectContext.workspace_id,
     task_type: "research_pack",
     objective,
     input_material: allowWebResearch ? [] : extractInputMaterial(objective),
@@ -217,6 +250,10 @@ function buildDirectSurfBrief(objective: string): HermesSurfBrief {
     source_context: {
       raw_request: objective,
       origin: "cmo_engine_direct_surf_command",
+      workspace_id: projectContext.workspace_id,
+      app_id: projectContext.app_id,
+      app_name: projectContext.app_name,
+      delegation_context: projectContext,
     },
     constraints: [
       "Do not invent unsupported sources, metrics, competitors, or claims",
@@ -545,7 +582,7 @@ export async function maybeHandleSurfBridge(request: CMOAppChatRequest): Promise
     if (!trendTopic) {
       return { handled: true, response: { answer: "## Agent Execution\n\n- Direct Last30Days command detected.\n- CMO was not invoked for strategic decisioning.\n\n## Research Pack\n\nPlease add the community trend topic after `/trend`.", assumptions: [], suggestedActions: [{ type: "direct_trend_empty", label: "Provide the trend topic for Last30Days." }], runtimeProvider: "hermes", runtimeAgent: "surf-last30days", isRuntimeFallback: false } };
     }
-    const brief = buildDirectLast30DaysBrief(trendTopic);
+    const brief = buildDirectLast30DaysBrief(request, trendTopic);
     const result = await executeHermesSurfLast30Days(brief);
     if (!result.ok || !result.response) {
       const reason = result.failureReason ?? "Hermes Surf Last30Days execution failed.";
@@ -560,8 +597,8 @@ export async function maybeHandleSurfBridge(request: CMOAppChatRequest): Promise
     if (!pulseTopic) {
       return { handled: true, response: { answer: "## Agent Execution\n\n- Direct Pulse command detected.\n- CMO was not invoked for strategic decisioning.\n\n## Research Pack\n\nPlease add the pulse research topic after `/pulse`.", assumptions: [], suggestedActions: [{ type: "direct_pulse_empty", label: "Provide the topic for Pulse." }], runtimeProvider: "hermes", runtimeAgent: "surf-last30days+surf-x", isRuntimeFallback: false } };
     }
-    const last30Brief = buildDirectLast30DaysBrief(pulseTopic);
-    const xBrief = buildDirectSurfXBrief(pulseTopic);
+    const last30Brief = buildDirectLast30DaysBrief(request, pulseTopic);
+    const xBrief = buildDirectSurfXBrief(request, pulseTopic);
     const [last30Result, xResult] = await Promise.all([executeHermesSurfLast30Days(last30Brief), executeHermesSurfX(xBrief)]);
     const failed = !last30Result.ok || !last30Result.response || !xResult.ok || !xResult.response;
     return { handled: true, response: { answer: renderPulseResponse(last30Result, xResult), assumptions: [], suggestedActions: [{ type: failed ? "direct_pulse_partial" : "direct_pulse_completed", label: failed ? "Review available Pulse branch and retry failed branch if needed." : "Review combined Pulse research pack." }], runtimeProvider: "hermes", runtimeAgent: "surf-last30days+surf-x", isRuntimeFallback: failed, runtimeError: failed ? [last30Result.failureReason, xResult.failureReason].filter(Boolean).join("; ") : undefined } };
@@ -593,7 +630,7 @@ export async function maybeHandleSurfBridge(request: CMOAppChatRequest): Promise
       };
     }
 
-    const brief = buildDirectSurfXBrief(surfXTopic);
+    const brief = buildDirectSurfXBrief(request, surfXTopic);
     const result = await executeHermesSurfX(brief);
 
     if (!result.ok || !result.response) {
@@ -655,7 +692,7 @@ export async function maybeHandleSurfBridge(request: CMOAppChatRequest): Promise
     };
   }
 
-  const brief = buildDirectSurfBrief(objective);
+  const brief = buildDirectSurfBrief(request, objective);
   const result = await executeHermesSurf(brief);
 
   if (!result.ok || !result.response) {

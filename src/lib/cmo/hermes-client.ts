@@ -129,6 +129,10 @@ export interface HermesSurfXBrief {
   source_context: {
     raw_request: string;
     origin: string;
+    workspace_id?: string;
+    app_id?: string;
+    app_name?: string;
+    delegation_context?: unknown;
   };
   return_to: "cmo_engine";
   max_turns: number;
@@ -150,6 +154,10 @@ export interface HermesSurfLast30DaysBrief {
   source_context: {
     raw_request: string;
     origin: string;
+    workspace_id?: string;
+    app_id?: string;
+    app_name?: string;
+    delegation_context?: unknown;
   };
   return_to: "cmo_engine";
   max_turns: number;

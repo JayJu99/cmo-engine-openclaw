@@ -29,13 +29,36 @@ function inferTone(message: string): string | undefined {
   return toneMatch?.[1]?.trim();
 }
 
-function buildDirectEchoBrief(request: CMOAppChatRequest, objective: string): HermesEchoBrief {
+function projectContextFromRequest(request: CMOAppChatRequest) {
+  const workspaceId = request.workspaceId || request.appId;
+  const notes = request.context.selectedNotes
+    .filter((note) => note.selected !== false && note.exists !== false)
+    .filter((note) => !note.path || note.path.includes(`/Workspace Lessons/${workspaceId}/`) || note.path.includes(`/${workspaceId}/`))
+    .map((note) => ({
+      title: note.title,
+      path: note.path,
+      reason: note.reason,
+      preview: note.contentPreview,
+      context_quality: note.contextQuality,
+    }))
+    .filter((note) => note.preview || note.path);
+
+  return {
+    workspace_id: workspaceId,
+    app_id: request.appId,
+    app_name: request.appName,
+    selected_project_context: notes,
+  };
+}
+
+export function buildDirectEchoBrief(request: CMOAppChatRequest, objective: string): HermesEchoBrief {
+  const projectContext = projectContextFromRequest(request);
   return {
     handoff_id: `direct_echo_${Date.now()}`,
     source_agent: "jay",
     target_agent: "echo",
     mode: "direct_jay",
-    workspace: "holdstation-mini-app",
+    workspace: projectContext.workspace_id,
     task_type: "direct_content_task",
     objective,
     platform: platformFromMessage(objective) ?? "unknown",
@@ -43,6 +66,7 @@ function buildDirectEchoBrief(request: CMOAppChatRequest, objective: string): He
     source_context: {
       raw_request: objective,
       origin: "cmo_engine_direct_echo_command",
+      delegation_context: projectContext,
     },
     constraints: [
       "Do not invent unsupported metrics",
@@ -137,23 +161,25 @@ export function echoBriefMarkdown(brief: HermesEchoBrief): string {
 
 function buildEchoBrief(request: CMOAppChatRequest, platform: string): HermesEchoBrief {
   const deliverable = deliverableForPlatform(platform);
+  const projectContext = projectContextFromRequest(request);
 
   return {
     handoff_id: `cmo_echo_${Date.now()}`,
     source_agent: "cmo",
     target_agent: "echo",
-    workspace: "holdstation-mini-app",
+    workspace: projectContext.workspace_id,
     task_type: deliverable.taskType,
     objective: request.message,
     platform,
-    audience: "crypto-native Holdstation Mini App users and prospects",
+    audience: `${request.appName} audience from accepted workspace project context`,
     source_context: {
-      metrics_source: "Dune / Worldchain",
+      metrics_source: "Active workspace context pack",
       allowed_metrics: [],
       claim_constraints: [],
       raw_request: request.message,
+      delegation_context: projectContext,
     },
-    tone: "sharp, crypto-native, non-corporate",
+    tone: "follow accepted workspace campaign and content rules",
     deliverable: {
       format: deliverable.format,
       count: deliverable.count,
@@ -227,22 +253,24 @@ export function buildMixedCmoEchoRuntimeMessage(message: string): string {
 
 export function buildMixedEchoBriefFromCmoAnswer(request: CMOAppChatRequest, cmoAnswer: string): HermesEchoBrief {
   const objective = request.message.replace(/@echo/gi, "Echo").trim();
+  const projectContext = projectContextFromRequest(request);
 
   return {
     handoff_id: `cmo_orchestrated_echo_${Date.now()}`,
     source_agent: "cmo",
     target_agent: "echo",
-    workspace: "holdstation-mini-app",
+    workspace: projectContext.workspace_id,
     task_type: "cmo_orchestrated_content_task",
     objective,
     platform: platformFromMessage(request.message) ?? "unknown",
-    audience: "crypto-native Holdstation Mini App users and prospects",
+    audience: `${request.appName} audience from accepted workspace project context`,
     source_context: {
-      metrics_source: "CMO strategic read",
+      metrics_source: "CMO strategic read plus active workspace context pack",
       allowed_metrics: [],
       claim_constraints: [],
       raw_request: request.message,
       origin: "cmo_engine_cmo_orchestrated_echo",
+      delegation_context: projectContext,
     },
     tone: inferTone(request.message) ?? "follow CMO strategic direction",
     deliverable: {

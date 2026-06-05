@@ -59,6 +59,17 @@ export const holdstationApps: AppWorkspace[] = [
     lastUpdated: "Vault-backed",
   },
   {
+    id: "eggs-vault",
+    slug: "eggs-vault",
+    ...registryFields("eggs-vault"),
+    name: "Eggs Vault",
+    group: "World Mini App",
+    stage: "Discovery",
+    currentMission: "Use accepted project context for Eggs Vault strategy, content, and research work.",
+    lastUpdated: "Vault-backed",
+    oneLiner: "Workspace for Eggs Vault audience, positioning, product truth, campaign rules, and content pillars.",
+  },
+  {
     id: "hold-pay",
     slug: "hold-pay",
     ...registryFields("hold-pay"),

@@ -592,7 +592,8 @@ export type ContextItemKind =
   | "latest_sessions"
   | "promotion_candidates"
   | "business_metrics"
-  | "indexed_context_supplement";
+  | "indexed_context_supplement"
+  | "project_context";
 export type CmoIndexedContextStatus = "off" | "skipped" | "used";
 export type CmoRuntimeErrorReason =
   | "unsupported_chat_turn"
