@@ -9,6 +9,7 @@ import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CmoAgentActivityPanel } from "@/components/cmo-apps/cmo-agent-activity-panel";
 import { icons } from "@/components/dashboard/icons";
+import { assistantDisplayMarkdown } from "@/lib/cmo/assistant-markdown-display";
 import type {
   AppWorkspace,
   CMOAppChatResponse,
@@ -312,38 +313,6 @@ function assistantProvenance(message: CMOChatMessage): string | null {
   }
 
   return message.runtimeMode === "live" ? "CMO Hermes - workspace context enabled" : "Workspace context answer";
-}
-
-function isBackendContextLine(line: string): boolean {
-  return (
-    /^(context used|unavailable context|context quality|context caution|draft or placeholder notes|graph hints|graph status|graph hint refs|runtime note|remote cmo adapter|cmo context pack)/i.test(line) ||
-    /\b(saved to vault|raw capture|context refs|session:\s*session_|vault path|vault_path|record id|record_id|target path|target_path|content_hash|approval_payload_hash|idempotency_key|gbrain_index|promotion_performed|side_effects|dry-run|receipt)\b/i.test(line) ||
-    /\b(vault_agent\.approved_write_result\.v1|vault_agent\.approved_write_dry_run\.v1|12 Knowledge|13 Sources|90 Runtime|sha256:)\b/i.test(line) ||
-    /\bsource:\s*[^.]+\.md\b/i.test(line) ||
-    /\b[A-Z][^:\n]*\/[^:\n]+\.md\b/.test(line) ||
-    /\b[A-Z][\w -]+\.md\b/.test(line)
-  );
-}
-
-function isBackendContextHeading(value: string): boolean {
-  return /^(context used|context|runtime note|graph hints|graph context|system context)$/i.test(value.trim());
-}
-
-function assistantDisplayMarkdown(content: string): string {
-  return content
-    .split(/\r?\n/)
-    .filter((line) => {
-      const trimmed = line.trim();
-      const heading = trimmed.match(/^#{1,6}\s+(.+)$/);
-
-      if (heading && isBackendContextHeading(heading[1])) {
-        return false;
-      }
-
-      return !isBackendContextLine(trimmed);
-    })
-    .join("\n")
-    .trim();
 }
 
 function renderAssistantContent(content: string) {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appChatStoreSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "app-chat-store.ts"), "utf8");
@@ -9,6 +10,7 @@ const appWorkspaceTypesSource = await readFile(path.join(rootDir, "src", "lib", 
 const activityPanelSource = await readFile(path.join(rootDir, "src", "components", "cmo-apps", "cmo-agent-activity-panel.tsx"), "utf8");
 const configSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "config.ts"), "utf8");
 const mapperSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-chat-mapper.ts"), "utf8");
+const assistantMarkdownDisplaySource = await readFile(path.join(rootDir, "src", "lib", "cmo", "assistant-markdown-display.ts"), "utf8");
 const runtimeSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-runtime.ts"), "utf8");
 const routerSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-chat-router.ts"), "utf8");
 const vaultAutoCaptureSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "vault-auto-capture.ts"), "utf8");
@@ -20,9 +22,24 @@ const sendMessagePreSuccessSource = chatPanelSource.match(/async function sendMe
 const productionFormattingSurface = [
   appChatStoreSource,
   mapperSource,
+  assistantMarkdownDisplaySource,
   activityPanelSource,
   chatPanelSource,
 ].join("\n");
+
+function loadAssistantMarkdownDisplayModule() {
+  const transpiled = ts.transpileModule(assistantMarkdownDisplaySource, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+  }).outputText;
+  const loadedModule = { exports: {} };
+  const fn = new Function("module", "exports", transpiled);
+  fn(loadedModule, loadedModule.exports);
+  return loadedModule.exports;
+}
 
 function productToolCapableAnswerFromHermesBody(answer) {
   return String(answer.body ?? "").trim() || String(answer.summary ?? "").trim();
@@ -60,6 +77,9 @@ const repeatedNumberingHermesAnswer = {
 };
 const cleanMappedAnswer = productToolCapableAnswerFromHermesBody(cleanNumberedHermesAnswer);
 const repeatedMappedAnswer = productToolCapableAnswerFromHermesBody(repeatedNumberingHermesAnswer);
+const { assistantDisplayMarkdown } = loadAssistantMarkdownDisplayModule();
+const cleanRenderedMarkdown = assistantDisplayMarkdown(cleanNumberedHermesAnswer.body);
+const repeatedRenderedMarkdown = assistantDisplayMarkdown(repeatedNumberingHermesAnswer.body);
 
 assert.match(
   appWorkspaceTypesSource,
@@ -127,6 +147,13 @@ assert.equal(cleanMappedAnswer, cleanNumberedHermesAnswer.body, "Product session
 assert.equal(repeatedMappedAnswer, repeatedNumberingHermesAnswer.body, "Product must preserve raw repeated numbering if Hermes emits it");
 assert.equal(repeatedOneMarkers(cleanMappedAnswer), 1, "Product must not create repeated 1. markers from a proper numbered list");
 assert.equal(repeatedOneMarkers(repeatedMappedAnswer), 3, "Repeated 1. markers in mapped output indicate raw Hermes body already had them");
+assert.match(chatPanelSource, /assistantDisplayMarkdown/, "CMO chat panel must render assistant content through the display markdown helper");
+assert.match(assistantMarkdownDisplaySource, /normalizeRepeatedOrderedListStartsForDisplay/, "display helper must normalize repeated top-level ordered-list restarts");
+assert.equal(cleanRenderedMarkdown, cleanNumberedHermesAnswer.body, "display helper must preserve proper numbered lists");
+assert.equal(repeatedOneMarkers(repeatedRenderedMarkdown), 1, "display helper must not show repeated top-level 1. markers");
+assert.match(repeatedRenderedMarkdown, /^2\. FOMO \/ activation/m, "display helper must render the second repeated marker as 2.");
+assert.match(repeatedRenderedMarkdown, /^3\. Narrative \/ human identity/m, "display helper must render the third repeated marker as 3.");
+assert.doesNotMatch(assistantDisplayMarkdown("Answer\nvault_path: 12 Knowledge/foo.md\ncontent_hash: sha256:abc"), /vault_path|12 Knowledge|sha256:/, "display helper must keep hiding Vault internals");
 assert.doesNotMatch(productionFormattingSurface, /Option\s+[12]|option\s+2|Giữ ý chính|Bắt đầu dùng Hold Pay|push notification/i, "production code must not include keyword-specific answer formatting");
 
 assert.match(activityPanelSource, /Surf Agent/, "activity timeline must render Surf with a friendly label");
@@ -214,6 +241,7 @@ console.log(JSON.stringify({
     properNumberedListPreserved: true,
     productCreatesRepeatedOneMarkers: false,
     rawHermesRepeatedOneMarkersPreserved: repeatedMappedAnswer === repeatedNumberingHermesAnswer.body,
+    displayMarkdownFixesRepeatedOneMarkers: repeatedOneMarkers(repeatedRenderedMarkdown) === 1,
     repeatedOneRootCauseWhenRawHasRepeatedMarkers: "Hermes output hygiene issue, not Product mapping",
   },
   activityTimelineSmoke: {

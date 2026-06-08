@@ -3373,6 +3373,7 @@ try {
     assert.doesNotMatch(suggestedVaultWriteRouteSource, /indexChat|Supabase|supabase|gbrain|memory_mutation/);
 
     const cmoChatPanelSource = await readFile(path.join(rootDir, "src", "components", "cmo-apps", "cmo-chat-panel.tsx"), "utf8");
+    const assistantMarkdownDisplaySource = await readFile(path.join(cmoDir, "assistant-markdown-display.ts"), "utf8");
     assert.match(cmoChatPanelSource, /Suggested Updates/);
     assert.match(cmoChatPanelSource, /Approve/);
     assert.match(cmoChatPanelSource, /Reject/);
@@ -3418,9 +3419,10 @@ try {
     assert.doesNotMatch(cmoChatPanelSource, /result\.content_hash/);
     assert.doesNotMatch(cmoChatPanelSource, /result\.gbrain_index/);
     assert.doesNotMatch(cmoChatPanelSource, /result\.promotion_performed/);
-    assert.match(cmoChatPanelSource, /function isBackendContextLine/);
     assert.match(cmoChatPanelSource, /assistantDisplayMarkdown/);
-    assert.match(cmoChatPanelSource, /90 Runtime\|sha256:/);
+    assert.match(assistantMarkdownDisplaySource, /function isBackendContextLine/);
+    assert.match(assistantMarkdownDisplaySource, /normalizeRepeatedOrderedListStartsForDisplay/);
+    assert.match(assistantMarkdownDisplaySource, /90 Runtime\|sha256:/);
     assert.match(cmoChatPanelSource, /recordString\(candidate, \["kind", "type"\]\)/);
     assert.match(cmoChatPanelSource, /recordString\(candidate, \["subject", "title", "name"\]\)/);
     assert.match(cmoChatPanelSource, /recordString\(candidate, \["summary", "statement", "description"\]\)/);
