@@ -20,6 +20,8 @@ const rawActivityRequestSource = appChatStoreSource.match(/function asyncRawActi
 const asyncRawActivityHookSource = appChatStoreSource.match(/async function attachAsyncToolRunRawActivityLog[\s\S]*?function asyncToolRunReplayHistory/)?.[0] ?? "";
 const chatPanelSource = await readFile(path.join(rootDir, "src", "components", "cmo-apps", "cmo-chat-panel.tsx"), "utf8");
 const sendMessagePreSuccessSource = chatPanelSource.match(/async function sendMessage\(\) \{[\s\S]*?const response = await readJsonResponse/)?.[0] ?? "";
+const imageFilesFromClipboardSource = chatPanelSource.match(/function imageFilesFromClipboard[\s\S]*?async function readJsonResponse/)?.[0] ?? "";
+const assistantMessageBlocks = [...appChatStoreSource.matchAll(/\{\s*id: assistantId,[\s\S]*?\n\s*\},/g)].map((match) => match[0]);
 const productionFormattingSurface = [
   appChatStoreSource,
   mapperSource,
@@ -206,6 +208,18 @@ assert.match(chatPanelSource, /CMO_PASTE_IMAGE_MIME_TYPES = new Set\(\["image\/p
 assert.match(chatPanelSource, /event\.clipboardData\.items/, "paste handling must inspect clipboard data items");
 assert.match(chatPanelSource, /pasted-image-\$\{compactTimestamp\(\)\}/, "clipboard images without names must receive safe generated filenames");
 assert.match(chatPanelSource, /if \(!pastedImageFiles\.length\) \{\s*return;\s*\}[\s\S]*event\.preventDefault\(\);[\s\S]*uploadAttachmentFiles\(pastedImageFiles\)/, "normal text paste must remain untouched unless image files are attached");
+assert.match(imageFilesFromClipboardSource, /const itemFiles: File\[\] = \[\]/, "paste helper must collect clipboard item images first");
+assert.match(imageFilesFromClipboardSource, /if \(itemFiles\.length\) \{\s*return itemFiles;\s*\}[\s\S]*event\.clipboardData\.files/, "paste helper must not also read clipboard files when item images were found");
+assert.doesNotMatch(imageFilesFromClipboardSource, /new Set<File>\(\)/, "paste helper must not rely on File object identity for clipboard dedupe");
+assert.match(imageFilesFromClipboardSource, /return \[\]/, "text-only clipboard files must not create attachments");
+assert.match(appChatStoreSource, /function messagesWithTurnScopedAssistantAttachments/, "session normalization must clamp assistant attachment chips to a source turn");
+assert.match(appChatStoreSource, /sourceUserMessageId[\s\S]*userAttachmentsByMessageId/, "assistant attachment normalization must use the source user message id");
+assert.match(appChatStoreSource, /delete messageWithoutAttachments\.attachments/, "text-only assistant turns must render without stale attachment chips");
+assert.ok(assistantMessageBlocks.length >= 2, "chat store must contain assistant message creation blocks");
+for (const block of assistantMessageBlocks) {
+  assert.doesNotMatch(block, /attachments: sessionAttachments/, "assistant messages must not be stamped with cumulative session attachments");
+}
+assert.match(appChatStoreSource, /id: assistantId,[\s\S]*attachments: turnAttachments[\s\S]*contextUsedCount/, "assistant messages with upload evidence must use only current turn attachments");
 
 assert.match(configSource, /getCmoHermesCmoAsyncToolRunTimeoutMs/, "async background timeout config getter must exist");
 assert.match(configSource, /CMO_HERMES_CMO_ASYNC_TOOL_RUN_TIMEOUT_MS/, "async background timeout env flag must exist");
@@ -247,7 +261,9 @@ console.log(JSON.stringify({
     "composer draft survives refresh and failed submit",
     "composer drag-and-drop attachment upload wired",
     "composer paste-image attachment upload wired",
+    "pasted image item/file duplicate prevented",
     "normal text paste preserved",
+    "assistant attachment chips are turn-scoped",
     "normal sync tool timeout remains configurable",
     "completed async tool run calls raw activity endpoint",
     "pending/running async tool runs skip raw activity endpoint",
@@ -291,7 +307,10 @@ console.log(JSON.stringify({
     sendDisabledOnlyForEmptyInputOrActiveSubmit: true,
     dragDropAttachmentsReuseExistingUploadFlow: true,
     pasteImageAttachmentsReuseExistingUploadFlow: true,
+    pastedImageCreatesOnePendingAttachment: true,
     textPasteDefaultPreserved: true,
+    textPasteCreatesNoAttachments: true,
+    textOnlyAssistantAfterAttachmentTurnShowsNoAttachmentChips: true,
   },
   asyncRawActivitySmoke: {
     completedRunCallsRawActivityLogEndpoint: true,

@@ -76,8 +76,7 @@ function hasFileDrag(event: DragEvent<HTMLElement>): boolean {
 }
 
 function imageFilesFromClipboard(event: ClipboardEvent<HTMLTextAreaElement>): File[] {
-  const files: File[] = [];
-  const seen = new Set<File>();
+  const itemFiles: File[] = [];
 
   Array.from(event.clipboardData.items).forEach((item, index) => {
     if (item.kind !== "file" || !CMO_PASTE_IMAGE_MIME_TYPES.has(item.type)) {
@@ -89,25 +88,30 @@ function imageFilesFromClipboard(event: ClipboardEvent<HTMLTextAreaElement>): Fi
       return;
     }
 
-    seen.add(file);
-    files.push(file.name ? file : new File([file], pastedImageFileName(file.type || item.type, index), {
+    itemFiles.push(file.name ? file : new File([file], pastedImageFileName(file.type || item.type, index), {
       type: file.type || item.type,
       lastModified: file.lastModified || Date.now(),
     }));
   });
 
-  Array.from(event.clipboardData.files).forEach((file, index) => {
-    if (!CMO_PASTE_IMAGE_MIME_TYPES.has(file.type) || seen.has(file)) {
-      return;
+  if (itemFiles.length) {
+    return itemFiles;
+  }
+
+  return Array.from(event.clipboardData.files).flatMap((file, index) => {
+    if (!CMO_PASTE_IMAGE_MIME_TYPES.has(file.type)) {
+      return [];
     }
 
-    files.push(file.name ? file : new File([file], pastedImageFileName(file.type, files.length + index), {
+    if (file.name) {
+      return [file];
+    }
+
+    return [new File([file], pastedImageFileName(file.type, index), {
       type: file.type,
       lastModified: file.lastModified || Date.now(),
-    }));
+    })];
   });
-
-  return files;
 }
 
 async function readJsonResponse<T>(response: Response): Promise<T> {

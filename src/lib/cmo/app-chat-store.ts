@@ -17,6 +17,7 @@ import type {
   CmoProductRenderSource,
   CmoRuntimeErrorReason,
   CmoRuntimeMode,
+  CmoSessionAttachment,
   CmoSessionLocalSource,
   CmoSourceAnswerContext,
   CmoSourceReviewContext,
@@ -2600,6 +2601,49 @@ function appendMessage(session: CMOChatSession, message: CMOChatMessage): CMOCha
   };
 }
 
+function messagesWithTurnScopedAssistantAttachments(messages: CMOChatMessage[]): CMOChatMessage[] {
+  const userAttachmentsByMessageId = new Map<string, CmoSessionAttachment[]>();
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      userAttachmentsByMessageId.set(message.id, normalizeCmoSessionAttachments(message.attachments));
+    }
+  }
+
+  let previousUserAttachments: CmoSessionAttachment[] = [];
+
+  return messages.map((message) => {
+    if (message.role === "user") {
+      previousUserAttachments = normalizeCmoSessionAttachments(message.attachments);
+      return message;
+    }
+
+    if (message.role !== "assistant") {
+      return message;
+    }
+
+    const sourceAttachments = message.sourceUserMessageId
+      ? userAttachmentsByMessageId.get(message.sourceUserMessageId) ?? []
+      : previousUserAttachments;
+
+    if (sourceAttachments.length) {
+      return {
+        ...message,
+        attachments: sourceAttachments,
+      };
+    }
+
+    if (!message.attachments?.length) {
+      return message;
+    }
+
+    const messageWithoutAttachments = { ...message };
+    delete messageWithoutAttachments.attachments;
+
+    return messageWithoutAttachments;
+  });
+}
+
 function normalizeSession(value: unknown): CMOChatSession | null {
   if (!isRecord(value)) {
     return null;
@@ -2613,7 +2657,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     return null;
   }
 
-  const messages = Array.isArray(value.messages)
+  const normalizedMessages = Array.isArray(value.messages)
     ? value.messages
         .map((message, index): CMOChatMessage | null => {
           if (!isRecord(message)) {
@@ -2709,6 +2753,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
         })
         .filter((message): message is CMOChatMessage => Boolean(message))
     : [];
+  const messages = messagesWithTurnScopedAssistantAttachments(normalizedMessages);
   const contextUsed = normalizeSelectedNotes(value.contextUsed);
   const missingContext = normalizeSelectedNotes(value.missingContext);
   const graphHints = normalizeGraphHints(value.graphHints);
@@ -3206,7 +3251,7 @@ export async function createAppChatSession(
           ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
           sessionLocalSources,
           sessionLocalResearchResults,
-          ...(sessionAttachments.length ? { attachments: sessionAttachments } : {}),
+          ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
           contextUsedCount: contextUsed.length,
           graphHintCount,
           indexedContextStatus,
@@ -4113,7 +4158,7 @@ export async function createAppChatSession(
         ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
         sessionLocalSources,
         sessionLocalResearchResults,
-        ...(sessionAttachments.length ? { attachments: sessionAttachments } : {}),
+        ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
         ...(activeSourceId ? { activeSourceId } : {}),
         ...(sessionSummary ? { sessionSummary } : {}),
         ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
