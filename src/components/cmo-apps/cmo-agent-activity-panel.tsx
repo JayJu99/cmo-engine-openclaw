@@ -169,6 +169,7 @@ function statusFromCmoRun(value: CMOChatMessage["cmoRunStatus"] | undefined): Ac
   if (value === "completed") return "completed";
   if (value === "failed") return "failed";
   if (value === "timed_out") return "timed_out";
+  if (value === "interrupted" || value === "cancelled") return "failed";
   return null;
 }
 

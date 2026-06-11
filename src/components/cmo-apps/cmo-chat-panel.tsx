@@ -155,8 +155,35 @@ function isActiveCmoRunStatus(value: unknown): value is "pending" | "running" {
   return value === "pending" || value === "running";
 }
 
-function isTerminalCmoRunStatus(value: unknown): value is "completed" | "failed" | "timed_out" {
-  return value === "completed" || value === "failed" || value === "timed_out";
+function isTerminalCmoRunStatus(value: unknown): value is "completed" | "failed" | "timed_out" | "interrupted" | "cancelled" {
+  return value === "completed" || value === "failed" || value === "timed_out" || value === "interrupted" || value === "cancelled";
+}
+
+function isRetryableCmoRunMessage(message: CMOChatMessage): boolean {
+  return message.role === "assistant" &&
+    (message.cmoRunStatus === "failed" ||
+      message.cmoRunStatus === "timed_out" ||
+      message.cmoRunStatus === "interrupted" ||
+      message.cmoRunStatus === "cancelled" ||
+      message.runtimeStatus === "runtime_error");
+}
+
+function sourceUserMessageForAssistant(messages: CMOChatMessage[], assistant: CMOChatMessage): CMOChatMessage | null {
+  if (assistant.sourceUserMessageId) {
+    const source = messages.find((message) => message.id === assistant.sourceUserMessageId && message.role === "user");
+
+    if (source) {
+      return source;
+    }
+  }
+
+  const assistantIndex = messages.findIndex((message) => message.id === assistant.id);
+
+  if (assistantIndex <= 0) {
+    return null;
+  }
+
+  return [...messages.slice(0, assistantIndex)].reverse().find((message) => message.role === "user") ?? null;
 }
 
 function latestAssistantMessage(messages: CMOChatMessage[]): CMOChatMessage | undefined {
@@ -555,6 +582,8 @@ export function CMOChatPanel({
   const [runtimeStatus, setRuntimeStatus] = useState<CMORuntimeStatus | null>(initialRuntimeStatus);
   const [runtimeErrorReason, setRuntimeErrorReason] = useState<CmoRuntimeErrorReason | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [stoppingRunMessageId, setStoppingRunMessageId] = useState<string | null>(null);
+  const [retryingRunMessageId, setRetryingRunMessageId] = useState<string | null>(null);
   const [pendingAssistantMessageId, setPendingAssistantMessageId] = useState<string | null>(null);
   const [pendingStartedAt, setPendingStartedAt] = useState<number | null>(null);
   const [pendingElapsedMs, setPendingElapsedMs] = useState(0);
@@ -628,6 +657,8 @@ export function CMOChatPanel({
       setRuntimeErrorReason(null);
       setError(null);
       setSendStatus(null);
+      setStoppingRunMessageId(null);
+      setRetryingRunMessageId(null);
       setReviewStatusMessage(null);
       setDryRunStatusMessage(null);
       setWriteStatusMessage(null);
@@ -649,6 +680,8 @@ export function CMOChatPanel({
         setMessages([]);
         setRuntimeStatus(initialRuntimeStatus);
         setRuntimeErrorReason(null);
+        setStoppingRunMessageId(null);
+        setRetryingRunMessageId(null);
         setPendingAssistantMessageId(null);
         setPendingStartedAt(null);
         setPendingElapsedMs(0);
@@ -666,6 +699,8 @@ export function CMOChatPanel({
       setMessages(selectedSession.messages);
       setRuntimeStatus(selectedSession.runtimeStatus ?? initialRuntimeStatus);
       setRuntimeErrorReason(selectedSession.runtimeErrorReason ?? null);
+      setStoppingRunMessageId(null);
+      setRetryingRunMessageId(null);
       setReviewStatusMessage(null);
       setDryRunStatusMessage(null);
       setWriteStatusMessage(null);
@@ -781,9 +816,9 @@ export function CMOChatPanel({
     };
   }, [activeDisplaySessionId, app.id, initialRuntimeStatus, latestVisibleCmoRunStatus, onSessionCreated]);
 
-  async function sendMessage() {
-    const trimmedInput = input.trim();
-    const attachmentsForTurn = pendingAttachments;
+  async function sendMessage(retryTurn?: { message: string; attachments: CmoSessionAttachment[]; retryOfAssistantMessageId: string }) {
+    const trimmedInput = retryTurn ? retryTurn.message.trim() : input.trim();
+    const attachmentsForTurn = retryTurn ? retryTurn.attachments : pendingAttachments;
     const question = trimmedInput || (attachmentsForTurn.length ? "Please review the attached file(s)." : "");
 
     if (!question || isSending || isUploadingAttachment) {
@@ -823,6 +858,9 @@ export function CMOChatPanel({
     setSendStatus("Sending...");
     setRuntimeStatus(null);
     setRuntimeErrorReason(null);
+    if (retryTurn) {
+      setRetryingRunMessageId(retryTurn.retryOfAssistantMessageId);
+    }
 
     let keepPendingRun = false;
 
@@ -902,6 +940,7 @@ export function CMOChatPanel({
                 forbiddenCounters: response.forbiddenCounters,
                 platformPersistenceSummary: response.platformPersistenceSummary,
                 delegationsMode: response.delegationsMode,
+                cmoRunId: response.cmoRunId,
                 cmoRunStatus: response.cmoRunStatus,
                 cmoRunStartedAt: response.cmoRunStartedAt,
                 cmoRunCompletedAt: response.cmoRunCompletedAt,
@@ -956,11 +995,82 @@ export function CMOChatPanel({
       );
     } finally {
       setIsSending(false);
+      if (retryTurn) {
+        setRetryingRunMessageId(null);
+      }
       if (!keepPendingRun) {
         setPendingAssistantMessageId(null);
         setPendingStartedAt(null);
       }
     }
+  }
+
+  async function stopCmoRun(message: CMOChatMessage) {
+    const activeSession = activeDisplaySessionId;
+
+    if (!activeSession || message.role !== "assistant" || !isActiveCmoRunStatus(message.cmoRunStatus) || stoppingRunMessageId) {
+      return;
+    }
+
+    setStoppingRunMessageId(message.id);
+    setError(null);
+    setSendStatus("Stopping CMO run...");
+
+    try {
+      const payload = await readJsonResponse<{ data: CMOChatSession }>(
+        await fetch("/api/cmo/sessions/run-control", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            action: "stop",
+            appId: app.id,
+            sessionId: activeSession,
+            assistantMessageId: message.id,
+            cmoRunId: message.cmoRunId,
+          }),
+        }),
+      );
+
+      if (asyncPollTimerRef.current) {
+        window.clearTimeout(asyncPollTimerRef.current);
+        asyncPollTimerRef.current = null;
+      }
+      asyncPollStartedAtRef.current = null;
+      setSessionId(payload.data.id);
+      setMessages(payload.data.messages);
+      setRuntimeStatus(payload.data.runtimeStatus ?? "runtime_error");
+      setRuntimeErrorReason(payload.data.runtimeErrorReason ?? null);
+      setPendingAssistantMessageId(null);
+      setPendingStartedAt(null);
+      setPendingElapsedMs(0);
+      setIsSending(false);
+      setSendStatus("CMO run was stopped. You can retry this run or continue in the same session.");
+      onSessionCreated?.(payload.data.id);
+    } catch (stopError) {
+      setSendStatus(null);
+      setError(`Stop run failed: ${stopError instanceof Error ? stopError.message : "CMO run could not be stopped"}`);
+    } finally {
+      setStoppingRunMessageId(null);
+    }
+  }
+
+  async function retryCmoRun(message: CMOChatMessage) {
+    const sourceUserMessage = sourceUserMessageForAssistant(visibleMessages, message);
+
+    if (!sourceUserMessage || !activeDisplaySessionId || isSending || retryingRunMessageId) {
+      if (!sourceUserMessage) {
+        setError("Retry failed: original user message was not found.");
+      }
+      return;
+    }
+
+    await sendMessage({
+      message: sourceUserMessage.content,
+      attachments: sourceUserMessage.attachments ?? [],
+      retryOfAssistantMessageId: message.id,
+    });
   }
 
   function focusChat() {
@@ -1369,6 +1479,42 @@ export function CMOChatPanel({
     );
   }
 
+  function renderAssistantRunControls(message: CMOChatMessage) {
+    if (message.role !== "assistant") {
+      return null;
+    }
+
+    const running = isActiveCmoRunStatus(message.cmoRunStatus);
+    const retryable = !running && isRetryableCmoRunMessage(message);
+
+    if (!running && !retryable) {
+      return null;
+    }
+
+    return (
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+        {running ? (
+          <Button type="button" size="sm" variant="outline" disabled={stoppingRunMessageId === message.id} onClick={() => void stopCmoRun(message)}>
+            {stoppingRunMessageId === message.id ? <icons.RefreshCw className="animate-spin" /> : <icons.X />}
+            Stop run
+          </Button>
+        ) : null}
+        {retryable ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={isSending || retryingRunMessageId === message.id}
+            onClick={() => void retryCmoRun(message)}
+          >
+            {retryingRunMessageId === message.id ? <icons.RefreshCw className="animate-spin" /> : <icons.RefreshCw />}
+            Retry this run
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div id="cmo-session" className="space-y-5">
       <Card
@@ -1440,6 +1586,7 @@ export function CMOChatPanel({
                       elapsedMs={pendingAssistantMessageId === message.id ? pendingElapsedMs : null}
                     />
                   ) : null}
+                  {renderAssistantRunControls(message)}
                   {renderSuggestedVaultUpdates(message)}
                   {message.role === "assistant" && assistantProvenance(message) ? (
                     <div className="mt-4 border-t border-emerald-100 pt-3 text-xs font-semibold text-emerald-700">

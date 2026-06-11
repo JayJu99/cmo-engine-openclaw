@@ -1742,7 +1742,10 @@ function normalizeIndexedContextStatus(value: unknown): CmoIndexedContextStatus 
 }
 
 function normalizeHermesCmoChatStatus(value: unknown): HermesCmoChatStatus | undefined {
-  return value === "live" || value === "failed_then_existing_fallback" || value === "guardrail_violation_then_existing_fallback"
+  return value === "live" ||
+    value === "failed_then_existing_fallback" ||
+    value === "guardrail_violation_then_existing_fallback" ||
+    value === "interrupted"
     ? value
     : undefined;
 }
@@ -2271,9 +2274,19 @@ function rawCaptureErrorForAutoCapture(result: AutoCaptureResult): string | unde
 }
 
 function normalizeCmoRunStatus(value: unknown): CmoAsyncToolRunStatus | undefined {
-  return value === "pending" || value === "running" || value === "completed" || value === "failed" || value === "timed_out"
+  return value === "pending" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "timed_out" ||
+    value === "interrupted" ||
+    value === "cancelled"
     ? value
     : undefined;
+}
+
+function stoppedToolRunAnswer(): string {
+  return "CMO run was stopped. You can retry this run or continue in the same session.";
 }
 
 function pendingToolRunAnswer(): string {
@@ -2711,6 +2724,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             delegationsMode: normalizeHermesCmoDelegationsMode(message.delegationsMode),
             vaultAgentDryRun: normalizeVaultAgentDryRunMetadata(message.vaultAgentDryRun),
             vaultAgentContextPack: normalizeVaultAgentContextPackMetadata(message.vaultAgentContextPack),
+            cmoRunId: normalizeOptionalString(message.cmoRunId),
             cmoRunStatus: normalizeCmoRunStatus(message.cmoRunStatus),
             cmoRunEndpoint: message.cmoRunEndpoint === "/agents/cmo/tool-execute" ? message.cmoRunEndpoint : undefined,
             cmoRunToolsUsed: Array.isArray(message.cmoRunToolsUsed)
@@ -2839,6 +2853,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode),
     vaultAgentDryRun: normalizeVaultAgentDryRunMetadata(value.vaultAgentDryRun),
     vaultAgentContextPack: normalizeVaultAgentContextPackMetadata(value.vaultAgentContextPack),
+    cmoRunId: normalizeOptionalString(value.cmoRunId),
     cmoRunStatus: normalizeCmoRunStatus(value.cmoRunStatus),
     cmoRunEndpoint: value.cmoRunEndpoint === "/agents/cmo/tool-execute" ? value.cmoRunEndpoint : undefined,
     cmoRunToolsUsed: Array.isArray(value.cmoRunToolsUsed)
@@ -2912,6 +2927,7 @@ export async function createAppChatSession(
   const sessionResolutionDurationMs = Date.now() - sessionResolutionStartedMs;
   const messageId = `msg_${randomUUID().slice(0, 12)}`;
   const assistantId = `msg_${randomUUID().slice(0, 12)}`;
+  const cmoRunId = `run_${randomUUID().slice(0, 12)}`;
   const sessionId = continuedSession?.id ?? `session_${safeId(request.workspaceId)}_${now.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
   const turnAttachments = bindCmoAttachmentsToTurn({
     attachments: request.attachments ?? [],
@@ -3185,6 +3201,7 @@ export async function createAppChatSession(
       calledHermesCmo: true,
       hermesCmoStatus: "live",
       delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+      cmoRunId,
       cmoRunStatus: "pending",
       cmoRunEndpoint: "/agents/cmo/tool-execute",
       cmoRunStartedAt: now,
@@ -3242,6 +3259,7 @@ export async function createAppChatSession(
           calledHermesCmo: true,
           hermesCmoStatus: "live",
           delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+          cmoRunId,
           cmoRunStatus: "pending",
           cmoRunEndpoint: "/agents/cmo/tool-execute",
           cmoRunStartedAt: now,
@@ -3266,13 +3284,19 @@ export async function createAppChatSession(
 
     const completeAsyncHermesCmoToolRun = async () => {
       const runningAt = new Date().toISOString();
+      const currentBeforeRunning = await readAppChatSession(sessionId);
+      if (!asyncToolRunStillActive(currentBeforeRunning, assistantId, cmoRunId)) {
+        return;
+      }
+
       await writeJsonFile(sessionPath(sessionId), {
-        ...pendingSession,
+        ...currentBeforeRunning,
         status: "running",
         updatedAt: runningAt,
+        cmoRunId,
         cmoRunStatus: "running",
         cmoRunTimeoutMs: asyncToolRunTimeoutMs,
-        messages: pendingSession.messages.map((message) => message.id === assistantId ? { ...message, cmoRunStatus: "running", cmoRunTimeoutMs: asyncToolRunTimeoutMs } : message),
+        messages: currentBeforeRunning.messages.map((message) => message.id === assistantId ? { ...message, cmoRunId, cmoRunStatus: "running", cmoRunTimeoutMs: asyncToolRunTimeoutMs } : message),
       });
 
       const runStartedMs = Date.now();
@@ -3334,6 +3358,7 @@ export async function createAppChatSession(
           liveAttemptStartedAt: runStartedAt,
           liveAttemptDurationMs: durationMs,
           totalDurationMs: Date.now() - requestStartedMs,
+          cmoRunId,
           cmoRunStatus: "completed" as const,
           cmoRunEndpoint: "/agents/cmo/tool-execute" as const,
           ...(toolsUsed?.length ? { cmoRunToolsUsed: toolsUsed } : {}),
@@ -3419,6 +3444,7 @@ export async function createAppChatSession(
           liveAttemptStartedAt: runStartedAt,
           liveAttemptDurationMs: durationMs,
           totalDurationMs: Date.now() - requestStartedMs,
+          cmoRunId,
           cmoRunStatus: runStatus,
           cmoRunEndpoint: "/agents/cmo/tool-execute" as const,
           cmoRunStartedAt: runStartedAt,
@@ -3453,6 +3479,12 @@ export async function createAppChatSession(
         };
       }
 
+      const currentBeforeFinalize = await readAppChatSession(sessionId);
+      if (!asyncToolRunStillActive(currentBeforeFinalize, assistantId, cmoRunId)) {
+        return;
+      }
+      finalSession = mergeAsyncToolRunFinalSession(currentBeforeFinalize, finalSession, assistantId);
+
       if (finalSession.status === "completed") {
         finalSession = await attachAsyncToolRunRawActivityLog({
           request,
@@ -3470,6 +3502,11 @@ export async function createAppChatSession(
         });
       }
 
+      const currentBeforeFinalWrite = await readAppChatSession(sessionId);
+      if (!asyncToolRunStillActive(currentBeforeFinalWrite, assistantId, cmoRunId)) {
+        return;
+      }
+      finalSession = mergeAsyncToolRunFinalSession(currentBeforeFinalWrite, finalSession, assistantId);
       await writeJsonFile(sessionPath(sessionId), finalSession);
     };
 
@@ -3503,6 +3540,7 @@ export async function createAppChatSession(
       calledHermesCmo: true,
       hermesCmoStatus: "live",
       delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+      cmoRunId,
       cmoRunStatus: "pending",
       cmoRunEndpoint: "/agents/cmo/tool-execute",
       cmoRunStartedAt: now,
@@ -4362,6 +4400,101 @@ export async function readAppChatSessions(limit = DEFAULT_LIMIT, appId?: string)
 
 export async function readAppChatSession(sessionId: string): Promise<CMOChatSession | null> {
   return normalizeSession(await readJsonFile(sessionPath(sessionId)));
+}
+
+function isActiveAsyncToolRunMessage(message: CMOChatMessage | undefined, cmoRunId: string): boolean {
+  return message?.role === "assistant" &&
+    message.cmoRunId === cmoRunId &&
+    (message.cmoRunStatus === "pending" || message.cmoRunStatus === "running");
+}
+
+function asyncToolRunStillActive(session: CMOChatSession | null, assistantId: string, cmoRunId: string): session is CMOChatSession {
+  return isActiveAsyncToolRunMessage(session?.messages.find((message) => message.id === assistantId), cmoRunId);
+}
+
+function mergeAsyncToolRunFinalSession(current: CMOChatSession, finalSession: CMOChatSession, assistantId: string): CMOChatSession {
+  const finalAssistant = finalSession.messages.find((message) => message.id === assistantId);
+
+  return {
+    ...current,
+    ...finalSession,
+    messages: finalAssistant
+      ? current.messages.map((message) => message.id === assistantId ? finalAssistant : message)
+      : current.messages,
+  };
+}
+
+export async function stopAppChatRun(input: {
+  appId: string;
+  sessionId: string;
+  assistantMessageId: string;
+  cmoRunId?: string;
+}): Promise<CMOChatSession | null> {
+  const session = await readAppChatSession(input.sessionId);
+
+  if (!session || session.appId !== input.appId) {
+    return null;
+  }
+
+  const assistant = session.messages.find((message) => message.id === input.assistantMessageId);
+  const activeRunMatches = assistant?.role === "assistant" &&
+    (assistant.cmoRunStatus === "pending" || assistant.cmoRunStatus === "running") &&
+    (!input.cmoRunId || assistant.cmoRunId === input.cmoRunId);
+
+  if (!activeRunMatches) {
+    return session;
+  }
+
+  const stoppedAt = new Date().toISOString();
+  const startedAtMs = Date.parse(assistant.cmoRunStartedAt ?? assistant.createdAt);
+  const durationMs = Number.isFinite(startedAtMs) ? Math.max(0, Date.now() - startedAtMs) : undefined;
+  const stoppedMessagePatch: Partial<CMOChatMessage> = {
+    content: stoppedToolRunAnswer(),
+    runtimeStatus: "runtime_error",
+    runtimeMode: "configured_but_unreachable",
+    runtimeErrorReason: "execution_error",
+    runtimeProvider: "hermes",
+    runtimeAgent: "cmo",
+    productFallbackReason: "user_stopped_run",
+    hermesCmoStatus: "interrupted",
+    cmoRunStatus: "interrupted",
+    cmoRunCompletedAt: stoppedAt,
+    ...(typeof durationMs === "number" ? { cmoRunDurationMs: durationMs, liveAttemptDurationMs: durationMs } : {}),
+  };
+  const updated: CMOChatSession = {
+    ...session,
+    status: "failed",
+    updatedAt: stoppedAt,
+    runtimeStatus: "runtime_error",
+    runtimeMode: "configured_but_unreachable",
+    runtimeErrorReason: "execution_error",
+    runtimeProvider: "hermes",
+    runtimeAgent: "cmo",
+    runtimeError: "CMO run stopped by user.",
+    productFallbackReason: "user_stopped_run",
+    hermesCmoStatus: "interrupted",
+    cmoRunStatus: "interrupted",
+    cmoRunCompletedAt: stoppedAt,
+    ...(typeof durationMs === "number" ? { cmoRunDurationMs: durationMs, liveAttemptDurationMs: durationMs } : {}),
+    messages: session.messages.map((message) => {
+      if (message.id !== input.assistantMessageId) {
+        return message;
+      }
+
+      const stoppedMessage = {
+        ...message,
+        ...stoppedMessagePatch,
+      };
+      delete stoppedMessage.currentStep;
+
+      return stoppedMessage;
+    }),
+  };
+  delete updated.currentStep;
+
+  await writeJsonFile(sessionPath(session.id), updated);
+
+  return updated;
 }
 
 type LocalChatCommand =

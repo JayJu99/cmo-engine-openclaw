@@ -601,7 +601,7 @@ export type CmoRuntimeErrorReason =
   | "invalid_response"
   | "empty_answer"
   | "execution_error";
-export type HermesCmoChatStatus = "live" | "failed_then_existing_fallback" | "guardrail_violation_then_existing_fallback";
+export type HermesCmoChatStatus = "live" | "failed_then_existing_fallback" | "guardrail_violation_then_existing_fallback" | "interrupted";
 export type HermesCmoDelegationsMode = "proposals_only" | "echo_surf_bounded";
 export type CmoProductRenderSource =
   | "hermes_cmo"
@@ -1080,7 +1080,7 @@ export type CMORuntimeStatus =
   | "runtime_error"
   | "not_configured";
 
-export type CmoAsyncToolRunStatus = "pending" | "running" | "completed" | "failed" | "timed_out";
+export type CmoAsyncToolRunStatus = "pending" | "running" | "completed" | "failed" | "timed_out" | "interrupted" | "cancelled";
 
 export interface CmoSessionAttachmentStorage {
   kind: "supabase_storage";
@@ -1158,6 +1158,7 @@ export interface CMOChatMessage {
   delegationsMode?: HermesCmoDelegationsMode;
   vaultAgentDryRun?: VaultAgentDryRunMetadata;
   vaultAgentContextPack?: VaultAgentContextPackMetadata;
+  cmoRunId?: string;
   cmoRunStatus?: CmoAsyncToolRunStatus;
   cmoRunEndpoint?: "/agents/cmo/tool-execute";
   cmoRunToolsUsed?: HermesCmoAgentUsed[];
@@ -1314,6 +1315,7 @@ export interface CMOChatSession {
   delegationsMode?: HermesCmoDelegationsMode;
   vaultAgentDryRun?: VaultAgentDryRunMetadata;
   vaultAgentContextPack?: VaultAgentContextPackMetadata;
+  cmoRunId?: string;
   cmoRunStatus?: CmoAsyncToolRunStatus;
   cmoRunEndpoint?: "/agents/cmo/tool-execute";
   cmoRunToolsUsed?: HermesCmoAgentUsed[];
@@ -1427,6 +1429,7 @@ export interface CMOAppChatResponse {
   forbiddenCounters?: HermesCmoForbiddenCounters;
   platformPersistenceSummary?: HermesCmoPlatformPersistenceSummary;
   delegationsMode?: HermesCmoDelegationsMode;
+  cmoRunId?: string;
   cmoRunStatus?: CmoAsyncToolRunStatus;
   cmoRunEndpoint?: string;
   cmoRunToolsUsed?: string[];

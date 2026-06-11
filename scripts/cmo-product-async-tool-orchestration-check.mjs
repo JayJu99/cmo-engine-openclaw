@@ -15,11 +15,12 @@ const runtimeSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "he
 const routerSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-chat-router.ts"), "utf8");
 const attachmentsSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "attachments.ts"), "utf8");
 const vaultAutoCaptureSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "vault-auto-capture.ts"), "utf8");
+const runControlRouteSource = await readFile(path.join(rootDir, "src", "app", "api", "cmo", "sessions", "run-control", "route.ts"), "utf8");
 const pendingToolRunAnswerSource = appChatStoreSource.match(/function pendingToolRunAnswer\(\): string \{[\s\S]*?\n\}/)?.[0] ?? "";
 const rawActivityRequestSource = appChatStoreSource.match(/function asyncRawActivityLogRequest[\s\S]*?async function readHermesRawActivityJson/)?.[0] ?? "";
 const asyncRawActivityHookSource = appChatStoreSource.match(/async function attachAsyncToolRunRawActivityLog[\s\S]*?function asyncToolRunReplayHistory/)?.[0] ?? "";
 const chatPanelSource = await readFile(path.join(rootDir, "src", "components", "cmo-apps", "cmo-chat-panel.tsx"), "utf8");
-const sendMessagePreSuccessSource = chatPanelSource.match(/async function sendMessage\(\) \{[\s\S]*?const response = await readJsonResponse/)?.[0] ?? "";
+const sendMessagePreSuccessSource = chatPanelSource.match(/async function sendMessage\([^)]*\) \{[\s\S]*?const response = await readJsonResponse/)?.[0] ?? "";
 const imageFilesFromClipboardSource = chatPanelSource.match(/function imageFilesFromClipboard[\s\S]*?async function readJsonResponse/)?.[0] ?? "";
 const assistantMessageBlocks = [...appChatStoreSource.matchAll(/\{\s*id: assistantId,[\s\S]*?\n\s*\},/g)].map((match) => match[0]);
 const productionFormattingSurface = [
@@ -94,7 +95,10 @@ assert.match(
   /status:\s*"pending"\s*\|\s*"running"\s*\|\s*"completed"\s*\|\s*"failed"\s*\|\s*"timed_out"/,
   "CMOAppChatResponse status must include async pending/running/completed/failed/timed_out states",
 );
+assert.match(appWorkspaceTypesSource, /CmoAsyncToolRunStatus[\s\S]*"interrupted"[\s\S]*"cancelled"/, "run status must support manual interrupted/cancelled terminal states");
+assert.match(appWorkspaceTypesSource, /HermesCmoChatStatus[\s\S]*"interrupted"/, "Hermes CMO status must support manual interruption metadata");
 assert.match(appWorkspaceTypesSource, /cmoRunStatus\?:\s*CmoAsyncToolRunStatus/, "message/session metadata must expose safe async run status");
+assert.match(appWorkspaceTypesSource, /cmoRunId\?:\s*string/, "message/session metadata must expose a stable run id");
 assert.match(appWorkspaceTypesSource, /cmoRunEndpoint\?:\s*"\/agents\/cmo\/tool-execute"/, "metadata must expose safe endpoint without raw tool JSON");
 assert.match(appWorkspaceTypesSource, /cmoRunStartedAt\?:\s*string/, "metadata must expose started_at");
 assert.match(appWorkspaceTypesSource, /cmoRunCompletedAt\?:\s*string/, "metadata must expose completed_at");
@@ -107,6 +111,15 @@ assert.match(appChatStoreSource, /function shouldStartAsyncHermesCmoToolRun/, "P
 assert.match(appChatStoreSource, /hermesCmoRoute\.endpointKind === "tool_execute"/, "async flow must target only CMO tool-execute route");
 assert.match(appChatStoreSource, /void completeAsyncHermesCmoToolRun\(/, "POST must launch non-blocking background completion");
 assert.match(appChatStoreSource, /await writeJsonFile\(sessionPath\(sessionId\), pendingSession\)/, "pending session must be persisted before background run starts");
+assert.match(appChatStoreSource, /const cmoRunId = `run_\$\{randomUUID\(\)\.slice\(0, 12\)\}`/, "async runs must create a stable Product cmoRunId");
+assert.match(appChatStoreSource, /asyncToolRunStillActive\(currentBeforeRunning,\s*assistantId,\s*cmoRunId\)/, "background runner must guard before marking a run as running");
+assert.match(appChatStoreSource, /asyncToolRunStillActive\(currentBeforeFinalize,\s*assistantId,\s*cmoRunId\)/, "late Hermes responses must be ignored before finalization when run id is no longer active");
+assert.match(appChatStoreSource, /asyncToolRunStillActive\(currentBeforeFinalWrite,\s*assistantId,\s*cmoRunId\)/, "late Hermes responses must be ignored before final write when run id is no longer active");
+assert.match(appChatStoreSource, /export async function stopAppChatRun/, "Product must expose a manual stop mutation for active async runs");
+assert.match(appChatStoreSource, /productFallbackReason:\s*"user_stopped_run"/, "manual stop must persist user_stopped_run fallback reason");
+assert.match(appChatStoreSource, /hermesCmoStatus:\s*"interrupted"/, "manual stop must persist interrupted Hermes CMO status");
+assert.match(appChatStoreSource, /delete stoppedMessage\.currentStep/, "manual stop must clear assistant currentStep metadata");
+assert.match(runControlRouteSource, /stopAppChatRun/, "Product run-control route must call the stop mutation");
 assert.match(appChatStoreSource, /getCmoHermesCmoAsyncToolRunTimeoutMs/, "async tool timeout config must be imported into Product session store");
 assert.match(appChatStoreSource, /const asyncToolRunTimeoutMs = getCmoHermesCmoAsyncToolRunTimeoutMs\(\)/, "async branch must calculate dedicated background timeout");
 assert.match(appChatStoreSource, /cmoRunTimeoutMs: asyncToolRunTimeoutMs/, "async timeout must be persisted in session/message metadata");
@@ -196,6 +209,14 @@ assert.match(appChatStoreSource, /cmo_call_echo_used/, "session normalizer must 
 assert.doesNotMatch(sendMessagePreSuccessSource, /setInput\(""\)/, "composer draft must not be cleared before successful submit response");
 assert.match(chatPanelSource, /setInput\(""\);\s*setPendingAttachments\(\[\]\);\s*setSessionId\(response\.sessionId\)/, "composer draft and pending attachments should clear only after successful submit response");
 assert.match(chatPanelSource, /disabled=\{\(!input\.trim\(\) && !pendingAttachments\.length\) \|\| isSending \|\| isUploadingAttachment\}/, "Send button must be enabled when text or attachment is present and no send/upload is active");
+assert.match(chatPanelSource, /Stop run/, "running assistant messages must expose a Stop run action");
+assert.match(chatPanelSource, /Retry this run/, "terminal interrupted/failed assistant messages must expose a Retry this run action");
+assert.match(chatPanelSource, /fetch\("\/api\/cmo\/sessions\/run-control"/, "Stop run action must call the Product run-control route");
+assert.match(chatPanelSource, /setIsSending\(false\)/, "Stop run action must unlock the composer");
+assert.match(chatPanelSource, /sourceUserMessageForAssistant/, "Retry this run must resolve the original source user message");
+assert.match(chatPanelSource, /attachments:\s*sourceUserMessage\.attachments \?\? \[\]/, "Retry this run must reuse only the source turn attachments");
+assert.doesNotMatch(chatPanelSource, /retryCmoRun[\s\S]*attachments:\s*pendingAttachments/, "Retry this run must not inherit current or previous composer attachments");
+assert.match(chatPanelSource, /message\.runtimeStatus === "runtime_error"/, "Retry action must be available for runtime_error assistant messages");
 assert.match(chatPanelSource, /onDragEnter=\{handleAttachmentDragEnter\}/, "CMO composer panel must accept file drag enter events");
 assert.match(chatPanelSource, /onDragOver=\{handleAttachmentDragOver\}/, "CMO composer panel must accept file drag over events");
 assert.match(chatPanelSource, /onDragLeave=\{handleAttachmentDragLeave\}/, "CMO composer panel must clear drag state on leave");
