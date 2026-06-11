@@ -569,6 +569,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       read_web_allowed: true,
       read_browser_allowed: true,
       read_file_allowed: true,
+      read_attachments_allowed: inputMaterial.attachments.length > 0,
       terminal_read_only_allowed: true,
       code_execution_allowed: true,
       vision_allowed: true,

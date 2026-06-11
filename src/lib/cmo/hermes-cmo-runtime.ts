@@ -208,7 +208,8 @@ export interface HermesCmoRuntimeAnswerBasis {
     | "insufficient_context"
     | "clarification"
     | "save_to_vault"
-    | "tool_read";
+    | "tool_read"
+    | "attachment_read";
   missing_inputs: string[];
   assumptions_used: Array<string | Record<string, unknown>>;
   user_can_override: boolean;
@@ -350,6 +351,7 @@ const answerBasisModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "insufficient_context",
   "clarification",
   "save_to_vault",
+  "attachment_read",
 ]);
 const answerFormats = new Set<HermesCmoRuntimeAnswer["format"]>(["markdown", "plain_text", "json"]);
 const simpleAnswerModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
@@ -361,6 +363,7 @@ const simpleAnswerModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "source_transform",
   "save_to_vault",
   "tool_read",
+  "attachment_read",
   "session_research_artifact",
   "live_external_research",
   "session_source_artifact",

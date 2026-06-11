@@ -13,6 +13,7 @@ const mapperSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "her
 const assistantMarkdownDisplaySource = await readFile(path.join(rootDir, "src", "lib", "cmo", "assistant-markdown-display.ts"), "utf8");
 const runtimeSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-runtime.ts"), "utf8");
 const routerSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "hermes-cmo-chat-router.ts"), "utf8");
+const attachmentsSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "attachments.ts"), "utf8");
 const vaultAutoCaptureSource = await readFile(path.join(rootDir, "src", "lib", "cmo", "vault-auto-capture.ts"), "utf8");
 const pendingToolRunAnswerSource = appChatStoreSource.match(/function pendingToolRunAnswer\(\): string \{[\s\S]*?\n\}/)?.[0] ?? "";
 const rawActivityRequestSource = appChatStoreSource.match(/function asyncRawActivityLogRequest[\s\S]*?async function readHermesRawActivityJson/)?.[0] ?? "";
@@ -134,6 +135,20 @@ assert.doesNotMatch(rawActivityRequestSource, /html|raw_html|source_text|extract
 assert.match(vaultAutoCaptureSource, /workspaceId:\s*ctx\.request\.workspaceId/, "legacy auto-capture must use selected workspace id, not app/tenant fallback");
 assert.doesNotMatch(vaultAutoCaptureSource, /workspaceId:\s*ctx\.request\.appId/, "legacy auto-capture must not target workspace from app id");
 
+assert.match(runtimeSource, /\|\s*"attachment_read"/, "Product runtime must type Hermes attachment_read answer_basis mode");
+assert.match(runtimeSource, /const answerBasisModes[\s\S]*"attachment_read"/, "Product runtime validator must accept attachment_read answer_basis mode");
+assert.match(runtimeSource, /const simpleAnswerModes[\s\S]*"attachment_read"/, "Product runtime must normalize simple attachment_read answers");
+assert.match(mapperSource, /inputMaterialAttachments\?: HermesCmoAttachmentRef\[\]/, "Product request mapper must accept Hermes attachment refs");
+assert.match(mapperSource, /input_material: inputMaterial/, "Product Hermes request must include top-level input_material");
+assert.match(mapperSource, /request_id: `req_h6_\$\{input\.userMessageId\}`/, "Product Hermes request must include stable request_id derived from turn/message id");
+assert.match(mapperSource, /turn_id: input\.userMessageId/, "Product Hermes request must include stable turn_id derived from user message id");
+assert.match(appChatStoreSource, /const hermesAttachmentRefs = await cmoAttachmentsForHermes\(turnAttachments\)/, "Product async mapper must generate Hermes attachment refs before calling Hermes");
+assert.match(appChatStoreSource, /inputMaterialAttachments: hermesAttachmentRefs/, "Product async mapper must pass attachment refs into Hermes request");
+assert.match(attachmentsSource, /fallback_extracted_text:[\s\S]*available: false[\s\S]*is_primary: false/, "Product must send fallback_extracted_text metadata only, not Product summaries as primary evidence");
+assert.match(appChatStoreSource, /attachmentTraceSummary/, "Product session metadata must preserve Hermes attachment_trace_summary");
+assert.match(appChatStoreSource, /toolsUsed/, "Product session metadata must preserve toolsUsed including cmo_read_attachment");
+assert.match(appChatStoreSource, /message\.attachments/, "Product session must preserve user message attachments");
+
 assert.match(mapperSource, /messages: recentConversationMessages\(input\.history\)/, "tool-capable Hermes request must include bounded recent messages");
 assert.match(mapperSource, /const MAX_REPLAY_MESSAGES = 16/, "recent message replay must be bounded");
 assert.match(mapperSource, /isPendingToolRunPlaceholder/, "request mapper must filter pending assistant placeholders");
@@ -177,8 +192,8 @@ assert.match(appChatStoreSource, /const toolsUsedSnake = normalizeStringList\(va
 assert.match(appChatStoreSource, /cmo_call_surf_used/, "session normalizer must preserve cmo_call_surf_used");
 assert.match(appChatStoreSource, /cmo_call_echo_used/, "session normalizer must preserve cmo_call_echo_used");
 assert.doesNotMatch(sendMessagePreSuccessSource, /setInput\(""\)/, "composer draft must not be cleared before successful submit response");
-assert.match(chatPanelSource, /setInput\(""\);\s*setSessionId\(response\.sessionId\)/, "composer draft should clear only after successful submit response");
-assert.match(chatPanelSource, /disabled=\{!input\.trim\(\) \|\| isSending\}/, "Send button must only be disabled for empty input or active submit");
+assert.match(chatPanelSource, /setInput\(""\);\s*setPendingAttachments\(\[\]\);\s*setSessionId\(response\.sessionId\)/, "composer draft and pending attachments should clear only after successful submit response");
+assert.match(chatPanelSource, /disabled=\{\(!input\.trim\(\) && !pendingAttachments\.length\) \|\| isSending \|\| isUploadingAttachment\}/, "Send button must be enabled when text or attachment is present and no send/upload is active");
 
 assert.match(configSource, /getCmoHermesCmoAsyncToolRunTimeoutMs/, "async background timeout config getter must exist");
 assert.match(configSource, /CMO_HERMES_CMO_ASYNC_TOOL_RUN_TIMEOUT_MS/, "async background timeout env flag must exist");
