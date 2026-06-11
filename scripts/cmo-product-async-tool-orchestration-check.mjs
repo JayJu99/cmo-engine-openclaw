@@ -194,6 +194,18 @@ assert.match(appChatStoreSource, /cmo_call_echo_used/, "session normalizer must 
 assert.doesNotMatch(sendMessagePreSuccessSource, /setInput\(""\)/, "composer draft must not be cleared before successful submit response");
 assert.match(chatPanelSource, /setInput\(""\);\s*setPendingAttachments\(\[\]\);\s*setSessionId\(response\.sessionId\)/, "composer draft and pending attachments should clear only after successful submit response");
 assert.match(chatPanelSource, /disabled=\{\(!input\.trim\(\) && !pendingAttachments\.length\) \|\| isSending \|\| isUploadingAttachment\}/, "Send button must be enabled when text or attachment is present and no send/upload is active");
+assert.match(chatPanelSource, /onDragEnter=\{handleAttachmentDragEnter\}/, "CMO composer panel must accept file drag enter events");
+assert.match(chatPanelSource, /onDragOver=\{handleAttachmentDragOver\}/, "CMO composer panel must accept file drag over events");
+assert.match(chatPanelSource, /onDragLeave=\{handleAttachmentDragLeave\}/, "CMO composer panel must clear drag state on leave");
+assert.match(chatPanelSource, /onDrop=\{handleAttachmentDrop\}/, "CMO composer panel must upload dropped files");
+assert.match(chatPanelSource, /hasFileDrag\(event\)/, "drag handlers must ignore non-file drags");
+assert.match(chatPanelSource, /Drop files to attach/, "drag state must render a visible drop hint");
+assert.match(chatPanelSource, /const droppedFiles = filesFromList\(event\.dataTransfer\.files\);[\s\S]*uploadAttachmentFiles\(droppedFiles\)/, "dropped files must reuse the existing attachment upload flow");
+assert.match(chatPanelSource, /onPaste=\{handleComposerPaste\}/, "composer must handle paste events");
+assert.match(chatPanelSource, /CMO_PASTE_IMAGE_MIME_TYPES = new Set\(\["image\/png", "image\/jpeg", "image\/webp"\]\)/, "paste handling must be limited to supported image MIME types");
+assert.match(chatPanelSource, /event\.clipboardData\.items/, "paste handling must inspect clipboard data items");
+assert.match(chatPanelSource, /pasted-image-\$\{compactTimestamp\(\)\}/, "clipboard images without names must receive safe generated filenames");
+assert.match(chatPanelSource, /if \(!pastedImageFiles\.length\) \{\s*return;\s*\}[\s\S]*event\.preventDefault\(\);[\s\S]*uploadAttachmentFiles\(pastedImageFiles\)/, "normal text paste must remain untouched unless image files are attached");
 
 assert.match(configSource, /getCmoHermesCmoAsyncToolRunTimeoutMs/, "async background timeout config getter must exist");
 assert.match(configSource, /CMO_HERMES_CMO_ASYNC_TOOL_RUN_TIMEOUT_MS/, "async background timeout env flag must exist");
@@ -233,6 +245,9 @@ console.log(JSON.stringify({
     "raw tool names hidden from timeline labels",
     "terminal tools_used metadata preserved",
     "composer draft survives refresh and failed submit",
+    "composer drag-and-drop attachment upload wired",
+    "composer paste-image attachment upload wired",
+    "normal text paste preserved",
     "normal sync tool timeout remains configurable",
     "completed async tool run calls raw activity endpoint",
     "pending/running async tool runs skip raw activity endpoint",
@@ -274,6 +289,9 @@ console.log(JSON.stringify({
     draftClearedOnlyAfterSubmitSuccess: true,
     pollingDoesNotClearDraft: true,
     sendDisabledOnlyForEmptyInputOrActiveSubmit: true,
+    dragDropAttachmentsReuseExistingUploadFlow: true,
+    pasteImageAttachmentsReuseExistingUploadFlow: true,
+    textPasteDefaultPreserved: true,
   },
   asyncRawActivitySmoke: {
     completedRunCallsRawActivityLogEndpoint: true,

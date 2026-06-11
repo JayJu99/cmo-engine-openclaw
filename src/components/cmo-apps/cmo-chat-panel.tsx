@@ -1,5 +1,6 @@
 "use client";
 
+import type { ClipboardEvent, DragEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -39,6 +40,75 @@ const CMO_ATTACHMENT_ACCEPT = [
   ".md",
   ".markdown",
 ].join(",");
+const CMO_MAX_PENDING_ATTACHMENTS = 8;
+const CMO_PASTE_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
+function compactTimestamp(date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function pastedImageExtension(mimeType: string): string {
+  if (mimeType === "image/jpeg") {
+    return "jpg";
+  }
+
+  if (mimeType === "image/webp") {
+    return "webp";
+  }
+
+  return "png";
+}
+
+function pastedImageFileName(mimeType: string, index: number): string {
+  const suffix = index > 0 ? `-${index + 1}` : "";
+
+  return `pasted-image-${compactTimestamp()}${suffix}.${pastedImageExtension(mimeType)}`;
+}
+
+function filesFromList(files: FileList | null | undefined): File[] {
+  return files ? Array.from(files) : [];
+}
+
+function hasFileDrag(event: DragEvent<HTMLElement>): boolean {
+  return Array.from(event.dataTransfer.types).includes("Files");
+}
+
+function imageFilesFromClipboard(event: ClipboardEvent<HTMLTextAreaElement>): File[] {
+  const files: File[] = [];
+  const seen = new Set<File>();
+
+  Array.from(event.clipboardData.items).forEach((item, index) => {
+    if (item.kind !== "file" || !CMO_PASTE_IMAGE_MIME_TYPES.has(item.type)) {
+      return;
+    }
+
+    const file = item.getAsFile();
+    if (!file) {
+      return;
+    }
+
+    seen.add(file);
+    files.push(file.name ? file : new File([file], pastedImageFileName(file.type || item.type, index), {
+      type: file.type || item.type,
+      lastModified: file.lastModified || Date.now(),
+    }));
+  });
+
+  Array.from(event.clipboardData.files).forEach((file, index) => {
+    if (!CMO_PASTE_IMAGE_MIME_TYPES.has(file.type) || seen.has(file)) {
+      return;
+    }
+
+    files.push(file.name ? file : new File([file], pastedImageFileName(file.type, files.length + index), {
+      type: file.type,
+      lastModified: file.lastModified || Date.now(),
+    }));
+  });
+
+  return files;
+}
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as unknown;
@@ -476,6 +546,7 @@ export function CMOChatPanel({
   const [input, setInput] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<CmoSessionAttachment[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
+  const [isDragActive, setIsDragActive] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<CMORuntimeStatus | null>(initialRuntimeStatus);
   const [runtimeErrorReason, setRuntimeErrorReason] = useState<CmoRuntimeErrorReason | null>(null);
@@ -493,6 +564,7 @@ export function CMOChatPanel({
   const [writingApprovalId, setWritingApprovalId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const dragDepthRef = useRef(0);
   const asyncPollTimerRef = useRef<number | null>(null);
   const asyncPollStartedAtRef = useRef<number | null>(null);
   const selectedQualitySummary = contextBrief.contextQualitySummary;
@@ -896,36 +968,64 @@ export function CMOChatPanel({
     inputRef.current?.focus();
   }
 
-  async function uploadAttachments(files: FileList | null) {
-    const file = files?.[0];
+  async function uploadAttachmentFiles(inputFiles: File[] | FileList | null) {
+    const files = Array.isArray(inputFiles) ? inputFiles : filesFromList(inputFiles);
 
-    if (!file || isUploadingAttachment) {
+    if (!files.length || isUploadingAttachment) {
       return;
     }
 
+    if (isSending) {
+      setError("Attachment upload failed: wait for the current CMO request to finish.");
+      return;
+    }
+
+    const availableSlots = Math.max(0, CMO_MAX_PENDING_ATTACHMENTS - pendingAttachments.length);
+    if (!availableSlots) {
+      setError(`Attachment upload failed: this message already has ${CMO_MAX_PENDING_ATTACHMENTS} attachments.`);
+      return;
+    }
+
+    const uploadQueue = files.slice(0, availableSlots);
+    const skippedCount = files.length - uploadQueue.length;
+    const uploadedAttachments: CmoSessionAttachment[] = [];
+
     setIsUploadingAttachment(true);
     setError(null);
-    setSendStatus("Uploading attachment...");
+    setSendStatus(uploadQueue.length === 1 ? "Uploading attachment..." : `Uploading ${uploadQueue.length} attachments...`);
 
     try {
-      const formData = new FormData();
-      formData.set("file", file);
-      formData.set("workspaceId", app.workspaceId);
-      const activeSession = activeSessionId ?? sessionId ?? selectedSession?.id;
-      if (activeSession) {
-        formData.set("sessionId", activeSession);
+      for (const file of uploadQueue) {
+        const formData = new FormData();
+        formData.set("file", file);
+        formData.set("workspaceId", app.workspaceId);
+        const activeSession = activeSessionId ?? sessionId ?? selectedSession?.id;
+        if (activeSession) {
+          formData.set("sessionId", activeSession);
+        }
+
+        const payload = await readJsonResponse<{ data: CmoSessionAttachment }>(
+          await fetch(`/api/apps/${app.id}/attachments`, {
+            method: "POST",
+            body: formData,
+          }),
+        );
+
+        uploadedAttachments.push(payload.data);
       }
 
-      const payload = await readJsonResponse<{ data: CmoSessionAttachment }>(
-        await fetch(`/api/apps/${app.id}/attachments`, {
-          method: "POST",
-          body: formData,
-        }),
+      setPendingAttachments((current) => [...current, ...uploadedAttachments].slice(0, CMO_MAX_PENDING_ATTACHMENTS));
+      setSendStatus(
+        skippedCount > 0
+          ? `${uploadedAttachments.length} attachment${uploadedAttachments.length === 1 ? "" : "s"} uploaded. ${skippedCount} skipped because this message is full.`
+          : uploadedAttachments.length === 1
+            ? "Attachment uploaded."
+            : `${uploadedAttachments.length} attachments uploaded.`,
       );
-
-      setPendingAttachments((current) => [...current, payload.data].slice(0, 8));
-      setSendStatus("Attachment uploaded.");
     } catch (uploadError) {
+      if (uploadedAttachments.length) {
+        setPendingAttachments((current) => [...current, ...uploadedAttachments].slice(0, CMO_MAX_PENDING_ATTACHMENTS));
+      }
       setSendStatus(null);
       setError(`Attachment upload failed: ${uploadError instanceof Error ? uploadError.message : "Upload failed"}`);
     } finally {
@@ -934,6 +1034,61 @@ export function CMOChatPanel({
         fileInputRef.current.value = "";
       }
     }
+  }
+
+  function handleAttachmentDragEnter(event: DragEvent<HTMLElement>) {
+    if (!hasFileDrag(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragActive(true);
+  }
+
+  function handleAttachmentDragOver(event: DragEvent<HTMLElement>) {
+    if (!hasFileDrag(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setIsDragActive(true);
+  }
+
+  function handleAttachmentDragLeave(event: DragEvent<HTMLElement>) {
+    if (!hasFileDrag(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsDragActive(false);
+    }
+  }
+
+  function handleAttachmentDrop(event: DragEvent<HTMLElement>) {
+    if (!hasFileDrag(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragActive(false);
+    const droppedFiles = filesFromList(event.dataTransfer.files);
+    void uploadAttachmentFiles(droppedFiles);
+  }
+
+  function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const pastedImageFiles = imageFilesFromClipboard(event);
+
+    if (!pastedImageFiles.length) {
+      return;
+    }
+
+    event.preventDefault();
+    void uploadAttachmentFiles(pastedImageFiles);
   }
 
   async function reviewSuggestedVaultUpdate(candidate: Record<string, unknown>, action: CmoVaultUpdateReviewAction) {
@@ -1212,7 +1367,19 @@ export function CMOChatPanel({
 
   return (
     <div id="cmo-session" className="space-y-5">
-      <Card className="overflow-hidden">
+      <Card
+        className="relative overflow-hidden"
+        onDragEnter={handleAttachmentDragEnter}
+        onDragOver={handleAttachmentDragOver}
+        onDragLeave={handleAttachmentDragLeave}
+        onDrop={handleAttachmentDrop}
+      >
+        {isDragActive ? (
+          <div className="pointer-events-none absolute inset-x-4 bottom-24 z-20 flex items-center justify-center rounded-lg border border-dashed border-indigo-300 bg-white/95 px-4 py-3 text-sm font-semibold text-indigo-700 shadow-lg shadow-indigo-950/10">
+            <icons.Upload className="mr-2 size-4" />
+            Drop files to attach
+          </div>
+        ) : null}
         <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <div className="grid size-10 place-items-center rounded-xl bg-indigo-50 text-indigo-700 ring-1 ring-indigo-100">
@@ -1324,6 +1491,7 @@ export function CMOChatPanel({
               ref={inputRef}
               value={input}
               onChange={(event) => setInput(event.target.value)}
+              onPaste={handleComposerPaste}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
@@ -1346,7 +1514,7 @@ export function CMOChatPanel({
                 type="file"
                 accept={CMO_ATTACHMENT_ACCEPT}
                 className="hidden"
-                onChange={(event) => void uploadAttachments(event.currentTarget.files)}
+                onChange={(event) => void uploadAttachmentFiles(event.currentTarget.files)}
                 disabled={isSending || isUploadingAttachment}
               />
               <Button
