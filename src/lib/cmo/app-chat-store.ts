@@ -50,6 +50,11 @@ import type {
   ContextGraphStatus,
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
+import {
+  bindCmoAttachmentsToTurn,
+  cmoAttachmentsForHermes,
+  normalizeCmoSessionAttachments,
+} from "@/lib/cmo/attachments";
 import { getAppWorkspace } from "@/lib/cmo/app-workspaces";
 import { buildContextPack, withContextPackMessage } from "@/lib/cmo/context-pack-builder";
 import { summarizeContextQuality } from "@/lib/cmo/context-quality";
@@ -1367,6 +1372,9 @@ function normalizeAppChatRequest(body: unknown): CMOAppChatRequest {
     message,
     topic: stringValue(body.topic),
     forceFallback: body.forceFallback === true || (isRecord(body.context) && body.context.forceFallback === true),
+    attachments: normalizeCmoSessionAttachments(body.attachments)
+      .filter((attachment) => attachment.workspace_id === workspaceId && attachment.app_id === knownApp.id)
+      .slice(0, 8),
     context: {
       mode: "app_context",
       selectedNotes: [],
@@ -2103,6 +2111,16 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(value.cmo_call_surf_used === true ? { cmo_call_surf_used: true } : {}),
     ...(value.cmo_call_echo_used === true ? { cmo_call_echo_used: true } : {}),
     ...(typeof value.toolReadsCount === "number" && Number.isFinite(value.toolReadsCount) ? { toolReadsCount: Math.max(0, Math.floor(value.toolReadsCount)) } : {}),
+    ...(isRecord(value.attachmentTraceSummary)
+      ? { attachmentTraceSummary: value.attachmentTraceSummary }
+      : isRecord(value.attachment_trace_summary)
+        ? { attachmentTraceSummary: value.attachment_trace_summary }
+        : {}),
+    ...(isRecord(value.attachment_trace_summary)
+      ? { attachment_trace_summary: value.attachment_trace_summary }
+      : isRecord(value.attachmentTraceSummary)
+        ? { attachment_trace_summary: value.attachmentTraceSummary }
+        : {}),
     ...(normalizeStrategyMode(value.strategyMode) ? { strategyMode: normalizeStrategyMode(value.strategyMode) } : {}),
     ...(stringValue(value.mainBottleneck) ? { mainBottleneck: stringValue(value.mainBottleneck) } : {}),
     ...(normalizeDecisionLabel(value.decisionLabel) ? { decisionLabel: normalizeDecisionLabel(value.decisionLabel) } : {}),
@@ -2310,6 +2328,19 @@ function asyncRawActivityLogRequest(input: {
 }): VaultAgentRawActivityLogRequest {
   const runtimeUser = normalizeCmoRuntimeUserIdentity(input.userIdentity);
   const userId = input.userIdentity.userId ?? input.session.userId ?? runtimeUser.user_id ?? "unknown_user";
+  const attachments = normalizeCmoSessionAttachments(input.session.attachments)
+    .filter((attachment) => attachment.message_id === input.userMessageId || !attachment.message_id)
+    .map((attachment) => ({
+      attachment_id: attachment.attachment_id,
+      filename: attachment.filename,
+      mime_type: attachment.mime_type,
+      size_bytes: String(attachment.size_bytes),
+      sha256: attachment.sha256,
+      storage_kind: attachment.storage.kind,
+      storage_ref: attachment.storage.ref,
+      storage_path: attachment.storage.path,
+      no_auto_promote_12_knowledge: "true",
+    }));
 
   return {
     schema_version: "vault_agent.raw_activity_log.request.v1",
@@ -2330,6 +2361,7 @@ function asyncRawActivityLogRequest(input: {
         turn_id: input.userMessageId,
         run_id: input.assistantMessageId,
       },
+      ...attachments,
     ],
   };
 }
@@ -2666,6 +2698,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             sourceReviewContext: normalizeSourceReviewContext(message.sourceReviewContext),
             sourceAnswerContext: normalizeSourceAnswerContext(message.sourceAnswerContext),
             sessionLocalResearchResults: normalizeSessionLocalResearchResults(message.sessionLocalResearchResults, undefined, id),
+            attachments: normalizeCmoSessionAttachments(message.attachments),
             sessionSummary: normalizeOptionalString(message.sessionSummary),
             sessionArtifacts: sanitizeHermesCmoChatV11Records(message.sessionArtifacts, undefined, { allowTopLevelContent: true }),
             suggestedVaultUpdates: mergeSuggestedVaultUpdates(undefined, sanitizeHermesCmoChatV11Records(message.suggestedVaultUpdates)),
@@ -2695,6 +2728,9 @@ function normalizeSession(value: unknown): CMOChatSession | null {
   const sessionLocalResearchResults = persistedSessionLocalResearchResults.length
     ? persistedSessionLocalResearchResults
     : mergeSessionLocalResearchResults(messageSessionLocalResearchResults, undefined);
+  const attachments = normalizeCmoSessionAttachments(value.attachments).length
+    ? normalizeCmoSessionAttachments(value.attachments)
+    : normalizeCmoSessionAttachments(messages.flatMap((message) => message.attachments ?? []));
   const activeSourceId = normalizeOptionalString(value.activeSourceId);
   const sessionSummary = normalizeOptionalString(value.sessionSummary);
   const sessionArtifacts = sanitizeHermesCmoChatV11Records(value.sessionArtifacts, undefined, { allowTopLevelContent: true });
@@ -2794,6 +2830,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     sourceAnswerContext: normalizeSourceAnswerContext(value.sourceAnswerContext),
     sessionLocalSources,
     sessionLocalResearchResults,
+    ...(attachments.length ? { attachments } : {}),
     ...(normalizedActiveSourceId ? { activeSourceId: normalizedActiveSourceId } : {}),
     ...(sessionSummary ? { sessionSummary } : {}),
     ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
@@ -2831,6 +2868,17 @@ export async function createAppChatSession(
   const messageId = `msg_${randomUUID().slice(0, 12)}`;
   const assistantId = `msg_${randomUUID().slice(0, 12)}`;
   const sessionId = continuedSession?.id ?? `session_${safeId(request.workspaceId)}_${now.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
+  const turnAttachments = bindCmoAttachmentsToTurn({
+    attachments: request.attachments ?? [],
+    sessionId,
+    messageId,
+    ...(userIdentity.userId ? { userId: userIdentity.userId } : {}),
+    ...(userIdentity.userEmail ? { userEmail: userIdentity.userEmail } : {}),
+  });
+  const sessionAttachments = normalizeCmoSessionAttachments([
+    ...(continuedSession?.attachments ?? []),
+    ...turnAttachments,
+  ]);
   const localCommand = continuedSession ? parseLocalChatCommand(request.message) : null;
 
   if (localCommand && continuedSession) {
@@ -2942,7 +2990,7 @@ export async function createAppChatSession(
     nowIso: now,
     allowRefetch: !preliminaryHermesCmoChatRequested,
   });
-  const sourceOrToolTask = sourceAnswerContext?.tool_read_recommended === true;
+  const sourceOrToolTask = sourceAnswerContext?.tool_read_recommended === true || turnAttachments.length > 0;
   const hermesCmoRoute = resolveHermesCmoChatRoute({
     appId: request.appId,
     message: request.message,
@@ -2959,6 +3007,7 @@ export async function createAppChatSession(
     ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
     sessionLocalSources,
     sessionLocalResearchResults,
+    ...(sessionAttachments.length ? { attachments: sessionAttachments } : {}),
     ...(activeSourceId ? { activeSourceId } : {}),
     contextPack: {
       ...contextPackage.contextPack,
@@ -3100,6 +3149,7 @@ export async function createAppChatSession(
       ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
       sessionLocalSources,
       sessionLocalResearchResults,
+      ...(sessionAttachments.length ? { attachments: sessionAttachments } : {}),
       ...(activeSourceId ? { activeSourceId } : {}),
       ...(sessionSummary ? { sessionSummary } : {}),
       ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
@@ -3130,6 +3180,7 @@ export async function createAppChatSession(
           ...(sourceReviewContext ? { sourceReviewContext } : {}),
           ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
           sessionLocalResearchResults,
+          ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
         },
         {
           id: assistantId,
@@ -3155,6 +3206,7 @@ export async function createAppChatSession(
           ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
           sessionLocalSources,
           sessionLocalResearchResults,
+          ...(sessionAttachments.length ? { attachments: sessionAttachments } : {}),
           contextUsedCount: contextUsed.length,
           graphHintCount,
           indexedContextStatus,
@@ -3183,6 +3235,7 @@ export async function createAppChatSession(
       let finalSession: CMOChatSession;
 
       try {
+        const hermesAttachmentRefs = await cmoAttachmentsForHermes(turnAttachments);
         const hermesRequest = mapCmoChatToHermesCmoRequest({
           contextPack: contextPackage.contextPack,
           contextPackage,
@@ -3195,6 +3248,7 @@ export async function createAppChatSession(
           userMessageId: messageId,
           createdAt: now,
           userIdentity,
+          inputMaterialAttachments: hermesAttachmentRefs,
         });
         const hermesResult = await runHermesCmoRuntime(hermesRequest, { toolTimeoutMs: asyncToolRunTimeoutMs });
         const counterValidation = validateHermesCmoChatCounters(hermesResult);
@@ -3500,6 +3554,7 @@ export async function createAppChatSession(
       if (chatResult.fallbackEligible && hermesCmoRoute.fallbackEnabled) {
         const fallbackStartedMs = Date.now();
         const fallbackTrace = fallbackHermesCmoChatV11Metadata(chatResult.request?.request_id ?? `req_cmo_chat_v11_${messageId}`, reason);
+        const hermesAttachmentRefs = await cmoAttachmentsForHermes(turnAttachments);
         const hermesFallbackRequest = mapCmoChatToHermesCmoRequest({
           contextPack: contextPackage.contextPack,
           contextPackage,
@@ -3512,6 +3567,7 @@ export async function createAppChatSession(
           userMessageId: messageId,
           createdAt: now,
           userIdentity,
+          inputMaterialAttachments: hermesAttachmentRefs,
         });
         const hermesFallbackResult = await runHermesCmoRuntime(hermesFallbackRequest);
         sessionLocalResearchResults = mergeSessionLocalResearchResults(
@@ -3621,6 +3677,7 @@ export async function createAppChatSession(
     const hermesStartedMs = Date.now();
 
     try {
+      const hermesAttachmentRefs = await cmoAttachmentsForHermes(turnAttachments);
       const hermesRequest = mapCmoChatToHermesCmoRequest({
         contextPack: contextPackage.contextPack,
         contextPackage,
@@ -3633,6 +3690,7 @@ export async function createAppChatSession(
         userMessageId: messageId,
         createdAt: now,
         userIdentity,
+        inputMaterialAttachments: hermesAttachmentRefs,
       });
       hermesRequestSent = true;
       const hermesResult = await runHermesCmoRuntime(hermesRequest);
@@ -4011,6 +4069,7 @@ export async function createAppChatSession(
         ...(sourceReviewContext ? { sourceReviewContext } : {}),
         ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
         sessionLocalResearchResults,
+        ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
         ...(sessionSummary ? { sessionSummary } : {}),
         ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
         ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
@@ -4054,6 +4113,7 @@ export async function createAppChatSession(
         ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
         sessionLocalSources,
         sessionLocalResearchResults,
+        ...(sessionAttachments.length ? { attachments: sessionAttachments } : {}),
         ...(activeSourceId ? { activeSourceId } : {}),
         ...(sessionSummary ? { sessionSummary } : {}),
         ...(sessionArtifacts.length ? { sessionArtifacts } : {}),

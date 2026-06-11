@@ -855,6 +855,8 @@ export interface HermesCmoChatMetadata {
   cmo_call_surf_used?: boolean;
   cmo_call_echo_used?: boolean;
   toolReadsCount?: number;
+  attachmentTraceSummary?: Record<string, unknown>;
+  attachment_trace_summary?: Record<string, unknown>;
   contextResolution?: Record<string, unknown>;
   context_resolution?: Record<string, unknown>;
   answerBasis?: Record<string, unknown>;
@@ -1080,6 +1082,42 @@ export type CMORuntimeStatus =
 
 export type CmoAsyncToolRunStatus = "pending" | "running" | "completed" | "failed" | "timed_out";
 
+export interface CmoSessionAttachmentStorage {
+  kind: "supabase_storage";
+  bucket: string;
+  path: string;
+  ref: string;
+}
+
+export interface CmoSessionAttachment {
+  schema_version: "cmo.session_attachment.v1";
+  attachment_id: string;
+  filename: string;
+  mime_type:
+    | "image/png"
+    | "image/jpeg"
+    | "image/webp"
+    | "application/pdf"
+    | "text/plain"
+    | "text/markdown"
+    | "text/csv"
+    | "application/json";
+  size_bytes: number;
+  sha256: string;
+  storage: CmoSessionAttachmentStorage;
+  created_at: string;
+  tenant_id?: string;
+  workspace_id: string;
+  app_id: string;
+  session_id?: string;
+  message_id?: string;
+  user_id?: string;
+  user_email?: string;
+  user_caption?: string;
+  purpose_hint: "user_uploaded_context";
+  no_auto_promote_12_knowledge: true;
+}
+
 export interface CMOChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -1150,6 +1188,7 @@ export interface CMOChatMessage {
   sourceAnswerContext?: CmoSourceAnswerContext;
   sessionLocalSources?: CmoSessionLocalSource[];
   sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
+  attachments?: CmoSessionAttachment[];
   activeSourceId?: string;
   sessionSummary?: string;
   sessionArtifacts?: Record<string, unknown>[];
@@ -1309,6 +1348,7 @@ export interface CMOChatSession {
   sourceAnswerContext?: CmoSourceAnswerContext;
   sessionLocalSources?: CmoSessionLocalSource[];
   sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
+  attachments?: CmoSessionAttachment[];
   activeSourceId?: string;
   sessionSummary?: string;
   sessionArtifacts?: Record<string, unknown>[];
@@ -1338,6 +1378,7 @@ export interface CMOAppChatRequest {
   message: string;
   topic?: string;
   forceFallback?: boolean;
+  attachments?: CmoSessionAttachment[];
   context: {
     selectedNotes: VaultNoteRef[];
     mode: "app_context";

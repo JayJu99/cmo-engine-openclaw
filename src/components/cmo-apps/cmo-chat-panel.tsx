@@ -16,6 +16,7 @@ import type {
   CMOContextBrief,
   CMOChatMessage,
   CMOChatSession,
+  CmoSessionAttachment,
   CMORuntimeStatus,
   CmoVaultApprovedWriteDryRunResult,
   CmoVaultApprovedWriteResult,
@@ -26,6 +27,18 @@ import { cn } from "@/lib/utils";
 
 const CMO_ASYNC_POLL_INTERVAL_MS = 3_000;
 const CMO_ASYNC_POLL_MAX_MS = 10 * 60 * 1000;
+const CMO_ATTACHMENT_ACCEPT = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "application/pdf",
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  "application/json",
+  ".md",
+  ".markdown",
+].join(",");
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as unknown;
@@ -46,6 +59,22 @@ function nowIso() {
 
 function messageId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0 B";
+  }
+
+  if (value < 1024) {
+    return `${Math.round(value)} B`;
+  }
+
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function isActiveCmoRunStatus(value: unknown): value is "pending" | "running" {
@@ -371,6 +400,59 @@ function renderAssistantContent(content: string) {
   );
 }
 
+function AttachmentCards({
+  attachments,
+  tone = "light",
+  onRemove,
+}: {
+  attachments?: CmoSessionAttachment[];
+  tone?: "light" | "dark";
+  onRemove?: (attachmentId: string) => void;
+}) {
+  if (!attachments?.length) {
+    return null;
+  }
+
+  const isDark = tone === "dark";
+
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {attachments.map((attachment) => (
+        <div
+          key={attachment.attachment_id}
+          className={cn(
+            "flex max-w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-xs leading-5",
+            isDark
+              ? "border-indigo-300/40 bg-indigo-500/40 text-white"
+              : "border-slate-200 bg-slate-50 text-slate-700",
+          )}
+        >
+          <icons.FileText className="size-4 shrink-0" />
+          <div className="min-w-0">
+            <div className="truncate font-bold">{attachment.filename}</div>
+            <div className={cn("truncate", isDark ? "text-indigo-100" : "text-slate-500")}>
+              {attachment.mime_type} - {formatBytes(attachment.size_bytes)}
+            </div>
+          </div>
+          {onRemove ? (
+            <button
+              type="button"
+              aria-label={`Remove ${attachment.filename}`}
+              onClick={() => onRemove(attachment.attachment_id)}
+              className={cn(
+                "grid size-6 shrink-0 place-items-center rounded-md transition",
+                isDark ? "hover:bg-white/15" : "hover:bg-slate-200",
+              )}
+            >
+              <icons.X className="size-4" />
+            </button>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function CMOChatPanel({
   app,
   contextBrief,
@@ -392,6 +474,8 @@ export function CMOChatPanel({
 }) {
   const [messages, setMessages] = useState<CMOChatMessage[]>([]);
   const [input, setInput] = useState("");
+  const [pendingAttachments, setPendingAttachments] = useState<CmoSessionAttachment[]>([]);
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<CMORuntimeStatus | null>(initialRuntimeStatus);
   const [runtimeErrorReason, setRuntimeErrorReason] = useState<CmoRuntimeErrorReason | null>(null);
@@ -408,6 +492,7 @@ export function CMOChatPanel({
   const [writeStatusMessage, setWriteStatusMessage] = useState<string | null>(null);
   const [writingApprovalId, setWritingApprovalId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const asyncPollTimerRef = useRef<number | null>(null);
   const asyncPollStartedAtRef = useRef<number | null>(null);
   const selectedQualitySummary = contextBrief.contextQualitySummary;
@@ -473,6 +558,7 @@ export function CMOChatPanel({
       setPendingAssistantMessageId(null);
       setPendingStartedAt(null);
       setPendingElapsedMs(0);
+      setPendingAttachments([]);
       inputRef.current?.scrollIntoView({ block: "center" });
       inputRef.current?.focus();
     }, 0);
@@ -490,6 +576,7 @@ export function CMOChatPanel({
         setPendingAssistantMessageId(null);
         setPendingStartedAt(null);
         setPendingElapsedMs(0);
+        setPendingAttachments([]);
         setReviewStatusMessage(null);
         setDryRunStatusMessage(null);
         setWriteStatusMessage(null);
@@ -619,11 +706,15 @@ export function CMOChatPanel({
   }, [activeDisplaySessionId, app.id, initialRuntimeStatus, latestVisibleCmoRunStatus, onSessionCreated]);
 
   async function sendMessage() {
-    const question = input.trim();
+    const trimmedInput = input.trim();
+    const attachmentsForTurn = pendingAttachments;
+    const question = trimmedInput || (attachmentsForTurn.length ? "Please review the attached file(s)." : "");
 
-    if (!question || isSending) {
+    if (!question || isSending || isUploadingAttachment) {
       if (!question) {
         setError("Failed to send: enter a message first.");
+      } else if (isUploadingAttachment) {
+        setError("Failed to send: wait for the attachment upload to finish.");
       }
       return;
     }
@@ -633,6 +724,7 @@ export function CMOChatPanel({
       role: "user",
       content: question,
       createdAt: nowIso(),
+      ...(attachmentsForTurn.length ? { attachments: attachmentsForTurn } : {}),
     };
     const pendingAssistantId = messageId("assistant");
     const pendingStartedMs = Date.now();
@@ -676,11 +768,13 @@ export function CMOChatPanel({
               selectedNotes: [],
               mode: "app_context",
             },
+            attachments: attachmentsForTurn,
           }),
         }),
       );
 
       setInput("");
+      setPendingAttachments([]);
       setSessionId(response.sessionId);
       setRuntimeStatus(response.runtimeStatus);
       setRuntimeErrorReason(response.runtimeErrorReason ?? null);
@@ -800,6 +894,46 @@ export function CMOChatPanel({
     }
 
     inputRef.current?.focus();
+  }
+
+  async function uploadAttachments(files: FileList | null) {
+    const file = files?.[0];
+
+    if (!file || isUploadingAttachment) {
+      return;
+    }
+
+    setIsUploadingAttachment(true);
+    setError(null);
+    setSendStatus("Uploading attachment...");
+
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      formData.set("workspaceId", app.workspaceId);
+      const activeSession = activeSessionId ?? sessionId ?? selectedSession?.id;
+      if (activeSession) {
+        formData.set("sessionId", activeSession);
+      }
+
+      const payload = await readJsonResponse<{ data: CmoSessionAttachment }>(
+        await fetch(`/api/apps/${app.id}/attachments`, {
+          method: "POST",
+          body: formData,
+        }),
+      );
+
+      setPendingAttachments((current) => [...current, payload.data].slice(0, 8));
+      setSendStatus("Attachment uploaded.");
+    } catch (uploadError) {
+      setSendStatus(null);
+      setError(`Attachment upload failed: ${uploadError instanceof Error ? uploadError.message : "Upload failed"}`);
+    } finally {
+      setIsUploadingAttachment(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
   }
 
   async function reviewSuggestedVaultUpdate(candidate: Record<string, unknown>, action: CmoVaultUpdateReviewAction) {
@@ -1127,6 +1261,7 @@ export function CMOChatPanel({
                     </div>
                   ) : null}
                   {message.role === "assistant" ? renderAssistantContent(message.content) : <div className="whitespace-pre-wrap">{message.content}</div>}
+                  <AttachmentCards attachments={message.attachments} tone={message.role === "user" ? "dark" : "light"} />
                   {message.role === "assistant" ? (
                     <CmoAgentActivityPanel
                       message={message}
@@ -1199,10 +1334,35 @@ export function CMOChatPanel({
               className="min-h-28 w-full resize-none rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
               disabled={isSending}
             />
-            <Button className="self-end" onClick={() => void sendMessage()} disabled={!input.trim() || isSending}>
-              {isSending ? <icons.RefreshCw className="animate-spin" /> : <icons.Send />}
-              Send
-            </Button>
+            <AttachmentCards
+              attachments={pendingAttachments}
+              onRemove={(attachmentId) =>
+                setPendingAttachments((current) => current.filter((attachment) => attachment.attachment_id !== attachmentId))
+              }
+            />
+            <div className="flex items-center justify-between gap-3">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={CMO_ATTACHMENT_ACCEPT}
+                className="hidden"
+                onChange={(event) => void uploadAttachments(event.currentTarget.files)}
+                disabled={isSending || isUploadingAttachment}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isSending || isUploadingAttachment}
+              >
+                {isUploadingAttachment ? <icons.RefreshCw className="animate-spin" /> : <icons.Upload />}
+                Attach
+              </Button>
+              <Button className="ml-auto" onClick={() => void sendMessage()} disabled={(!input.trim() && !pendingAttachments.length) || isSending || isUploadingAttachment}>
+                {isSending ? <icons.RefreshCw className="animate-spin" /> : <icons.Send />}
+                Send
+              </Button>
+            </div>
           </div>
         </div>
       </Card>

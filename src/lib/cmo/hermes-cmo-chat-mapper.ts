@@ -18,6 +18,7 @@ import type {
   HermesCmoRuntimeResponse,
   HermesCmoRuntimeResult,
 } from "@/lib/cmo/hermes-cmo-runtime";
+import type { HermesCmoAttachmentRef } from "@/lib/cmo/attachments";
 import type { CmoRuntimeTurnInput } from "@/lib/cmo/runtime";
 import {
   resolveSessionWorkingMemory,
@@ -39,6 +40,7 @@ export interface HermesCmoChatRequestInput extends CmoRuntimeTurnInput {
   sessionId: string;
   userMessageId: string;
   createdAt: string;
+  inputMaterialAttachments?: HermesCmoAttachmentRef[];
   userIdentity?: {
     userId?: string;
     userEmail?: string;
@@ -455,6 +457,9 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const indexedContextSupplement = contextItems
     .filter((item) => item.exists && item.kind === "indexed_context_supplement")
     .map(contextItemSnapshot);
+  const inputMaterial = {
+    attachments: input.inputMaterialAttachments ?? [],
+  };
 
   return {
     schema_version: "hermes.cmo.request.v1",
@@ -478,6 +483,10 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       user_message: input.message,
       explicit_command: null,
     },
+    input: {
+      input_material: inputMaterial,
+    },
+    input_material: inputMaterial,
     messages: recentConversationMessages(input.history),
     context_pack: {
       current_priority: currentPriority,
@@ -623,6 +632,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       official_ingestion_role: "inputs_priorities_sources_ui",
       active_source_id: input.contextPackage.activeSourceId ?? null,
       session_local_sources_count: sessionLocalSources.length,
+      user_uploaded_attachments_count: inputMaterial.attachments.length,
       source_answer_context_available: Boolean(sourceAnswerContext),
       source_review_context_available: Boolean(sourceReviewContext),
       session_local_research_results_count: sessionLocalResearchResults.length,
@@ -1021,6 +1031,7 @@ function metadataFromHermes(
   const toolReadsCount = toolReadsCountFromResponse(result.response, activityEvents);
   const contextResolution = contextResolutionFromResponse(result.response);
   const answerBasis = isRecord(result.response.answer_basis) ? result.response.answer_basis : {};
+  const attachmentTraceSummary = isRecord(result.response.attachment_trace_summary) ? result.response.attachment_trace_summary : undefined;
   const cmoCallSurfUsed = toolsUsed.includes("cmo_call_surf") || executedCounts.surfCalls > 0;
   const cmoCallEchoUsed = toolsUsed.includes("cmo_call_echo") || executedCounts.echoCalls > 0;
 
@@ -1048,6 +1059,7 @@ function metadataFromHermes(
     ...(cmoCallSurfUsed ? { cmo_call_surf_used: true } : {}),
     ...(cmoCallEchoUsed ? { cmo_call_echo_used: true } : {}),
     ...(toolReadsCount !== undefined ? { toolReadsCount } : {}),
+    ...(attachmentTraceSummary ? { attachmentTraceSummary, attachment_trace_summary: attachmentTraceSummary } : {}),
     ...(Object.keys(contextResolution).length > 0 ? { contextResolution, context_resolution: contextResolution } : {}),
     ...(Object.keys(answerBasis).length > 0 ? { answerBasis, answer_basis: answerBasis } : {}),
     ...(result.strategyMode ? { strategyMode: result.strategyMode } : {}),
