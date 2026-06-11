@@ -110,6 +110,10 @@ export function DashboardShell({
 }) {
   const pathname = usePathname();
 
+  if (pathname.startsWith("/ui-preview/")) {
+    return <>{children}</>;
+  }
+
   return (
     <div className="min-h-screen bg-[#fbfcff] soft-grid">
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-[282px] border-r border-slate-200/80 bg-white/88 backdrop-blur-xl xl:block">
