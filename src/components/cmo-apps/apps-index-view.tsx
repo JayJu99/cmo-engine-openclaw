@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { icons } from "@/components/dashboard/icons";
 import { PageChrome } from "@/components/dashboard/shell";
+import { AppProjectLogo } from "@/components/cmo-apps/app-project-logo";
 import type { AppWorkspace } from "@/lib/cmo/app-workspace-types";
 
 export function AppsIndexView({ apps }: { apps: AppWorkspace[] }) {
@@ -27,9 +28,7 @@ export function AppsIndexView({ apps }: { apps: AppWorkspace[] }) {
         {apps.map((app) => (
           <Card key={app.id} className="p-6 transition hover:-translate-y-1 hover:border-indigo-200 hover:shadow-[0_24px_70px_rgba(15,23,42,0.1)]">
             <div className="flex items-start justify-between gap-4">
-              <div className="grid size-12 place-items-center rounded-2xl bg-indigo-50 text-indigo-700 ring-1 ring-indigo-100">
-                <icons.Package />
-              </div>
+              <AppProjectLogo app={app} />
               <Badge variant={app.stage === "Active" ? "green" : "slate"}>{app.stage || "Unknown"}</Badge>
             </div>
             <h2 className="mt-6 text-xl font-bold text-slate-950">{app.name}</h2>

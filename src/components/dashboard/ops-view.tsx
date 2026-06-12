@@ -200,6 +200,10 @@ function WarningPanel({ errors }: { errors: string[] }) {
     return null;
   }
 
+  const errorItems = Array.from(
+    errors.reduce((counts, error) => counts.set(error, (counts.get(error) ?? 0) + 1), new Map<string, number>()),
+  );
+
   return (
     <Card className="border-orange-100 bg-orange-50/60 p-5">
       <div className="flex gap-4">
@@ -212,9 +216,10 @@ function WarningPanel({ errors }: { errors: string[] }) {
             The page remains usable. Check the affected service or retry after the adapter is reachable.
           </CardDescription>
           <div className="mt-4 space-y-2">
-            {errors.map((error) => (
+            {errorItems.map(([error, count]) => (
               <div key={error} className="rounded-xl border border-orange-100 bg-white/70 px-3 py-2 text-sm font-semibold text-orange-800">
                 {error}
+                {count > 1 ? <span className="ml-2 text-xs text-orange-600">x{count}</span> : null}
               </div>
             ))}
           </div>
