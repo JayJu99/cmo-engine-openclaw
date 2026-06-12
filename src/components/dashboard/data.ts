@@ -4,13 +4,15 @@ type NavItem = {
   icon: string;
   count?: number;
   systemOnly?: boolean;
+  exact?: boolean;
 };
 
 export const navItems: NavItem[] = [
   { label: "Command Center", href: "/", icon: "Home" },
   { label: "Apps", href: "/apps", icon: "Grid2X2" },
   { label: "Daily Notes", href: "/daily", icon: "FileText" },
-  { label: "Vault", href: "/vault", icon: "Package" },
+  { label: "Vault", href: "/vault", icon: "Package", exact: true },
+  { label: "Vault Graph", href: "/vault/graph", icon: "Workflow" },
   { label: "Settings", href: "/ops", icon: "Settings", systemOnly: true },
 ];
 

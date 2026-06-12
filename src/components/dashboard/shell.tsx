@@ -124,7 +124,9 @@ export function DashboardShell({
           <nav className="flex-1 space-y-2 px-4 py-6">
             {navItems.filter((item) => !item.systemOnly || authStatus.isOwnerOrAdmin).map((item) => {
               const Icon = icons[item.icon as IconName];
-              const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+              const active = item.href === "/" || item.exact
+                ? pathname === item.href
+                : pathname === item.href || pathname.startsWith(`${item.href}/`);
               return (
                 <Link
                   key={item.href}
