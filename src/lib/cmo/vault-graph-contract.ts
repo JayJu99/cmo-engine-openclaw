@@ -7,6 +7,7 @@ import {
 
 export const VAULT_GRAPH_SCHEMA_VERSION = "cmo.vault_graph.v1";
 export const VAULT_GRAPH_SOURCE_ROOT = "mock";
+export type VaultGraphSourceRoot = typeof VAULT_GRAPH_SOURCE_ROOT;
 
 export type VaultGraphHiddenCounts = {
   runtime: number;
@@ -18,7 +19,7 @@ export type VaultGraphHiddenCounts = {
 export type VaultGraphApiResponse = VaultGraphData & {
   schema_version: typeof VAULT_GRAPH_SCHEMA_VERSION;
   vault_mutation: false;
-  source_root: typeof VAULT_GRAPH_SOURCE_ROOT;
+  source_root: VaultGraphSourceRoot;
   indexed_at: string;
   hidden_counts: VaultGraphHiddenCounts;
   warnings: string[];
