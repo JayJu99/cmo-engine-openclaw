@@ -8,11 +8,16 @@ import { CardDescription, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { icons } from "@/components/dashboard/icons";
 import { PageChrome } from "@/components/dashboard/shell";
+import {
+  buildMockVaultGraphResponse,
+  isVaultGraphApiResponse,
+  type VaultGraphApiResponse,
+} from "@/lib/cmo/vault-graph-contract";
 import { cn } from "@/lib/utils";
 import {
   vaultGraphClusters,
-  vaultGraphMockData,
   vaultGraphSemanticNodes,
+  type VaultGraphData,
   type VaultGraphColorGroup,
   type VaultGraphEdge,
   type VaultGraphNode,
@@ -20,6 +25,9 @@ import {
 } from "@/components/vault-graph/vault-graph-mock-data";
 
 type VaultGraphFilter = "All" | "Knowledge" | "Sources" | "Agents" | "Proposals" | "Decisions";
+type VaultGraphApiStatus = "loading" | "mock-api" | "fallback";
+
+const fallbackGraphResponse = buildMockVaultGraphResponse("1970-01-01T00:00:00.000Z");
 
 const graphWidth = 1200;
 const graphHeight = 820;
@@ -293,6 +301,8 @@ function VaultGraphTopOverlay({
   onSearchChange,
   visibleCount,
   nodes,
+  apiStatus,
+  graphResponse,
 }: {
   activeFilter: VaultGraphFilter;
   onFilterChange: (filter: VaultGraphFilter) => void;
@@ -300,6 +310,8 @@ function VaultGraphTopOverlay({
   onSearchChange: (value: string) => void;
   visibleCount: number;
   nodes: VaultGraphNode[];
+  apiStatus: VaultGraphApiStatus;
+  graphResponse: VaultGraphApiResponse;
 }) {
   const metrics = [
     { label: "Knowledge", groups: ["accepted_knowledge"] as VaultGraphColorGroup[] },
@@ -327,9 +339,22 @@ function VaultGraphTopOverlay({
             {filter.label}
           </button>
         ))}
-        <span className="rounded-full border border-violet-300/20 bg-violet-300/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-violet-100">
-          Mock graph
-        </span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="rounded-full border border-violet-300/20 bg-violet-300/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-violet-100">
+            Mock API
+          </span>
+          <span className="rounded-full border border-cyan-300/14 bg-cyan-300/[0.06] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-cyan-100/80">
+            Read-only
+          </span>
+          <span className="rounded-full border border-emerald-300/14 bg-emerald-300/[0.06] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-100/80">
+            No Vault mutation
+          </span>
+          {apiStatus === "fallback" ? (
+            <span className="rounded-full border border-amber-300/14 bg-amber-300/[0.06] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-amber-100/80">
+              Local fallback
+            </span>
+          ) : null}
+        </div>
       </div>
 
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
@@ -352,6 +377,9 @@ function VaultGraphTopOverlay({
         </div>
         <span className="whitespace-nowrap rounded-full border border-white/8 bg-white/[0.045] px-3 py-2 text-xs font-semibold text-slate-400">
           {visibleCount} nodes
+        </span>
+        <span className="whitespace-nowrap rounded-full border border-white/8 bg-white/[0.035] px-3 py-2 text-[11px] font-semibold text-slate-500">
+          {apiStatus === "loading" ? "Loading" : graphResponse.source_root}
         </span>
       </div>
     </div>
@@ -905,9 +933,11 @@ function VaultGraphMiniMap({
 function VaultGraphNodeDetails({
   node,
   edges,
+  nodes,
 }: {
   node: VaultGraphNode | null;
   edges: VaultGraphEdge[];
+  nodes: VaultGraphNode[];
 }) {
   const relatedEdges = node ? edges.filter((edge) => edgeTouches(edge, node.id) && !isDecorativeEdge(edge)) : [];
   const color = node ? colorSystem[node.color_group] : colorSystem.workspace;
@@ -988,7 +1018,7 @@ function VaultGraphNodeDetails({
             <div className="space-y-2">
               {relatedEdges.slice(0, 4).map((edge) => {
                 const otherId = edge.source === node.id ? edge.target : edge.source;
-                const other = vaultGraphMockData.nodes.find((item) => item.id === otherId);
+                const other = nodes.find((item) => item.id === otherId);
                 return (
                   <div key={edge.id} className="flex items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.04] px-3 py-2">
                     <span
@@ -1032,25 +1062,64 @@ export function VaultGraphPage() {
   const [selectedNodeId, setSelectedNodeId] = useState("workspace-holdstation");
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [graphResponse, setGraphResponse] = useState<VaultGraphApiResponse>(fallbackGraphResponse);
+  const [apiStatus, setApiStatus] = useState<VaultGraphApiStatus>("loading");
+  const graphData: VaultGraphData = graphResponse;
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadGraph() {
+      try {
+        const response = await fetch("/api/cmo/vault-graph", {
+          method: "GET",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Vault Graph API returned ${response.status}`);
+        }
+
+        const payload: unknown = await response.json();
+        if (!isVaultGraphApiResponse(payload)) {
+          throw new Error("Vault Graph API response did not match cmo.vault_graph.v1.");
+        }
+
+        setGraphResponse(payload);
+        setApiStatus("mock-api");
+      } catch {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setGraphResponse(fallbackGraphResponse);
+        setApiStatus("fallback");
+      }
+    }
+
+    loadGraph();
+    return () => controller.abort();
+  }, []);
 
   const visibleNodes = useMemo(() => {
     const active = filters.find((filter) => filter.label === activeFilter);
     if (!active?.types && !active?.colorGroups) {
-      return vaultGraphMockData.nodes;
+      return graphData.nodes;
     }
 
-    return vaultGraphMockData.nodes.filter(
+    return graphData.nodes.filter(
       (node) => active.types?.includes(node.type) || active.colorGroups?.includes(node.color_group),
     );
-  }, [activeFilter]);
+  }, [activeFilter, graphData.nodes]);
 
   const visibleNodeIds = useMemo(() => new Set(visibleNodes.map((node) => node.id)), [visibleNodes]);
   const visibleEdges = useMemo(
     () =>
-      vaultGraphMockData.edges.filter(
+      graphData.edges.filter(
         (edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target),
       ),
-    [visibleNodeIds],
+    [graphData.edges, visibleNodeIds],
   );
   const selectedNode =
     visibleNodes.find((node) => node.id === selectedNodeId && isSemanticNode(node)) ??
@@ -1081,6 +1150,8 @@ export function VaultGraphPage() {
               onSearchChange={setSearch}
               visibleCount={visibleNodes.length}
               nodes={visibleNodes}
+              apiStatus={apiStatus}
+              graphResponse={graphResponse}
             />
 
             <div className="grid gap-3 xl:min-h-[calc(100vh-205px)] xl:grid-cols-[minmax(0,1fr)_280px] 2xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -1101,7 +1172,7 @@ export function VaultGraphPage() {
                 onZoomOut={() => setZoom((value) => Math.max(0.9, Number((value - 0.08).toFixed(2))))}
                 onZoomReset={() => setZoom(1)}
               />
-              <VaultGraphNodeDetails node={selectedNode} edges={visibleEdges} />
+              <VaultGraphNodeDetails node={selectedNode} edges={visibleEdges} nodes={graphData.nodes} />
             </div>
           </div>
         </div>
