@@ -16,7 +16,6 @@ import {
 import { cn } from "@/lib/utils";
 import {
   vaultGraphClusters,
-  vaultGraphSemanticNodes,
   type VaultGraphData,
   type VaultGraphColorGroup,
   type VaultGraphEdge,
@@ -25,7 +24,7 @@ import {
 } from "@/components/vault-graph/vault-graph-mock-data";
 
 type VaultGraphFilter = "All" | "Knowledge" | "Sources" | "Agents" | "Proposals" | "Decisions";
-type VaultGraphApiStatus = "loading" | "mock-api" | "fallback";
+type VaultGraphApiStatus = "loading" | "mock-api" | "vault-agent" | "warning" | "fallback";
 
 const fallbackGraphResponse = buildMockVaultGraphResponse("1970-01-01T00:00:00.000Z");
 
@@ -313,6 +312,12 @@ function VaultGraphTopOverlay({
   apiStatus: VaultGraphApiStatus;
   graphResponse: VaultGraphApiResponse;
 }) {
+  const sourceLabel = apiStatus === "loading"
+    ? "Loading"
+    : graphResponse.source_root === "vault-agent"
+      ? "Vault Agent"
+      : "Mock API";
+  const hasGraphWarning = apiStatus === "warning" || graphResponse.warnings.length > 0 || graphResponse.parse_errors.length > 0;
   const metrics = [
     { label: "Knowledge", groups: ["accepted_knowledge"] as VaultGraphColorGroup[] },
     { label: "Sources", groups: ["sources"] as VaultGraphColorGroup[] },
@@ -340,8 +345,13 @@ function VaultGraphTopOverlay({
           </button>
         ))}
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="rounded-full border border-violet-300/20 bg-violet-300/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-violet-100">
-            Mock API
+          <span className={cn(
+            "rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.18em]",
+            graphResponse.source_root === "vault-agent"
+              ? "border-cyan-300/20 bg-cyan-300/10 text-cyan-100"
+              : "border-violet-300/20 bg-violet-300/10 text-violet-100",
+          )}>
+            {sourceLabel}
           </span>
           <span className="rounded-full border border-cyan-300/14 bg-cyan-300/[0.06] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-cyan-100/80">
             Read-only
@@ -352,6 +362,11 @@ function VaultGraphTopOverlay({
           {apiStatus === "fallback" ? (
             <span className="rounded-full border border-amber-300/14 bg-amber-300/[0.06] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-amber-100/80">
               Local fallback
+            </span>
+          ) : null}
+          {hasGraphWarning && apiStatus !== "fallback" ? (
+            <span className="rounded-full border border-amber-300/14 bg-amber-300/[0.06] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-amber-100/80">
+              Source warning
             </span>
           ) : null}
         </div>
@@ -1040,7 +1055,7 @@ function VaultGraphNodeDetails({
 
           <Button className="mt-5 w-full rounded-2xl bg-cyan-300 text-slate-950 shadow-[0_0_36px_rgba(34,211,238,0.24)] hover:bg-cyan-200">
             <icons.Search />
-            Inspect mock node
+            Inspect node
           </Button>
         </>
       ) : (
@@ -1049,7 +1064,7 @@ function VaultGraphNodeDetails({
             <icons.Package className="size-5" />
           </div>
           <CardTitle className="mt-4 text-lg text-white">Select a node</CardTitle>
-          <CardDescription className="mt-2 text-slate-400">Choose a semantic graph node to inspect its mock metadata.</CardDescription>
+          <CardDescription className="mt-2 text-slate-400">Choose a semantic graph node to inspect its graph metadata.</CardDescription>
         </div>
       )}
     </aside>
@@ -1087,7 +1102,13 @@ export function VaultGraphPage() {
         }
 
         setGraphResponse(payload);
-        setApiStatus("mock-api");
+        setApiStatus(
+          payload.warnings.length > 0 || payload.parse_errors.length > 0
+            ? "warning"
+            : payload.source_root === "vault-agent"
+              ? "vault-agent"
+              : "mock-api",
+        );
       } catch {
         if (controller.signal.aborted) {
           return;
@@ -1124,7 +1145,6 @@ export function VaultGraphPage() {
   const selectedNode =
     visibleNodes.find((node) => node.id === selectedNodeId && isSemanticNode(node)) ??
     visibleNodes.find(isSemanticNode) ??
-    vaultGraphSemanticNodes[0] ??
     null;
 
   return (
@@ -1133,7 +1153,7 @@ export function VaultGraphPage() {
       description="Orbit UI constellation view for workspace knowledge, sources, agents, decisions, and outputs."
       actions={
         <Badge variant="slate" className="rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-slate-400">
-          Mock
+          {graphResponse.source_root === "vault-agent" ? "Vault Agent" : "Mock"}
         </Badge>
       }
     >

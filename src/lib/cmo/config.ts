@@ -64,6 +64,18 @@ export function getCmoHermesTimeoutMs(): number {
   return positiveIntEnv("CMO_HERMES_TIMEOUT_MS", 240_000);
 }
 
+export function getCmoVaultAgentGraphBaseUrl(): string {
+  return (process.env.CMO_VAULT_AGENT_GRAPH_BASE_URL?.trim() || getCmoHermesBaseUrl()).replace(/\/+$/g, "");
+}
+
+export function getCmoVaultAgentGraphApiKey(): string {
+  return process.env.CMO_VAULT_AGENT_GRAPH_API_KEY?.trim() || getCmoHermesApiKey();
+}
+
+export function getCmoVaultAgentGraphTimeoutMs(): number {
+  return positiveIntEnv("CMO_VAULT_AGENT_GRAPH_TIMEOUT_MS", 10_000);
+}
+
 function booleanEnv(name: string, fallback = false): boolean {
   const value = process.env[name]?.trim().toLowerCase();
 
