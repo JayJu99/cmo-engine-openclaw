@@ -84,6 +84,29 @@ const repeatedMappedAnswer = productToolCapableAnswerFromHermesBody(repeatedNumb
 const { assistantDisplayMarkdown } = loadAssistantMarkdownDisplayModule();
 const cleanRenderedMarkdown = assistantDisplayMarkdown(cleanNumberedHermesAnswer.body);
 const repeatedRenderedMarkdown = assistantDisplayMarkdown(repeatedNumberingHermesAnswer.body);
+const indentedRepeatedRenderedMarkdown = assistantDisplayMarkdown([
+  "  1. Định vị chương trình đúng",
+  "Core copy.",
+  "",
+  "  1. Phân tách track hợp lý",
+  "Track copy.",
+  "",
+  "  1. Reward wording khá an toàn",
+  "Reward copy.",
+].join("\n"));
+const fencedRepeatedRenderedMarkdown = assistantDisplayMarkdown([
+  "```",
+  "1. Keep fixture one",
+  "1. Keep fixture two",
+  "1. Keep fixture three",
+  "```",
+  "",
+  "1. First display item",
+  "",
+  "1. Second display item",
+  "",
+  "1. Third display item",
+].join("\n"));
 
 assert.match(
   appWorkspaceTypesSource,
@@ -183,6 +206,12 @@ assert.equal(cleanRenderedMarkdown, cleanNumberedHermesAnswer.body, "display hel
 assert.equal(repeatedOneMarkers(repeatedRenderedMarkdown), 1, "display helper must not show repeated top-level 1. markers");
 assert.match(repeatedRenderedMarkdown, /^2\. FOMO \/ activation/m, "display helper must render the second repeated marker as 2.");
 assert.match(repeatedRenderedMarkdown, /^3\. Narrative \/ human identity/m, "display helper must render the third repeated marker as 3.");
+assert.equal(repeatedOneMarkers(indentedRepeatedRenderedMarkdown), 1, "display helper must normalize repeated 1. markers with CommonMark-leading spaces");
+assert.match(indentedRepeatedRenderedMarkdown, /^  2\. Phân tách track hợp lý/m, "display helper must preserve leading spaces while numbering repeated display markers");
+assert.match(indentedRepeatedRenderedMarkdown, /^  3\. Reward wording khá an toàn/m, "display helper must number later indented repeated markers");
+assert.match(fencedRepeatedRenderedMarkdown, /```\n1\. Keep fixture one\n1\. Keep fixture two\n1\. Keep fixture three\n```/, "display helper must not rewrite repeated 1. markers inside fenced code");
+assert.match(fencedRepeatedRenderedMarkdown, /^2\. Second display item/m, "display helper must still normalize display markers after fenced code");
+assert.match(fencedRepeatedRenderedMarkdown, /^3\. Third display item/m, "display helper must continue numbering display markers after fenced code");
 assert.doesNotMatch(assistantDisplayMarkdown("Answer\nvault_path: 12 Knowledge/foo.md\ncontent_hash: sha256:abc"), /vault_path|12 Knowledge|sha256:/, "display helper must keep hiding Vault internals");
 assert.doesNotMatch(productionFormattingSurface, /Option\s+[12]|option\s+2|Giữ ý chính|Bắt đầu dùng Hold Pay|push notification/i, "production code must not include keyword-specific answer formatting");
 

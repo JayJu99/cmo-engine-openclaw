@@ -13,25 +13,80 @@ function isBackendContextHeading(value: string): boolean {
   return /^(context used|context|runtime note|graph hints|graph context|system context)$/i.test(value.trim());
 }
 
+function markdownFenceMarker(line: string): "`" | "~" | null {
+  const match = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+
+  if (!match) {
+    return null;
+  }
+
+  return match[1].startsWith("`") ? "`" : "~";
+}
+
+function repeatedOrderedListStart(line: string): RegExpMatchArray | null {
+  return line.match(/^([ \t]{0,3})1\.(\s+\S.*)$/);
+}
+
+function orderedListContinuation(line: string): boolean {
+  return /^[ \t]{0,3}[2-9]\d*\.\s+\S/.test(line);
+}
+
 function normalizeRepeatedOrderedListStartsForDisplay(markdown: string): string {
   const lines = markdown.split(/\r?\n/);
-  const repeatedTopLevelOneCount = lines.filter((line) => /^1\.\s+\S/.test(line)).length;
-  const hasTopLevelOrderedContinuation = lines.some((line) => /^[2-9]\d*\.\s+\S/.test(line));
+  let activeFence: "`" | "~" | null = null;
+  let repeatedTopLevelOneCount = 0;
+  let hasTopLevelOrderedContinuation = false;
+
+  lines.forEach((line) => {
+    const fence = markdownFenceMarker(line);
+
+    if (fence && (!activeFence || activeFence === fence)) {
+      activeFence = activeFence ? null : fence;
+      return;
+    }
+
+    if (activeFence) {
+      return;
+    }
+
+    if (repeatedOrderedListStart(line)) {
+      repeatedTopLevelOneCount += 1;
+      return;
+    }
+
+    if (orderedListContinuation(line)) {
+      hasTopLevelOrderedContinuation = true;
+    }
+  });
 
   if (repeatedTopLevelOneCount < 3 || hasTopLevelOrderedContinuation) {
     return markdown;
   }
 
   let nextNumber = 0;
+  activeFence = null;
 
   return lines
     .map((line) => {
-      if (!/^1\.\s+\S/.test(line)) {
+      const fence = markdownFenceMarker(line);
+
+      if (fence && (!activeFence || activeFence === fence)) {
+        activeFence = activeFence ? null : fence;
+        return line;
+      }
+
+      if (activeFence) {
+        return line;
+      }
+
+      const match = repeatedOrderedListStart(line);
+
+      if (!match) {
         return line;
       }
 
       nextNumber += 1;
-      return line.replace(/^1\./, `${nextNumber}.`);
+      return `${match[1]}${nextNumber}.${match[2]}`;
     })
     .join("\n");
 }
