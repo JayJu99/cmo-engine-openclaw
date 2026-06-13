@@ -393,8 +393,16 @@ function buildSignalPaths({
     const incidentCandidates = sortedSignalEdges(
       [...localEdges, ...bridgeEdges].filter((edge) => edgeTouchesSignalGroup(edge, group, nodeById)),
     );
-    const candidates = internalCandidates.length > 0 ? internalCandidates : incidentCandidates;
-    const limit = group === "workspace" || group === focusedGroup ? 2 : 1;
+    const internalIds = new Set(internalCandidates.map((edge) => edge.id));
+    const candidates = [
+      ...internalCandidates,
+      ...incidentCandidates.filter((edge) => !internalIds.has(edge.id)),
+    ];
+    const limit = focusedGroup
+      ? group === focusedGroup
+        ? 4
+        : 2
+      : 3;
 
     candidates.slice(0, limit).forEach((edge) => addPath(edge, "ambient"));
   }
@@ -411,7 +419,7 @@ function buildSignalPaths({
       );
     }),
   )
-    .slice(0, focusedGroup ? 4 : 5)
+    .slice(0, focusedGroup ? 4 : 6)
     .forEach((edge) => addPath(edge, "bridge"));
 
   if (focusedId) {
@@ -426,7 +434,7 @@ function buildSignalPaths({
       .forEach((edge) => addPath(edge, "focused"));
   }
 
-  return Array.from(paths.values()).slice(0, focusedId ? 22 : 16);
+  return Array.from(paths.values()).slice(0, focusedId ? 34 : 32);
 }
 
 function edgeStrength(edge: VaultGraphEdge) {
@@ -480,8 +488,8 @@ function signalTiming(edge: VaultGraphEdge, index: number, emphasis: SignalEmpha
       focused
         ? 1.18 + (seed % 7) * 0.1
         : bridge
-          ? 2.55 + (seed % 8) * 0.13
-          : 2.02 + (seed % 9) * 0.12
+          ? 2.35 + (seed % 8) * 0.12
+          : 1.82 + (seed % 9) * 0.1
     ).toFixed(2)),
   };
 }
@@ -874,10 +882,10 @@ function VaultGraphCanvas({
                 const focused = signal.emphasis === "focused";
                 const bridge = signal.emphasis === "bridge";
                 const timing = signalTiming(signal.edge, index, signal.emphasis);
-                const coreRadius = focused ? 4.8 : bridge ? 2.6 : 3.2;
-                const haloRadius = focused ? 9 : bridge ? 5.4 : 6.2;
-                const coreValues = focused ? "0;0.95;0.58;0" : bridge ? "0;0.52;0.24;0" : "0;0.66;0.34;0";
-                const haloValues = focused ? "0;0.22;0.1;0" : bridge ? "0;0.08;0.035;0" : "0;0.12;0.055;0";
+                const coreRadius = focused ? 5.1 : bridge ? 2.9 : 3.8;
+                const haloRadius = focused ? 9.6 : bridge ? 5.8 : 7.2;
+                const coreValues = focused ? "0;1;0.66;0" : bridge ? "0;0.58;0.28;0" : "0;0.82;0.46;0";
+                const haloValues = focused ? "0;0.26;0.12;0" : bridge ? "0;0.1;0.045;0" : "0;0.17;0.08;0";
 
                 return (
                   <g key={signal.pathKey}>
@@ -1002,15 +1010,14 @@ function VaultGraphCanvas({
                   strokeOpacity={isSelected ? 0.95 : 0.72}
                   strokeWidth={isSelected ? 2.2 : isHovered ? 1.8 : 1.1}
                 />
-                {node.collapsed ? (
-                  <text
-                    x={node.x}
-                    y={node.y + 4.5}
-                    textAnchor="middle"
-                    className="pointer-events-none fill-slate-950 text-[12px] font-black"
-                  >
-                    {node.type === "session_aggregate" ? "18" : "G"}
-                  </text>
+                {node.collapsed && (isSelected || isHovered) ? (
+                  <circle
+                    cx={node.x}
+                    cy={node.y}
+                    fill="#ffffff"
+                    opacity="0.78"
+                    r={Math.max(2.3, radius * 0.24)}
+                  />
                 ) : (
                   <circle cx={node.x - radius * 0.22} cy={node.y - radius * 0.25} fill="#ffffff" opacity="0.72" r={Math.max(1.8, radius * 0.22)} />
                 )}
