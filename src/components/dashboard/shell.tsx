@@ -66,7 +66,7 @@ function AuthStatusCard({
           : "Signed in";
 
   return (
-    <div className={cn("rounded-2xl border border-slate-200 bg-white p-4 shadow-sm", compact && "p-3")}>
+    <div className={cn("rounded-2xl border border-slate-200 bg-white p-4 shadow-sm", compact && "min-w-0 p-3")}>
       <div className="flex items-center gap-3">
         <div
           className={cn(
@@ -79,7 +79,7 @@ function AuthStatusCard({
         />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-slate-950">{title}</div>
-          <div className="text-xs text-slate-500">{subtitle}</div>
+          <div className="truncate text-xs text-slate-500">{subtitle}</div>
         </div>
       </div>
       {authStatus.authEnabled ? (
@@ -110,9 +110,13 @@ export function DashboardShell({
 }) {
   const pathname = usePathname();
 
+  if (pathname.startsWith("/ui-preview/")) {
+    return <>{children}</>;
+  }
+
   return (
     <div className="min-h-screen bg-[#fbfcff] soft-grid">
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-[282px] border-r border-slate-200/80 bg-white/88 backdrop-blur-xl xl:block">
+      <aside className="thin-scrollbar fixed inset-y-0 left-0 z-40 hidden w-[282px] overflow-y-auto border-r border-slate-200/80 bg-white/88 backdrop-blur-xl xl:block">
         <div className="flex h-full flex-col">
           <div className="border-b border-slate-100 px-7 py-7">
             <Logo />
@@ -120,7 +124,9 @@ export function DashboardShell({
           <nav className="flex-1 space-y-2 px-4 py-6">
             {navItems.filter((item) => !item.systemOnly || authStatus.isOwnerOrAdmin).map((item) => {
               const Icon = icons[item.icon as IconName];
-              const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+              const active = item.href === "/" || item.exact
+                ? pathname === item.href
+                : pathname === item.href || pathname.startsWith(`${item.href}/`);
               return (
                 <Link
                   key={item.href}
@@ -151,18 +157,6 @@ export function DashboardShell({
           <div className="space-y-4 p-5">
             <AuthStatusCard authStatus={authStatus} />
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className="grid size-11 place-items-center rounded-full bg-gradient-to-br from-slate-200 to-slate-100 text-sm font-bold text-slate-700">
-                  H
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="font-semibold text-slate-950">Holdstation</div>
-                  <div className="text-xs text-slate-500">CMO</div>
-                </div>
-                <icons.ChevronDown className="size-4 text-slate-500" />
-              </div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="text-xs font-medium text-slate-500">CMO System</div>
               <div className="mt-3 flex items-center gap-2">
                 <span className="size-2 rounded-full bg-emerald-500" />
@@ -178,9 +172,9 @@ export function DashboardShell({
 
       <div className="xl:pl-[282px]">
         <div className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/86 px-4 py-4 backdrop-blur-xl lg:px-8 xl:hidden">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <Logo />
-            <div className="flex items-center gap-3">
+            <div className="grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-2 sm:flex sm:gap-3">
               <Badge variant="green">Hermes CMO active</Badge>
               <AuthStatusCard authStatus={authStatus} compact />
             </div>

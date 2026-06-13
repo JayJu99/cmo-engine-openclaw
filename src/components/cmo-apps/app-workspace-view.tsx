@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,6 @@ import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { icons } from "@/components/dashboard/icons";
 import { PageChrome } from "@/components/dashboard/shell";
-import { AppOperatingDeck } from "@/components/cmo-apps/app-operating-deck";
 import { AppMemorySection } from "@/components/cmo-apps/app-memory-section";
 import { CMOChatPanel } from "@/components/cmo-apps/cmo-chat-panel";
 import { ContextBriefCard } from "@/components/cmo-apps/context-brief-card";
@@ -21,7 +20,6 @@ import type {
   AppPlanType,
   AppWorkspacePlanState,
   AppWorkspaceTab,
-  CLevelPriority,
   CmoAppMetric,
   CmoAppMetricDateRangePreset,
   CmoAppMetricsSnapshot,
@@ -32,11 +30,7 @@ import type {
   CmoChannelMetricsSnapshot,
   CMOChatSession,
   CMORuntimeStatus,
-  PriorityLevel,
-  PriorityStatus,
-  VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
-import { summarizeContextQuality } from "@/lib/cmo/context-quality";
 import { cn } from "@/lib/utils";
 
 const tabs: Array<{ id: AppWorkspaceTab; label: string }> = [
@@ -120,7 +114,7 @@ function displayDate(value: string | undefined): string {
 }
 
 function EmptyCopy({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-500">{children}</div>;
+  return <div className="rounded-lg border border-slate-200/70 bg-slate-50/80 px-4 py-3 text-sm font-medium text-slate-500">{children}</div>;
 }
 
 function SectionCard({
@@ -135,10 +129,10 @@ function SectionCard({
   action?: React.ReactNode;
 }) {
   return (
-    <Card className="p-5">
+    <Card className="rounded-lg border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-4 flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="grid size-10 place-items-center rounded-xl bg-indigo-50 text-indigo-700 ring-1 ring-indigo-100">{icon}</div>
+          <div className="grid size-9 shrink-0 place-items-center rounded-lg bg-slate-950 text-white shadow-sm">{icon}</div>
           <CardTitle>{title}</CardTitle>
         </div>
         {action}
@@ -157,93 +151,10 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="text-xs font-semibold uppercase text-slate-400">{label}</span>
+      <span className="text-[11px] font-bold uppercase text-slate-500">{label}</span>
       <div className="mt-1">{children}</div>
     </label>
   );
-}
-
-function TextareaField({
-  name,
-  value,
-  onChange,
-  placeholder,
-}: {
-  name?: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-}) {
-  return (
-    <textarea
-      name={name}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      placeholder={placeholder}
-      className="min-h-24 w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
-    />
-  );
-}
-
-function priorityForm(priority?: CLevelPriority): CLevelPriority {
-  const now = new Date().toISOString();
-
-  return {
-    id: priority?.id ?? "",
-    title: priority?.title ?? "",
-    source: priority?.source ?? "",
-    priorityLevel: priority?.priorityLevel ?? "P1",
-    timeframe: priority?.timeframe ?? "this week",
-    owner: priority?.owner ?? "",
-    successMetric: priority?.successMetric ?? "",
-    whyNow: priority?.whyNow ?? "",
-    constraints: priority?.constraints ?? "",
-    mustDo: priority?.mustDo ?? "",
-    mustNotDo: priority?.mustNotDo ?? "",
-    status: priority?.status ?? "active",
-    linkedDocs: priority?.linkedDocs ?? [],
-    lastReviewedAt: priority?.lastReviewedAt ?? now,
-    createdAt: priority?.createdAt ?? now,
-    updatedAt: priority?.updatedAt ?? now,
-  };
-}
-
-function formValue(formData: FormData, key: string, fallback: string): string {
-  const value = formData.get(key);
-
-  return typeof value === "string" ? value.trim() : fallback;
-}
-
-function validPriorityLevel(value: string, fallback: PriorityLevel): PriorityLevel {
-  return value === "P0" || value === "P1" || value === "P2" ? value : fallback;
-}
-
-function validPriorityStatus(value: string, fallback: PriorityStatus): PriorityStatus {
-  return value === "active" || value === "paused" || value === "completed" || value === "archived" ? value : fallback;
-}
-
-function priorityFormData(form: HTMLFormElement, current: CLevelPriority): CLevelPriority {
-  const formData = new FormData(form);
-  const linkedDocs = formValue(formData, "linkedDocs", current.linkedDocs.join("\n"))
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  return {
-    ...current,
-    title: formValue(formData, "title", current.title),
-    source: formValue(formData, "source", current.source),
-    priorityLevel: validPriorityLevel(formValue(formData, "priorityLevel", current.priorityLevel), current.priorityLevel),
-    timeframe: formValue(formData, "timeframe", current.timeframe),
-    owner: formValue(formData, "owner", current.owner),
-    successMetric: formValue(formData, "successMetric", current.successMetric),
-    whyNow: formValue(formData, "whyNow", current.whyNow),
-    constraints: formValue(formData, "constraints", current.constraints),
-    mustDo: formValue(formData, "mustDo", current.mustDo),
-    mustNotDo: formValue(formData, "mustNotDo", current.mustNotDo),
-    status: validPriorityStatus(formValue(formData, "status", current.status), current.status),
-    linkedDocs,
-  };
 }
 
 function firstUserMessage(session: CMOChatSession): string {
@@ -252,10 +163,6 @@ function firstUserMessage(session: CMOChatSession): string {
 
 function latestAssistantMessage(session: CMOChatSession): string {
   return [...session.messages].reverse().find((message) => message.role === "assistant")?.content ?? "";
-}
-
-function sessionRuntimeModeLabel(session: CMOChatSession): string {
-  return session.runtimeMode === "live" ? "Live" : session.isRuntimeFallback || session.isDevelopmentFallback ? "Workspace context" : "Pending";
 }
 
 function isSmokeSession(session: CMOChatSession | undefined): boolean {
@@ -337,9 +244,9 @@ function FieldValue({ label, value }: { label: string; value?: React.ReactNode }
   const displayValue = value === null || value === undefined || value === "" ? "Not set" : value;
 
   return (
-    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-      <div className="text-xs font-semibold uppercase text-slate-400">{label}</div>
-      <div className="mt-1 text-sm font-bold text-slate-950">{displayValue}</div>
+    <div className="rounded-lg border border-slate-200/80 bg-white px-4 py-3 shadow-sm">
+      <div className="text-[11px] font-bold uppercase text-slate-500">{label}</div>
+      <div className="mt-1 break-words text-sm font-bold text-slate-950">{displayValue}</div>
     </div>
   );
 }
@@ -360,7 +267,7 @@ function KpiCard({
   comparison?: React.ReactNode;
 }) {
   return (
-    <div className="min-h-28 rounded-xl border border-slate-100 bg-white px-4 py-3 shadow-sm">
+    <div className="min-h-28 rounded-lg border border-slate-200/80 bg-white px-4 py-3 shadow-sm">
       <div className="flex items-start justify-between gap-2">
         <div className="text-xs font-bold uppercase text-slate-400">{label}</div>
         {status}
@@ -368,26 +275,6 @@ function KpiCard({
       <div className={cn("mt-3 text-2xl font-bold tracking-tight", muted ? "text-slate-400" : "text-slate-950")}>{value}</div>
       {detail ? <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{detail}</div> : null}
       {comparison ? <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{comparison}</div> : null}
-    </div>
-  );
-}
-
-function StatusChipCard({
-  label,
-  badge,
-  variant = "slate",
-  detail,
-}: {
-  label: string;
-  badge: string;
-  variant?: "green" | "orange" | "red" | "blue" | "slate";
-  detail?: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-      <div className="text-xs font-semibold uppercase text-slate-400">{label}</div>
-      <Badge className="mt-2" variant={variant}>{badge}</Badge>
-      {detail ? <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{detail}</div> : null}
     </div>
   );
 }
@@ -418,18 +305,6 @@ function metricStatusVariant(status: CmoAppMetric["status"] | CmoAppMetricsSnaps
   }
 
   return status === "missing" ? "red" : "slate";
-}
-
-function metricsSourceLabel(source: CmoAppMetricsSnapshot["diagnostics"]["source"] | undefined): string {
-  if (source === "json") {
-    return "JSON";
-  }
-
-  if (source === "placeholder") {
-    return "Placeholder";
-  }
-
-  return "Not connected";
 }
 
 function channelMetricStatusLabel(status: CmoChannelMetric["status"] | CmoChannelMetricsSnapshot["status"] | undefined): string {
@@ -1221,15 +1096,9 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
-  const priorityFormRef = useRef<HTMLFormElement | null>(null);
   const [activeTab, setActiveTab] = useState<AppWorkspaceTab>(isWorkspaceTab(tabParam) ? tabParam : "dashboard");
-  const [appNotes, setAppNotes] = useState<VaultNoteRef[]>(state.notes);
   const [contextBrief, setContextBrief] = useState(state.contextBrief);
   const [priorityState, setPriorityState] = useState(state.priorityState);
-  const [priority, setPriority] = useState<CLevelPriority>(() => priorityForm(state.priorityState.activePriority));
-  const [prioritySaveStatus, setPrioritySaveStatus] = useState<string | null>(null);
-  const [priorityError, setPriorityError] = useState<string | null>(null);
-  const [isSavingPriority, setIsSavingPriority] = useState(false);
   const [plans, setPlans] = useState<AppWorkspacePlanState>(state.plans);
   const [planStatus, setPlanStatus] = useState<string | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
@@ -1261,7 +1130,6 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [sessionFocusSignal, setSessionFocusSignal] = useState(0);
   const [memoryRefreshSignal, setMemoryRefreshSignal] = useState(0);
   const [promotionRefreshSignal, setPromotionRefreshSignal] = useState(0);
-  const appNoteQuality = useMemo(() => summarizeContextQuality(appNotes), [appNotes]);
   const selectedQuality = contextBrief.contextQualitySummary;
   const selectedSession = selectedSessionId ? sessions.find((session) => session.id === selectedSessionId) : undefined;
   const filteredSessions = useMemo(() => {
@@ -1291,9 +1159,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   }, [filteredSessions]);
   const latestSession = sessions[0];
   const latestDisplaySession = sessions.find((session) => !isSmokeSession(session)) ?? latestSession;
-  const mostAppNotesArePlaceholders = appNoteQuality.selectedCount > 0 && appNoteQuality.placeholderCount > appNoteQuality.selectedCount / 2;
   const contextStatus = contextStatusLabel(selectedQuality);
-  const memoryHealth = `${appNoteQuality.confirmedCount} confirmed / ${appNoteQuality.draftCount} draft / ${appNoteQuality.placeholderCount} need content`;
   const appLastUpdated = app.lastUpdated && app.lastUpdated !== "Vault-backed" ? app.lastUpdated : undefined;
   const lastUpdated = appLastUpdated || priorityState.activePriority?.updatedAt || latestDisplaySession?.createdAt || "Workspace context";
   const metricById = useMemo(() => {
@@ -1314,9 +1180,6 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   ].map((id) => metricById.get(id)).filter((metric): metric is CmoAppMetric => Boolean(metric));
   const promotionsPendingMetric = metricById.get("promotions_pending");
   const metricsHealthLabel = metricsStatus === "loading" ? "Loading" : metricStatusLabel(metricsSnapshot?.status);
-  const metricsHealthVariant = metricsStatus === "loading" ? "slate" : metricStatusVariant(metricsSnapshot?.status);
-  const metricsSource = metricsSourceLabel(metricsSnapshot?.diagnostics.source);
-  const metricsLastUpdated = metricsSnapshot?.lastUpdatedAt ? displayDate(metricsSnapshot.lastUpdatedAt) : "Not connected";
   const channelMetricById = useMemo(() => {
     const lookup = new Map<string, CmoChannelMetric>();
 
@@ -1547,10 +1410,8 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
       await fetch(`/api/apps/${app.id}/workspace`, { cache: "no-store" }),
     );
 
-    setAppNotes(payload.data.notes);
     setContextBrief(payload.data.contextBrief);
     setPriorityState(payload.data.priorityState);
-    setPriority(priorityForm(payload.data.priorityState.activePriority));
     setPlans(payload.data.plans);
     setLatestPromotion(payload.data.latestPromotion);
     setMemoryRefreshSignal((current) => current + 1);
@@ -1595,58 +1456,6 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     }
 
     router.replace(target, { scroll: false });
-  }
-
-  async function savePriority() {
-    const submittedPriority = priorityFormRef.current ? priorityFormData(priorityFormRef.current, priority) : priority;
-    const requestedTitle = submittedPriority.title.trim();
-
-    if (!requestedTitle) {
-      setPriorityError("Failed: Priority title is required.");
-      setPrioritySaveStatus(null);
-      return;
-    }
-
-    setPriority(submittedPriority);
-    setIsSavingPriority(true);
-    setPrioritySaveStatus("Saving...");
-    setPriorityError(null);
-
-    try {
-      const payload = await readJsonResponse<{ data: typeof priorityState & { savedPriority: CLevelPriority; updatedExisting: boolean } }>(
-        await fetch(`/api/apps/${app.id}/priorities`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(submittedPriority),
-        }),
-      );
-      const priorityReadback = await readJsonResponse<{ data: typeof priorityState }>(
-        await fetch(`/api/apps/${app.id}/priorities`, { cache: "no-store" }),
-      );
-
-      if (priorityReadback.data.activePriority?.title !== requestedTitle) {
-        throw new Error(`Priority saved, but readback returned "${priorityReadback.data.activePriority?.title || "none"}" instead of "${requestedTitle}".`);
-      }
-
-      setPriorityState(priorityReadback.data);
-      setPriority(priorityForm(priorityReadback.data.activePriority));
-
-      const workspace = await refreshWorkspace();
-
-      if (workspace.priorityState.activePriority?.title !== requestedTitle) {
-        throw new Error(`Workspace readback returned "${workspace.priorityState.activePriority?.title || "none"}" instead of "${requestedTitle}".`);
-      }
-
-      setPrioritySaveStatus(`Saved at ${displayDate(new Date().toISOString())}: ${payload.data.path}`);
-      router.refresh();
-    } catch (error) {
-      setPrioritySaveStatus(null);
-      setPriorityError(`Failed: ${error instanceof Error ? error.message : "C-Level priority save failed"}`);
-    } finally {
-      setIsSavingPriority(false);
-    }
   }
 
   async function createPlan(type: AppPlanType) {
@@ -1757,34 +1566,21 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
   return (
     <PageChrome title={app.name} description="Executive app workspace with chat-first CMO review and workspace context." actions={headerActions}>
-      <Card className="p-4">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={app.stage === "Active" ? "green" : "slate"}>{app.stage || "Unknown stage"}</Badge>
-              <Badge title={state.initialRuntimeStatus ?? "not_checked"} variant={runtimeVariant(state.initialRuntimeStatus)}>{runtimeLabel(state.initialRuntimeStatus)}</Badge>
-              <Badge variant={contextStatusVariant(contextStatus)}>Context: {contextStatus}</Badge>
-              <Badge variant="slate">Workspace context enabled</Badge>
-            </div>
-            <h2 className="mt-3 text-xl font-bold tracking-tight text-slate-950">{app.name}</h2>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
-              <span>Last updated: {displayDate(lastUpdated)}</span>
-              <span>Metrics: {metricsHealthLabel}</span>
-            </div>
+      <Card className="overflow-hidden rounded-lg border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={app.stage === "Active" ? "green" : "slate"}>{app.stage || "Unknown stage"}</Badge>
+            <Badge title={state.initialRuntimeStatus ?? "not_checked"} variant={runtimeVariant(state.initialRuntimeStatus)}>{runtimeLabel(state.initialRuntimeStatus)}</Badge>
+            <Badge variant={contextStatusVariant(contextStatus)}>Context: {contextStatus}</Badge>
           </div>
-          <div className="flex flex-col gap-3 xl:items-end">
-            <div className="flex flex-wrap gap-2">
-              {dateRangeOptions.map((option) => (
-                <Button
-                  key={option.id}
-                  type="button"
-                  size="sm"
-                  variant={dateRange === option.id ? "default" : "outline"}
-                  onClick={() => setDateRange(option.id)}
-                >
-                  {option.label}
-                </Button>
-              ))}
+          <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div className="min-w-0">
+              <h2 className="truncate text-xl font-bold tracking-tight text-slate-950">{app.name}</h2>
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-semibold text-slate-500">
+                <span>Updated {displayDate(lastUpdated)}</span>
+                <span>Metrics {metricsHealthLabel}</span>
+                <span>Workspace context enabled</span>
+              </div>
             </div>
             <label className="flex items-center gap-2 text-xs font-bold uppercase text-slate-500">
               <input
@@ -1793,117 +1589,81 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                 onChange={(event) => setComparePrevious(event.target.checked)}
                 className="size-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
               />
-              Compare to previous period
+              Compare
             </label>
+          </div>
+
+          <div className="mt-4 -mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+            {dateRangeOptions.map((option) => (
+              <Button
+                key={option.id}
+                type="button"
+                size="sm"
+                variant={dateRange === option.id ? "default" : "outline"}
+                className={cn("shrink-0 rounded-md", dateRange === option.id ? "shadow-sm hover:translate-y-0" : "hover:translate-y-0")}
+                onClick={() => setDateRange(option.id)}
+              >
+                {option.label}
+              </Button>
+            ))}
           </div>
         </div>
 
         {dateRange === "custom" ? (
-          <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-500">
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-500">
             Custom date range picker is not connected yet. The endpoint currently uses the current date for custom ranges unless explicit dates are supplied.
           </div>
         ) : null}
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-          {metricCards.map((metric) => (
-            <KpiCard
-              key={metric.id}
-              label={metric.label}
-              value={metric.status === "connected" && metric.value !== null ? metric.displayValue : "No data"}
-              detail={metric.status === "connected" ? metric.description : "No metrics source connected yet."}
-              muted={metric.status !== "connected"}
-              status={<Badge variant={metricStatusVariant(metric.status)}>{metric.status === "connected" ? "Connected" : "Metrics missing"}</Badge>}
-              comparison={comparePrevious ? metric.deltaDisplay || "No comparison data" : null}
-            />
-          ))}
-          {!metricCards.length ? (
-            <KpiCard
-              label="Metrics"
-              value={metricsStatus === "loading" ? "Loading" : "No data"}
-              detail={metricsError || "No metrics source connected yet."}
-              muted
-              status={<Badge variant="orange">{metricsStatus === "error" ? "Error" : "Metrics missing"}</Badge>}
-            />
-          ) : null}
-        </div>
-
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <StatusChipCard label="CMO" badge="Hermes Active" variant="green" detail="Product workspace ready" />
-          <StatusChipCard label="Context" badge={contextStatus} variant={contextStatusVariant(contextStatus)} detail="Vault-backed workspace context enabled" />
-          <StatusChipCard label="Memory" badge={memoryHealth} variant={appNoteQuality.placeholderCount ? "orange" : "green"} detail="Available to CMO" />
-          <StatusChipCard label="Metrics" badge={metricsHealthLabel} variant={metricsHealthVariant} detail={`Source: ${metricsSource}; updated ${metricsLastUpdated}`} />
-        </div>
+        {activeTab === "dashboard" ? (
+          <div className="border-t border-slate-200 p-4 sm:p-5">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+              {metricCards.map((metric) => (
+                <KpiCard
+                  key={metric.id}
+                  label={metric.label}
+                  value={metric.status === "connected" && metric.value !== null ? metric.displayValue : "No data"}
+                  detail={metric.status === "connected" ? metric.description : "No metrics source connected yet."}
+                  muted={metric.status !== "connected"}
+                  status={<Badge variant={metricStatusVariant(metric.status)}>{metric.status === "connected" ? "Connected" : "Metrics missing"}</Badge>}
+                  comparison={comparePrevious ? metric.deltaDisplay || "No comparison data" : null}
+                />
+              ))}
+              {!metricCards.length ? (
+                <KpiCard
+                  label="Metrics"
+                  value={metricsStatus === "loading" ? "Loading" : "No data"}
+                  detail={metricsError || "No metrics source connected yet."}
+                  muted
+                  status={<Badge variant="orange">{metricsStatus === "error" ? "Error" : "Metrics missing"}</Badge>}
+                />
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </Card>
 
-      <Card className="p-2">
-        <div className="flex flex-wrap gap-2">
+      <nav className="rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+        <div className="flex gap-1 overflow-x-auto">
           {tabs.map((tab) => (
-            <Button key={tab.id} asChild variant={activeTab === tab.id ? "default" : "ghost"} size="sm">
-              <Link href={`${pathname}?tab=${tab.id}`} onClick={() => setActiveTab(tab.id)}>
+            <Link
+              key={tab.id}
+              href={`${pathname}?tab=${tab.id}`}
+              aria-current={activeTab === tab.id ? "page" : undefined}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                "inline-flex h-9 shrink-0 items-center justify-center rounded-md px-3 text-sm font-semibold transition",
+                activeTab === tab.id ? "bg-slate-950 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
+              )}
+            >
                 {tab.label}
-              </Link>
-            </Button>
+            </Link>
           ))}
         </div>
-      </Card>
+      </nav>
 
       {activeTab === "dashboard" ? (
         <div className="space-y-6">
-          <div className="grid gap-5 xl:grid-cols-2 2xl:grid-cols-[1.35fr_1fr_1fr_1fr]">
-            <SectionCard title="Current Priority" icon={<icons.Target />}>
-              {priorityState.activePriority ? (
-                <div className="space-y-4">
-                  <div className="flex flex-wrap gap-2">
-                    <Badge>{priorityState.activePriority.priorityLevel}</Badge>
-                    <Badge variant={priorityState.activePriority.status === "active" ? "green" : "slate"}>{priorityState.activePriority.status}</Badge>
-                    <Badge variant="slate">{priorityState.activePriority.timeframe}</Badge>
-                  </div>
-                  <div>
-                    <div className="text-lg font-bold leading-7 text-slate-950">{priorityState.activePriority.title}</div>
-                    {priorityState.activePriority.successMetric ? <p className="mt-2 text-sm leading-6 text-slate-700">Success metric: {priorityState.activePriority.successMetric}</p> : null}
-                  </div>
-                  {priorityState.activePriority.mustDo || priorityState.activePriority.mustNotDo ? (
-                    <div className="grid gap-2 text-sm leading-6 text-slate-700 md:grid-cols-2">
-                      {priorityState.activePriority.mustDo ? (
-                        <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2">
-                          <div className="text-xs font-bold uppercase text-emerald-700">Must do</div>
-                          <div className="mt-1 text-emerald-900">{priorityState.activePriority.mustDo}</div>
-                        </div>
-                      ) : null}
-                      {priorityState.activePriority.mustNotDo ? (
-                        <div className="rounded-xl border border-orange-100 bg-orange-50 px-3 py-2">
-                          <div className="text-xs font-bold uppercase text-orange-700">Must not do</div>
-                          <div className="mt-1 text-orange-900">{priorityState.activePriority.mustNotDo}</div>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              ) : (
-                <EmptyCopy>No active C-Level priority yet. Add one in Inputs & Priorities.</EmptyCopy>
-              )}
-            </SectionCard>
-
-            <SectionCard title="Current Mission" icon={<icons.Rocket />}>
-              {app.currentMission ? <p className="text-sm leading-6 text-slate-700">{app.currentMission}</p> : <EmptyCopy>No active mission yet.</EmptyCopy>}
-            </SectionCard>
-
-            <SectionCard title="KPI / Metrics Snapshot" icon={<icons.BarChart3 />}>
-              <div className="space-y-3">
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant={metricsHealthVariant}>Metrics: {metricsHealthLabel}</Badge>
-                  <Badge variant="slate">Source: {metricsSource}</Badge>
-                  <Badge variant="slate">Range: {dateRangeOptions.find((option) => option.id === dateRange)?.label}</Badge>
-                </div>
-                <EmptyCopy>{metricsSnapshot?.diagnostics.notes[0] ?? "No metrics source connected yet."}</EmptyCopy>
-              </div>
-            </SectionCard>
-
-            <SectionCard title="Task Summary" icon={<icons.List />}>
-              <EmptyCopy>{state.taskSummary.message}</EmptyCopy>
-            </SectionCard>
-          </div>
-
           {showChannelPerformance ? (
             <SectionCard
               title="Channel Performance"
@@ -2062,239 +1822,16 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             </div>
           </SectionCard>
           ) : null}
-
-          <div className="grid gap-5 xl:grid-cols-3">
-            <SectionCard title="Week Plan Summary" icon={<icons.CalendarDays />}>
-              {plans.weekly.exists ? (
-                <div>
-                  <Badge variant="blue">{plans.weekly.status}</Badge>
-                  <p className="mt-3 break-all text-sm font-medium text-slate-600">{plans.weekly.path}</p>
-                </div>
-              ) : (
-                <EmptyCopy>No active weekly plan yet.</EmptyCopy>
-              )}
-            </SectionCard>
-
-            <SectionCard title="Latest CMO Session" icon={<icons.MessageSquare />}>
-              {latestDisplaySession ? (
-                <div className="space-y-3">
-                  <div className="font-bold text-slate-950">{latestDisplaySession.topic || "CMO session"}</div>
-                  <div className="flex flex-wrap gap-2">
-                    <Badge title={latestDisplaySession.runtimeStatus} variant={runtimeVariant(latestDisplaySession.runtimeStatus)}>{runtimeLabel(latestDisplaySession.runtimeStatus)}</Badge>
-                    <Badge variant={latestDisplaySession.runtimeMode === "live" ? "green" : "orange"}>{sessionRuntimeModeLabel(latestDisplaySession)}</Badge>
-                  </div>
-                  <CardDescription>{displayDate(latestDisplaySession.createdAt)}</CardDescription>
-                </div>
-              ) : (
-                <EmptyCopy>No CMO session saved yet.</EmptyCopy>
-              )}
-            </SectionCard>
-
-            <SectionCard title="Latest Recap" icon={<icons.FileText />}>
-              {state.todayDailyExists ? (
-                <div>
-                  <Badge variant="green">Daily note exists</Badge>
-                  <p className="mt-3 break-all text-sm font-medium text-slate-600">{state.todayDailyPath}</p>
-                </div>
-              ) : (
-                <EmptyCopy>No daily recap exists for today.</EmptyCopy>
-              )}
-            </SectionCard>
-          </div>
-
-          <SectionCard title="CMO Readiness / Data Quality" icon={<icons.ShieldCheck />}>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                <div className="text-xs font-semibold uppercase text-slate-400">Runtime</div>
-                <Badge className="mt-2" title={state.initialRuntimeStatus ?? "not_checked"} variant={runtimeVariant(state.initialRuntimeStatus)}>{runtimeLabel(state.initialRuntimeStatus)}</Badge>
-                {state.initialRuntimeStatus === "configured_but_unreachable" ? <p className="mt-2 text-xs font-medium text-slate-500">Workspace context is available.</p> : null}
-              </div>
-              <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                <div className="text-xs font-semibold uppercase text-slate-400">Memory</div>
-                <div className="mt-2 text-sm font-bold text-slate-950">
-                  {appNoteQuality.confirmedCount} confirmed / {appNoteQuality.draftCount} draft / {appNoteQuality.placeholderCount} need content
-                </div>
-              </div>
-              <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                <div className="text-xs font-semibold uppercase text-slate-400">Metrics</div>
-                <Badge className="mt-2" variant={metricsHealthVariant}>{metricsHealthLabel}</Badge>
-                <div className="mt-2 text-xs font-semibold text-slate-500">Source: {metricsSource}</div>
-              </div>
-              <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                <div className="text-xs font-semibold uppercase text-slate-400">C-Level Priority</div>
-                <Badge className="mt-2" variant={priorityState.activePriority ? "green" : "orange"}>{priorityState.activePriority ? "active" : "missing"}</Badge>
-              </div>
-            </div>
-          </SectionCard>
-
-          <details className="rounded-xl border border-slate-100 bg-white p-4">
-            <summary className="cursor-pointer text-sm font-bold text-slate-950">System Details</summary>
-            <div className="mt-4 space-y-5">
-              <ContextBriefCard brief={contextBrief} />
-              <AppOperatingDeck
-                app={app}
-                notes={appNotes}
-                recentCaptures={state.recentCaptures}
-                dailyNotePath={state.todayDailyPath}
-                dailyNoteExists={state.todayDailyExists}
-                latestPromotion={latestPromotion}
-              />
-            </div>
-          </details>
         </div>
       ) : null}
 
       {activeTab === "inputs" ? (
-        <div className="grid gap-6 2xl:grid-cols-[1fr_0.9fr]">
-          <div className="space-y-6">
-            <SectionCard title="Priority Snapshot" icon={<icons.Target />} action={<Badge variant={priorityState.activePriority ? "green" : "orange"}>{priorityState.activePriority ? "active" : "missing"}</Badge>}>
-              <div className="grid gap-3 md:grid-cols-2">
-                <FieldValue label="Current priority" value={priorityState.activePriority?.title} />
-                <FieldValue label="Why now" value={priorityState.activePriority?.whyNow} />
-                <FieldValue label="Success metric" value={priorityState.activePriority?.successMetric} />
-                <FieldValue label="Timeframe" value={priorityState.activePriority?.timeframe} />
-                <FieldValue label="Owner" value={priorityState.activePriority?.owner} />
-                <FieldValue label="Last updated" value={displayDate(priorityState.activePriority?.updatedAt)} />
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Badge variant="slate">Source: {priorityState.activePriority?.source || "Updated via CMO Chat / Manual"}</Badge>
-                {priorityState.activePriority ? <Badge>{priorityState.activePriority.priorityLevel}</Badge> : null}
-                {priorityState.activePriority ? <Badge variant={priorityState.activePriority.status === "active" ? "green" : "slate"}>{priorityState.activePriority.status}</Badge> : null}
-              </div>
-              {priorityState.priorities.length > 1 ? (
-                <div className="mt-5 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                  <div className="text-xs font-bold uppercase text-slate-400">Priority Change Log</div>
-                  <div className="mt-3 space-y-2">
-                    {priorityState.priorities.slice(0, 4).map((item) => (
-                      <div key={item.id || `${item.title}-${item.updatedAt}`} className="flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between">
-                        <span className="font-semibold text-slate-800">{item.title || "Untitled priority"}</span>
-                        <span className="text-xs font-semibold text-slate-500">{displayDate(item.updatedAt)} - {item.status}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-              <details className="mt-5 rounded-xl border border-slate-100 bg-white p-4">
-                <summary className="cursor-pointer text-sm font-bold text-slate-950">Edit manually</summary>
-                <form
-                ref={priorityFormRef}
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void savePriority();
-                }}
-              >
-                {priorityState.activePriority ? (
-                  <div className="mb-5 rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="green">Active priority</Badge>
-                      <Badge>{priorityState.activePriority.priorityLevel}</Badge>
-                      <Badge variant="slate">{priorityState.activePriority.timeframe}</Badge>
-                    </div>
-                    <div className="mt-2 font-bold text-emerald-950">{priorityState.activePriority.title}</div>
-                    {priorityState.activePriority.successMetric ? <div className="mt-1 text-sm font-medium text-emerald-800">Success metric: {priorityState.activePriority.successMetric}</div> : null}
-                  </div>
-                ) : null}
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Title">
-                    <Input name="title" required value={priority.title} onChange={(event) => setPriority((current) => ({ ...current, title: event.target.value }))} placeholder="Executive priority title" />
-                    <p className="mt-1 text-xs font-medium text-slate-500">Required for save and dashboard readback.</p>
-                  </Field>
-                  <Field label="Source">
-                    <Input name="source" value={priority.source} onChange={(event) => setPriority((current) => ({ ...current, source: event.target.value }))} placeholder="CEO, leadership review, planning note" />
-                  </Field>
-                  <Field label="Priority Level">
-                    <select
-                      name="priorityLevel"
-                      value={priority.priorityLevel}
-                      onChange={(event) => setPriority((current) => ({ ...current, priorityLevel: event.target.value as PriorityLevel }))}
-                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 shadow-sm outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
-                    >
-                      <option value="P0">P0</option>
-                      <option value="P1">P1</option>
-                      <option value="P2">P2</option>
-                    </select>
-                  </Field>
-                  <Field label="Timeframe">
-                    <Input name="timeframe" value={priority.timeframe} onChange={(event) => setPriority((current) => ({ ...current, timeframe: event.target.value }))} placeholder="this week, this month, this quarter, custom" />
-                  </Field>
-                  <Field label="Owner">
-                    <Input name="owner" value={priority.owner} onChange={(event) => setPriority((current) => ({ ...current, owner: event.target.value }))} placeholder="Owner" />
-                  </Field>
-                  <Field label="Status">
-                    <select
-                      name="status"
-                      required
-                      value={priority.status}
-                      onChange={(event) => setPriority((current) => ({ ...current, status: event.target.value as PriorityStatus }))}
-                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 shadow-sm outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
-                    >
-                      <option value="active">active</option>
-                      <option value="paused">paused</option>
-                      <option value="completed">completed</option>
-                      <option value="archived">archived</option>
-                    </select>
-                    <p className="mt-1 text-xs font-medium text-slate-500">Required. Use active for the current C-Level priority.</p>
-                  </Field>
-                </div>
-                <div className="mt-4 grid gap-4">
-                  <Field label="Success Metric">
-                    <Input name="successMetric" value={priority.successMetric} onChange={(event) => setPriority((current) => ({ ...current, successMetric: event.target.value }))} placeholder="Metric or outcome to watch" />
-                  </Field>
-                  <Field label="Why Now">
-                    <TextareaField name="whyNow" value={priority.whyNow} onChange={(value) => setPriority((current) => ({ ...current, whyNow: value }))} />
-                  </Field>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <Field label="Constraints">
-                      <TextareaField name="constraints" value={priority.constraints} onChange={(value) => setPriority((current) => ({ ...current, constraints: value }))} />
-                    </Field>
-                    <Field label="Linked Docs">
-                      <TextareaField name="linkedDocs" value={priority.linkedDocs.join("\n")} onChange={(value) => setPriority((current) => ({ ...current, linkedDocs: value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) }))} />
-                    </Field>
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <Field label="Must Do">
-                      <TextareaField name="mustDo" value={priority.mustDo} onChange={(value) => setPriority((current) => ({ ...current, mustDo: value }))} />
-                    </Field>
-                    <Field label="Must Not Do">
-                      <TextareaField name="mustNotDo" value={priority.mustNotDo} onChange={(value) => setPriority((current) => ({ ...current, mustNotDo: value }))} />
-                    </Field>
-                  </div>
-                </div>
-                <div className="mt-5 flex flex-wrap items-center gap-3">
-                  <Button type="submit" disabled={isSavingPriority}>
-                    {isSavingPriority ? <icons.RefreshCw className="animate-spin" /> : <icons.Check />}
-                    Save Priority
-                  </Button>
-                  <CardDescription className="break-all">{priorityState.path}</CardDescription>
-                </div>
-                {prioritySaveStatus ? <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">{prioritySaveStatus}</div> : null}
-                {priorityError ? <div className="mt-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{priorityError}</div> : null}
-                </form>
-              </details>
-            </SectionCard>
-
-            <SectionCard title="Memory Health" icon={<icons.Database />}>
-              <div className="grid gap-3 md:grid-cols-4">
-                <FieldValue label="Confirmed" value={appNoteQuality.confirmedCount} />
-                <FieldValue label="Draft" value={appNoteQuality.draftCount} />
-                <FieldValue label="Needs input" value={appNoteQuality.placeholderCount} />
-                <FieldValue label="Last updated" value={displayDate(lastUpdated)} />
-              </div>
-              {mostAppNotesArePlaceholders ? <p className="mt-3 text-sm font-medium text-orange-700">Memory quality is partial. Use CMO Chat to clarify durable facts before promotion.</p> : null}
-            </SectionCard>
+        <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)] 2xl:grid-cols-[420px_minmax(0,1fr)]">
+          <div className="space-y-5">
+            <ProjectContextImportCard app={app} onImported={refreshWorkspaceAfterMemoryChange} />
           </div>
 
-          <div className="space-y-6">
-            <ProjectContextImportCard app={app} onImported={refreshWorkspaceAfterMemoryChange} />
-
-            <SectionCard title="Backend Status" icon={<icons.ShieldCheck />}>
-              <div className="grid gap-3">
-                <StatusChipCard label="Context" badge={contextStatus} variant={contextStatusVariant(contextStatus)} detail="Resolved automatically" />
-                <StatusChipCard label="Memory" badge={memoryHealth} variant={appNoteQuality.placeholderCount ? "orange" : "green"} detail="Backend managed" />
-                <StatusChipCard label="Metrics" badge={metricsHealthLabel} variant={metricsHealthVariant} detail={`Source: ${metricsSource}; updated ${metricsLastUpdated}`} />
-              </div>
-            </SectionCard>
-
+          <div className="space-y-5">
             <details className="rounded-xl border border-slate-100 bg-white p-4">
               <summary className="cursor-pointer text-sm font-bold text-slate-950">System Details</summary>
               <div className="mt-4 space-y-5">
