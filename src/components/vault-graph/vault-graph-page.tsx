@@ -515,14 +515,14 @@ function VaultGraphTopOverlay({
   visibleCount: number;
   nodes: VaultGraphNode[];
   apiStatus: VaultGraphApiStatus;
-  graphResponse: VaultGraphApiResponse;
+  graphResponse: VaultGraphApiResponse | null;
 }) {
   const sourceLabel = apiStatus === "loading"
     ? "Loading"
-    : graphResponse.source_root === "vault-agent"
+    : graphResponse?.source_root === "vault-agent"
       ? "Vault Agent"
       : "Mock API";
-  const hasGraphWarning = apiStatus === "warning" || graphResponse.warnings.length > 0 || graphResponse.parse_errors.length > 0;
+  const hasGraphWarning = apiStatus === "warning" || Boolean(graphResponse && (graphResponse.warnings.length > 0 || graphResponse.parse_errors.length > 0));
   const metrics = [
     { label: "Knowledge", groups: ["accepted_knowledge"] as VaultGraphColorGroup[] },
     { label: "Sources", groups: ["sources"] as VaultGraphColorGroup[] },
@@ -552,9 +552,11 @@ function VaultGraphTopOverlay({
         <div className="flex flex-wrap items-center gap-1.5">
           <span className={cn(
             "rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.18em]",
-            graphResponse.source_root === "vault-agent"
+            graphResponse?.source_root === "vault-agent"
               ? "border-cyan-300/20 bg-cyan-300/10 text-cyan-100"
-              : "border-violet-300/20 bg-violet-300/10 text-violet-100",
+              : apiStatus === "loading"
+                ? "border-slate-300/16 bg-slate-300/[0.06] text-slate-200"
+                : "border-violet-300/20 bg-violet-300/10 text-violet-100",
           )}>
             {sourceLabel}
           </span>
@@ -599,7 +601,7 @@ function VaultGraphTopOverlay({
           {visibleCount} nodes
         </span>
         <span className="whitespace-nowrap rounded-full border border-white/8 bg-white/[0.035] px-3 py-2 text-[11px] font-semibold text-slate-500">
-          {apiStatus === "loading" ? "Loading" : graphResponse.source_root}
+          {apiStatus === "loading" ? "Loading" : graphResponse?.source_root ?? "unknown"}
         </span>
       </div>
     </div>
@@ -614,6 +616,7 @@ function VaultGraphCanvas({
   search,
   zoom,
   sourceRoot,
+  isLoading,
   onSelectNode,
   onClearSelection,
   onHoverNode,
@@ -628,6 +631,7 @@ function VaultGraphCanvas({
   search: string;
   zoom: number;
   sourceRoot: VaultGraphApiResponse["source_root"];
+  isLoading: boolean;
   onSelectNode: (node: VaultGraphNode, event: MouseEvent<SVGGElement>) => void;
   onClearSelection: () => void;
   onHoverNode: (nodeId: string | null) => void;
@@ -654,6 +658,90 @@ function VaultGraphCanvas({
     () => buildSignalPaths({ localEdges, bridgeEdges, nodeById, focusedId }),
     [bridgeEdges, focusedId, localEdges, nodeById],
   );
+
+  if (isLoading) {
+    return (
+      <div className="relative min-h-[720px] overflow-hidden rounded-[30px] border border-white/8 bg-black/20 xl:min-h-[calc(100vh-245px)] xl:max-h-[840px]">
+        <svg
+          aria-label="Vault Graph loading"
+          className="relative z-10 h-[720px] min-h-[720px] w-full xl:h-[calc(100vh-245px)] xl:max-h-[840px]"
+          preserveAspectRatio="xMidYMid meet"
+          role="img"
+          viewBox={`${graphViewBox.x} ${graphViewBox.y} ${graphViewBox.width} ${graphViewBox.height}`}
+        >
+          <defs>
+            <radialGradient id="loadingStageGlow" cx="50%" cy="50%" r="62%">
+              <stop offset="0%" stopColor="#1e3a8a" stopOpacity="0.34" />
+              <stop offset="48%" stopColor="#0f172a" stopOpacity="0.18" />
+              <stop offset="100%" stopColor="#020617" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+          <style>
+            {`
+              .vault-loading-dot {
+                animation: vaultLoadingDot 2.8s ease-in-out infinite;
+              }
+
+              .vault-loading-ring {
+                animation: vaultLoadingRing 3.8s ease-in-out infinite;
+              }
+
+              @keyframes vaultLoadingDot {
+                0%, 100% { opacity: 0.14; }
+                50% { opacity: 0.48; }
+              }
+
+              @keyframes vaultLoadingRing {
+                0%, 100% { stroke-opacity: 0.05; }
+                50% { stroke-opacity: 0.16; }
+              }
+
+              @media (prefers-reduced-motion: reduce) {
+                .vault-loading-dot,
+                .vault-loading-ring {
+                  animation: none;
+                }
+              }
+            `}
+          </style>
+          <rect x={graphViewBox.x} y={graphViewBox.y} width={graphViewBox.width} height={graphViewBox.height} fill="url(#loadingStageGlow)" opacity="0.86" />
+          <g transform={`translate(${centerX} ${centerY}) scale(${renderZoom}) translate(${-centerX} ${-centerY})`}>
+            <ellipse
+              className={prefersReducedMotion ? undefined : "vault-loading-ring"}
+              cx={graphWidth / 2}
+              cy={graphHeight / 2}
+              fill="none"
+              rx="265"
+              ry="172"
+              stroke="#67e8f9"
+              strokeDasharray="2 18"
+              strokeLinecap="round"
+              strokeWidth="0.9"
+            />
+            {starField.slice(0, 54).map((star, index) => (
+              <circle
+                key={star.id}
+                className={prefersReducedMotion ? undefined : "vault-loading-dot"}
+                cx={star.x}
+                cy={star.y}
+                fill={index % 5 === 0 ? "#a78bfa" : "#bae6fd"}
+                opacity={star.opacity}
+                r={star.r + (index % 3) * 0.2}
+                style={{ animationDelay: `${animationDelay(star.id, 3.6)}s` }}
+              />
+            ))}
+            <circle cx={graphWidth / 2} cy={graphHeight / 2} fill="#c4b5fd" opacity="0.62" r="6" />
+            <circle cx={graphWidth / 2} cy={graphHeight / 2} fill="none" opacity="0.42" r="22" stroke="#8b5cf6" strokeDasharray="2 8" />
+          </g>
+        </svg>
+
+        <div className="pointer-events-none absolute inset-0 z-20 rounded-[30px] bg-[radial-gradient(circle_at_50%_45%,transparent_0%,transparent_54%,rgba(0,0,0,0.42)_100%)]" />
+        <div className="absolute bottom-5 left-5 z-30 rounded-full border border-white/10 bg-slate-950/64 px-4 py-2.5 text-sm font-semibold text-slate-300 shadow-[0_20px_48px_rgba(0,0,0,0.3)] backdrop-blur-xl">
+          Loading Vault Graph...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative min-h-[720px] overflow-hidden rounded-[30px] border border-white/8 bg-black/20 xl:min-h-[calc(100vh-245px)] xl:max-h-[840px]">
@@ -1188,11 +1276,13 @@ function VaultGraphNodeDetails({
   edges,
   nodes,
   sourceRoot,
+  isLoading,
 }: {
   node: VaultGraphNode | null;
   edges: VaultGraphEdge[];
   nodes: VaultGraphNode[];
   sourceRoot: VaultGraphApiResponse["source_root"];
+  isLoading: boolean;
 }) {
   const relatedEdges = node ? edges.filter((edge) => edgeTouches(edge, node.id) && !isDecorativeEdge(edge)) : [];
   const color = node ? colorSystem[node.color_group] : colorSystem.workspace;
@@ -1213,7 +1303,37 @@ function VaultGraphNodeDetails({
 
   return (
     <aside className="h-fit rounded-[28px] border border-white/10 bg-slate-950/54 p-4 text-slate-100 shadow-[0_24px_80px_rgba(0,0,0,0.34)] backdrop-blur-xl xl:min-h-[calc(100vh-245px)] xl:max-h-[840px] xl:overflow-auto">
-      {node ? (
+      {isLoading ? (
+        <div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="grid size-11 shrink-0 place-items-center rounded-2xl border border-white/10 bg-white/[0.055] text-cyan-200">
+              <icons.Database className="size-5" />
+            </div>
+            <span className="rounded-full border border-white/10 bg-white/[0.055] px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-300">
+              Loading
+            </span>
+          </div>
+
+          <div className="mt-5">
+            <CardTitle className="text-xl leading-tight text-white">Loading graph</CardTitle>
+            <CardDescription className="mt-3 text-sm leading-5 text-slate-400">
+              Fetching the read-only Vault Graph source before rendering nodes.
+            </CardDescription>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            <div className="h-24 rounded-2xl border border-white/10 bg-white/[0.035]" />
+            <div className="h-24 rounded-2xl border border-white/10 bg-white/[0.035]" />
+          </div>
+
+          <div className="mt-5 space-y-2 rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+            <div className="h-3 w-24 rounded-full bg-white/10" />
+            <div className="h-2.5 w-full rounded-full bg-white/[0.075]" />
+            <div className="h-2.5 w-4/5 rounded-full bg-white/[0.06]" />
+            <div className="h-2.5 w-2/3 rounded-full bg-white/[0.05]" />
+          </div>
+        </div>
+      ) : node ? (
         <>
           <div className="flex items-center justify-between gap-3">
             <div
@@ -1360,12 +1480,13 @@ function VaultGraphNodeDetails({
 export function VaultGraphPage() {
   const [activeFilter, setActiveFilter] = useState<VaultGraphFilter>("All");
   const [search, setSearch] = useState("");
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>("workspace-holdstation");
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
-  const [graphResponse, setGraphResponse] = useState<VaultGraphApiResponse>(fallbackGraphResponse);
+  const [graphResponse, setGraphResponse] = useState<VaultGraphApiResponse | null>(null);
   const [apiStatus, setApiStatus] = useState<VaultGraphApiStatus>("loading");
-  const graphData: VaultGraphData = graphResponse;
+  const isGraphLoading = apiStatus === "loading" || !graphResponse;
+  const graphData: VaultGraphData = graphResponse ?? { nodes: [], edges: [] };
   const clearSelection = useCallback(() => {
     setSelectedNodeId(null);
     setHoveredNodeId(null);
@@ -1465,7 +1586,7 @@ export function VaultGraphPage() {
       description="Orbit UI constellation view for workspace knowledge, sources, agents, decisions, and outputs."
       actions={
         <Badge variant="slate" className="rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-slate-400">
-          {graphResponse.source_root === "vault-agent" ? "Vault Agent" : "Mock"}
+          {isGraphLoading ? "Loading" : graphResponse.source_root === "vault-agent" ? "Vault Agent" : "Mock"}
         </Badge>
       }
     >
@@ -1494,7 +1615,8 @@ export function VaultGraphPage() {
                 selectedNode={selectedNode}
                 hoveredNodeId={hoveredNodeId}
                 zoom={zoom}
-                sourceRoot={graphResponse.source_root}
+                sourceRoot={graphResponse?.source_root ?? "mock"}
+                isLoading={isGraphLoading}
                 onSelectNode={toggleNodeSelection}
                 onClearSelection={clearSelection}
                 onHoverNode={setHoveredNodeId}
@@ -1502,7 +1624,13 @@ export function VaultGraphPage() {
                 onZoomOut={() => setZoom((value) => Math.max(0.9, Number((value - 0.08).toFixed(2))))}
                 onZoomReset={() => setZoom(1)}
               />
-              <VaultGraphNodeDetails node={selectedNode} edges={visibleEdges} nodes={graphData.nodes} sourceRoot={graphResponse.source_root} />
+              <VaultGraphNodeDetails
+                node={selectedNode}
+                edges={visibleEdges}
+                nodes={graphData.nodes}
+                sourceRoot={graphResponse?.source_root ?? "mock"}
+                isLoading={isGraphLoading}
+              />
             </div>
           </div>
         </div>
