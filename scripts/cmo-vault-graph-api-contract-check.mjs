@@ -41,6 +41,12 @@ assert.match(uiSource, /fetch\("\/api\/cmo\/vault-graph"/, "Vault Graph UI must 
 assert.match(uiSource, /Vault Agent/, "Vault Graph UI must show Vault Agent source status.");
 assert.match(uiSource, /Source warning/, "Vault Graph UI must show safe warning state.");
 assert.match(uiSource, /normalizeVaultGraphForRendering/, "Vault Graph UI must normalize live graph payloads before rendering.");
+assert.match(uiSource, /function matchesFilter/, "Vault Graph UI must keep explicit category filter mapping.");
+assert.match(uiSource, /semanticNodesForFilterAndSearch/, "Vault Graph UI must filter real semantic nodes by filter and search.");
+assert.match(uiSource, /decorativeNodesForVisibleClusters/, "Vault Graph UI must keep mock decorative context scoped to visible semantic clusters.");
+assert.match(uiSource, /No matching nodes/, "Vault Graph UI must show a clean empty filter or search state.");
+assert.match(uiSource, /node\.workspace_id/, "Vault Graph search must include workspace_id metadata.");
+assert.match(uiSource, /\.\.\.node\.tags/, "Vault Graph search must include node tags.");
 assert.doesNotMatch(uiSource, /isVaultGraphApiResponse/, "Vault Graph UI must not fall back only because live nodes lack mock x/y coordinates.");
 assert.match(normalizerSource, /normalizeVaultGraphForRendering/, "Vault Graph visual normalizer must exist.");
 assert.match(normalizerSource, /Math\.sin|deterministicSeed/, "Vault Graph visual layout must be deterministic.");
@@ -200,7 +206,9 @@ async function checkVaultGraphVisualNormalizer() {
       { id: "source-1", type: "source_map", label: "Source", folder: "Sources", workspace_id: "holdstation-mini-app" },
       { id: "agent-1", type: "agent_skill", label: "Agent Skill", folder: "Agents", workspace_id: "holdstation-mini-app" },
       { id: "candidate-1", type: "candidate", label: "Candidate", folder: "Candidates", workspace_id: "holdstation-mini-app" },
+      { id: "promotion-1", type: "promotion_candidate", label: "Promotion Candidate", folder: "Candidates", workspace_id: "holdstation-mini-app" },
       { id: "decision-1", type: "decision", label: "Decision", folder: "Decisions", workspace_id: "holdstation-mini-app" },
+      { id: "output-1", type: "content_output", label: "Output", folder: "Outputs", workspace_id: "holdstation-mini-app" },
       { id: "session-1", type: "runtime", label: "Session", folder: "Runtime", workspace_id: "holdstation-mini-app" },
     ],
     edges: [
@@ -222,7 +230,9 @@ async function checkVaultGraphVisualNormalizer() {
   assert.equal(normalized.nodes.find((node) => node.id === "source-1")?.color_group, "sources", "Source map nodes must map to the source cluster.");
   assert.equal(normalized.nodes.find((node) => node.id === "agent-1")?.color_group, "agents", "Agent skill nodes must map to the agent cluster.");
   assert.equal(normalized.nodes.find((node) => node.id === "candidate-1")?.color_group, "proposals", "Candidate nodes must map to the proposal cluster.");
+  assert.equal(normalized.nodes.find((node) => node.id === "promotion-1")?.color_group, "proposals", "Promotion candidate nodes must map to the proposal cluster.");
   assert.equal(normalized.nodes.find((node) => node.id === "decision-1")?.color_group, "decisions", "Decision nodes must map to the decision cluster.");
+  assert.equal(normalized.nodes.find((node) => node.id === "output-1")?.color_group, "content_outputs", "Content output nodes must map to the output cluster.");
   assert.equal(normalized.nodes.find((node) => node.id === "session-1")?.color_group, "runtime", "Runtime nodes must map to the runtime cluster.");
   assert.equal(chooseDefaultVaultGraphNodeId(normalized.nodes, normalized.source_root), "workspace", "Vault Agent graph should default-select the workspace/core node when present.");
 

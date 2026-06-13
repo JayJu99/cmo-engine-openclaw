@@ -51,9 +51,9 @@ const filters: { label: VaultGraphFilter; types?: VaultGraphNodeType[]; colorGro
   { label: "All" },
   { label: "Knowledge", types: ["workspace", "knowledge"], colorGroups: ["workspace", "accepted_knowledge"] },
   { label: "Sources", types: ["source_note", "source_asset"], colorGroups: ["sources"] },
-  { label: "Agents", types: ["agent", "session_aggregate"], colorGroups: ["agents", "runtime"] },
-  { label: "Proposals", types: ["proposal", "content_output"], colorGroups: ["proposals", "content_outputs"] },
-  { label: "Decisions", types: ["decision", "governance"], colorGroups: ["decisions", "governance"] },
+  { label: "Agents", types: ["agent"], colorGroups: ["agents"] },
+  { label: "Proposals", types: ["proposal"], colorGroups: ["proposals"] },
+  { label: "Decisions", types: ["decision", "content_output"], colorGroups: ["decisions", "content_outputs"] },
 ];
 
 const colorSystem: Record<
@@ -235,9 +235,11 @@ function matchesSearch(node: VaultGraphNode, query: string) {
 
   const normalized = query.trim().toLowerCase();
   return [
+    node.id,
     node.label,
     node.type,
     node.folder,
+    node.workspace_id,
     node.status,
     node.truth_status,
     node.visibility,
@@ -247,6 +249,37 @@ function matchesSearch(node: VaultGraphNode, query: string) {
     .join(" ")
     .toLowerCase()
     .includes(normalized);
+}
+
+function matchesFilter(node: VaultGraphNode, filter: VaultGraphFilter) {
+  if (filter === "All") {
+    return isSemanticNode(node);
+  }
+
+  const active = filters.find((item) => item.label === filter);
+  return Boolean(
+    isSemanticNode(node) &&
+      (active?.types?.includes(node.type) || active?.colorGroups?.includes(node.color_group)),
+  );
+}
+
+function semanticNodesForFilterAndSearch(nodes: VaultGraphNode[], filter: VaultGraphFilter, query: string) {
+  return nodes.filter((node) => matchesFilter(node, filter) && matchesSearch(node, query));
+}
+
+function decorativeNodesForVisibleClusters(nodes: VaultGraphNode[], visibleSemanticNodes: VaultGraphNode[], includeDecorative: boolean) {
+  if (!includeDecorative || visibleSemanticNodes.length === 0) {
+    return [];
+  }
+
+  const visibleClusterIds = new Set(visibleSemanticNodes.map((node) => node.cluster_id).filter(Boolean));
+  const visibleColorGroups = new Set(visibleSemanticNodes.map((node) => node.color_group));
+
+  return nodes.filter(
+    (node) =>
+      !isSemanticNode(node) &&
+      ((node.cluster_id && visibleClusterIds.has(node.cluster_id)) || visibleColorGroups.has(node.color_group)),
+  );
 }
 
 function relatedNodeIds(edges: VaultGraphEdge[], nodeId: string | null) {
@@ -493,8 +526,8 @@ function signalTiming(edge: VaultGraphEdge, index: number, emphasis: SignalEmpha
   };
 }
 
-function metricCount(nodes: VaultGraphNode[], colorGroups: VaultGraphColorGroup[]) {
-  return nodes.filter((node) => colorGroups.includes(node.color_group)).length;
+function metricCount(nodes: VaultGraphNode[], filter: VaultGraphFilter) {
+  return nodes.filter((node) => matchesFilter(node, filter)).length;
 }
 
 function VaultGraphTopOverlay({
@@ -522,13 +555,7 @@ function VaultGraphTopOverlay({
       ? "Vault Agent"
       : "Mock API";
   const hasGraphWarning = apiStatus === "warning" || Boolean(graphResponse && (graphResponse.warnings.length > 0 || graphResponse.parse_errors.length > 0));
-  const metrics = [
-    { label: "Knowledge", groups: ["accepted_knowledge"] as VaultGraphColorGroup[] },
-    { label: "Sources", groups: ["sources"] as VaultGraphColorGroup[] },
-    { label: "Agents", groups: ["agents", "runtime"] as VaultGraphColorGroup[] },
-    { label: "Proposals", groups: ["proposals", "content_outputs"] as VaultGraphColorGroup[] },
-    { label: "Decisions", groups: ["decisions", "governance"] as VaultGraphColorGroup[] },
-  ];
+  const metrics: Exclude<VaultGraphFilter, "All">[] = ["Knowledge", "Sources", "Agents", "Proposals", "Decisions"];
 
   return (
     <div className="relative z-30 flex flex-col gap-3 rounded-[26px] border border-white/10 bg-slate-950/52 p-3 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl xl:flex-row xl:items-center xl:justify-between">
@@ -581,9 +608,9 @@ function VaultGraphTopOverlay({
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
         <div className="hidden items-center gap-2 2xl:flex">
           {metrics.map((metric) => (
-            <div key={metric.label} className="rounded-2xl border border-white/8 bg-white/[0.045] px-3 py-2">
-              <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{metric.label}</div>
-              <div className="mt-0.5 text-sm font-bold text-slate-100">{metricCount(nodes, metric.groups)}</div>
+            <div key={metric} className="rounded-2xl border border-white/8 bg-white/[0.045] px-3 py-2">
+              <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{metric}</div>
+              <div className="mt-0.5 text-sm font-bold text-slate-100">{metricCount(nodes, metric)}</div>
             </div>
           ))}
         </div>
@@ -737,6 +764,44 @@ function VaultGraphCanvas({
         <div className="pointer-events-none absolute inset-0 z-20 rounded-[30px] bg-[radial-gradient(circle_at_50%_45%,transparent_0%,transparent_54%,rgba(0,0,0,0.42)_100%)]" />
         <div className="absolute bottom-5 left-5 z-30 rounded-full border border-white/10 bg-slate-950/64 px-4 py-2.5 text-sm font-semibold text-slate-300 shadow-[0_20px_48px_rgba(0,0,0,0.3)] backdrop-blur-xl">
           Loading Vault Graph...
+        </div>
+      </div>
+    );
+  }
+
+  if (semanticNodes.length === 0) {
+    return (
+      <div className="relative min-h-[720px] overflow-hidden rounded-[30px] border border-white/8 bg-black/20 xl:min-h-[calc(100vh-245px)] xl:max-h-[840px]">
+        <svg
+          aria-label="Vault Graph empty"
+          className="relative z-10 h-[720px] min-h-[720px] w-full xl:h-[calc(100vh-245px)] xl:max-h-[840px]"
+          preserveAspectRatio="xMidYMid meet"
+          role="img"
+          viewBox={`${graphViewBox.x} ${graphViewBox.y} ${graphViewBox.width} ${graphViewBox.height}`}
+        >
+          <defs>
+            <radialGradient id="emptyStageGlow" cx="50%" cy="50%" r="62%">
+              <stop offset="0%" stopColor="#0e7490" stopOpacity="0.18" />
+              <stop offset="48%" stopColor="#0f172a" stopOpacity="0.12" />
+              <stop offset="100%" stopColor="#020617" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+          <rect x={graphViewBox.x} y={graphViewBox.y} width={graphViewBox.width} height={graphViewBox.height} fill="url(#emptyStageGlow)" opacity="0.78" />
+          <g opacity="0.36">
+            {starField.slice(0, 34).map((star) => (
+              <circle key={star.id} cx={star.x} cy={star.y} fill="#bae6fd" opacity={star.opacity} r={star.r} />
+            ))}
+          </g>
+        </svg>
+        <div className="pointer-events-none absolute inset-0 z-20 rounded-[30px] bg-[radial-gradient(circle_at_50%_45%,transparent_0%,transparent_54%,rgba(0,0,0,0.42)_100%)]" />
+        <div className="absolute left-1/2 top-1/2 z-30 w-[min(360px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[24px] border border-white/10 bg-slate-950/68 p-5 text-center shadow-[0_24px_70px_rgba(0,0,0,0.36)] backdrop-blur-xl">
+          <div className="mx-auto grid size-11 place-items-center rounded-2xl border border-white/10 bg-white/[0.055] text-cyan-200">
+            <icons.Search className="size-5" />
+          </div>
+          <CardTitle className="mt-4 text-lg text-white">No matching nodes</CardTitle>
+          <CardDescription className="mt-2 text-sm leading-5 text-slate-400">
+            Try another filter or search term.
+          </CardDescription>
         </div>
       </div>
     );
@@ -1554,16 +1619,17 @@ export function VaultGraphPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [clearSelection]);
 
-  const visibleNodes = useMemo(() => {
-    const active = filters.find((filter) => filter.label === activeFilter);
-    if (!active?.types && !active?.colorGroups) {
-      return graphData.nodes;
-    }
-
-    return graphData.nodes.filter(
-      (node) => active.types?.includes(node.type) || active.colorGroups?.includes(node.color_group),
-    );
-  }, [activeFilter, graphData.nodes]);
+  const visibleSemanticNodes = useMemo(
+    () => semanticNodesForFilterAndSearch(graphData.nodes, activeFilter, search),
+    [activeFilter, graphData.nodes, search],
+  );
+  const visibleNodes = useMemo(
+    () => [
+      ...visibleSemanticNodes,
+      ...decorativeNodesForVisibleClusters(graphData.nodes, visibleSemanticNodes, !search.trim()),
+    ],
+    [graphData.nodes, search, visibleSemanticNodes],
+  );
 
   const visibleNodeIds = useMemo(() => new Set(visibleNodes.map((node) => node.id)), [visibleNodes]);
   const visibleEdges = useMemo(
@@ -1573,6 +1639,38 @@ export function VaultGraphPage() {
       ),
     [graphData.edges, visibleNodeIds],
   );
+
+  const clearHiddenInteraction = useCallback(
+    (nextFilter: VaultGraphFilter, nextSearch: string) => {
+      const nextSemanticNodes = semanticNodesForFilterAndSearch(graphData.nodes, nextFilter, nextSearch);
+      const nextNodes = [
+        ...nextSemanticNodes,
+        ...decorativeNodesForVisibleClusters(graphData.nodes, nextSemanticNodes, !nextSearch.trim()),
+      ];
+      const nextNodeIds = new Set(nextNodes.map((node) => node.id));
+
+      setSelectedNodeId((current) => (current && !nextNodeIds.has(current) ? null : current));
+      setHoveredNodeId((current) => (current && !nextNodeIds.has(current) ? null : current));
+    },
+    [graphData.nodes],
+  );
+
+  const handleFilterChange = useCallback(
+    (nextFilter: VaultGraphFilter) => {
+      setActiveFilter(nextFilter);
+      clearHiddenInteraction(nextFilter, search);
+    },
+    [clearHiddenInteraction, search],
+  );
+
+  const handleSearchChange = useCallback(
+    (nextSearch: string) => {
+      setSearch(nextSearch);
+      clearHiddenInteraction(activeFilter, nextSearch);
+    },
+    [activeFilter, clearHiddenInteraction],
+  );
+
   const selectedNode = selectedNodeId
     ? visibleNodes.find((node) => node.id === selectedNodeId && isSemanticNode(node)) ?? null
     : null;
@@ -1595,11 +1693,11 @@ export function VaultGraphPage() {
           <div className="relative z-10 space-y-3">
             <VaultGraphTopOverlay
               activeFilter={activeFilter}
-              onFilterChange={setActiveFilter}
+              onFilterChange={handleFilterChange}
               search={search}
-              onSearchChange={setSearch}
-              visibleCount={visibleNodes.length}
-              nodes={visibleNodes}
+              onSearchChange={handleSearchChange}
+              visibleCount={visibleSemanticNodes.length}
+              nodes={graphData.nodes}
               apiStatus={apiStatus}
               graphResponse={graphResponse}
             />
