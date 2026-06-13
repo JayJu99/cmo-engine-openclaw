@@ -10,10 +10,10 @@ import { icons } from "@/components/dashboard/icons";
 import { PageChrome } from "@/components/dashboard/shell";
 import {
   buildMockVaultGraphResponse,
-  isVaultGraphApiResponse,
   type VaultGraphApiResponse,
 } from "@/lib/cmo/vault-graph-contract";
 import { cn } from "@/lib/utils";
+import { normalizeVaultGraphForRendering } from "@/components/vault-graph/vault-graph-normalizer";
 import {
   vaultGraphClusters,
   type VaultGraphData,
@@ -479,7 +479,7 @@ function VaultGraphCanvas({
   return (
     <div className="relative min-h-[720px] overflow-hidden rounded-[30px] border border-white/8 bg-black/20 xl:min-h-[calc(100vh-245px)] xl:max-h-[840px]">
       <svg
-        aria-label="Mock Vault Graph"
+        aria-label="Vault Graph"
         className="relative z-10 h-[720px] min-h-[720px] w-full xl:h-[calc(100vh-245px)] xl:max-h-[840px]"
         preserveAspectRatio="xMidYMid meet"
         role="img"
@@ -1096,8 +1096,8 @@ export function VaultGraphPage() {
           throw new Error(`Vault Graph API returned ${response.status}`);
         }
 
-        const payload: unknown = await response.json();
-        if (!isVaultGraphApiResponse(payload)) {
+        const payload = normalizeVaultGraphForRendering(await response.json());
+        if (!payload) {
           throw new Error("Vault Graph API response did not match cmo.vault_graph.v1.");
         }
 

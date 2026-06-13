@@ -7,6 +7,7 @@ const routeSource = readFileSync("src/app/api/cmo/vault-graph/route.ts", "utf8")
 const contractSource = readFileSync("src/lib/cmo/vault-graph-contract.ts", "utf8");
 const adapterSource = readFileSync("src/lib/cmo/vault-graph-adapter.ts", "utf8");
 const uiSource = readFileSync("src/components/vault-graph/vault-graph-page.tsx", "utf8");
+const normalizerSource = readFileSync("src/components/vault-graph/vault-graph-normalizer.ts", "utf8");
 const configSource = readFileSync("src/lib/cmo/config.ts", "utf8");
 
 assert.match(routeSource, /export async function GET\(/, "Vault Graph API must expose GET.");
@@ -39,12 +40,18 @@ assert.match(configSource, /CMO_VAULT_AGENT_GRAPH_TIMEOUT_MS/, "Graph adapter mu
 assert.match(uiSource, /fetch\("\/api\/cmo\/vault-graph"/, "Vault Graph UI must load through the read-only API boundary.");
 assert.match(uiSource, /Vault Agent/, "Vault Graph UI must show Vault Agent source status.");
 assert.match(uiSource, /Source warning/, "Vault Graph UI must show safe warning state.");
+assert.match(uiSource, /normalizeVaultGraphForRendering/, "Vault Graph UI must normalize live graph payloads before rendering.");
+assert.doesNotMatch(uiSource, /isVaultGraphApiResponse/, "Vault Graph UI must not fall back only because live nodes lack mock x/y coordinates.");
+assert.match(normalizerSource, /normalizeVaultGraphForRendering/, "Vault Graph visual normalizer must exist.");
+assert.match(normalizerSource, /Math\.sin|deterministicSeed/, "Vault Graph visual layout must be deterministic.");
+assert.doesNotMatch(normalizerSource, /Math\.random/, "Vault Graph visual layout must not use Math.random.");
 
 for (const [label, source] of [
   ["route", routeSource],
   ["contract", contractSource],
   ["adapter", adapterSource],
   ["ui", uiSource],
+  ["normalizer", normalizerSource],
 ]) {
   assert.doesNotMatch(source, /\b(writeFile|appendFile|rm|unlink|mkdir|rmdir)\b/, `${label} must not use filesystem write methods.`);
   assert.doesNotMatch(source, /\b(createClient|supabase)\b/i, `${label} must not introduce Supabase access.`);
@@ -83,6 +90,7 @@ for (const block of consoleWarnBlocks) {
 }
 
 await checkStubbedVaultAgentAdapterSuccessAndFailures();
+await checkVaultGraphVisualNormalizer();
 
 const smokeSource = process.argv.includes("--vault-agent") || process.env.CMO_VAULT_GRAPH_SMOKE_SOURCE === "vault-agent"
   ? "vault-agent"
@@ -172,6 +180,51 @@ async function checkStubbedVaultAgentAdapterSuccessAndFailures() {
       }
     }
   }
+}
+
+async function checkVaultGraphVisualNormalizer() {
+  const jiti = createJiti(import.meta.url, {
+    interopDefault: true,
+    alias: { "@": resolve("src") },
+  });
+  const { normalizeVaultGraphForRendering } = await jiti.import(resolve("src/components/vault-graph/vault-graph-normalizer.ts"));
+  const livePayloadWithoutCoordinates = {
+    schema_version: "cmo.vault_graph.v1",
+    vault_mutation: false,
+    source_root: "vault-agent",
+    indexed_at: "2026-06-13T00:00:00.000Z",
+    nodes: [
+      { id: "workspace", type: "workspace", label: "Workspace", folder: "Workspace", workspace_id: "holdstation-mini-app" },
+      { id: "lesson-1", type: "lesson", label: "Lesson", folder: "Lessons", workspace_id: "holdstation-mini-app" },
+      { id: "source-1", type: "source_map", label: "Source", folder: "Sources", workspace_id: "holdstation-mini-app" },
+      { id: "agent-1", type: "agent_skill", label: "Agent Skill", folder: "Agents", workspace_id: "holdstation-mini-app" },
+      { id: "candidate-1", type: "candidate", label: "Candidate", folder: "Candidates", workspace_id: "holdstation-mini-app" },
+      { id: "decision-1", type: "decision", label: "Decision", folder: "Decisions", workspace_id: "holdstation-mini-app" },
+      { id: "session-1", type: "runtime", label: "Session", folder: "Runtime", workspace_id: "holdstation-mini-app" },
+    ],
+    edges: [
+      { id: "edge-1", source: "workspace", target: "lesson-1", relation: "contains", weight: 0.5 },
+      { id: "edge-2", source: "workspace", target: "missing-filtered", relation: "filtered" },
+    ],
+    hidden_counts: {},
+    warnings: [],
+    parse_errors: [],
+  };
+
+  const normalized = normalizeVaultGraphForRendering(livePayloadWithoutCoordinates);
+  assert.notEqual(normalized, null, "Valid vault-agent graph data without x/y must not trigger local fallback.");
+  assert.equal(normalized.source_root, "vault-agent", "Visual normalization must preserve vault-agent source_root.");
+  assert.equal(normalized.nodes.length, livePayloadWithoutCoordinates.nodes.length, "Visual normalization must preserve semantic live node count.");
+  assert.equal(normalized.edges.length, 1, "Visual normalization must ignore edges with missing or filtered endpoints.");
+  assert.equal(normalized.nodes.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y)), true, "Visual normalization must add renderable x/y coordinates.");
+  assert.equal(normalized.nodes.find((node) => node.id === "lesson-1")?.color_group, "accepted_knowledge", "Lesson nodes must map to the knowledge cluster.");
+  assert.equal(normalized.nodes.find((node) => node.id === "source-1")?.color_group, "sources", "Source map nodes must map to the source cluster.");
+  assert.equal(normalized.nodes.find((node) => node.id === "agent-1")?.color_group, "agents", "Agent skill nodes must map to the agent cluster.");
+  assert.equal(normalized.nodes.find((node) => node.id === "candidate-1")?.color_group, "proposals", "Candidate nodes must map to the proposal cluster.");
+  assert.equal(normalized.nodes.find((node) => node.id === "decision-1")?.color_group, "decisions", "Decision nodes must map to the decision cluster.");
+  assert.equal(normalized.nodes.find((node) => node.id === "session-1")?.color_group, "runtime", "Runtime nodes must map to the runtime cluster.");
+
+  assert.equal(normalizeVaultGraphForRendering({ ...livePayloadWithoutCoordinates, source_root: undefined }), null, "Invalid graph payloads must still trigger mock fallback.");
 }
 
 function jsonResponse(payload, init = {}) {
