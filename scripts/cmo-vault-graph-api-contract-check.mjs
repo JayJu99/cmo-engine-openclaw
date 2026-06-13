@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { createJiti } from "jiti";
 
 const routeSource = readFileSync("src/app/api/cmo/vault-graph/route.ts", "utf8");
 const contractSource = readFileSync("src/lib/cmo/vault-graph-contract.ts", "utf8");
@@ -29,6 +31,8 @@ assert.match(adapterSource, /parse_errors:\s*\[\s*\{\s*code:\s*diagnostic\.code,
 assert.match(adapterSource, /base_url_origin:\s*safeUrl\.origin/, "Vault Agent diagnostic logs must include only the base URL origin.");
 assert.match(adapterSource, /base_url_host:\s*safeUrl\.host/, "Vault Agent diagnostic logs must include only the base URL host.");
 assert.match(adapterSource, /diagnostic_code:\s*diagnostic\.code/, "Vault Agent diagnostic logs must include the diagnostic code.");
+assert.match(adapterSource, /payload\.value as VaultGraphApiResponse/, "Vault Agent adapter must return the parsed JSON body on valid live-source success.");
+assert.doesNotMatch(adapterSource, /isVaultGraphApiResponse/, "Vault Agent adapter must not reject live-source graph payloads with the stricter mock/UI node validator.");
 assert.match(configSource, /CMO_VAULT_AGENT_GRAPH_BASE_URL/, "Graph adapter must support graph-specific base URL env.");
 assert.match(configSource, /CMO_VAULT_AGENT_GRAPH_API_KEY/, "Graph adapter must support graph-specific API key env.");
 assert.match(configSource, /CMO_VAULT_AGENT_GRAPH_TIMEOUT_MS/, "Graph adapter must support graph-specific timeout env.");
@@ -78,6 +82,8 @@ for (const block of consoleWarnBlocks) {
   assert.doesNotMatch(block, /Authorization|Bearer|apiKey|API_KEY|secret|token/i, "Vault Agent diagnostic logs must not emit auth material.");
 }
 
+await checkStubbedVaultAgentAdapterSuccessAndFailures();
+
 const smokeSource = process.argv.includes("--vault-agent") || process.env.CMO_VAULT_GRAPH_SMOKE_SOURCE === "vault-agent"
   ? "vault-agent"
   : "mock";
@@ -87,6 +93,104 @@ if (smokeSource === "vault-agent") {
 }
 
 console.log("Vault Graph API contract guardrails passed.");
+
+async function checkStubbedVaultAgentAdapterSuccessAndFailures() {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const originalEnv = {
+    CMO_VAULT_AGENT_GRAPH_BASE_URL: process.env.CMO_VAULT_AGENT_GRAPH_BASE_URL,
+    CMO_VAULT_AGENT_GRAPH_API_KEY: process.env.CMO_VAULT_AGENT_GRAPH_API_KEY,
+    CMO_VAULT_AGENT_GRAPH_TIMEOUT_MS: process.env.CMO_VAULT_AGENT_GRAPH_TIMEOUT_MS,
+  };
+  const warnings = [];
+  const requestedUrls = [];
+
+  process.env.CMO_VAULT_AGENT_GRAPH_BASE_URL = "http://127.0.0.1:18642";
+  process.env.CMO_VAULT_AGENT_GRAPH_API_KEY = "test-contract-secret";
+  process.env.CMO_VAULT_AGENT_GRAPH_TIMEOUT_MS = "1000";
+  console.warn = (...args) => warnings.push(args);
+
+  try {
+    const jiti = createJiti(import.meta.url, {
+      interopDefault: true,
+      alias: { "@": resolve("src") },
+    });
+    const { VaultAgentVaultGraphAdapter } = await jiti.import(resolve("src/lib/cmo/vault-graph-adapter.ts"));
+
+    const validPayload = {
+      schema_version: "cmo.vault_graph.v1",
+      vault_mutation: false,
+      source_root: "vault-agent",
+      indexed_at: "2026-06-13T00:00:00.000Z",
+      nodes: [{ id: "live-node-1" }],
+      edges: [{ id: "live-edge-1", source: "live-node-1", target: "live-node-1" }],
+      hidden_counts: {},
+      warnings: [],
+      parse_errors: [],
+    };
+
+    globalThis.fetch = async (url) => {
+      requestedUrls.push(String(url));
+      return jsonResponse(validPayload);
+    };
+
+    const adapter = new VaultAgentVaultGraphAdapter();
+    const success = await adapter.getVaultGraph({
+      workspace_id: "holdstation-mini-app",
+      limit_nodes: "50",
+      limit_edges: "100",
+    });
+
+    assert.equal(success.source_root, "vault-agent", "Stubbed Vault Agent success must preserve vault-agent source_root.");
+    assert.equal(success.nodes.length > 0, true, "Stubbed Vault Agent success must return live-source nodes.");
+    assert.equal(success.edges.length > 0, true, "Stubbed Vault Agent success must return live-source edges.");
+    assert.match(requestedUrls[0], /^http:\/\/127\.0\.0\.1:18642\/agents\/vault-agent\/vault-graph\?/, "Vault Agent adapter must call the graph endpoint under the configured base URL.");
+    const requestedSearchParams = new URL(requestedUrls[0]).searchParams;
+    assert.equal(requestedSearchParams.get("workspace_id"), "holdstation-mini-app", "Vault Agent adapter must forward whitelisted workspace_id.");
+    assert.equal(requestedSearchParams.get("limit_nodes"), "50", "Vault Agent adapter must forward whitelisted limit_nodes.");
+    assert.equal(requestedSearchParams.get("limit_edges"), "100", "Vault Agent adapter must forward whitelisted limit_edges.");
+
+    await assertSafeFailure(VaultAgentVaultGraphAdapter, async () => new Response("nope", { status: 502 }), "non_200_status");
+    await assertSafeFailure(VaultAgentVaultGraphAdapter, async () => new Response("{", { status: 200 }), "invalid_json");
+    await assertSafeFailure(VaultAgentVaultGraphAdapter, async () => jsonResponse({ ...validPayload, schema_version: "wrong" }), "invalid_schema_version");
+    await assertSafeFailure(VaultAgentVaultGraphAdapter, async () => jsonResponse({ ...validPayload, nodes: [{ id: "n", marker: "/Users/jay" }] }), "forbidden_token_detected");
+    await assertSafeFailure(VaultAgentVaultGraphAdapter, async () => jsonResponse({ ...validPayload, edges: undefined }), "missing_nodes_edges");
+
+    const serializedWarnings = JSON.stringify(warnings).toLowerCase();
+    assert.equal(serializedWarnings.includes("test-contract-secret"), false, "Vault Agent diagnostic logs must not include API keys.");
+    assert.equal(serializedWarnings.includes("authorization"), false, "Vault Agent diagnostic logs must not include Authorization headers.");
+    assert.equal(serializedWarnings.includes("bearer"), false, "Vault Agent diagnostic logs must not include bearer auth material.");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+function jsonResponse(payload, init = {}) {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+}
+
+async function assertSafeFailure(Adapter, fetchStub, expectedCode) {
+  globalThis.fetch = fetchStub;
+  const payload = await new Adapter().getVaultGraph();
+
+  assert.equal(payload.vault_mutation, false, `${expectedCode} must return vault_mutation=false.`);
+  assert.equal(payload.nodes.length, 0, `${expectedCode} must return empty nodes.`);
+  assert.equal(payload.edges.length, 0, `${expectedCode} must return empty edges.`);
+  assert.equal(payload.parse_errors?.[0]?.code, expectedCode, `${expectedCode} must surface the diagnostic code.`);
+}
 
 async function checkLiveProductVaultAgentResponse() {
   const baseUrl = (process.env.CMO_SMOKE_BASE_URL || "http://127.0.0.1:3002").replace(/\/+$/, "");

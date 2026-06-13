@@ -5,7 +5,6 @@ import {
 } from "@/lib/cmo/config";
 import {
   buildMockVaultGraphResponse,
-  isVaultGraphApiResponse,
   VAULT_GRAPH_SCHEMA_VERSION,
   VAULT_GRAPH_SOURCE_ROOT,
   VAULT_GRAPH_VAULT_AGENT_SOURCE_ROOT,
@@ -54,6 +53,9 @@ type VaultAgentGraphDiagnostic = {
   message: string;
   status?: number;
   tokenCategory?: ForbiddenResponseTokenCategory;
+  topLevelKeys?: string[];
+  schemaVersion?: string;
+  sourceRoot?: string;
 };
 
 const FORBIDDEN_RESPONSE_TOKENS: { token: string; category: ForbiddenResponseTokenCategory }[] = [
@@ -272,14 +274,22 @@ function getVaultAgentGraphValidationDiagnostic(value: unknown): VaultAgentGraph
   }
 
   if (!Array.isArray(response.nodes) || !Array.isArray(response.edges)) {
-    return vaultAgentGraphDiagnostic("missing_nodes_edges");
+    return vaultAgentGraphDiagnostic("missing_nodes_edges", getSanitizedResponseShape(value));
   }
 
-  if (!isVaultGraphApiResponse(value)) {
-    return vaultAgentGraphDiagnostic("missing_nodes_edges");
+  if (typeof response.indexed_at !== "string" || !isHiddenCountsShape(response.hidden_counts)) {
+    return vaultAgentGraphDiagnostic("missing_nodes_edges", getSanitizedResponseShape(value));
   }
 
-  const forbiddenToken = findForbiddenVaultGraphToken(value);
+  if (!Array.isArray(response.warnings) || !response.warnings.every((warning) => typeof warning === "string")) {
+    return vaultAgentGraphDiagnostic("missing_nodes_edges", getSanitizedResponseShape(value));
+  }
+
+  if (!Array.isArray(response.parse_errors)) {
+    return vaultAgentGraphDiagnostic("missing_nodes_edges", getSanitizedResponseShape(value));
+  }
+
+  const forbiddenToken = findForbiddenVaultGraphToken(value as VaultGraphApiResponse);
   if (forbiddenToken) {
     return vaultAgentGraphDiagnostic("forbidden_token_detected", {
       tokenCategory: forbiddenToken.category,
@@ -289,6 +299,14 @@ function getVaultAgentGraphValidationDiagnostic(value: unknown): VaultAgentGraph
   return null;
 }
 
+function isHiddenCountsShape(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  return Object.values(value).every((count) => typeof count === "number" && Number.isFinite(count) && count >= 0);
+}
+
 function findForbiddenVaultGraphToken(value: VaultGraphApiResponse) {
   const serialized = JSON.stringify(value).toLowerCase();
   return FORBIDDEN_RESPONSE_TOKENS.find(({ token }) => serialized.includes(token.toLowerCase()));
@@ -296,7 +314,7 @@ function findForbiddenVaultGraphToken(value: VaultGraphApiResponse) {
 
 function vaultAgentGraphDiagnostic(
   code: VaultAgentGraphDiagnosticCode,
-  details: Pick<VaultAgentGraphDiagnostic, "status" | "tokenCategory"> = {},
+  details: Pick<VaultAgentGraphDiagnostic, "status" | "tokenCategory" | "topLevelKeys" | "schemaVersion" | "sourceRoot"> = {},
 ): VaultAgentGraphDiagnostic {
   switch (code) {
     case "missing_base_url":
@@ -322,7 +340,13 @@ function vaultAgentGraphDiagnostic(
     case "source_root_mismatch":
       return { code, message: "source_root_mismatch: Vault Agent graph response source_root was not vault-agent." };
     case "missing_nodes_edges":
-      return { code, message: "missing_nodes_edges: Vault Agent graph response did not include valid nodes and edges arrays." };
+      return {
+        code,
+        topLevelKeys: details.topLevelKeys,
+        schemaVersion: details.schemaVersion,
+        sourceRoot: details.sourceRoot,
+        message: `missing_nodes_edges: Vault Agent graph response did not include the required top-level graph fields. ${formatSanitizedResponseShape(details)}`,
+      };
     case "forbidden_token_detected":
       return {
         code,
@@ -330,6 +354,34 @@ function vaultAgentGraphDiagnostic(
         message: `forbidden_token_detected: Vault Agent graph response contained a forbidden ${details.tokenCategory ?? "unknown"} token category.`,
       };
   }
+}
+
+function getSanitizedResponseShape(value: unknown): Pick<VaultAgentGraphDiagnostic, "topLevelKeys" | "schemaVersion" | "sourceRoot"> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    topLevelKeys: Object.keys(record).map(sanitizeTopLevelKey).sort(),
+    schemaVersion: typeof record.schema_version === "string" ? record.schema_version : undefined,
+    sourceRoot: typeof record.source_root === "string" ? record.source_root : undefined,
+  };
+}
+
+function sanitizeTopLevelKey(key: string) {
+  const forbiddenToken = FORBIDDEN_RESPONSE_TOKENS.find(({ token }) => key.toLowerCase().includes(token.toLowerCase()));
+  return forbiddenToken ? `forbidden_${forbiddenToken.category}` : key;
+}
+
+function formatSanitizedResponseShape(details: Pick<VaultAgentGraphDiagnostic, "topLevelKeys" | "schemaVersion" | "sourceRoot">) {
+  const shapeParts = [
+    details.schemaVersion ? `schema_version=${details.schemaVersion}` : undefined,
+    details.sourceRoot ? `source_root=${details.sourceRoot}` : undefined,
+    details.topLevelKeys ? `top_level_keys=${details.topLevelKeys.join(",")}` : undefined,
+  ].filter(Boolean);
+
+  return shapeParts.length > 0 ? shapeParts.join("; ") : "No response object shape was available.";
 }
 
 function logVaultAgentGraphDiagnostic(
