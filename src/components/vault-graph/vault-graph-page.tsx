@@ -21,6 +21,7 @@ import {
   vaultGraphClusters,
   type VaultGraphData,
   type VaultGraphColorGroup,
+  type VaultGraphClusterKey,
   type VaultGraphEdge,
   type VaultGraphNode,
   type VaultGraphNodeType,
@@ -28,6 +29,13 @@ import {
 
 type VaultGraphFilter = "All" | "Knowledge" | "Sources" | "Agents" | "Proposals" | "Decisions";
 type VaultGraphApiStatus = "loading" | "mock-api" | "vault-agent" | "warning" | "fallback";
+type SignalGroupKey = VaultGraphClusterKey | VaultGraphColorGroup | "workspace";
+type SignalEmphasis = "ambient" | "bridge" | "focused";
+type SignalPath = {
+  edge: VaultGraphEdge;
+  emphasis: SignalEmphasis;
+  pathKey: string;
+};
 
 const fallbackGraphResponse = buildMockVaultGraphResponse("1970-01-01T00:00:00.000Z");
 
@@ -286,6 +294,141 @@ function isLocalEdge(edge: VaultGraphEdge, nodeById: Map<string, VaultGraphNode>
   return Boolean(source?.cluster_id && source.cluster_id === target?.cluster_id);
 }
 
+function signalGroupForNode(node: VaultGraphNode): SignalGroupKey {
+  if (node.type === "workspace") {
+    return "workspace";
+  }
+
+  return node.cluster_id ?? node.color_group;
+}
+
+function signalGroupsForEdge(edge: VaultGraphEdge, nodeById: Map<string, VaultGraphNode>) {
+  const source = nodeById.get(edge.source);
+  const target = nodeById.get(edge.target);
+  if (!source || !target) {
+    return null;
+  }
+
+  return {
+    source: signalGroupForNode(source),
+    target: signalGroupForNode(target),
+  };
+}
+
+function edgeTouchesSignalGroup(edge: VaultGraphEdge, group: SignalGroupKey, nodeById: Map<string, VaultGraphNode>) {
+  const groups = signalGroupsForEdge(edge, nodeById);
+  return Boolean(groups && (groups.source === group || groups.target === group));
+}
+
+function edgeWithinSignalGroup(edge: VaultGraphEdge, group: SignalGroupKey, nodeById: Map<string, VaultGraphNode>) {
+  const groups = signalGroupsForEdge(edge, nodeById);
+  return Boolean(groups && groups.source === group && groups.target === group);
+}
+
+function signalGroupOrder(group: SignalGroupKey) {
+  const order: SignalGroupKey[] = [
+    "workspace",
+    "knowledge",
+    "sources",
+    "agents",
+    "proposals",
+    "decisions",
+    "content_outputs",
+    "governance",
+    "runtime",
+  ];
+
+  const index = order.indexOf(group);
+  return index === -1 ? order.length : index;
+}
+
+function sortedSignalEdges(edges: VaultGraphEdge[]) {
+  return [...edges].sort((left, right) => {
+    const strengthDelta = edgeStrength(right) - edgeStrength(left);
+    if (Math.abs(strengthDelta) > 0.001) {
+      return strengthDelta;
+    }
+
+    return deterministicSeed(left.id) - deterministicSeed(right.id);
+  });
+}
+
+function buildSignalPaths({
+  localEdges,
+  bridgeEdges,
+  nodeById,
+  focusedId,
+}: {
+  localEdges: VaultGraphEdge[];
+  bridgeEdges: VaultGraphEdge[];
+  nodeById: Map<string, VaultGraphNode>;
+  focusedId: string | null;
+}) {
+  const visibleGroups = Array.from(
+    new Set(
+      Array.from(nodeById.values())
+        .filter(isSemanticNode)
+        .map(signalGroupForNode),
+    ),
+  ).sort((left, right) => signalGroupOrder(left) - signalGroupOrder(right) || String(left).localeCompare(String(right)));
+  const focusedNode = focusedId ? nodeById.get(focusedId) : undefined;
+  const focusedGroup = focusedNode ? signalGroupForNode(focusedNode) : null;
+  const paths = new Map<string, SignalPath>();
+
+  const addPath = (edge: VaultGraphEdge, emphasis: SignalEmphasis) => {
+    const current = paths.get(edge.id);
+    if (current?.emphasis === "focused" && emphasis !== "focused") {
+      return;
+    }
+
+    paths.set(edge.id, {
+      edge,
+      emphasis,
+      pathKey: `${emphasis}-${edge.id}`,
+    });
+  };
+
+  for (const group of visibleGroups) {
+    const internalCandidates = sortedSignalEdges(localEdges.filter((edge) => edgeWithinSignalGroup(edge, group, nodeById)));
+    const incidentCandidates = sortedSignalEdges(
+      [...localEdges, ...bridgeEdges].filter((edge) => edgeTouchesSignalGroup(edge, group, nodeById)),
+    );
+    const candidates = internalCandidates.length > 0 ? internalCandidates : incidentCandidates;
+    const limit = group === "workspace" || group === focusedGroup ? 2 : 1;
+
+    candidates.slice(0, limit).forEach((edge) => addPath(edge, "ambient"));
+  }
+
+  sortedSignalEdges(
+    bridgeEdges.filter((edge) => {
+      const source = nodeById.get(edge.source);
+      const target = nodeById.get(edge.target);
+      return Boolean(
+        source &&
+          target &&
+          !isDecorativeEdge(edge) &&
+          (source.type === "workspace" || target.type === "workspace" || isClusterHub(source) || isClusterHub(target) || edgeStrength(edge) > 0.3),
+      );
+    }),
+  )
+    .slice(0, focusedGroup ? 4 : 5)
+    .forEach((edge) => addPath(edge, "bridge"));
+
+  if (focusedId) {
+    sortedSignalEdges(
+      [...localEdges, ...bridgeEdges].filter(
+        (edge) =>
+          !isDecorativeEdge(edge) &&
+          (edgeTouches(edge, focusedId) || (focusedGroup ? edgeTouchesSignalGroup(edge, focusedGroup, nodeById) : false)),
+      ),
+    )
+      .slice(0, 7)
+      .forEach((edge) => addPath(edge, "focused"));
+  }
+
+  return Array.from(paths.values()).slice(0, focusedId ? 22 : 16);
+}
+
 function edgeStrength(edge: VaultGraphEdge) {
   return clampNumber(edge.weight * 0.7 + edge.confidence * 0.3, 0, 1);
 }
@@ -327,11 +470,19 @@ function edgePath(source: VaultGraphNode, target: VaultGraphNode, edge: VaultGra
   return `M ${source.x} ${source.y} Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${target.x} ${target.y}`;
 }
 
-function signalTiming(edge: VaultGraphEdge, index: number, focused: boolean) {
+function signalTiming(edge: VaultGraphEdge, index: number, emphasis: SignalEmphasis) {
   const seed = deterministicSeed(edge.id);
+  const focused = emphasis === "focused";
+  const bridge = emphasis === "bridge";
   return {
-    delay: Number(((seed % 1100) / 1000 + index * 0.18).toFixed(2)),
-    duration: Number((focused ? 1.28 + (seed % 7) * 0.11 : 1.8 + (seed % 9) * 0.12).toFixed(2)),
+    delay: Number(((seed % 1300) / 1000 + index * 0.11).toFixed(2)),
+    duration: Number((
+      focused
+        ? 1.18 + (seed % 7) * 0.1
+        : bridge
+          ? 2.55 + (seed % 8) * 0.13
+          : 2.02 + (seed % 9) * 0.12
+    ).toFixed(2)),
   };
 }
 
@@ -491,41 +642,10 @@ function VaultGraphCanvas({
   const localEdges = useMemo(() => edges.filter((edge) => isLocalEdge(edge, nodeById)), [edges, nodeById]);
   const bridgeEdges = useMemo(() => edges.filter((edge) => !isLocalEdge(edge, nodeById)), [edges, nodeById]);
   const visibleClusterIds = useMemo(() => new Set(nodes.map((node) => node.cluster_id).filter(Boolean)), [nodes]);
-  const idleSignalEdges = useMemo(
-    () =>
-      bridgeEdges
-        .filter((edge) => {
-          const source = nodeById.get(edge.source);
-          const target = nodeById.get(edge.target);
-          return Boolean(
-            source &&
-              target &&
-              !isDecorativeEdge(edge) &&
-              (source.type === "workspace" || target.type === "workspace" || isClusterHub(source) || isClusterHub(target)),
-          );
-        })
-        .slice(0, 7),
-    [bridgeEdges, nodeById],
+  const signalPaths = useMemo(
+    () => buildSignalPaths({ localEdges, bridgeEdges, nodeById, focusedId }),
+    [bridgeEdges, focusedId, localEdges, nodeById],
   );
-  const focusedSignalEdges = useMemo(() => {
-    if (!focusedId) {
-      return [];
-    }
-
-    return edges.filter((edge) => edgeTouches(edge, focusedId) && !isDecorativeEdge(edge)).slice(0, 6);
-  }, [edges, focusedId]);
-  const signalEdges = useMemo(() => {
-    const seen = new Set<string>();
-    return [...idleSignalEdges, ...focusedSignalEdges]
-      .filter((edge) => {
-        if (seen.has(edge.id)) {
-          return false;
-        }
-        seen.add(edge.id);
-        return true;
-      })
-      .slice(0, hoveredNodeId || (selectedNode && selectedNode.id !== "workspace-holdstation") ? 12 : 8);
-  }, [focusedSignalEdges, hoveredNodeId, idleSignalEdges, selectedNode]);
 
   return (
     <div className="relative min-h-[720px] overflow-hidden rounded-[30px] border border-white/8 bg-black/20 xl:min-h-[calc(100vh-245px)] xl:max-h-[840px]">
@@ -740,31 +860,36 @@ function VaultGraphCanvas({
 
           {!prefersReducedMotion ? (
             <g className="pointer-events-none">
-              {signalEdges.map((edge, index) => {
-                const source = nodeById.get(edge.source);
-                const target = nodeById.get(edge.target);
+              {signalPaths.map((signal, index) => {
+                const source = nodeById.get(signal.edge.source);
+                const target = nodeById.get(signal.edge.target);
                 if (!source || !target) {
                   return null;
                 }
 
-                const local = isLocalEdge(edge, nodeById);
-                const pathId = `vault-signal-path-${edge.id}`;
-                const path = edgePath(source, target, edge, local);
+                const local = isLocalEdge(signal.edge, nodeById);
+                const pathId = `vault-signal-path-${signal.pathKey}`;
+                const path = edgePath(source, target, signal.edge, local);
                 const color = colorSystem[source.color_group];
-                const focused = edgeTouches(edge, focusedId);
-                const timing = signalTiming(edge, index, focused);
+                const focused = signal.emphasis === "focused";
+                const bridge = signal.emphasis === "bridge";
+                const timing = signalTiming(signal.edge, index, signal.emphasis);
+                const coreRadius = focused ? 4.8 : bridge ? 2.6 : 3.2;
+                const haloRadius = focused ? 9 : bridge ? 5.4 : 6.2;
+                const coreValues = focused ? "0;0.95;0.58;0" : bridge ? "0;0.52;0.24;0" : "0;0.66;0.34;0";
+                const haloValues = focused ? "0;0.22;0.1;0" : bridge ? "0;0.08;0.035;0" : "0;0.12;0.055;0";
 
                 return (
-                  <g key={edge.id}>
+                  <g key={signal.pathKey}>
                     <path id={pathId} d={path} fill="none" stroke="none" />
-                    <circle fill={color.edge} filter="url(#signalGlow)" opacity="0" r={focused ? 4.2 : 3.1}>
-                      <animate attributeName="opacity" begin={`${timing.delay}s`} dur={`${timing.duration}s`} keyTimes="0;0.16;0.74;1" repeatCount="indefinite" values="0;0.95;0.58;0" />
+                    <circle fill={color.edge} filter="url(#signalGlow)" opacity="0" r={coreRadius}>
+                      <animate attributeName="opacity" begin={`${timing.delay}s`} dur={`${timing.duration}s`} keyTimes="0;0.16;0.74;1" repeatCount="indefinite" values={coreValues} />
                       <animateMotion begin={`${timing.delay}s`} dur={`${timing.duration}s`} repeatCount="indefinite" rotate="auto">
                         <mpath href={`#${pathId}`} />
                       </animateMotion>
                     </circle>
-                    <circle fill={color.fill} filter="url(#signalGlow)" opacity="0" r={focused ? 8 : 6}>
-                      <animate attributeName="opacity" begin={`${timing.delay + 0.05}s`} dur={`${timing.duration}s`} keyTimes="0;0.12;0.46;1" repeatCount="indefinite" values="0;0.2;0.09;0" />
+                    <circle fill={color.fill} filter="url(#signalGlow)" opacity="0" r={haloRadius}>
+                      <animate attributeName="opacity" begin={`${timing.delay + 0.05}s`} dur={`${timing.duration}s`} keyTimes="0;0.12;0.46;1" repeatCount="indefinite" values={haloValues} />
                       <animateMotion begin={`${timing.delay + 0.05}s`} dur={`${timing.duration}s`} repeatCount="indefinite" rotate="auto">
                         <mpath href={`#${pathId}`} />
                       </animateMotion>
