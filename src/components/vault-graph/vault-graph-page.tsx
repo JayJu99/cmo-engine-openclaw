@@ -35,6 +35,14 @@ type SignalPath = {
   emphasis: SignalEmphasis;
   pathKey: string;
 };
+type VaultGraphInspectorNode = VaultGraphNode & {
+  session_id?: string;
+  source_id?: string;
+  agent?: string;
+  source_agent?: string;
+  writer?: string;
+};
+type InspectorCopyAction = "path" | "id" | "label";
 
 const fallbackGraphResponse = buildMockVaultGraphResponse("1970-01-01T00:00:00.000Z");
 
@@ -473,18 +481,75 @@ function edgeStrength(edge: VaultGraphEdge) {
   return clampNumber(edge.weight * 0.7 + edge.confidence * 0.3, 0, 1);
 }
 
-function displayPath(node: VaultGraphNode) {
-  const candidate = node.path;
+function safeVaultGraphDisplayPath(value: string) {
+  const candidate = value;
   if (!candidate) {
     return "";
   }
 
-  const normalized = candidate.replace(/\\/g, "/");
+  let normalized = candidate.trim().replace(/\\/g, "/");
+  normalized = normalized.replace(/^vault-agent:\/\//, "").replace(/^mock:\/\//, "");
+  normalized = normalized.replace(/^file:\/\//, "");
+
   if (/^[a-z]:\//i.test(normalized) || normalized.startsWith("/")) {
     return normalized.split("/").filter(Boolean).slice(-3).join("/");
   }
 
-  return normalized.replace(/^vault-agent:\/\//, "");
+  return normalized.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+}
+
+function copyableVaultGraphPath(node: VaultGraphNode) {
+  const path = safeVaultGraphDisplayPath(node.path);
+  return path || "";
+}
+
+function relationSummaryForEdges(edges: VaultGraphEdge[]) {
+  const relationCounts = edges.reduce((counts, edge) => {
+    counts.set(edge.relation, (counts.get(edge.relation) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>());
+
+  return [...relationCounts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 6);
+}
+
+function relatedNodeRowsForInspector(
+  node: VaultGraphNode,
+  edges: VaultGraphEdge[],
+  nodeById: Map<string, VaultGraphNode>,
+  visibleNodeIds: Set<string>,
+) {
+  return edges
+    .filter((edge) => edgeTouches(edge, node.id) && !isDecorativeEdge(edge))
+    .map((edge) => {
+      const otherId = edge.source === node.id ? edge.target : edge.source;
+      const other = nodeById.get(otherId) ?? null;
+      return {
+        edge,
+        other,
+        isFiltered: other ? !visibleNodeIds.has(other.id) : true,
+      };
+    })
+    .sort((left, right) => Number(left.isFiltered) - Number(right.isFiltered) || right.edge.weight - left.edge.weight)
+    .slice(0, 8);
+}
+
+function inspectorMetadataValue(node: VaultGraphNode, key: keyof VaultGraphInspectorNode) {
+  const value = (node as VaultGraphInspectorNode)[key];
+  return typeof value === "string" ? value : "";
+}
+
+function isAcceptedNode(node: VaultGraphNode) {
+  return [node.status, node.truth_status].join(" ").toLowerCase().includes("accepted");
+}
+
+function isCandidateNode(node: VaultGraphNode) {
+  return (
+    node.type === "proposal" ||
+    [node.status, node.truth_status, node.color_group].join(" ").toLowerCase().includes("candidate") ||
+    [node.status, node.truth_status].join(" ").toLowerCase().includes("unaccepted")
+  );
 }
 
 function compactLabel(value: string, maxLength = 28) {
@@ -1339,31 +1404,110 @@ function VaultGraphNodeDetails({
   node,
   edges,
   nodes,
+  visibleNodeIds,
+  visibleCount,
+  activeFilter,
+  search,
   sourceRoot,
   isLoading,
+  onSelectNode,
 }: {
   node: VaultGraphNode | null;
   edges: VaultGraphEdge[];
   nodes: VaultGraphNode[];
+  visibleNodeIds: Set<string>;
+  visibleCount: number;
+  activeFilter: VaultGraphFilter;
+  search: string;
   sourceRoot: VaultGraphApiResponse["source_root"];
   isLoading: boolean;
+  onSelectNode: (nodeId: string) => void;
 }) {
+  const [copiedAction, setCopiedAction] = useState<InspectorCopyAction | null>(null);
+  const nodeById = useMemo(() => new Map(nodes.map((item) => [item.id, item])), [nodes]);
   const relatedEdges = node ? edges.filter((edge) => edgeTouches(edge, node.id) && !isDecorativeEdge(edge)) : [];
+  const relationSummary = relationSummaryForEdges(relatedEdges);
+  const relatedRows = node ? relatedNodeRowsForInspector(node, edges, nodeById, visibleNodeIds) : [];
   const color = node ? colorSystem[node.color_group] : colorSystem.workspace;
   const semanticNodeCount = nodes.filter(isSemanticNode).length;
   const semanticEdgeCount = edges.filter((edge) => !isDecorativeEdge(edge)).length;
   const sourceLabel = sourceRoot === "vault-agent" ? "Vault Agent" : "Mock API";
+  const safePath = node ? copyableVaultGraphPath(node) : "";
+  const normalizedSearch = search.trim();
+  const statusBadges = node
+    ? [
+        typeLabel[node.type],
+        color.label,
+        node.truth_status,
+        node.visibility,
+        sourceLabel,
+        "Read-only",
+        isCandidateNode(node) ? "Candidate" : "",
+        isAcceptedNode(node) ? "Accepted" : "",
+      ].filter((badge): badge is string => Boolean(badge))
+    : [];
   const metadata = node
     ? [
         { label: "Type", value: typeLabel[node.type] },
+        { label: "Category", value: color.label },
         { label: "Status", value: node.status },
-        { label: "Truth", value: node.truth_status },
+        { label: "Truth status", value: node.truth_status },
         { label: "Visibility", value: node.visibility },
         { label: "Folder", value: node.folder },
-        { label: "Relative path", value: displayPath(node) },
-        { label: "Workspace", value: node.workspace_id },
+        { label: "Relative path", value: safePath },
+        { label: "Workspace ID", value: node.workspace_id },
+        { label: "Session ID", value: inspectorMetadataValue(node, "session_id") },
+        { label: "Source ID", value: inspectorMetadataValue(node, "source_id") },
+        { label: "Agent", value: inspectorMetadataValue(node, "agent") || inspectorMetadataValue(node, "source_agent") },
+        { label: "Writer", value: inspectorMetadataValue(node, "writer") },
+        { label: "Size score", value: node.size_score > 0 ? node.size_score.toFixed(2) : "" },
+        { label: "Connected", value: String(relatedEdges.length) },
       ].filter((item): item is { label: string; value: string } => Boolean(item.value))
     : [];
+
+  const copyInspectorValue = useCallback(async (action: InspectorCopyAction, value: string) => {
+    if (!value) {
+      return;
+    }
+
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+
+      await navigator.clipboard.writeText(value);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.setAttribute("readonly", "true");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+
+    setCopiedAction(action);
+    window.setTimeout(() => {
+      setCopiedAction((current) => (current === action ? null : current));
+    }, 1400);
+  }, []);
+
+  const copyButton = (action: InspectorCopyAction, label: string, value: string) => (
+    <Button
+      key={action}
+      type="button"
+      size="sm"
+      variant="ghost"
+      disabled={!value}
+      className="h-8 justify-start gap-2 rounded-xl border border-white/8 bg-white/[0.035] px-2.5 text-[11px] font-bold text-slate-300 hover:bg-white/[0.07] hover:text-white disabled:opacity-40"
+      onClick={() => void copyInspectorValue(action, value)}
+    >
+      {copiedAction === action ? <icons.Check className="size-3.5" /> : <icons.Copy className="size-3.5" />}
+      {copiedAction === action ? "Copied" : label}
+    </Button>
+  );
 
   return (
     <aside className="h-fit rounded-[28px] border border-white/10 bg-slate-950/54 p-4 text-slate-100 shadow-[0_24px_80px_rgba(0,0,0,0.34)] backdrop-blur-xl xl:min-h-[calc(100vh-245px)] xl:max-h-[840px] xl:overflow-auto">
@@ -1423,16 +1567,34 @@ function VaultGraphNodeDetails({
 
           <div className="mt-5">
             <CardTitle className="text-xl leading-tight text-white">{node.label}</CardTitle>
-            <div className="mt-2 flex items-center gap-2 text-xs font-semibold text-slate-400">
-              <span>{typeLabel[node.type]}</span>
-              <span className="size-1 rounded-full bg-slate-600" />
-              <span className={color.darkText}>{color.label}</span>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {statusBadges.slice(0, 8).map((badge) => (
+                <span key={badge} className="rounded-full border border-white/8 bg-white/[0.045] px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-slate-300">
+                  {badge}
+                </span>
+              ))}
             </div>
             <CardDescription className="mt-3 text-sm leading-5 text-slate-400">
               {sourceRoot === "vault-agent"
                 ? "Vault Agent semantic node indexed for read-only graph display."
                 : node.description ?? "Mock graph node for the Phase 1 Vault Graph preview."}
             </CardDescription>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-2">
+            {copyButton("path", "Copy path", safePath)}
+            {copyButton("id", "Copy node ID", node.id)}
+            {copyButton("label", "Copy label", node.label)}
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-8 justify-start gap-2 rounded-xl border border-cyan-300/10 bg-cyan-300/[0.045] px-2.5 text-[11px] font-bold text-cyan-100 hover:bg-cyan-300/[0.08]"
+              onClick={() => onSelectNode(node.id)}
+            >
+              <icons.Target className="size-3.5" />
+              Focus node
+            </Button>
           </div>
 
           <div className="mt-5 grid grid-cols-2 gap-3">
@@ -1467,28 +1629,62 @@ function VaultGraphNodeDetails({
             ) : null}
           </div>
 
+          {relationSummary.length > 0 ? (
+            <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+              <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Relation summary</div>
+              <div className="flex flex-wrap gap-1.5">
+                {relationSummary.map(([relation, count]) => (
+                  <span key={relation} className="rounded-full border border-white/8 bg-white/[0.045] px-2 py-1 text-[11px] font-semibold text-slate-300">
+                    {relation} <span className="text-slate-500">{count}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <div className="mt-5">
-            <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Related items</div>
+            <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Related nodes</div>
             <div className="space-y-2">
-              {relatedEdges.slice(0, 4).map((edge) => {
-                const otherId = edge.source === node.id ? edge.target : edge.source;
-                const other = nodes.find((item) => item.id === otherId);
+              {relatedRows.length > 0 ? relatedRows.map(({ edge, other, isFiltered }) => {
+                const canSelect = Boolean(other && !isFiltered && isSemanticNode(other));
+                const otherColor = other ? colorSystem[other.color_group] : color;
                 return (
-                  <div key={edge.id} className="flex items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.04] px-3 py-2">
+                  <button
+                    key={edge.id}
+                    type="button"
+                    disabled={!canSelect}
+                    onClick={() => {
+                      if (other && canSelect) {
+                        onSelectNode(other.id);
+                      }
+                    }}
+                    className="flex w-full items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.04] px-3 py-2 text-left transition hover:border-white/14 hover:bg-white/[0.065] disabled:cursor-default disabled:hover:border-white/8 disabled:hover:bg-white/[0.04]"
+                  >
                     <span
                       className="size-2.5 rounded-full"
                       style={{
-                        backgroundColor: colorSystem[other?.color_group ?? node.color_group].fill,
-                        boxShadow: `0 0 14px ${colorSystem[other?.color_group ?? node.color_group].glow}`,
+                        backgroundColor: otherColor.fill,
+                        boxShadow: `0 0 14px ${otherColor.glow}`,
                       }}
                     />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-bold text-slate-200">{other?.label ?? edge.relation}</div>
-                      <div className="truncate text-[11px] text-slate-500">{edge.relation}</div>
+                      <div className="truncate text-xs font-bold text-slate-200">{other?.label ?? "Missing endpoint"}</div>
+                      <div className="truncate text-[11px] text-slate-500">
+                        {edge.relation}{other ? ` · ${typeLabel[other.type]}` : ""}
+                      </div>
                     </div>
-                  </div>
+                    {isFiltered ? (
+                      <span className="rounded-full border border-amber-300/12 bg-amber-300/[0.055] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-100/70">
+                        Filtered
+                      </span>
+                    ) : null}
+                  </button>
                 );
-              })}
+              }) : (
+                <div className="rounded-2xl border border-white/8 bg-white/[0.035] px-3 py-2 text-xs font-semibold text-slate-500">
+                  No connected semantic nodes.
+                </div>
+              )}
             </div>
           </div>
 
@@ -1510,30 +1706,53 @@ function VaultGraphNodeDetails({
           <div className="mt-5">
             <CardTitle className="text-xl leading-tight text-white">Graph overview</CardTitle>
             <CardDescription className="mt-3 text-sm leading-5 text-slate-400">
-              No node selected. Select a node to inspect details, or use the graph as a neutral knowledge map.
+              Select a node to inspect metadata and connections.
             </CardDescription>
           </div>
 
           <div className="mt-5 grid grid-cols-2 gap-3">
             <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-3">
-              <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Nodes</div>
+              <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Total nodes</div>
               <div className="mt-1 text-3xl font-black tracking-tight text-white">{semanticNodeCount}</div>
             </div>
             <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-3">
-              <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Edges</div>
+              <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Total edges</div>
               <div className="mt-1 text-3xl font-black tracking-tight text-white">{semanticEdgeCount}</div>
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-3">
+              <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Visible</div>
+              <div className="mt-1 text-2xl font-black tracking-tight text-white">{visibleCount}</div>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-3">
+              <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Filter</div>
+              <div className="mt-2 truncate text-sm font-bold text-slate-200">{activeFilter}</div>
             </div>
           </div>
 
           <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.035] p-3">
             <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Source</div>
-            <div className="flex items-center justify-between gap-3 text-xs font-semibold text-slate-300">
-              <span>{sourceLabel}</span>
-              <span className="text-slate-500">Read-only</span>
+            <div className="space-y-2 text-xs font-semibold text-slate-300">
+              <div className="flex items-center justify-between gap-3">
+                <span>source_root</span>
+                <span>{sourceLabel}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span>read_only</span>
+                <span>true</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span>vault_mutation</span>
+                <span>false</span>
+              </div>
             </div>
-            <div className="mt-3 rounded-2xl border border-white/8 bg-white/[0.035] px-3 py-2 text-[11px] font-semibold text-slate-500">
-              No Vault mutation.
-            </div>
+            {normalizedSearch ? (
+              <div className="mt-3 rounded-2xl border border-white/8 bg-white/[0.035] px-3 py-2 text-[11px] font-semibold text-slate-400">
+                Search: <span className="text-slate-200">{compactLabel(normalizedSearch, 32)}</span>
+              </div>
+            ) : null}
           </div>
         </div>
       )}
@@ -1721,10 +1940,15 @@ export function VaultGraphPage() {
               />
               <VaultGraphNodeDetails
                 node={selectedNode}
-                edges={visibleEdges}
+                edges={graphData.edges}
                 nodes={graphData.nodes}
+                visibleNodeIds={visibleNodeIds}
+                visibleCount={visibleSemanticNodes.length}
+                activeFilter={activeFilter}
+                search={search}
                 sourceRoot={graphResponse?.source_root ?? "mock"}
                 isLoading={isGraphLoading}
+                onSelectNode={setSelectedNodeId}
               />
             </div>
           </div>

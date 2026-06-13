@@ -128,7 +128,7 @@ function normalizeVaultGraphNode(
   clusterCounts.set(colorGroup, clusterIndex + 1);
   const point = visualPoint(rawNode, id, colorGroup, clusterIndex, index);
 
-  return {
+  const node: VaultGraphNode = {
     id,
     type,
     visual_role: rawNode.visual_role === "decorative" ? "decorative" : "semantic",
@@ -148,6 +148,14 @@ function normalizeVaultGraphNode(
     x: point.x,
     y: point.y,
   };
+
+  return Object.assign(node, {
+    session_id: stringField(rawNode, "session_id") || undefined,
+    source_id: stringField(rawNode, "source_id") || undefined,
+    agent: stringField(rawNode, "agent") || undefined,
+    source_agent: stringField(rawNode, "source_agent") || undefined,
+    writer: stringField(rawNode, "writer") || undefined,
+  });
 }
 
 function normalizeVaultGraphEdges(rawEdges: unknown[], nodeIds: Set<string>) {

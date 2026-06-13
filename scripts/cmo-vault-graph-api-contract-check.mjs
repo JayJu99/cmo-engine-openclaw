@@ -47,6 +47,11 @@ assert.match(uiSource, /decorativeNodesForVisibleClusters/, "Vault Graph UI must
 assert.match(uiSource, /No matching nodes/, "Vault Graph UI must show a clean empty filter or search state.");
 assert.match(uiSource, /node\.workspace_id/, "Vault Graph search must include workspace_id metadata.");
 assert.match(uiSource, /\.\.\.node\.tags/, "Vault Graph search must include node tags.");
+assert.match(uiSource, /safeVaultGraphDisplayPath/, "Vault Graph inspector must sanitize display paths.");
+assert.match(uiSource, /copyableVaultGraphPath/, "Vault Graph inspector must copy sanitized relative paths only.");
+assert.match(uiSource, /relationSummaryForEdges/, "Vault Graph inspector must summarize connected edge relations.");
+assert.match(uiSource, /relatedNodeRowsForInspector/, "Vault Graph inspector must handle related node lookup safely.");
+assert.match(uiSource, /Copy node ID/, "Vault Graph inspector must expose safe copy actions.");
 assert.doesNotMatch(uiSource, /isVaultGraphApiResponse/, "Vault Graph UI must not fall back only because live nodes lack mock x/y coordinates.");
 assert.match(normalizerSource, /normalizeVaultGraphForRendering/, "Vault Graph visual normalizer must exist.");
 assert.match(normalizerSource, /Math\.sin|deterministicSeed/, "Vault Graph visual layout must be deterministic.");
@@ -204,7 +209,7 @@ async function checkVaultGraphVisualNormalizer() {
       { id: "workspace", type: "workspace", label: "Workspace", folder: "Workspace", workspace_id: "holdstation-mini-app" },
       { id: "lesson-1", type: "lesson", label: "Lesson", folder: "Lessons", workspace_id: "holdstation-mini-app" },
       { id: "source-1", type: "source_map", label: "Source", folder: "Sources", workspace_id: "holdstation-mini-app" },
-      { id: "agent-1", type: "agent_skill", label: "Agent Skill", folder: "Agents", workspace_id: "holdstation-mini-app" },
+      { id: "agent-1", type: "agent_skill", label: "Agent Skill", folder: "Agents", workspace_id: "holdstation-mini-app", session_id: "session-42", source_id: "source-42", source_agent: "vault-agent", writer: "cmo-agent" },
       { id: "candidate-1", type: "candidate", label: "Candidate", folder: "Candidates", workspace_id: "holdstation-mini-app" },
       { id: "promotion-1", type: "promotion_candidate", label: "Promotion Candidate", folder: "Candidates", workspace_id: "holdstation-mini-app" },
       { id: "decision-1", type: "decision", label: "Decision", folder: "Decisions", workspace_id: "holdstation-mini-app" },
@@ -229,6 +234,10 @@ async function checkVaultGraphVisualNormalizer() {
   assert.equal(normalized.nodes.find((node) => node.id === "lesson-1")?.color_group, "accepted_knowledge", "Lesson nodes must map to the knowledge cluster.");
   assert.equal(normalized.nodes.find((node) => node.id === "source-1")?.color_group, "sources", "Source map nodes must map to the source cluster.");
   assert.equal(normalized.nodes.find((node) => node.id === "agent-1")?.color_group, "agents", "Agent skill nodes must map to the agent cluster.");
+  assert.equal(normalized.nodes.find((node) => node.id === "agent-1")?.session_id, "session-42", "Live node session metadata must survive normalization for read-only inspector display.");
+  assert.equal(normalized.nodes.find((node) => node.id === "agent-1")?.source_id, "source-42", "Live node source metadata must survive normalization for read-only inspector display.");
+  assert.equal(normalized.nodes.find((node) => node.id === "agent-1")?.source_agent, "vault-agent", "Live node source agent metadata must survive normalization for read-only inspector display.");
+  assert.equal(normalized.nodes.find((node) => node.id === "agent-1")?.writer, "cmo-agent", "Live node writer metadata must survive normalization for read-only inspector display.");
   assert.equal(normalized.nodes.find((node) => node.id === "candidate-1")?.color_group, "proposals", "Candidate nodes must map to the proposal cluster.");
   assert.equal(normalized.nodes.find((node) => node.id === "promotion-1")?.color_group, "proposals", "Promotion candidate nodes must map to the proposal cluster.");
   assert.equal(normalized.nodes.find((node) => node.id === "decision-1")?.color_group, "decisions", "Decision nodes must map to the decision cluster.");
