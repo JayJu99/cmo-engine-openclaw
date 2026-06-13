@@ -291,7 +291,7 @@ function edgeStrength(edge: VaultGraphEdge) {
 }
 
 function displayPath(node: VaultGraphNode) {
-  const candidate = node.relative_path || node.path;
+  const candidate = node.path;
   if (!candidate) {
     return "";
   }
@@ -1065,7 +1065,6 @@ function VaultGraphNodeDetails({
     ? [
         { label: "Type", value: typeLabel[node.type] },
         { label: "Status", value: node.status },
-        { label: "Review", value: node.review_status },
         { label: "Truth", value: node.truth_status },
         { label: "Visibility", value: node.visibility },
         { label: "Folder", value: node.folder },
@@ -1096,7 +1095,7 @@ function VaultGraphNodeDetails({
               )}
             </div>
             <span className="rounded-full border border-white/10 bg-white/[0.055] px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-300">
-              {node.collapsed ? "Collapsed" : node.review_status ?? node.status}
+              {node.collapsed ? "Collapsed" : node.status}
             </span>
           </div>
 

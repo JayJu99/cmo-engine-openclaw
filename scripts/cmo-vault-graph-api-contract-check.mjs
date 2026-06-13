@@ -225,7 +225,6 @@ async function checkVaultGraphVisualNormalizer() {
   assert.equal(normalized.nodes.find((node) => node.id === "decision-1")?.color_group, "decisions", "Decision nodes must map to the decision cluster.");
   assert.equal(normalized.nodes.find((node) => node.id === "session-1")?.color_group, "runtime", "Runtime nodes must map to the runtime cluster.");
   assert.equal(chooseDefaultVaultGraphNodeId(normalized.nodes, normalized.source_root), "workspace", "Vault Agent graph should default-select the workspace/core node when present.");
-  assert.equal(normalized.nodes.find((node) => node.id === "workspace")?.relative_path, undefined, "Workspace nodes without paths should not invent a relative path.");
 
   assert.equal(normalizeVaultGraphForRendering({ ...livePayloadWithoutCoordinates, source_root: undefined }), null, "Invalid graph payloads must still trigger mock fallback.");
 

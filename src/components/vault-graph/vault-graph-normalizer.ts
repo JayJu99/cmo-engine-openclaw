@@ -134,12 +134,10 @@ function normalizeVaultGraphNode(
     visual_role: rawNode.visual_role === "decorative" ? "decorative" : "semantic",
     label: stringField(rawNode, "label") || stringField(rawNode, "name") || id,
     description: stringField(rawNode, "description") || undefined,
-    review_status: stringField(rawNode, "review_status") || stringField(rawNode, "reviewStatus") || undefined,
-    relative_path: safeRelativePath(stringField(rawNode, "relative_path") || stringField(rawNode, "relativePath") || stringField(rawNode, "path")),
     path: stringField(rawNode, "path") || `vault-agent://${id}`,
     folder,
     workspace_id: stringField(rawNode, "workspace_id") || "vault-agent",
-    status: stringField(rawNode, "status") || "indexed",
+    status: stringField(rawNode, "status") || stringField(rawNode, "review_status") || stringField(rawNode, "reviewStatus") || "indexed",
     truth_status: stringField(rawNode, "truth_status") || "indexed",
     visibility: stringField(rawNode, "visibility") || "team",
     tags: stringArray(rawNode.tags),
@@ -317,13 +315,13 @@ export function chooseDefaultVaultGraphNodeId(
   const workspaceById = candidates.find((node) => /\bworkspace\b/i.test(node.id));
   const workspaceByType = candidates.find((node) => node.type === "workspace");
   const holdstationNode = candidates.find((node) =>
-    [node.label, node.path, node.relative_path, node.folder, node.workspace_id, ...node.tags]
+    [node.label, node.path, node.folder, node.workspace_id, ...node.tags]
       .join(" ")
       .toLowerCase()
       .includes("holdstation"),
   );
   const miniAppNode = candidates.find((node) =>
-    [node.label, node.path, node.relative_path, node.folder, node.workspace_id, ...node.tags]
+    [node.label, node.path, node.folder, node.workspace_id, ...node.tags]
       .join(" ")
       .toLowerCase()
       .includes("holdstation-mini-app"),
@@ -337,25 +335,6 @@ export function chooseDefaultVaultGraphNodeId(
     [...candidates].sort((left, right) => right.size_score - left.size_score)[0]?.id ??
     candidates[0].id
   );
-}
-
-function safeRelativePath(path: string) {
-  if (!path) {
-    return undefined;
-  }
-
-  const normalized = path.replace(/\\/g, "/");
-  if (/^[a-z]:\//i.test(normalized) || normalized.startsWith("/")) {
-    const vaultIndex = normalized.toLowerCase().lastIndexOf("/vault-agent/");
-    if (vaultIndex >= 0) {
-      return normalized.slice(vaultIndex + "/vault-agent/".length);
-    }
-
-    const parts = normalized.split("/").filter(Boolean);
-    return parts.slice(-3).join("/");
-  }
-
-  return normalized.replace(/^\.\/+/, "");
 }
 
 function isRecord(value: unknown): value is RawRecord {
