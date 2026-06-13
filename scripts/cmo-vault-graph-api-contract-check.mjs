@@ -24,6 +24,11 @@ assert.match(adapterSource, /Authorization:\s*`Bearer \$\{apiKey\}`/, "Vault Age
 assert.match(adapterSource, /buildSafeVaultAgentGraphErrorResponse/, "Vault Agent adapter must have safe empty failure behavior.");
 assert.match(adapterSource, /FORBIDDEN_RESPONSE_TOKENS/, "Vault Agent adapter must scan forbidden response tokens.");
 assert.match(adapterSource, /Unsupported CMO_VAULT_GRAPH_SOURCE/, "Unsupported source values must safely fall back with warning.");
+assert.match(adapterSource, /warnings:\s*\[\s*`\$\{VAULT_AGENT_UNAVAILABLE_WARNING\} Diagnostic: \$\{diagnostic\.message\}`\s*\]/, "Safe Vault Agent failures must include a sanitized diagnostic warning.");
+assert.match(adapterSource, /parse_errors:\s*\[\s*\{\s*code:\s*diagnostic\.code,\s*message:\s*diagnostic\.message,/s, "Safe Vault Agent failures must expose the diagnostic code and message in parse_errors.");
+assert.match(adapterSource, /base_url_origin:\s*safeUrl\.origin/, "Vault Agent diagnostic logs must include only the base URL origin.");
+assert.match(adapterSource, /base_url_host:\s*safeUrl\.host/, "Vault Agent diagnostic logs must include only the base URL host.");
+assert.match(adapterSource, /diagnostic_code:\s*diagnostic\.code/, "Vault Agent diagnostic logs must include the diagnostic code.");
 assert.match(configSource, /CMO_VAULT_AGENT_GRAPH_BASE_URL/, "Graph adapter must support graph-specific base URL env.");
 assert.match(configSource, /CMO_VAULT_AGENT_GRAPH_API_KEY/, "Graph adapter must support graph-specific API key env.");
 assert.match(configSource, /CMO_VAULT_AGENT_GRAPH_TIMEOUT_MS/, "Graph adapter must support graph-specific timeout env.");
@@ -44,6 +49,34 @@ for (const [label, source] of [
 assert.doesNotMatch(routeSource, /\bfetch\(/, "Vault Graph API route must not call external endpoints directly.");
 assert.doesNotMatch(adapterSource, /\/agents\/vault-agent\/(?!vault-graph\b)[A-Za-z0-9/_-]+/, "Vault Graph adapter must not reference non-graph Vault Agent endpoints.");
 assert.doesNotMatch(adapterSource, /method:\s*"(POST|PUT|PATCH|DELETE)"/, "Vault Graph adapter must not use mutation HTTP methods.");
+
+for (const code of [
+  "missing_base_url",
+  "missing_api_key",
+  "fetch_failed",
+  "timeout",
+  "non_200_status",
+  "invalid_json",
+  "invalid_schema_version",
+  "vault_mutation_not_false",
+  "source_root_mismatch",
+  "missing_nodes_edges",
+  "forbidden_token_detected",
+]) {
+  assert.match(adapterSource, new RegExp(`"${code}"`), `Vault Agent diagnostic code must be supported: ${code}.`);
+}
+
+assert.match(
+  adapterSource,
+  /export function buildSafeVaultAgentGraphErrorResponse[\s\S]*?vault_mutation:\s*false[\s\S]*?nodes:\s*\[\][\s\S]*?edges:\s*\[\]/,
+  "Safe Vault Agent failures must still return vault_mutation=false with empty nodes and edges.",
+);
+
+const consoleWarnBlocks = adapterSource.match(/console\.warn\([\s\S]*?\);/g) ?? [];
+assert.ok(consoleWarnBlocks.length > 0, "Vault Agent adapter must log sanitized server-side diagnostics.");
+for (const block of consoleWarnBlocks) {
+  assert.doesNotMatch(block, /Authorization|Bearer|apiKey|API_KEY|secret|token/i, "Vault Agent diagnostic logs must not emit auth material.");
+}
 
 const smokeSource = process.argv.includes("--vault-agent") || process.env.CMO_VAULT_GRAPH_SMOKE_SOURCE === "vault-agent"
   ? "vault-agent"
@@ -84,5 +117,21 @@ async function checkLiveProductVaultAgentResponse() {
     "email",
   ]) {
     assert.equal(serialized.includes(token), false, `Vault Agent graph response leaked forbidden token: ${token}`);
+  }
+
+  for (const secret of [
+    process.env.CMO_VAULT_AGENT_GRAPH_API_KEY,
+    process.env.CMO_HERMES_API_KEY,
+  ]) {
+    const normalizedSecret = secret?.trim().toLowerCase();
+    if (normalizedSecret && normalizedSecret.length >= 8) {
+      assert.equal(serialized.includes(normalizedSecret), false, "Vault Agent graph response leaked configured secret material.");
+    }
+  }
+
+  if (payload.nodes.length === 0 && payload.edges.length === 0) {
+    const firstError = payload.parse_errors?.[0];
+    assert.equal(typeof firstError === "object" && firstError !== null, true, "Safe empty Vault Agent failures must include a structured diagnostic parse error.");
+    assert.equal(typeof firstError.code === "string" || typeof firstError.message === "string", true, "Safe empty Vault Agent failures must include a diagnostic code or message.");
   }
 }
