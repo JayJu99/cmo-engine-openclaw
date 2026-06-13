@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -456,6 +456,7 @@ function VaultGraphCanvas({
   zoom,
   sourceRoot,
   onSelectNode,
+  onClearSelection,
   onHoverNode,
   onZoomIn,
   onZoomOut,
@@ -468,7 +469,8 @@ function VaultGraphCanvas({
   search: string;
   zoom: number;
   sourceRoot: VaultGraphApiResponse["source_root"];
-  onSelectNode: (node: VaultGraphNode) => void;
+  onSelectNode: (node: VaultGraphNode, event: MouseEvent<SVGGElement>) => void;
+  onClearSelection: () => void;
   onHoverNode: (nodeId: string | null) => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
@@ -530,6 +532,7 @@ function VaultGraphCanvas({
       <svg
         aria-label="Vault Graph"
         className="relative z-10 h-[720px] min-h-[720px] w-full xl:h-[calc(100vh-245px)] xl:max-h-[840px]"
+        onClick={onClearSelection}
         preserveAspectRatio="xMidYMid meet"
         role="img"
         viewBox={`${graphViewBox.x} ${graphViewBox.y} ${graphViewBox.width} ${graphViewBox.height}`}
@@ -809,7 +812,7 @@ function VaultGraphCanvas({
               <g
                 key={node.id}
                 className="cursor-pointer outline-none"
-                onClick={() => onSelectNode(node)}
+                onClick={(event) => onSelectNode(node, event)}
                 onFocus={() => onHoverNode(node.id)}
                 onMouseEnter={() => onHoverNode(node.id)}
                 onMouseLeave={() => onHoverNode(null)}
@@ -1061,6 +1064,9 @@ function VaultGraphNodeDetails({
 }) {
   const relatedEdges = node ? edges.filter((edge) => edgeTouches(edge, node.id) && !isDecorativeEdge(edge)) : [];
   const color = node ? colorSystem[node.color_group] : colorSystem.workspace;
+  const semanticNodeCount = nodes.filter(isSemanticNode).length;
+  const semanticEdgeCount = edges.filter((edge) => !isDecorativeEdge(edge)).length;
+  const sourceLabel = sourceRoot === "vault-agent" ? "Vault Agent" : "Mock API";
   const metadata = node
     ? [
         { label: "Type", value: typeLabel[node.type] },
@@ -1175,12 +1181,44 @@ function VaultGraphNodeDetails({
           </div>
         </>
       ) : (
-        <div className="py-8 text-center">
-          <div className="mx-auto grid size-12 place-items-center rounded-2xl border border-white/10 bg-white/[0.06] text-cyan-200">
-            <icons.Package className="size-5" />
+        <div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="grid size-11 shrink-0 place-items-center rounded-2xl border border-white/10 bg-white/[0.055] text-cyan-200">
+              <icons.Package className="size-5" />
+            </div>
+            <span className="rounded-full border border-white/10 bg-white/[0.055] px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-300">
+              Overview
+            </span>
           </div>
-          <CardTitle className="mt-4 text-lg text-white">Select a node</CardTitle>
-          <CardDescription className="mt-2 text-slate-400">Choose a semantic graph node to inspect its graph metadata.</CardDescription>
+
+          <div className="mt-5">
+            <CardTitle className="text-xl leading-tight text-white">Graph overview</CardTitle>
+            <CardDescription className="mt-3 text-sm leading-5 text-slate-400">
+              No node selected. Select a node to inspect details, or use the graph as a neutral knowledge map.
+            </CardDescription>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-3">
+              <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Nodes</div>
+              <div className="mt-1 text-3xl font-black tracking-tight text-white">{semanticNodeCount}</div>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-3">
+              <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Edges</div>
+              <div className="mt-1 text-3xl font-black tracking-tight text-white">{semanticEdgeCount}</div>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+            <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Source</div>
+            <div className="flex items-center justify-between gap-3 text-xs font-semibold text-slate-300">
+              <span>{sourceLabel}</span>
+              <span className="text-slate-500">Read-only</span>
+            </div>
+            <div className="mt-3 rounded-2xl border border-white/8 bg-white/[0.035] px-3 py-2 text-[11px] font-semibold text-slate-500">
+              No Vault mutation.
+            </div>
+          </div>
         </div>
       )}
     </aside>
@@ -1190,12 +1228,26 @@ function VaultGraphNodeDetails({
 export function VaultGraphPage() {
   const [activeFilter, setActiveFilter] = useState<VaultGraphFilter>("All");
   const [search, setSearch] = useState("");
-  const [selectedNodeId, setSelectedNodeId] = useState("workspace-holdstation");
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>("workspace-holdstation");
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [graphResponse, setGraphResponse] = useState<VaultGraphApiResponse>(fallbackGraphResponse);
   const [apiStatus, setApiStatus] = useState<VaultGraphApiStatus>("loading");
   const graphData: VaultGraphData = graphResponse;
+  const clearSelection = useCallback(() => {
+    setSelectedNodeId(null);
+    setHoveredNodeId(null);
+  }, []);
+
+  const toggleNodeSelection = useCallback((node: VaultGraphNode, event: MouseEvent<SVGGElement>) => {
+    event.stopPropagation();
+    if (!isSemanticNode(node)) {
+      return;
+    }
+
+    setSelectedNodeId((currentNodeId) => currentNodeId === node.id ? null : node.id);
+    setHoveredNodeId((currentNodeId) => currentNodeId === node.id ? null : currentNodeId);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1232,6 +1284,7 @@ export function VaultGraphPage() {
         }
 
         setGraphResponse(fallbackGraphResponse);
+        setSelectedNodeId(chooseDefaultVaultGraphNodeId(fallbackGraphResponse.nodes, fallbackGraphResponse.source_root));
         setApiStatus("fallback");
       }
     }
@@ -1239,6 +1292,17 @@ export function VaultGraphPage() {
     loadGraph();
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        clearSelection();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [clearSelection]);
 
   const visibleNodes = useMemo(() => {
     const active = filters.find((filter) => filter.label === activeFilter);
@@ -1259,10 +1323,9 @@ export function VaultGraphPage() {
       ),
     [graphData.edges, visibleNodeIds],
   );
-  const selectedNode =
-    visibleNodes.find((node) => node.id === selectedNodeId && isSemanticNode(node)) ??
-    visibleNodes.find(isSemanticNode) ??
-    null;
+  const selectedNode = selectedNodeId
+    ? visibleNodes.find((node) => node.id === selectedNodeId && isSemanticNode(node)) ?? null
+    : null;
 
   return (
     <PageChrome
@@ -1300,11 +1363,8 @@ export function VaultGraphPage() {
                 hoveredNodeId={hoveredNodeId}
                 zoom={zoom}
                 sourceRoot={graphResponse.source_root}
-                onSelectNode={(node) => {
-                  if (isSemanticNode(node)) {
-                    setSelectedNodeId(node.id);
-                  }
-                }}
+                onSelectNode={toggleNodeSelection}
+                onClearSelection={clearSelection}
                 onHoverNode={setHoveredNodeId}
                 onZoomIn={() => setZoom((value) => Math.min(1.16, Number((value + 0.08).toFixed(2))))}
                 onZoomOut={() => setZoom((value) => Math.max(0.9, Number((value - 0.08).toFixed(2))))}
