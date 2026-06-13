@@ -14,7 +14,6 @@ import {
 } from "@/lib/cmo/vault-graph-contract";
 import { cn } from "@/lib/utils";
 import {
-  chooseDefaultVaultGraphNodeId,
   normalizeVaultGraphForRendering,
 } from "@/components/vault-graph/vault-graph-normalizer";
 import {
@@ -1523,7 +1522,6 @@ export function VaultGraphPage() {
         }
 
         setGraphResponse(payload);
-        setSelectedNodeId(chooseDefaultVaultGraphNodeId(payload.nodes, payload.source_root));
         setApiStatus(
           payload.warnings.length > 0 || payload.parse_errors.length > 0
             ? "warning"
@@ -1537,7 +1535,6 @@ export function VaultGraphPage() {
         }
 
         setGraphResponse(fallbackGraphResponse);
-        setSelectedNodeId(chooseDefaultVaultGraphNodeId(fallbackGraphResponse.nodes, fallbackGraphResponse.source_root));
         setApiStatus("fallback");
       }
     }
