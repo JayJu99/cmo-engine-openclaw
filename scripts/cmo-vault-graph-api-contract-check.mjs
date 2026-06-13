@@ -188,6 +188,7 @@ async function checkVaultGraphVisualNormalizer() {
     alias: { "@": resolve("src") },
   });
   const { normalizeVaultGraphForRendering } = await jiti.import(resolve("src/components/vault-graph/vault-graph-normalizer.ts"));
+  const { chooseDefaultVaultGraphNodeId } = await jiti.import(resolve("src/components/vault-graph/vault-graph-normalizer.ts"));
   const livePayloadWithoutCoordinates = {
     schema_version: "cmo.vault_graph.v1",
     vault_mutation: false,
@@ -223,8 +224,26 @@ async function checkVaultGraphVisualNormalizer() {
   assert.equal(normalized.nodes.find((node) => node.id === "candidate-1")?.color_group, "proposals", "Candidate nodes must map to the proposal cluster.");
   assert.equal(normalized.nodes.find((node) => node.id === "decision-1")?.color_group, "decisions", "Decision nodes must map to the decision cluster.");
   assert.equal(normalized.nodes.find((node) => node.id === "session-1")?.color_group, "runtime", "Runtime nodes must map to the runtime cluster.");
+  assert.equal(chooseDefaultVaultGraphNodeId(normalized.nodes, normalized.source_root), "workspace", "Vault Agent graph should default-select the workspace/core node when present.");
+  assert.equal(normalized.nodes.find((node) => node.id === "workspace")?.relative_path, undefined, "Workspace nodes without paths should not invent a relative path.");
 
   assert.equal(normalizeVaultGraphForRendering({ ...livePayloadWithoutCoordinates, source_root: undefined }), null, "Invalid graph payloads must still trigger mock fallback.");
+
+  const livePayloadWithHoldstationFallback = {
+    ...livePayloadWithoutCoordinates,
+    nodes: [
+      { id: "skill-ocr", type: "agent_skill", label: "OCR Documents", folder: "Agents", size_score: 0.99 },
+      { id: "core-mini-app", type: "knowledge", label: "Holdstation Mini App Context", folder: "Knowledge", size_score: 0.64 },
+    ],
+    edges: [],
+  };
+  const normalizedFallback = normalizeVaultGraphForRendering(livePayloadWithHoldstationFallback);
+  assert.notEqual(normalizedFallback, null, "Valid holdstation fallback payload must normalize.");
+  assert.equal(
+    chooseDefaultVaultGraphNodeId(normalizedFallback.nodes, normalizedFallback.source_root),
+    "core-mini-app",
+    "Vault Agent default selection must prefer Holdstation/core context before highest size_score agent detail nodes.",
+  );
 }
 
 function jsonResponse(payload, init = {}) {

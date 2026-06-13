@@ -13,7 +13,10 @@ import {
   type VaultGraphApiResponse,
 } from "@/lib/cmo/vault-graph-contract";
 import { cn } from "@/lib/utils";
-import { normalizeVaultGraphForRendering } from "@/components/vault-graph/vault-graph-normalizer";
+import {
+  chooseDefaultVaultGraphNodeId,
+  normalizeVaultGraphForRendering,
+} from "@/components/vault-graph/vault-graph-normalizer";
 import {
   vaultGraphClusters,
   type VaultGraphData,
@@ -195,20 +198,27 @@ function isClusterHub(node: VaultGraphNode) {
   return node.type === "workspace" || vaultGraphClusters.some((cluster) => cluster.anchor === node.id);
 }
 
-function getNodeRadius(node: VaultGraphNode) {
+function getNodeRadius(node: VaultGraphNode, connectionCount = 0) {
   if (!isSemanticNode(node)) {
-    return 2.1 + node.size_score * 7.5;
+    return clampNumber(1.8 + node.size_score * 5.5, 2.3, 4.2);
   }
+
+  const score = clampNumber(node.size_score, 0, 1);
+  const connectionBoost = clampNumber(Math.log2(connectionCount + 1) * 0.85, 0, 3.4);
 
   if (node.type === "workspace") {
-    return 17;
+    return clampNumber(14 + score * 3 + connectionBoost * 0.45, 14, 18);
   }
 
-  if (isClusterHub(node)) {
-    return 8.5 + node.size_score * 3.6;
+  if (isClusterHub(node) || connectionCount >= 5) {
+    return clampNumber(7.2 + score * 2.8 + connectionBoost, 8, 12);
   }
 
-  return 6.4 + node.size_score * 2.2;
+  if (connectionCount <= 1 && score < 0.5) {
+    return clampNumber(2.8 + score * 2 + connectionBoost * 0.45, 2.5, 4);
+  }
+
+  return clampNumber(3.8 + score * 2.2 + connectionBoost * 0.5, 4, 7);
 }
 
 function matchesSearch(node: VaultGraphNode, query: string) {
@@ -248,6 +258,16 @@ function relatedNodeIds(edges: VaultGraphEdge[], nodeId: string | null) {
   }, new Set<string>([nodeId]));
 }
 
+function buildConnectionCounts(edges: VaultGraphEdge[]) {
+  return edges.reduce((counts, edge) => {
+    if (!isDecorativeEdge(edge)) {
+      counts.set(edge.source, (counts.get(edge.source) ?? 0) + 1);
+      counts.set(edge.target, (counts.get(edge.target) ?? 0) + 1);
+    }
+    return counts;
+  }, new Map<string, number>());
+}
+
 function edgeTouches(edge: VaultGraphEdge, nodeId: string | null) {
   return Boolean(nodeId && (edge.source === nodeId || edge.target === nodeId));
 }
@@ -264,6 +284,32 @@ function isLocalEdge(edge: VaultGraphEdge, nodeById: Map<string, VaultGraphNode>
   const source = nodeById.get(edge.source);
   const target = nodeById.get(edge.target);
   return Boolean(source?.cluster_id && source.cluster_id === target?.cluster_id);
+}
+
+function edgeStrength(edge: VaultGraphEdge) {
+  return clampNumber(edge.weight * 0.7 + edge.confidence * 0.3, 0, 1);
+}
+
+function displayPath(node: VaultGraphNode) {
+  const candidate = node.relative_path || node.path;
+  if (!candidate) {
+    return "";
+  }
+
+  const normalized = candidate.replace(/\\/g, "/");
+  if (/^[a-z]:\//i.test(normalized) || normalized.startsWith("/")) {
+    return normalized.split("/").filter(Boolean).slice(-3).join("/");
+  }
+
+  return normalized.replace(/^vault-agent:\/\//, "");
+}
+
+function compactLabel(value: string, maxLength = 28) {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function edgePath(source: VaultGraphNode, target: VaultGraphNode, edge: VaultGraphEdge, local: boolean) {
@@ -408,6 +454,7 @@ function VaultGraphCanvas({
   hoveredNodeId,
   search,
   zoom,
+  sourceRoot,
   onSelectNode,
   onHoverNode,
   onZoomIn,
@@ -420,6 +467,7 @@ function VaultGraphCanvas({
   hoveredNodeId: string | null;
   search: string;
   zoom: number;
+  sourceRoot: VaultGraphApiResponse["source_root"];
   onSelectNode: (node: VaultGraphNode) => void;
   onHoverNode: (nodeId: string | null) => void;
   onZoomIn: () => void;
@@ -428,8 +476,9 @@ function VaultGraphCanvas({
 }) {
   const prefersReducedMotion = usePrefersReducedMotion();
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  const connectionCounts = useMemo(() => buildConnectionCounts(edges), [edges]);
   const focusedId = hoveredNodeId ?? selectedNode?.id ?? null;
-  const shouldDimByFocus = Boolean(hoveredNodeId || (selectedNode && selectedNode.id !== "workspace-holdstation"));
+  const shouldDimByFocus = Boolean(hoveredNodeId || selectedNode);
   const relatedIds = useMemo(() => relatedNodeIds(edges, focusedId), [edges, focusedId]);
   const hasSearch = search.trim().length > 0;
   const centerX = graphWidth / 2;
@@ -656,7 +705,21 @@ function VaultGraphCanvas({
             const local = isLocalEdge(edge, nodeById);
             const isFocused = edgeTouches(edge, focusedId);
             const sourceColor = colorSystem[source.color_group].edge;
+            const targetColor = colorSystem[target.color_group].edge;
+            const strength = edgeStrength(edge);
             const dimmed = shouldDimByFocus ? !isFocused : false;
+            const opacity = isFocused
+              ? clampNumber(0.52 + strength * 0.28, 0.52, 0.82)
+              : dimmed
+                ? local ? 0.055 : 0.075
+                : local
+                  ? clampNumber(0.075 + strength * 0.12, 0.075, 0.2)
+                  : clampNumber(0.16 + strength * 0.18, 0.16, 0.34);
+            const width = isFocused
+              ? clampNumber(1 + strength * 0.8, 1.05, 1.75)
+              : local
+                ? clampNumber(0.45 + strength * 0.35, 0.45, 0.8)
+                : clampNumber(0.58 + strength * 0.55, 0.62, 1.1);
 
             return (
               <path
@@ -664,10 +727,10 @@ function VaultGraphCanvas({
                 className={isFocused && !prefersReducedMotion ? "vault-signal-trace" : undefined}
                 d={edgePath(source, target, edge, local)}
                 fill="none"
-                stroke={sourceColor}
+                stroke={local ? sourceColor : targetColor}
                 strokeLinecap="round"
-                strokeOpacity={isFocused ? 0.68 : dimmed ? 0.035 : local ? 0.18 : 0.11}
-                strokeWidth={isFocused ? 1.2 : local ? 0.72 : 0.62}
+                strokeOpacity={opacity}
+                strokeWidth={width}
               />
             );
           })}
@@ -713,7 +776,7 @@ function VaultGraphCanvas({
             const isRelated = relatedIds.has(node.id);
             const searchMatch = matchesSearch(node, search);
             const color = colorSystem[node.color_group];
-            const radius = getNodeRadius(node);
+            const radius = getNodeRadius(node, connectionCounts.get(node.id) ?? 0);
             const dimmedByFocus = shouldDimByFocus ? !isRelated : false;
             const dimmedBySearch = hasSearch && !searchMatch;
 
@@ -724,7 +787,7 @@ function VaultGraphCanvas({
                 cy={node.y}
                 fill={color.fill}
                 filter="url(#darkNodeGlow)"
-                opacity={dimmedByFocus || dimmedBySearch ? 0.16 : 0.88}
+                opacity={dimmedByFocus || dimmedBySearch ? 0.22 : 0.72}
                 r={radius}
               />
             );
@@ -736,7 +799,7 @@ function VaultGraphCanvas({
             const isRelated = relatedIds.has(node.id);
             const searchMatch = matchesSearch(node, search);
             const color = colorSystem[node.color_group];
-            const radius = getNodeRadius(node);
+            const radius = getNodeRadius(node, connectionCounts.get(node.id) ?? 0);
             const dimmedByFocus = shouldDimByFocus ? !isRelated : false;
             const dimmedBySearch = hasSearch && !searchMatch;
             const showLabel = isHovered || isSelected;
@@ -754,6 +817,7 @@ function VaultGraphCanvas({
                 role="button"
                 aria-label={`Select ${node.label}`}
               >
+                <title>{`${node.label} / ${typeLabel[node.type]} / ${connectionCounts.get(node.id) ?? 0} connections`}</title>
                 {!prefersReducedMotion ? (
                   <circle
                     className={shouldPulseArrival ? "vault-node-arrival-ring" : "vault-node-ambient-ring"}
@@ -804,7 +868,7 @@ function VaultGraphCanvas({
                   cy={node.y}
                   fill={node.type === "workspace" ? "url(#workspaceDarkGradient)" : color.fill}
                   filter="url(#darkNodeGlow)"
-                  opacity={dimmedByFocus || dimmedBySearch ? 0.28 : 1}
+                  opacity={dimmedByFocus || dimmedBySearch ? 0.46 : isRelated && focusedId ? 1 : 0.94}
                   r={radius}
                   stroke={isSelected ? "#ffffff" : color.stroke}
                   strokeOpacity={isSelected ? 0.95 : 0.72}
@@ -851,7 +915,7 @@ function VaultGraphCanvas({
                       textAnchor="middle"
                       className="pointer-events-none fill-white text-[12px] font-bold"
                     >
-                      {node.label}
+                      {compactLabel(node.label)}
                     </text>
                   </g>
                 ) : null}
@@ -891,7 +955,7 @@ function VaultGraphCanvas({
         </div>
       ) : null}
 
-      <VaultGraphMiniMap nodes={nodes} selectedNode={selectedNode} />
+      <VaultGraphMiniMap nodes={nodes} selectedNode={selectedNode} sourceRoot={sourceRoot} />
     </div>
   );
 }
@@ -899,30 +963,69 @@ function VaultGraphCanvas({
 function VaultGraphMiniMap({
   nodes,
   selectedNode,
+  sourceRoot,
 }: {
   nodes: VaultGraphNode[];
   selectedNode: VaultGraphNode | null;
+  sourceRoot: VaultGraphApiResponse["source_root"];
 }) {
   const visibleClusterIds = useMemo(() => new Set(nodes.map((node) => node.cluster_id).filter(Boolean)), [nodes]);
+  const liveClusterBounds = useMemo(() => {
+    const grouped = nodes
+      .filter(isSemanticNode)
+      .reduce((groups, node) => {
+        const group = groups.get(node.color_group) ?? [];
+        group.push(node);
+        groups.set(node.color_group, group);
+        return groups;
+      }, new Map<VaultGraphColorGroup, VaultGraphNode[]>());
+
+    return Array.from(grouped.entries()).map(([colorGroup, groupNodes]) => {
+      const minX = Math.min(...groupNodes.map((node) => node.x));
+      const maxX = Math.max(...groupNodes.map((node) => node.x));
+      const minY = Math.min(...groupNodes.map((node) => node.y));
+      const maxY = Math.max(...groupNodes.map((node) => node.y));
+
+      return {
+        colorGroup,
+        cx: (minX + maxX) / 2,
+        cy: (minY + maxY) / 2,
+        rx: clampNumber((maxX - minX) / 2 + 44, 34, 210),
+        ry: clampNumber((maxY - minY) / 2 + 34, 28, 170),
+      };
+    });
+  }, [nodes]);
 
   return (
     <div className="absolute bottom-5 right-5 z-30 h-30 w-44 rounded-2xl border border-white/10 bg-slate-950/68 p-3 shadow-[0_20px_48px_rgba(0,0,0,0.32)] backdrop-blur-xl">
       <svg aria-label="Vault Graph minimap" className="h-full w-full" viewBox={`0 0 ${graphWidth} ${graphHeight}`}>
         <rect x="0" y="0" width={graphWidth} height={graphHeight} rx="54" fill="#020617" />
-        {vaultGraphClusters
-          .filter((cluster) => visibleClusterIds.has(cluster.id))
-          .map((cluster) => (
-            <ellipse
-              key={cluster.id}
-              cx={cluster.center.x}
-              cy={cluster.center.y}
-              fill={colorSystem[cluster.color_group].fill}
-              opacity="0.18"
-              rx={cluster.halo.rx}
-              ry={cluster.halo.ry}
-              transform={`rotate(${cluster.halo.rotate} ${cluster.center.x} ${cluster.center.y})`}
-            />
-          ))}
+        {sourceRoot === "vault-agent"
+          ? liveClusterBounds.map((cluster) => (
+              <ellipse
+                key={cluster.colorGroup}
+                cx={cluster.cx}
+                cy={cluster.cy}
+                fill={colorSystem[cluster.colorGroup].fill}
+                opacity="0.13"
+                rx={cluster.rx}
+                ry={cluster.ry}
+              />
+            ))
+          : vaultGraphClusters
+              .filter((cluster) => visibleClusterIds.has(cluster.id))
+              .map((cluster) => (
+                <ellipse
+                  key={cluster.id}
+                  cx={cluster.center.x}
+                  cy={cluster.center.y}
+                  fill={colorSystem[cluster.color_group].fill}
+                  opacity="0.18"
+                  rx={cluster.halo.rx}
+                  ry={cluster.halo.ry}
+                  transform={`rotate(${cluster.halo.rotate} ${cluster.center.x} ${cluster.center.y})`}
+                />
+              ))}
         {nodes.map((node) => {
           const selected = selectedNode?.id === node.id;
           const semantic = isSemanticNode(node);
@@ -932,14 +1035,14 @@ function VaultGraphMiniMap({
               cx={node.x}
               cy={node.y}
               fill={colorSystem[node.color_group].fill}
-              opacity={selected ? 1 : semantic ? 0.8 : 0.66}
-              r={selected ? 16 : semantic ? 7 : 3.1}
+              opacity={selected ? 1 : semantic ? 0.74 : 0.42}
+              r={selected ? 15 : semantic ? 5.8 : 2.6}
               stroke={selected ? "#ffffff" : "transparent"}
               strokeWidth="4"
             />
           );
         })}
-        <rect x="72" y="52" width="1056" height="716" rx="42" fill="none" stroke="#a78bfa" strokeDasharray="16 16" strokeOpacity="0.45" strokeWidth="6" />
+        <rect x="72" y="52" width="1056" height="716" rx="42" fill="none" stroke="#a78bfa" strokeDasharray="16 16" strokeOpacity={sourceRoot === "vault-agent" ? "0.32" : "0.45"} strokeWidth="6" />
       </svg>
     </div>
   );
@@ -949,18 +1052,27 @@ function VaultGraphNodeDetails({
   node,
   edges,
   nodes,
+  sourceRoot,
 }: {
   node: VaultGraphNode | null;
   edges: VaultGraphEdge[];
   nodes: VaultGraphNode[];
+  sourceRoot: VaultGraphApiResponse["source_root"];
 }) {
   const relatedEdges = node ? edges.filter((edge) => edgeTouches(edge, node.id) && !isDecorativeEdge(edge)) : [];
   const color = node ? colorSystem[node.color_group] : colorSystem.workspace;
-  const bars = [
-    { label: "Confidence", value: node?.type === "workspace" ? 94 : 78, color: color.stroke },
-    { label: "Trace", value: node?.collapsed ? 64 : 86, color: color.edge },
-    { label: "Freshness", value: node?.status === "active" ? 92 : 73, color: "#e2e8f0" },
-  ];
+  const metadata = node
+    ? [
+        { label: "Type", value: typeLabel[node.type] },
+        { label: "Status", value: node.status },
+        { label: "Review", value: node.review_status },
+        { label: "Truth", value: node.truth_status },
+        { label: "Visibility", value: node.visibility },
+        { label: "Folder", value: node.folder },
+        { label: "Relative path", value: displayPath(node) },
+        { label: "Workspace", value: node.workspace_id },
+      ].filter((item): item is { label: string; value: string } => Boolean(item.value))
+    : [];
 
   return (
     <aside className="h-fit rounded-[28px] border border-white/10 bg-slate-950/54 p-4 text-slate-100 shadow-[0_24px_80px_rgba(0,0,0,0.34)] backdrop-blur-xl xl:min-h-[calc(100vh-245px)] xl:max-h-[840px] xl:overflow-auto">
@@ -984,7 +1096,7 @@ function VaultGraphNodeDetails({
               )}
             </div>
             <span className="rounded-full border border-white/10 bg-white/[0.055] px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-300">
-              {node.collapsed ? "Collapsed" : node.status}
+              {node.collapsed ? "Collapsed" : node.review_status ?? node.status}
             </span>
           </div>
 
@@ -996,7 +1108,9 @@ function VaultGraphNodeDetails({
               <span className={color.darkText}>{color.label}</span>
             </div>
             <CardDescription className="mt-3 text-sm leading-5 text-slate-400">
-              {node.description ?? "Mock graph node for the Phase 1 Vault Graph preview."}
+              {sourceRoot === "vault-agent"
+                ? "Vault Agent semantic node indexed for read-only graph display."
+                : node.description ?? "Mock graph node for the Phase 1 Vault Graph preview."}
             </CardDescription>
           </div>
 
@@ -1011,21 +1125,25 @@ function VaultGraphNodeDetails({
             </div>
           </div>
 
-          <div className="mt-5 space-y-3">
-            {bars.map((bar) => (
-              <div key={bar.label}>
-                <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.13em] text-slate-500">
-                  <span>{bar.label}</span>
-                  <span>{bar.value}%</span>
+          <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+            <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Metadata</div>
+            <div className="space-y-2">
+              {metadata.map((item) => (
+                <div key={item.label} className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 text-xs">
+                  <span className="font-bold uppercase tracking-[0.12em] text-slate-600">{item.label}</span>
+                  <span className="truncate text-right font-semibold text-slate-300" title={item.value}>{item.value}</span>
                 </div>
-                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="h-full rounded-full"
-                    style={{ width: `${bar.value}%`, backgroundColor: bar.color, boxShadow: `0 0 18px ${bar.color}` }}
-                  />
-                </div>
+              ))}
+            </div>
+            {node.tags.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {node.tags.slice(0, 8).map((tag) => (
+                  <span key={tag} className="rounded-full border border-white/8 bg-white/[0.045] px-2 py-1 text-[11px] font-semibold text-slate-400">
+                    {tag}
+                  </span>
+                ))}
               </div>
-            ))}
+            ) : null}
           </div>
 
           <div className="mt-5">
@@ -1053,10 +1171,9 @@ function VaultGraphNodeDetails({
             </div>
           </div>
 
-          <Button className="mt-5 w-full rounded-2xl bg-cyan-300 text-slate-950 shadow-[0_0_36px_rgba(34,211,238,0.24)] hover:bg-cyan-200">
-            <icons.Search />
-            Inspect node
-          </Button>
+          <div className="mt-5 rounded-2xl border border-white/8 bg-white/[0.035] px-3 py-2 text-[11px] font-semibold text-slate-500">
+            Read-only graph view. No Vault mutation.
+          </div>
         </>
       ) : (
         <div className="py-8 text-center">
@@ -1102,6 +1219,7 @@ export function VaultGraphPage() {
         }
 
         setGraphResponse(payload);
+        setSelectedNodeId(chooseDefaultVaultGraphNodeId(payload.nodes, payload.source_root));
         setApiStatus(
           payload.warnings.length > 0 || payload.parse_errors.length > 0
             ? "warning"
@@ -1182,6 +1300,7 @@ export function VaultGraphPage() {
                 selectedNode={selectedNode}
                 hoveredNodeId={hoveredNodeId}
                 zoom={zoom}
+                sourceRoot={graphResponse.source_root}
                 onSelectNode={(node) => {
                   if (isSemanticNode(node)) {
                     setSelectedNodeId(node.id);
@@ -1192,7 +1311,7 @@ export function VaultGraphPage() {
                 onZoomOut={() => setZoom((value) => Math.max(0.9, Number((value - 0.08).toFixed(2))))}
                 onZoomReset={() => setZoom(1)}
               />
-              <VaultGraphNodeDetails node={selectedNode} edges={visibleEdges} nodes={graphData.nodes} />
+              <VaultGraphNodeDetails node={selectedNode} edges={visibleEdges} nodes={graphData.nodes} sourceRoot={graphResponse.source_root} />
             </div>
           </div>
         </div>

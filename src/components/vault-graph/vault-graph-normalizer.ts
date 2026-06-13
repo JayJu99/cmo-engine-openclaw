@@ -134,6 +134,8 @@ function normalizeVaultGraphNode(
     visual_role: rawNode.visual_role === "decorative" ? "decorative" : "semantic",
     label: stringField(rawNode, "label") || stringField(rawNode, "name") || id,
     description: stringField(rawNode, "description") || undefined,
+    review_status: stringField(rawNode, "review_status") || stringField(rawNode, "reviewStatus") || undefined,
+    relative_path: safeRelativePath(stringField(rawNode, "relative_path") || stringField(rawNode, "relativePath") || stringField(rawNode, "path")),
     path: stringField(rawNode, "path") || `vault-agent://${id}`,
     folder,
     workspace_id: stringField(rawNode, "workspace_id") || "vault-agent",
@@ -188,6 +190,9 @@ function normalizeNodeType(rawType: string, rawColorGroup: string, folder: strin
   if (normalized.includes("workspace")) {
     return "workspace";
   }
+  if (normalized.includes("lesson") || normalized.includes("knowledge") || normalized.includes("learning")) {
+    return "knowledge";
+  }
   if (normalized.includes("source") || normalized.includes("asset") || normalized.includes("map")) {
     return normalized.includes("asset") || normalized.includes("map") ? "source_asset" : "source_note";
   }
@@ -218,7 +223,7 @@ function normalizeColorGroup(rawColorGroup: string, type: VaultGraphNodeType, fo
     return rawColorGroup as VaultGraphColorGroup;
   }
 
-  const normalized = `${rawColorGroup} ${folder}`.toLowerCase();
+  const normalized = `${rawColorGroup} ${type} ${folder}`.toLowerCase();
   if (type === "workspace") {
     return "workspace";
   }
@@ -243,6 +248,9 @@ function normalizeColorGroup(rawColorGroup: string, type: VaultGraphNodeType, fo
   if (type === "governance" || normalized.includes("governance")) {
     return "governance";
   }
+  if (normalized.includes("lesson") || normalized.includes("knowledge") || normalized.includes("learning")) {
+    return "accepted_knowledge";
+  }
 
   return "accepted_knowledge";
 }
@@ -262,15 +270,17 @@ function visualPoint(
 
   const cluster = clusterForColorGroup(colorGroup);
   const seed = deterministicSeed(`${id}:${globalIndex}`);
-  const theta = clusterIndex * 2.399963229728653 + (seed % 628) / 100;
-  const ring = Math.floor(clusterIndex / 13);
-  const radius = 0.26 + (clusterIndex % 13) / 13 * 0.68 + ring * 0.16;
-  const jitterX = ((seed % 29) - 14) * 0.9;
-  const jitterY = (((seed >> 3) % 29) - 14) * 0.9;
+  const theta = clusterIndex * 2.399963229728653 + (seed % 997) / 997 * Math.PI * 0.82;
+  const ring = Math.floor(clusterIndex / 16);
+  const radius = Math.sqrt((clusterIndex % 16 + 0.72) / 16) + ring * 0.18;
+  const lobe = 0.88 + ((seed >> 5) % 23) / 100 + Math.sin(theta * 2.1 + seed * 0.003) * 0.14;
+  const drift = Math.cos(theta * 1.7 + seed * 0.002) * 18;
+  const jitterX = ((seed % 41) - 20) * 0.72;
+  const jitterY = (((seed >> 3) % 37) - 18) * 0.72;
 
   return {
-    x: Math.round(clamp(cluster.center.x + Math.cos(theta) * cluster.spread.x * radius + jitterX, 42, graphWidth - 42)),
-    y: Math.round(clamp(cluster.center.y + Math.sin(theta) * cluster.spread.y * radius + jitterY, 42, graphHeight - 42)),
+    x: Math.round(clamp(cluster.center.x + Math.cos(theta) * cluster.spread.x * radius * lobe + Math.sin(theta) * drift + jitterX, 42, graphWidth - 42)),
+    y: Math.round(clamp(cluster.center.y + Math.sin(theta) * cluster.spread.y * radius + Math.cos(theta) * drift * 0.5 + jitterY, 42, graphHeight - 42)),
   };
 }
 
@@ -284,6 +294,68 @@ function clusterForColorGroup(colorGroup: VaultGraphColorGroup) {
 
 function deterministicSeed(value: string) {
   return value.split("").reduce((seed, character, index) => seed + character.charCodeAt(0) * (index + 17), 0);
+}
+
+export function chooseDefaultVaultGraphNodeId(
+  nodes: VaultGraphNode[],
+  sourceRoot: VaultGraphApiResponse["source_root"],
+) {
+  const semanticNodes = nodes.filter((node) => node.visual_role !== "decorative");
+  const candidates = semanticNodes.length > 0 ? semanticNodes : nodes;
+  if (candidates.length === 0) {
+    return "";
+  }
+
+  if (sourceRoot !== VAULT_GRAPH_VAULT_AGENT_SOURCE_ROOT) {
+    return (
+      candidates.find((node) => node.id === "workspace-holdstation")?.id ??
+      candidates.find((node) => node.type === "workspace")?.id ??
+      candidates[0].id
+    );
+  }
+
+  const workspaceById = candidates.find((node) => /\bworkspace\b/i.test(node.id));
+  const workspaceByType = candidates.find((node) => node.type === "workspace");
+  const holdstationNode = candidates.find((node) =>
+    [node.label, node.path, node.relative_path, node.folder, node.workspace_id, ...node.tags]
+      .join(" ")
+      .toLowerCase()
+      .includes("holdstation"),
+  );
+  const miniAppNode = candidates.find((node) =>
+    [node.label, node.path, node.relative_path, node.folder, node.workspace_id, ...node.tags]
+      .join(" ")
+      .toLowerCase()
+      .includes("holdstation-mini-app"),
+  );
+
+  return (
+    workspaceById?.id ??
+    workspaceByType?.id ??
+    miniAppNode?.id ??
+    holdstationNode?.id ??
+    [...candidates].sort((left, right) => right.size_score - left.size_score)[0]?.id ??
+    candidates[0].id
+  );
+}
+
+function safeRelativePath(path: string) {
+  if (!path) {
+    return undefined;
+  }
+
+  const normalized = path.replace(/\\/g, "/");
+  if (/^[a-z]:\//i.test(normalized) || normalized.startsWith("/")) {
+    const vaultIndex = normalized.toLowerCase().lastIndexOf("/vault-agent/");
+    if (vaultIndex >= 0) {
+      return normalized.slice(vaultIndex + "/vault-agent/".length);
+    }
+
+    const parts = normalized.split("/").filter(Boolean);
+    return parts.slice(-3).join("/");
+  }
+
+  return normalized.replace(/^\.\/+/, "");
 }
 
 function isRecord(value: unknown): value is RawRecord {
