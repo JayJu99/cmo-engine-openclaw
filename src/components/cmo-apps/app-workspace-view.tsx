@@ -222,6 +222,37 @@ type LensOAuthAccountsResponse = {
   missingConfig: string[];
 };
 
+type LensGa4Property = {
+  propertyId: string;
+  propertyName?: string;
+  displayName: string;
+  accountId?: string;
+  accountName?: string;
+  timezone?: string | null;
+};
+
+type LensGa4PropertiesResponse = {
+  data: {
+    properties: LensGa4Property[];
+  };
+};
+
+type WorkspaceGa4MetricSourceMapping = {
+  sourceType: "ga4";
+  provider: "ga4_native";
+  oauthAccountId: string;
+  propertyId: string;
+  propertyDisplayName?: string;
+  accountId?: string;
+  accountDisplayName?: string;
+  timezone?: string | null;
+  enabled: boolean;
+};
+
+type WorkspaceGa4MetricSourceResponse = {
+  data: WorkspaceGa4MetricSourceMapping | null;
+};
+
 const dateRangeOptions: Array<{ id: CmoAppMetricDateRangePreset; label: string }> = [
   { id: "this_week", label: "This week" },
   { id: "last_7_days", label: "Last 7 days" },
@@ -1147,6 +1178,13 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [lensOAuthMissingConfig, setLensOAuthMissingConfig] = useState<string[]>([]);
   const [lensOAuthStatus, setLensOAuthStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [lensOAuthError, setLensOAuthError] = useState<string | null>(null);
+  const [ga4Properties, setGa4Properties] = useState<LensGa4Property[]>([]);
+  const [ga4PropertiesStatus, setGa4PropertiesStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [ga4PropertiesError, setGa4PropertiesError] = useState<string | null>(null);
+  const [selectedGa4PropertyId, setSelectedGa4PropertyId] = useState("");
+  const [ga4MetricSourceMapping, setGa4MetricSourceMapping] = useState<WorkspaceGa4MetricSourceMapping | null>(null);
+  const [ga4MappingStatus, setGa4MappingStatus] = useState<"idle" | "loading" | "ready" | "saving" | "error">("idle");
+  const [ga4MappingError, setGa4MappingError] = useState<string | null>(null);
   const [aggregatorChartMode, setAggregatorChartMode] = useState<AggregatorChartMode>("transactions");
   const [partnerChartMode, setPartnerChartMode] = useState<PartnerChartMode>("daily_volume");
   const [planTypeFilter, setPlanTypeFilter] = useState<PlanReviewTypeFilter>("all");
@@ -1268,6 +1306,18 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   }).toString()}`;
   const lensOAuthResult = searchParams.get("lensOAuth");
   const lensOAuthResultCode = searchParams.get("lensOAuthCode");
+  const selectedGa4Property = ga4Properties.find((property) => property.propertyId === selectedGa4PropertyId) ?? null;
+  const mappedGa4PropertyLabel = ga4MetricSourceMapping?.propertyDisplayName || ga4MetricSourceMapping?.propertyId || "Not mapped";
+  const ga4SourceBadgeVariant = ga4MappingStatus === "loading" || ga4PropertiesStatus === "loading"
+    ? "slate"
+    : ga4MetricSourceMapping?.enabled
+      ? "green"
+      : lensOAuthBadgeVariant;
+  const ga4SourceBadgeLabel = ga4MappingStatus === "loading" || ga4PropertiesStatus === "loading"
+    ? "Loading"
+    : ga4MetricSourceMapping?.enabled
+      ? "Property mapped"
+      : lensOAuthBadgeLabel;
 
   useEffect(() => {
     const nextTab: AppWorkspaceTab = isWorkspaceTab(tabParam) ? tabParam : "dashboard";
@@ -1491,6 +1541,99 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     return () => controller.abort();
   }, [app.id]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadGa4MetricSourceMapping() {
+      setGa4MappingStatus("loading");
+      setGa4MappingError(null);
+
+      try {
+        const payload = await readJsonResponse<WorkspaceGa4MetricSourceResponse>(
+          await fetch(`/api/cmo/apps/${app.id}/metric-sources/ga4`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        );
+
+        if (!controller.signal.aborted) {
+          setGa4MetricSourceMapping(payload.data);
+          setSelectedGa4PropertyId((current) => payload.data?.propertyId ?? current);
+          setGa4MappingStatus("ready");
+        }
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setGa4MetricSourceMapping(null);
+        setGa4MappingStatus("error");
+        setGa4MappingError(loadError instanceof Error ? loadError.message : "GA4 mapping load failed");
+      }
+    }
+
+    void loadGa4MetricSourceMapping();
+
+    return () => controller.abort();
+  }, [app.id]);
+
+  useEffect(() => {
+    if (!connectedLensOAuthAccount) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      appId: app.id,
+      oauthAccountId: connectedLensOAuthAccount.id,
+    });
+
+    async function loadGa4Properties() {
+      setGa4PropertiesStatus("loading");
+      setGa4PropertiesError(null);
+
+      try {
+        const payload = await readJsonResponse<LensGa4PropertiesResponse>(
+          await fetch(`/api/lens/ga4/properties?${params.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        );
+
+        if (!controller.signal.aborted) {
+          const properties = payload.data.properties;
+          setGa4Properties(properties);
+          setSelectedGa4PropertyId((current) => {
+            const mappedId = ga4MetricSourceMapping?.propertyId;
+
+            if (mappedId && properties.some((property) => property.propertyId === mappedId)) {
+              return mappedId;
+            }
+
+            if (current && properties.some((property) => property.propertyId === current)) {
+              return current;
+            }
+
+            return properties[0]?.propertyId ?? "";
+          });
+          setGa4PropertiesStatus("ready");
+        }
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setGa4Properties([]);
+        setGa4PropertiesStatus("error");
+        setGa4PropertiesError(loadError instanceof Error ? loadError.message : "GA4 property discovery failed");
+      }
+    }
+
+    void loadGa4Properties();
+
+    return () => controller.abort();
+  }, [app.id, connectedLensOAuthAccount, ga4MetricSourceMapping?.propertyId]);
+
   async function refreshWorkspace() {
     const payload = await readJsonResponse<{ data: AppWorkspaceState }>(
       await fetch(`/api/apps/${app.id}/workspace`, { cache: "no-store" }),
@@ -1542,6 +1685,42 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     }
 
     router.replace(target, { scroll: false });
+  }
+
+  async function saveGa4MetricSource() {
+    if (!connectedLensOAuthAccount || !selectedGa4Property) {
+      setGa4MappingError("Choose a connected Google account and GA4 property first.");
+      return;
+    }
+
+    setGa4MappingStatus("saving");
+    setGa4MappingError(null);
+
+    try {
+      const payload = await readJsonResponse<{ data: WorkspaceGa4MetricSourceMapping }>(
+        await fetch(`/api/cmo/apps/${app.id}/metric-sources/ga4`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            oauthAccountId: connectedLensOAuthAccount.id,
+            propertyId: selectedGa4Property.propertyId,
+            propertyDisplayName: selectedGa4Property.displayName,
+            accountId: selectedGa4Property.accountId,
+            accountDisplayName: selectedGa4Property.accountName,
+            timezone: selectedGa4Property.timezone,
+          }),
+        }),
+      );
+
+      setGa4MetricSourceMapping(payload.data);
+      setSelectedGa4PropertyId(payload.data.propertyId);
+      setGa4MappingStatus("ready");
+    } catch (error) {
+      setGa4MappingStatus("error");
+      setGa4MappingError(error instanceof Error ? error.message : "GA4 mapping save failed");
+    }
   }
 
   async function createPlan(type: AppPlanType) {
@@ -1753,23 +1932,28 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
           <SectionCard
             title="Lens GA4"
             icon={<icons.KeyRound />}
-            action={<Badge variant={lensOAuthBadgeVariant}>{lensOAuthBadgeLabel}</Badge>}
+            action={<Badge variant={ga4SourceBadgeVariant}>{ga4SourceBadgeLabel}</Badge>}
           >
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
               <div>
                 <div className="text-sm font-bold text-slate-950">
                   {connectedLensOAuthAccount?.googleEmail ?? "Google Analytics account not connected"}
                 </div>
                 <div className="mt-2 text-sm font-semibold leading-6 text-slate-600">
                   {lensOAuthResult === "connected"
-                    ? "GA4 OAuth is connected. Property discovery is not enabled in this phase."
+                    ? "GA4 OAuth is connected. Choose a GA4 property for this workspace."
                     : lensOAuthResult === "error"
                       ? `Google OAuth did not complete${lensOAuthResultCode ? ` (${lensOAuthResultCode})` : ""}.`
-                      : connectedLensOAuthAccount
-                        ? `Connected ${displayDate(connectedLensOAuthAccount.updatedAt)}. GA4 properties and metrics are intentionally not fetched yet.`
+                      : ga4MetricSourceMapping?.enabled
+                        ? `Connected + Property: ${mappedGa4PropertyLabel} / ${ga4MetricSourceMapping.propertyId}`
+                        : connectedLensOAuthAccount
+                          ? `Connected ${displayDate(connectedLensOAuthAccount.updatedAt)}. Choose a GA4 property for this workspace.`
                         : lensOAuthConfigured === false
                           ? "Google OAuth server configuration is incomplete."
                           : lensOAuthError || "Connect GA4 to authorize Product-side Lens access."}
+                </div>
+                <div className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                  Property discovery enabled. Metrics fetching comes in M6.4.
                 </div>
                 {lensOAuthMissingConfig.length ? (
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -1785,6 +1969,50 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                     <Badge variant="slate">Tenant: {connectedLensOAuthAccount.tenantId}</Badge>
                   </div>
                 ) : null}
+                {ga4MetricSourceMapping?.enabled ? (
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    <FieldValue label="Property" value={`${mappedGa4PropertyLabel} / ${ga4MetricSourceMapping.propertyId}`} />
+                    <FieldValue label="Account" value={ga4MetricSourceMapping.accountDisplayName ?? ga4MetricSourceMapping.accountId} />
+                    <FieldValue label="Timezone" value={ga4MetricSourceMapping.timezone ?? "Not returned"} />
+                  </div>
+                ) : null}
+                {connectedLensOAuthAccount ? (
+                  <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                    <Field label="Choose GA4 property">
+                      <select
+                        value={selectedGa4PropertyId}
+                        onChange={(event) => setSelectedGa4PropertyId(event.target.value)}
+                        disabled={ga4PropertiesStatus === "loading" || !ga4Properties.length}
+                        className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 shadow-sm outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 disabled:bg-slate-50 disabled:text-slate-400"
+                      >
+                        {ga4Properties.length ? (
+                          ga4Properties.map((property) => (
+                            <option key={property.propertyId} value={property.propertyId}>
+                              {property.accountName ? `${property.accountName} / ` : ""}{property.displayName} / {property.propertyId}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="">
+                            {ga4PropertiesStatus === "loading" ? "Loading GA4 properties..." : "No GA4 properties available"}
+                          </option>
+                        )}
+                      </select>
+                    </Field>
+                    <Button
+                      type="button"
+                      onClick={() => void saveGa4MetricSource()}
+                      disabled={!selectedGa4Property || ga4MappingStatus === "saving" || ga4PropertiesStatus === "loading"}
+                    >
+                      <icons.Check />
+                      {ga4MappingStatus === "saving" ? "Saving" : "Save property"}
+                    </Button>
+                  </div>
+                ) : null}
+                {ga4PropertiesError || ga4MappingError ? (
+                  <div className="mt-3 rounded-xl border border-orange-100 bg-orange-50 px-4 py-3 text-sm font-semibold text-orange-700">
+                    {ga4PropertiesError || ga4MappingError}
+                  </div>
+                ) : null}
               </div>
               {lensOAuthConfigured === false ? (
                 <Button type="button" disabled>
@@ -1795,7 +2023,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                 <Button asChild>
                   <a href={lensOAuthStartHref}>
                     <icons.KeyRound />
-                    Connect GA4
+                    {connectedLensOAuthAccount ? "Reconnect GA4" : "Connect GA4"}
                   </a>
                 </Button>
               )}

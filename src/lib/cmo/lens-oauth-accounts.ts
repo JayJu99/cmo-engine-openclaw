@@ -28,6 +28,11 @@ interface LensOAuthAccountRow {
   last_error: string | null;
 }
 
+export interface LensOAuthPrivateAccount extends LensOAuthAccountRow {
+  encrypted_refresh_token: string;
+  access_token_expires_at: string | null;
+}
+
 export interface UpsertGoogleLensOAuthAccountInput {
   tenantId: string;
   workspaceId?: string | null;
@@ -77,6 +82,64 @@ export async function listGoogleLensOAuthAccounts(input: {
   }
 
   return ((data ?? []) as LensOAuthAccountRow[]).map(toSafeLensOAuthAccount);
+}
+
+export async function getGoogleLensOAuthAccountForToken(input: {
+  oauthAccountId: string;
+}): Promise<LensOAuthPrivateAccount | null> {
+  const supabase = await getLensOAuthAccountsClient();
+  const { data, error } = await supabase
+    .from("lens_oauth_accounts")
+    .select("id,tenant_id,provider,google_email,scopes,status,created_at,updated_at,last_refresh_at,last_error,encrypted_refresh_token,access_token_expires_at")
+    .eq("id", input.oauthAccountId)
+    .eq("provider", "google")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Lens OAuth account lookup failed: ${error.message}`);
+  }
+
+  return data ? (data as LensOAuthPrivateAccount) : null;
+}
+
+export async function updateGoogleLensOAuthAccountRefreshMetadata(input: {
+  oauthAccountId: string;
+  status?: LensOAuthAccountStatus;
+  accessTokenExpiresAt?: string | null;
+  lastRefreshAt?: string | null;
+  lastError?: string | null;
+}): Promise<void> {
+  const supabase = await getLensOAuthAccountsClient();
+  const row: Record<string, string | null> = {};
+
+  if (input.status) {
+    row.status = input.status;
+  }
+
+  if ("accessTokenExpiresAt" in input) {
+    row.access_token_expires_at = input.accessTokenExpiresAt ?? null;
+  }
+
+  if ("lastRefreshAt" in input) {
+    row.last_refresh_at = input.lastRefreshAt ?? null;
+  }
+
+  if ("lastError" in input) {
+    row.last_error = input.lastError ?? null;
+  }
+
+  if (!Object.keys(row).length) {
+    return;
+  }
+
+  const { error } = await supabase
+    .from("lens_oauth_accounts")
+    .update(row)
+    .eq("id", input.oauthAccountId);
+
+  if (error) {
+    throw new Error(`Lens OAuth account metadata update failed: ${error.message}`);
+  }
 }
 
 export async function upsertGoogleLensOAuthAccount(input: UpsertGoogleLensOAuthAccountInput): Promise<LensOAuthSafeAccount> {
