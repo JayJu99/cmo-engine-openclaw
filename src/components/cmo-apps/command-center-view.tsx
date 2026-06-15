@@ -72,7 +72,7 @@ export function CommandCenterView({ state }: { state: CommandCenterState }) {
   const activeApps = state.apps.filter((app) => app.stage?.toLowerCase().includes("active")).length;
   const heroTitle = focusApp?.name.replace(/\s+Mini App$/i, "") ?? "Holdstation";
   const heroSubtitle = focusApp?.currentMission || "Chat-first CMO workspace with live app context and vault capture.";
-  const visibleApps = state.apps.slice(0, 5);
+  const visibleApps = state.apps;
 
   return (
     <div className="mx-auto w-full max-w-[1720px] space-y-7">
@@ -157,19 +157,19 @@ export function CommandCenterView({ state }: { state: CommandCenterState }) {
             <SnapshotMetric icon={icons.Workflow} value={String(discoveryApps)} label="Discovery" />
           </aside>
 
-          <nav className="absolute bottom-6 left-1/2 z-20 grid w-[min(900px,calc(100%-64px))] -translate-x-1/2 grid-flow-col auto-cols-[minmax(130px,1fr)] gap-2 overflow-x-auto rounded-full border border-slate-200/80 bg-white/72 p-3 shadow-[0_24px_70px_rgba(78,89,119,0.10)] backdrop-blur-xl">
+          <nav className="absolute bottom-6 left-1/2 z-20 grid w-[min(860px,calc(100%-64px))] -translate-x-1/2 grid-flow-col auto-cols-[80px] justify-center gap-2 overflow-x-auto rounded-full border border-slate-200/80 bg-white/72 p-3 shadow-[0_24px_70px_rgba(78,89,119,0.10)] backdrop-blur-xl">
             {visibleApps.map((app, index) => (
               <Link
                 key={app.id}
+                aria-label={`Open ${app.name}`}
                 href={`/apps/${app.slug}`}
-                className={`inline-flex h-14 items-center justify-center gap-3 rounded-full px-4 text-sm font-semibold transition hover:bg-white ${
-                  index === 0 ? "bg-white text-slate-950 shadow-[0_14px_36px_rgba(92,103,137,0.10)]" : "text-slate-500"
+                title={app.name}
+                className={`inline-flex h-14 items-center justify-center rounded-full px-3 transition hover:bg-white hover:shadow-[0_14px_36px_rgba(92,103,137,0.10)] ${
+                  index === 0 ? "bg-white shadow-[0_14px_36px_rgba(92,103,137,0.10)]" : ""
                 }`}
               >
-                <span className={`grid size-10 place-items-center rounded-full ${index === 0 ? "bg-indigo-50 text-indigo-600" : "text-slate-500"}`}>
-                  <icons.Package className="size-5" />
-                </span>
-                <span className="truncate">{app.name.replace(/\s+Mini App$/i, "")}</span>
+                <AppProjectLogo app={app} className="h-11 w-14 rounded-2xl" iconClassName="size-5" />
+                <span className="sr-only">{app.name}</span>
               </Link>
             ))}
           </nav>
