@@ -86,6 +86,7 @@ export async function GET(_request: Request, context: RouteContext<"/api/cmo/app
     const mapping = await getWorkspaceGa4MetricSourceMapping({
       tenantId: entry.tenantId,
       workspaceId: entry.workspaceId,
+      appId: entry.appId,
     });
 
     return Response.json({ data: mapping });

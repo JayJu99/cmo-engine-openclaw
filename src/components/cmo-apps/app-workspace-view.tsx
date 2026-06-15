@@ -113,6 +113,91 @@ function displayDate(value: string | undefined): string {
   }).format(date);
 }
 
+function ga4VerificationBadgeVariant(input: {
+  loading: boolean;
+  mapping: WorkspaceGa4MetricSourceMapping | null;
+  fallbackVariant: "green" | "orange" | "red" | "slate";
+}): "green" | "orange" | "red" | "slate" {
+  if (input.loading) {
+    return "slate";
+  }
+
+  if (!input.mapping?.enabled) {
+    return input.fallbackVariant;
+  }
+
+  if (input.mapping.verificationStatus === "verified") {
+    return "green";
+  }
+
+  if (input.mapping.verificationStatus === "needs_reconnect" || input.mapping.verificationStatus === "property_inaccessible") {
+    return "orange";
+  }
+
+  if (input.mapping.verificationStatus === "error") {
+    return "red";
+  }
+
+  return "green";
+}
+
+function ga4VerificationBadgeLabel(input: {
+  loading: boolean;
+  mapping: WorkspaceGa4MetricSourceMapping | null;
+  fallbackLabel: string;
+}): string {
+  if (input.loading) {
+    return "Loading";
+  }
+
+  if (!input.mapping?.enabled) {
+    return input.fallbackLabel;
+  }
+
+  if (input.mapping.verificationStatus === "verified") {
+    return "Verified";
+  }
+
+  if (input.mapping.verificationStatus === "needs_reconnect") {
+    return "Needs reconnect";
+  }
+
+  if (input.mapping.verificationStatus === "property_inaccessible") {
+    return "Property inaccessible";
+  }
+
+  if (input.mapping.verificationStatus === "error") {
+    return "Verification error";
+  }
+
+  return "Property mapped";
+}
+
+function ga4VerificationStatusCopy(mapping: WorkspaceGa4MetricSourceMapping | null): string | null {
+  if (!mapping?.enabled) {
+    return null;
+  }
+
+  if (mapping.verificationStatus === "verified") {
+    return `Last verified: ${displayDate(mapping.lastVerifiedAt ?? undefined)}`;
+  }
+
+  if (mapping.verificationStatus === "needs_reconnect") {
+    return "Google connection needs reconnect.";
+  }
+
+  if (mapping.verificationStatus === "property_inaccessible") {
+    return "The selected GA4 property is no longer accessible from this Google account.";
+  }
+
+  if (mapping.verificationStatus === "error") {
+    const code = mapping.lastVerificationCode ? ` (${mapping.lastVerificationCode})` : "";
+    return `${mapping.lastVerificationError || "GA4 source verification failed."}${code}`;
+  }
+
+  return "Not verified yet";
+}
+
 function EmptyCopy({ children }: { children: React.ReactNode }) {
   return <div className="rounded-lg border border-slate-200/70 bg-slate-50/80 px-4 py-3 text-sm font-medium text-slate-500">{children}</div>;
 }
@@ -240,17 +325,33 @@ type LensGa4PropertiesResponse = {
 type WorkspaceGa4MetricSourceMapping = {
   sourceType: "ga4";
   provider: "ga4_native";
-  oauthAccountId: string;
+  oauthAccountId: string | null;
   propertyId: string;
   propertyDisplayName?: string;
   accountId?: string;
   accountDisplayName?: string;
   timezone?: string | null;
   enabled: boolean;
+  verificationStatus?: WorkspaceGa4VerificationStatus;
+  lastVerifiedAt?: string | null;
+  lastVerificationError?: string | null;
+  lastVerificationCode?: string | null;
 };
 
 type WorkspaceGa4MetricSourceResponse = {
   data: WorkspaceGa4MetricSourceMapping | null;
+};
+
+type WorkspaceGa4VerificationStatus = "verified" | "needs_reconnect" | "property_inaccessible" | "error";
+
+type WorkspaceGa4VerificationResponse = {
+  mapping: WorkspaceGa4MetricSourceMapping | null;
+  verification: {
+    ok: boolean;
+    status: WorkspaceGa4VerificationStatus;
+    code?: string;
+    message?: string;
+  };
 };
 
 const dateRangeOptions: Array<{ id: CmoAppMetricDateRangePreset; label: string }> = [
@@ -1183,7 +1284,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [ga4PropertiesError, setGa4PropertiesError] = useState<string | null>(null);
   const [selectedGa4PropertyId, setSelectedGa4PropertyId] = useState("");
   const [ga4MetricSourceMapping, setGa4MetricSourceMapping] = useState<WorkspaceGa4MetricSourceMapping | null>(null);
-  const [ga4MappingStatus, setGa4MappingStatus] = useState<"idle" | "loading" | "ready" | "saving" | "error">("idle");
+  const [ga4MappingStatus, setGa4MappingStatus] = useState<"idle" | "loading" | "ready" | "saving" | "verifying" | "error">("idle");
   const [ga4MappingError, setGa4MappingError] = useState<string | null>(null);
   const [aggregatorChartMode, setAggregatorChartMode] = useState<AggregatorChartMode>("transactions");
   const [partnerChartMode, setPartnerChartMode] = useState<PartnerChartMode>("daily_volume");
@@ -1308,16 +1409,24 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const lensOAuthResultCode = searchParams.get("lensOAuthCode");
   const selectedGa4Property = ga4Properties.find((property) => property.propertyId === selectedGa4PropertyId) ?? null;
   const mappedGa4PropertyLabel = ga4MetricSourceMapping?.propertyDisplayName || ga4MetricSourceMapping?.propertyId || "Not mapped";
-  const ga4SourceBadgeVariant = ga4MappingStatus === "loading" || ga4PropertiesStatus === "loading"
-    ? "slate"
-    : ga4MetricSourceMapping?.enabled
-      ? "green"
-      : lensOAuthBadgeVariant;
-  const ga4SourceBadgeLabel = ga4MappingStatus === "loading" || ga4PropertiesStatus === "loading"
-    ? "Loading"
-    : ga4MetricSourceMapping?.enabled
-      ? "Property mapped"
-      : lensOAuthBadgeLabel;
+  const ga4SourceIsBusy = ga4MappingStatus === "loading" || ga4PropertiesStatus === "loading" || ga4MappingStatus === "verifying";
+  const selectedGa4PropertyIsMapped = Boolean(ga4MetricSourceMapping?.propertyId && selectedGa4PropertyId === ga4MetricSourceMapping.propertyId);
+  const ga4VerificationCopy = ga4VerificationStatusCopy(ga4MetricSourceMapping);
+  const ga4VerifyButtonLabel = ga4MappingStatus === "verifying"
+    ? "Verifying"
+    : ga4MetricSourceMapping?.verificationStatus === "verified"
+      ? "Verify again"
+      : "Verify connection";
+  const ga4SourceBadgeVariant = ga4VerificationBadgeVariant({
+    loading: ga4SourceIsBusy,
+    mapping: ga4MetricSourceMapping,
+    fallbackVariant: lensOAuthBadgeVariant,
+  });
+  const ga4SourceBadgeLabel = ga4VerificationBadgeLabel({
+    loading: ga4SourceIsBusy,
+    mapping: ga4MetricSourceMapping,
+    fallbackLabel: lensOAuthBadgeLabel,
+  });
 
   useEffect(() => {
     const nextTab: AppWorkspaceTab = isWorkspaceTab(tabParam) ? tabParam : "dashboard";
@@ -1723,6 +1832,32 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     }
   }
 
+  async function verifyGa4MetricSource() {
+    if (!ga4MetricSourceMapping?.enabled) {
+      setGa4MappingError("Save a GA4 property before verification.");
+      return;
+    }
+
+    setGa4MappingStatus("verifying");
+    setGa4MappingError(null);
+
+    try {
+      const payload = await readJsonResponse<WorkspaceGa4VerificationResponse>(
+        await fetch(`/api/cmo/apps/${app.id}/metric-sources/ga4/verify`, {
+          method: "POST",
+          cache: "no-store",
+        }),
+      );
+
+      setGa4MetricSourceMapping(payload.mapping);
+      setSelectedGa4PropertyId((current) => payload.mapping?.propertyId ?? current);
+      setGa4MappingStatus("ready");
+    } catch (error) {
+      setGa4MappingStatus("error");
+      setGa4MappingError(error instanceof Error ? error.message : "GA4 source verification failed");
+    }
+  }
+
   async function createPlan(type: AppPlanType) {
     setPlanStatus(null);
     setPlanError(null);
@@ -1955,6 +2090,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                 <div className="mt-2 text-sm font-semibold leading-6 text-slate-500">
                   Property discovery enabled. Metrics fetching comes in M6.4.
                 </div>
+                {ga4VerificationCopy ? (
+                  <div className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                    {ga4VerificationCopy}
+                  </div>
+                ) : null}
                 {lensOAuthMissingConfig.length ? (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {lensOAuthMissingConfig.map((name) => (
@@ -1974,10 +2114,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                     <FieldValue label="Property" value={`${mappedGa4PropertyLabel} / ${ga4MetricSourceMapping.propertyId}`} />
                     <FieldValue label="Account" value={ga4MetricSourceMapping.accountDisplayName ?? ga4MetricSourceMapping.accountId} />
                     <FieldValue label="Timezone" value={ga4MetricSourceMapping.timezone ?? "Not returned"} />
+                    <FieldValue label="Last verified" value={ga4MetricSourceMapping.lastVerifiedAt ? displayDate(ga4MetricSourceMapping.lastVerifiedAt) : "Not verified yet"} />
                   </div>
                 ) : null}
                 {connectedLensOAuthAccount ? (
-                  <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                  <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-end">
                     <Field label="Choose GA4 property">
                       <select
                         value={selectedGa4PropertyId}
@@ -2001,11 +2142,28 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                     <Button
                       type="button"
                       onClick={() => void saveGa4MetricSource()}
-                      disabled={!selectedGa4Property || ga4MappingStatus === "saving" || ga4PropertiesStatus === "loading"}
+                      disabled={!selectedGa4Property || selectedGa4PropertyIsMapped || ga4MappingStatus === "saving" || ga4MappingStatus === "verifying" || ga4PropertiesStatus === "loading"}
                     >
                       <icons.Check />
-                      {ga4MappingStatus === "saving" ? "Saving" : "Save property"}
+                      {ga4MappingStatus === "saving"
+                        ? "Saving"
+                        : selectedGa4PropertyIsMapped
+                          ? "Saved"
+                          : ga4MetricSourceMapping?.verificationStatus === "property_inaccessible"
+                            ? "Choose another property"
+                            : "Save property"}
                     </Button>
+                    {ga4MetricSourceMapping?.enabled && ga4MetricSourceMapping.verificationStatus !== "needs_reconnect" ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void verifyGa4MetricSource()}
+                        disabled={ga4MappingStatus === "saving" || ga4MappingStatus === "verifying"}
+                      >
+                        <icons.RefreshCw />
+                        {ga4VerifyButtonLabel}
+                      </Button>
+                    ) : null}
                   </div>
                 ) : null}
                 {ga4PropertiesError || ga4MappingError ? (
@@ -2023,7 +2181,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                 <Button asChild>
                   <a href={lensOAuthStartHref}>
                     <icons.KeyRound />
-                    {connectedLensOAuthAccount ? "Reconnect GA4" : "Connect GA4"}
+                    {ga4MetricSourceMapping?.verificationStatus === "needs_reconnect" || connectedLensOAuthAccount ? "Reconnect GA4" : "Connect GA4"}
                   </a>
                 </Button>
               )}

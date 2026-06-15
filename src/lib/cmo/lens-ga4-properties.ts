@@ -1,5 +1,7 @@
 import "server-only";
 
+import type { WorkspaceGa4VerificationStatus } from "@/lib/cmo/workspace-metric-sources";
+
 export type LensGa4PropertiesErrorCode =
   | "ga4_admin_api_unavailable"
   | "property_access_denied"
@@ -56,6 +58,14 @@ export interface LensGa4Property {
 
 export interface LensGa4PropertiesResult {
   properties: LensGa4Property[];
+}
+
+export interface LensGa4PropertyVerificationResult {
+  ok: boolean;
+  verificationStatus: WorkspaceGa4VerificationStatus;
+  code?: string;
+  message?: string;
+  property?: LensGa4Property;
 }
 
 export class LensGa4PropertiesError extends Error {
@@ -218,4 +228,94 @@ export async function listLensGa4Properties(input: {
   );
 
   return normalizeGa4AccountSummaries({ accountSummaries, propertiesByAccountName });
+}
+
+export function ga4VerificationStatusForCode(code: string): WorkspaceGa4VerificationStatus {
+  if (code === "token_revoked" || code === "token_expired" || code === "oauth_account_not_found") {
+    return "needs_reconnect";
+  }
+
+  if (code === "property_access_denied" || code === "property_not_found") {
+    return "property_inaccessible";
+  }
+
+  return "error";
+}
+
+export function ga4VerificationMessageForCode(code: string): string {
+  if (code === "token_revoked" || code === "token_expired" || code === "oauth_account_not_found") {
+    return "Google connection needs reconnect.";
+  }
+
+  if (code === "property_access_denied") {
+    return "The selected GA4 property is no longer accessible from this Google account.";
+  }
+
+  if (code === "property_not_found") {
+    return "The selected GA4 property was not found in this Google account.";
+  }
+
+  if (code === "missing_mapping") {
+    return "Workspace GA4 mapping is missing.";
+  }
+
+  if (code === "ga4_admin_api_unavailable") {
+    return "Google Analytics Admin API is unavailable for this connection.";
+  }
+
+  return "GA4 source verification failed.";
+}
+
+export async function verifyLensGa4PropertyAccess(input: {
+  accessToken: string;
+  propertyId: string;
+}): Promise<LensGa4PropertyVerificationResult> {
+  const propertyId = input.propertyId.trim();
+
+  if (!propertyId) {
+    return {
+      ok: false,
+      verificationStatus: "error",
+      code: "missing_mapping",
+      message: ga4VerificationMessageForCode("missing_mapping"),
+    };
+  }
+
+  try {
+    const properties = await listLensGa4Properties({ accessToken: input.accessToken });
+    const property = properties.properties.find((candidate) => candidate.propertyId === propertyId);
+
+    if (!property) {
+      return {
+        ok: false,
+        verificationStatus: "property_inaccessible",
+        code: "property_not_found",
+        message: ga4VerificationMessageForCode("property_not_found"),
+      };
+    }
+
+    return {
+      ok: true,
+      verificationStatus: "verified",
+      property,
+    };
+  } catch (error) {
+    if (error instanceof LensGa4PropertiesError) {
+      const verificationStatus = ga4VerificationStatusForCode(error.code);
+
+      return {
+        ok: false,
+        verificationStatus,
+        code: error.code,
+        message: ga4VerificationMessageForCode(error.code),
+      };
+    }
+
+    return {
+      ok: false,
+      verificationStatus: "error",
+      code: "ga4_admin_api_unavailable",
+      message: ga4VerificationMessageForCode("ga4_admin_api_unavailable"),
+    };
+  }
 }
