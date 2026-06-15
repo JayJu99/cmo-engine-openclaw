@@ -134,6 +134,66 @@ function percentMetricValue(value: number | null | undefined): string {
   }).format(value * 100)}%`;
 }
 
+function ga4DashboardRangeKey(dateRange: CmoAppMetricDateRangePreset): WorkspaceGa4DashboardRangeKey {
+  return dateRange === "custom" ? "this_week" : dateRange;
+}
+
+function ga4SnapshotStaleThresholdMs(rangeKey: WorkspaceGa4DashboardRangeKey): number {
+  return rangeKey === "last_30_days" || rangeKey === "this_month"
+    ? 48 * 60 * 60 * 1000
+    : 24 * 60 * 60 * 1000;
+}
+
+function isGa4SnapshotStale(snapshot: WorkspaceGa4MetricSnapshot | null, rangeKey: WorkspaceGa4DashboardRangeKey): boolean {
+  if (!snapshot?.syncedAt || snapshot.status !== "synced") {
+    return false;
+  }
+
+  const syncedAt = Date.parse(snapshot.syncedAt);
+
+  return Number.isFinite(syncedAt) && Date.now() - syncedAt > ga4SnapshotStaleThresholdMs(rangeKey);
+}
+
+function ga4SnapshotHealthLabel(input: {
+  loadStatus: "idle" | "loading" | "ready" | "syncing" | "error";
+  snapshot: WorkspaceGa4MetricSnapshot | null;
+  stale: boolean;
+}): string {
+  if (input.loadStatus === "loading") {
+    return "Loading";
+  }
+
+  if (input.loadStatus === "syncing") {
+    return "Syncing";
+  }
+
+  if (input.loadStatus === "error" || input.snapshot?.status === "error") {
+    return "Error";
+  }
+
+  if (input.stale) {
+    return "Stale";
+  }
+
+  return input.snapshot?.status === "synced" ? "Synced" : "No snapshot";
+}
+
+function ga4SnapshotHealthVariant(label: string): "green" | "orange" | "red" | "slate" {
+  if (label === "Synced") {
+    return "green";
+  }
+
+  if (label === "Error") {
+    return "red";
+  }
+
+  return label === "Stale" || label === "Syncing" ? "orange" : "slate";
+}
+
+function isGa4SyncedNumber(snapshot: WorkspaceGa4MetricSnapshot | null, value: number | null | undefined): value is number {
+  return snapshot?.status === "synced" && typeof value === "number" && Number.isFinite(value);
+}
+
 function ga4VerificationBadgeVariant(input: {
   loading: boolean;
   mapping: WorkspaceGa4MetricSourceMapping | null;
@@ -400,6 +460,8 @@ type WorkspaceGa4MetricSnapshot = {
 type WorkspaceGa4MetricSnapshotResponse = {
   data: WorkspaceGa4MetricSnapshot | null;
 };
+
+type WorkspaceGa4DashboardRangeKey = Exclude<CmoAppMetricDateRangePreset, "custom">;
 
 const dateRangeOptions: Array<{ id: CmoAppMetricDateRangePreset; label: string }> = [
   { id: "this_week", label: "This week" },
@@ -1382,7 +1444,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
     return lookup;
   }, [metricsSnapshot]);
-  const metricCards = [
+  const dashboardBaseMetricIds = [
     "activated_users",
     "activation_rate",
     "new_users",
@@ -1390,7 +1452,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     "d7_retention",
     "pending_reviews",
     "promotions_pending",
-  ].map((id) => metricById.get(id)).filter((metric): metric is CmoAppMetric => Boolean(metric));
+  ];
   const promotionsPendingMetric = metricById.get("promotions_pending");
   const metricsHealthLabel = metricsStatus === "loading" ? "Loading" : metricStatusLabel(metricsSnapshot?.status);
   const channelMetricById = useMemo(() => {
@@ -1467,9 +1529,18 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     : ga4MetricSourceMapping?.verificationStatus === "verified"
       ? "Verify again"
       : "Verify connection";
+  const ga4SnapshotRangeKey = ga4DashboardRangeKey(dateRange);
+  const ga4SnapshotSelectedRangeLabel = dateRangeOptions.find((option) => option.id === ga4SnapshotRangeKey)?.label ?? "This week";
+  const ga4SnapshotIsStale = isGa4SnapshotStale(ga4MetricSnapshot, ga4SnapshotRangeKey);
+  const ga4SnapshotHealth = ga4SnapshotHealthLabel({
+    loadStatus: ga4SnapshotStatus,
+    snapshot: ga4MetricSnapshot,
+    stale: ga4SnapshotIsStale,
+  });
+  const ga4SnapshotHealthBadgeVariant = ga4SnapshotHealthVariant(ga4SnapshotHealth);
   const ga4SnapshotRangeLabel = ga4MetricSnapshot
     ? `${ga4MetricSnapshot.dateStart} to ${ga4MetricSnapshot.dateEnd}`
-    : "this week";
+    : ga4SnapshotSelectedRangeLabel;
   const ga4SyncButtonLabel = ga4SnapshotStatus === "syncing" ? "Syncing GA4 metrics" : "Sync GA4 metrics";
   const ga4SourceBadgeVariant = ga4VerificationBadgeVariant({
     loading: ga4SourceIsBusy,
@@ -1481,6 +1552,84 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     mapping: ga4MetricSourceMapping,
     fallbackLabel: lensOAuthBadgeLabel,
   });
+  const ga4MappedStatus = (
+    <div className="flex flex-wrap justify-end gap-1">
+      <Badge variant="green">Connected</Badge>
+      <Badge variant={ga4SnapshotHealthBadgeVariant}>{ga4SnapshotHealth}</Badge>
+    </div>
+  );
+  const ga4MissingStatus = <Badge variant={ga4SnapshotHealth === "Error" ? "red" : "slate"}>{ga4SnapshotHealth === "Error" ? "Error" : "Not configured"}</Badge>;
+  const ga4MappedMetricDetail = ga4MetricSnapshot?.status === "synced" ? "GA4 core metric." : "Sync GA4 metrics to populate GA4 core metric.";
+  const dashboardMetricCards = [
+    ...dashboardBaseMetricIds.map((id) => {
+      const metric = metricById.get(id);
+      const requiresDefinition = id === "activated_users" || id === "activation_rate" || id === "d1_retention" || id === "d7_retention";
+      const isNewUsers = id === "new_users";
+      const label = metric?.label ?? (isNewUsers ? "New Users" : id);
+      const newUsers = ga4MetricSnapshot?.metrics.newUsers;
+
+      if (isNewUsers && isGa4SyncedNumber(ga4MetricSnapshot, newUsers)) {
+        return {
+          id,
+          label: "New Users",
+          value: compactMetricValue(newUsers),
+          detail: ga4MappedMetricDetail,
+          muted: false,
+          status: ga4MappedStatus,
+          comparison: comparePrevious ? "GA4 comparison not connected yet." : null,
+        };
+      }
+
+      if (requiresDefinition) {
+        return {
+          id,
+          label,
+          value: "No data",
+          detail: "Requires activation/retention definition.",
+          muted: true,
+          status: <Badge variant="orange">Metric definition needed</Badge>,
+          comparison: null,
+        };
+      }
+
+      return {
+        id,
+        label,
+        value: metric?.status === "connected" && metric.value !== null ? metric.displayValue : "No data",
+        detail: metric?.status === "connected" ? metric.description : isNewUsers ? "Sync GA4 metrics to populate GA4 core metric." : "No metrics source connected yet.",
+        muted: metric?.status !== "connected",
+        status: isNewUsers ? ga4MissingStatus : <Badge variant={metricStatusVariant(metric?.status)}>{metric?.status === "connected" ? "Connected" : "Metrics missing"}</Badge>,
+        comparison: comparePrevious ? metric?.deltaDisplay || "No comparison data" : null,
+      };
+    }),
+    {
+      id: "ga4_sessions",
+      label: "Sessions",
+      value: compactMetricValue(ga4MetricSnapshot?.metrics.sessions),
+      detail: ga4MappedMetricDetail,
+      muted: !isGa4SyncedNumber(ga4MetricSnapshot, ga4MetricSnapshot?.metrics.sessions),
+      status: isGa4SyncedNumber(ga4MetricSnapshot, ga4MetricSnapshot?.metrics.sessions) ? ga4MappedStatus : ga4MissingStatus,
+      comparison: comparePrevious ? "GA4 comparison not connected yet." : null,
+    },
+    {
+      id: "ga4_event_count",
+      label: "Event Count",
+      value: compactMetricValue(ga4MetricSnapshot?.metrics.eventCount),
+      detail: ga4MappedMetricDetail,
+      muted: !isGa4SyncedNumber(ga4MetricSnapshot, ga4MetricSnapshot?.metrics.eventCount),
+      status: isGa4SyncedNumber(ga4MetricSnapshot, ga4MetricSnapshot?.metrics.eventCount) ? ga4MappedStatus : ga4MissingStatus,
+      comparison: comparePrevious ? "GA4 comparison not connected yet." : null,
+    },
+    {
+      id: "ga4_engagement_rate",
+      label: "Engagement Rate",
+      value: percentMetricValue(ga4MetricSnapshot?.metrics.engagementRate),
+      detail: ga4MappedMetricDetail,
+      muted: !isGa4SyncedNumber(ga4MetricSnapshot, ga4MetricSnapshot?.metrics.engagementRate),
+      status: isGa4SyncedNumber(ga4MetricSnapshot, ga4MetricSnapshot?.metrics.engagementRate) ? ga4MappedStatus : ga4MissingStatus,
+      comparison: comparePrevious ? "GA4 comparison not connected yet." : null,
+    },
+  ];
 
   useEffect(() => {
     const nextTab: AppWorkspaceTab = isWorkspaceTab(tabParam) ? tabParam : "dashboard";
@@ -1749,7 +1898,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
       try {
         const payload = await readJsonResponse<WorkspaceGa4MetricSnapshotResponse>(
-          await fetch(`/api/cmo/apps/${app.id}/metric-sources/ga4/snapshots?rangeKey=this_week`, {
+          await fetch(`/api/cmo/apps/${app.id}/metric-sources/ga4/snapshots?rangeKey=${ga4SnapshotRangeKey}`, {
             cache: "no-store",
             signal: controller.signal,
           }),
@@ -1773,7 +1922,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     void loadGa4MetricSnapshot();
 
     return () => controller.abort();
-  }, [app.id]);
+  }, [app.id, ga4SnapshotRangeKey]);
 
   useEffect(() => {
     if (!connectedLensOAuthAccount) {
@@ -1958,7 +2107,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
     try {
       const payload = await readJsonResponse<WorkspaceGa4MetricSnapshotResponse>(
-        await fetch(`/api/cmo/apps/${app.id}/metric-sources/ga4/sync?rangeKey=this_week`, {
+        await fetch(`/api/cmo/apps/${app.id}/metric-sources/ga4/sync?rangeKey=${ga4SnapshotRangeKey}`, {
           method: "POST",
           cache: "no-store",
         }),
@@ -2092,7 +2241,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               <h2 className="truncate text-xl font-bold tracking-tight text-slate-950">{app.name}</h2>
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-semibold text-slate-500">
                 <span>Updated {displayDate(lastUpdated)}</span>
-                <span>Metrics {metricsHealthLabel}</span>
+                <span title={metricsError ?? undefined}>Metrics {metricsHealthLabel}</span>
                 <span>Workspace context enabled</span>
               </div>
             </div>
@@ -2132,26 +2281,17 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
         {activeTab === "dashboard" ? (
           <div className="border-t border-slate-200 p-4 sm:p-5">
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-              {metricCards.map((metric) => (
+              {dashboardMetricCards.map((metric) => (
                 <KpiCard
                   key={metric.id}
                   label={metric.label}
-                  value={metric.status === "connected" && metric.value !== null ? metric.displayValue : "No data"}
-                  detail={metric.status === "connected" ? metric.description : "No metrics source connected yet."}
-                  muted={metric.status !== "connected"}
-                  status={<Badge variant={metricStatusVariant(metric.status)}>{metric.status === "connected" ? "Connected" : "Metrics missing"}</Badge>}
-                  comparison={comparePrevious ? metric.deltaDisplay || "No comparison data" : null}
+                  value={metric.value}
+                  detail={metric.detail}
+                  muted={metric.muted}
+                  status={metric.status}
+                  comparison={metric.comparison}
                 />
               ))}
-              {!metricCards.length ? (
-                <KpiCard
-                  label="Metrics"
-                  value={metricsStatus === "loading" ? "Loading" : "No data"}
-                  detail={metricsError || "No metrics source connected yet."}
-                  muted
-                  status={<Badge variant="orange">{metricsStatus === "error" ? "Error" : "Metrics missing"}</Badge>}
-                />
-              ) : null}
             </div>
           </div>
         ) : null}
@@ -2202,7 +2342,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                           : lensOAuthError || "Connect GA4 to authorize Product-side Lens access."}
                 </div>
                 <div className="mt-2 text-sm font-semibold leading-6 text-slate-500">
-                  Property discovery enabled. Metrics fetching comes in M6.4.
+                  Property discovery enabled. Metrics fetching comes in M6.4. Current dashboard values load from the latest cached Lens snapshot for the selected range.
                 </div>
                 {ga4MetricSnapshot?.status === "synced" ? (
                   <div className="mt-2 text-sm font-semibold leading-6 text-slate-500">
@@ -2226,6 +2366,21 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                     <Badge variant="slate">Provider: Google</Badge>
                     <Badge variant="slate">Scopes: {connectedLensOAuthAccount.scopes.length}</Badge>
                     <Badge variant="slate">Tenant: {connectedLensOAuthAccount.tenantId}</Badge>
+                  </div>
+                ) : null}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Badge variant="slate">Source: Lens GA4</Badge>
+                  <Badge variant={ga4SnapshotHealthBadgeVariant}>{ga4SnapshotHealth}</Badge>
+                  <Badge variant="slate">Range: {ga4SnapshotSelectedRangeLabel}</Badge>
+                  <Badge variant="slate">Last synced: {ga4MetricSnapshot?.syncedAt ? displayDate(ga4MetricSnapshot.syncedAt) : "No snapshot yet"}</Badge>
+                </div>
+                {ga4MetricSnapshot?.status === "error" || ga4SnapshotStatus === "error" || !ga4MetricSnapshot ? (
+                  <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold leading-6 text-slate-600">
+                    {ga4MetricSnapshot?.status === "error"
+                      ? ga4MetricSnapshot.lastError || "Latest GA4 snapshot ended in an error."
+                      : ga4SnapshotStatus === "error"
+                        ? ga4SnapshotError || "GA4 snapshot load failed."
+                        : "No GA4 snapshot for this range yet. Sync GA4 metrics after source verification."}
                   </div>
                 ) : null}
                 {ga4MetricSourceMapping?.enabled ? (
