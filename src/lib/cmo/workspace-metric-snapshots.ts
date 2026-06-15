@@ -15,6 +15,7 @@ export interface WorkspaceGa4CoreMetrics {
 }
 
 interface WorkspaceMetricSnapshotRow {
+  id: string;
   tenant_id: string;
   workspace_id: string;
   app_id: string;
@@ -32,6 +33,7 @@ interface WorkspaceMetricSnapshotRow {
 }
 
 export interface WorkspaceGa4MetricSnapshot {
+  snapshotId: string;
   sourceType: "ga4";
   sourceId: "ga4_native";
   rangeKey: WorkspaceGa4MetricRangeKey;
@@ -157,6 +159,7 @@ function cleanJson(value: Record<string, unknown>): Record<string, unknown> {
 
 export function toSafeWorkspaceGa4MetricSnapshot(row: WorkspaceMetricSnapshotRow): WorkspaceGa4MetricSnapshot {
   return {
+    snapshotId: row.id,
     sourceType: "ga4",
     sourceId: "ga4_native",
     rangeKey: row.range_key,
@@ -198,7 +201,7 @@ export async function upsertWorkspaceGa4MetricSnapshot(input: UpsertWorkspaceGa4
     .upsert(row, {
       onConflict: "tenant_id,workspace_id,app_id,source_type,source_id,range_key,date_start,date_end",
     })
-    .select("tenant_id,workspace_id,app_id,source_type,source_id,range_key,date_start,date_end,timezone,metrics_json,source_meta_json,status,last_error,synced_at")
+    .select("id,tenant_id,workspace_id,app_id,source_type,source_id,range_key,date_start,date_end,timezone,metrics_json,source_meta_json,status,last_error,synced_at")
     .single();
 
   if (error) {
@@ -217,7 +220,7 @@ export async function getLatestWorkspaceGa4MetricSnapshot(input: {
   const supabase = await getWorkspaceMetricSnapshotsClient();
   const { data, error } = await supabase
     .from("workspace_metric_snapshots")
-    .select("tenant_id,workspace_id,app_id,source_type,source_id,range_key,date_start,date_end,timezone,metrics_json,source_meta_json,status,last_error,synced_at")
+    .select("id,tenant_id,workspace_id,app_id,source_type,source_id,range_key,date_start,date_end,timezone,metrics_json,source_meta_json,status,last_error,synced_at")
     .eq("tenant_id", input.tenantId)
     .eq("workspace_id", input.workspaceId)
     .eq("app_id", input.appId)
