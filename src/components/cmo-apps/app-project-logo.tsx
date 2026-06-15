@@ -43,6 +43,12 @@ const projectLogos: Record<string, ProjectLogo> = {
     height: 96,
     shape: "wide",
   },
+  "holdstation-mini-app": {
+    src: "/app-logos/holdstation-mini-app.png",
+    width: 1500,
+    height: 1500,
+    shape: "square",
+  },
   "holdstation-wallet": {
     src: "/app-logos/holdstation-wallet.png",
     width: 160,
