@@ -203,6 +203,25 @@ type DunePartnerSummaryRow = {
   totalTransactions: number;
 };
 
+type LensOAuthSafeAccount = {
+  id: string;
+  tenantId: string;
+  provider: "google";
+  googleEmail: string | null;
+  scopes: string[];
+  status: "connected" | "revoked" | "error";
+  createdAt: string;
+  updatedAt: string;
+  lastRefreshAt?: string | null;
+  lastError?: string | null;
+};
+
+type LensOAuthAccountsResponse = {
+  data: LensOAuthSafeAccount[];
+  oauthConfigured: boolean;
+  missingConfig: string[];
+};
+
 const dateRangeOptions: Array<{ id: CmoAppMetricDateRangePreset; label: string }> = [
   { id: "this_week", label: "This week" },
   { id: "last_7_days", label: "Last 7 days" },
@@ -1123,6 +1142,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [feesBusinessMetricsSnapshot, setFeesBusinessMetricsSnapshot] = useState<CmoBusinessMetricsSnapshot | null>(null);
   const [businessMetricsStatus, setBusinessMetricsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [businessMetricsError, setBusinessMetricsError] = useState<string | null>(null);
+  const [lensOAuthAccounts, setLensOAuthAccounts] = useState<LensOAuthSafeAccount[]>([]);
+  const [lensOAuthConfigured, setLensOAuthConfigured] = useState<boolean | null>(null);
+  const [lensOAuthMissingConfig, setLensOAuthMissingConfig] = useState<string[]>([]);
+  const [lensOAuthStatus, setLensOAuthStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [lensOAuthError, setLensOAuthError] = useState<string | null>(null);
   const [aggregatorChartMode, setAggregatorChartMode] = useState<AggregatorChartMode>("transactions");
   const [partnerChartMode, setPartnerChartMode] = useState<PartnerChartMode>("daily_volume");
   const [planTypeFilter, setPlanTypeFilter] = useState<PlanReviewTypeFilter>("all");
@@ -1222,6 +1246,28 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const hasDexBusinessMetrics = businessSnapshotHasData(dexBusinessMetricsSnapshot);
   const hasFeesBusinessMetrics = businessSnapshotHasData(feesBusinessMetricsSnapshot);
   const hasAnyBusinessMetrics = hasDexBusinessMetrics || hasFeesBusinessMetrics;
+  const connectedLensOAuthAccount = lensOAuthAccounts.find((account) => account.status === "connected") ?? null;
+  const lensOAuthBadgeVariant = lensOAuthStatus === "loading"
+    ? "slate"
+    : connectedLensOAuthAccount
+      ? "green"
+      : lensOAuthConfigured === false || lensOAuthStatus === "error"
+        ? "orange"
+        : "slate";
+  const lensOAuthBadgeLabel = lensOAuthStatus === "loading"
+    ? "Loading"
+    : connectedLensOAuthAccount
+      ? "Connected"
+      : lensOAuthConfigured === false
+        ? "Config missing"
+        : "Not connected";
+  const lensOAuthReturnTo = `${pathname}?tab=dashboard`;
+  const lensOAuthStartHref = `/api/lens/oauth/google/start?${new URLSearchParams({
+    appId: app.id,
+    returnTo: lensOAuthReturnTo,
+  }).toString()}`;
+  const lensOAuthResult = searchParams.get("lensOAuth");
+  const lensOAuthResultCode = searchParams.get("lensOAuthCode");
 
   useEffect(() => {
     const nextTab: AppWorkspaceTab = isWorkspaceTab(tabParam) ? tabParam : "dashboard";
@@ -1404,6 +1450,46 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
     return () => controller.abort();
   }, [app.id, showChannelPerformance]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      appId: app.id,
+    });
+
+    async function loadLensOAuthAccounts() {
+      setLensOAuthStatus("loading");
+      setLensOAuthError(null);
+
+      try {
+        const payload = await readJsonResponse<LensOAuthAccountsResponse>(
+          await fetch(`/api/lens/oauth/google/accounts?${params.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        );
+
+        if (!controller.signal.aborted) {
+          setLensOAuthAccounts(payload.data);
+          setLensOAuthConfigured(payload.oauthConfigured);
+          setLensOAuthMissingConfig(payload.missingConfig);
+          setLensOAuthStatus("ready");
+        }
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setLensOAuthAccounts([]);
+        setLensOAuthStatus("error");
+        setLensOAuthError(loadError instanceof Error ? loadError.message : "Lens OAuth status load failed");
+      }
+    }
+
+    void loadLensOAuthAccounts();
+
+    return () => controller.abort();
+  }, [app.id]);
 
   async function refreshWorkspace() {
     const payload = await readJsonResponse<{ data: AppWorkspaceState }>(
@@ -1664,6 +1750,58 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
 
       {activeTab === "dashboard" ? (
         <div className="space-y-6">
+          <SectionCard
+            title="Lens GA4"
+            icon={<icons.KeyRound />}
+            action={<Badge variant={lensOAuthBadgeVariant}>{lensOAuthBadgeLabel}</Badge>}
+          >
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+              <div>
+                <div className="text-sm font-bold text-slate-950">
+                  {connectedLensOAuthAccount?.googleEmail ?? "Google Analytics account not connected"}
+                </div>
+                <div className="mt-2 text-sm font-semibold leading-6 text-slate-600">
+                  {lensOAuthResult === "connected"
+                    ? "GA4 OAuth is connected. Property discovery is not enabled in this phase."
+                    : lensOAuthResult === "error"
+                      ? `Google OAuth did not complete${lensOAuthResultCode ? ` (${lensOAuthResultCode})` : ""}.`
+                      : connectedLensOAuthAccount
+                        ? `Connected ${displayDate(connectedLensOAuthAccount.updatedAt)}. GA4 properties and metrics are intentionally not fetched yet.`
+                        : lensOAuthConfigured === false
+                          ? "Google OAuth server configuration is incomplete."
+                          : lensOAuthError || "Connect GA4 to authorize Product-side Lens access."}
+                </div>
+                {lensOAuthMissingConfig.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {lensOAuthMissingConfig.map((name) => (
+                      <Badge key={name} variant="orange">{name}</Badge>
+                    ))}
+                  </div>
+                ) : null}
+                {connectedLensOAuthAccount ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Badge variant="slate">Provider: Google</Badge>
+                    <Badge variant="slate">Scopes: {connectedLensOAuthAccount.scopes.length}</Badge>
+                    <Badge variant="slate">Tenant: {connectedLensOAuthAccount.tenantId}</Badge>
+                  </div>
+                ) : null}
+              </div>
+              {lensOAuthConfigured === false ? (
+                <Button type="button" disabled>
+                  <icons.KeyRound />
+                  Connect GA4
+                </Button>
+              ) : (
+                <Button asChild>
+                  <a href={lensOAuthStartHref}>
+                    <icons.KeyRound />
+                    Connect GA4
+                  </a>
+                </Button>
+              )}
+            </div>
+          </SectionCard>
+
           {showChannelPerformance ? (
             <SectionCard
               title="Channel Performance"
