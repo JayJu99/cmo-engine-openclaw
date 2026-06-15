@@ -113,6 +113,27 @@ function displayDate(value: string | undefined): string {
   }).format(date);
 }
 
+function compactMetricValue(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "No data";
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    notation: Math.abs(value) >= 10_000 ? "compact" : "standard",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function percentMetricValue(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "No data";
+  }
+
+  return `${new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 1,
+  }).format(value * 100)}%`;
+}
+
 function ga4VerificationBadgeVariant(input: {
   loading: boolean;
   mapping: WorkspaceGa4MetricSourceMapping | null;
@@ -352,6 +373,32 @@ type WorkspaceGa4VerificationResponse = {
     code?: string;
     message?: string;
   };
+};
+
+type WorkspaceGa4MetricSnapshot = {
+  sourceType: "ga4";
+  sourceId: "ga4_native";
+  rangeKey: "this_week" | "last_7_days" | "last_30_days" | "this_month";
+  dateStart: string;
+  dateEnd: string;
+  timezone: string | null;
+  status: "synced" | "error";
+  syncedAt: string | null;
+  lastError?: string | null;
+  metrics: {
+    activeUsers?: number | null;
+    newUsers?: number | null;
+    totalUsers?: number | null;
+    sessions?: number | null;
+    engagedSessions?: number | null;
+    engagementRate?: number | null;
+    eventCount?: number | null;
+    userEngagementDuration?: number | null;
+  };
+};
+
+type WorkspaceGa4MetricSnapshotResponse = {
+  data: WorkspaceGa4MetricSnapshot | null;
 };
 
 const dateRangeOptions: Array<{ id: CmoAppMetricDateRangePreset; label: string }> = [
@@ -1284,6 +1331,9 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [ga4PropertiesError, setGa4PropertiesError] = useState<string | null>(null);
   const [selectedGa4PropertyId, setSelectedGa4PropertyId] = useState("");
   const [ga4MetricSourceMapping, setGa4MetricSourceMapping] = useState<WorkspaceGa4MetricSourceMapping | null>(null);
+  const [ga4MetricSnapshot, setGa4MetricSnapshot] = useState<WorkspaceGa4MetricSnapshot | null>(null);
+  const [ga4SnapshotStatus, setGa4SnapshotStatus] = useState<"idle" | "loading" | "ready" | "syncing" | "error">("idle");
+  const [ga4SnapshotError, setGa4SnapshotError] = useState<string | null>(null);
   const [ga4MappingStatus, setGa4MappingStatus] = useState<"idle" | "loading" | "ready" | "saving" | "verifying" | "error">("idle");
   const [ga4MappingError, setGa4MappingError] = useState<string | null>(null);
   const [aggregatorChartMode, setAggregatorChartMode] = useState<AggregatorChartMode>("transactions");
@@ -1417,6 +1467,10 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     : ga4MetricSourceMapping?.verificationStatus === "verified"
       ? "Verify again"
       : "Verify connection";
+  const ga4SnapshotRangeLabel = ga4MetricSnapshot
+    ? `${ga4MetricSnapshot.dateStart} to ${ga4MetricSnapshot.dateEnd}`
+    : "this week";
+  const ga4SyncButtonLabel = ga4SnapshotStatus === "syncing" ? "Syncing GA4 metrics" : "Sync GA4 metrics";
   const ga4SourceBadgeVariant = ga4VerificationBadgeVariant({
     loading: ga4SourceIsBusy,
     mapping: ga4MetricSourceMapping,
@@ -1687,6 +1741,41 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   }, [app.id]);
 
   useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadGa4MetricSnapshot() {
+      setGa4SnapshotStatus("loading");
+      setGa4SnapshotError(null);
+
+      try {
+        const payload = await readJsonResponse<WorkspaceGa4MetricSnapshotResponse>(
+          await fetch(`/api/cmo/apps/${app.id}/metric-sources/ga4/snapshots?rangeKey=this_week`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        );
+
+        if (!controller.signal.aborted) {
+          setGa4MetricSnapshot(payload.data);
+          setGa4SnapshotStatus("ready");
+        }
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setGa4MetricSnapshot(null);
+        setGa4SnapshotStatus("error");
+        setGa4SnapshotError(loadError instanceof Error ? loadError.message : "GA4 metric snapshot load failed");
+      }
+    }
+
+    void loadGa4MetricSnapshot();
+
+    return () => controller.abort();
+  }, [app.id]);
+
+  useEffect(() => {
     if (!connectedLensOAuthAccount) {
       return;
     }
@@ -1855,6 +1944,31 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     } catch (error) {
       setGa4MappingStatus("error");
       setGa4MappingError(error instanceof Error ? error.message : "GA4 source verification failed");
+    }
+  }
+
+  async function syncGa4MetricSnapshot() {
+    if (ga4MetricSourceMapping?.verificationStatus !== "verified") {
+      setGa4SnapshotError("Verify the GA4 source before syncing metrics.");
+      return;
+    }
+
+    setGa4SnapshotStatus("syncing");
+    setGa4SnapshotError(null);
+
+    try {
+      const payload = await readJsonResponse<WorkspaceGa4MetricSnapshotResponse>(
+        await fetch(`/api/cmo/apps/${app.id}/metric-sources/ga4/sync?rangeKey=this_week`, {
+          method: "POST",
+          cache: "no-store",
+        }),
+      );
+
+      setGa4MetricSnapshot(payload.data);
+      setGa4SnapshotStatus("ready");
+    } catch (error) {
+      setGa4SnapshotStatus("error");
+      setGa4SnapshotError(error instanceof Error ? error.message : "GA4 metric sync failed");
     }
   }
 
@@ -2090,6 +2204,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                 <div className="mt-2 text-sm font-semibold leading-6 text-slate-500">
                   Property discovery enabled. Metrics fetching comes in M6.4.
                 </div>
+                {ga4MetricSnapshot?.status === "synced" ? (
+                  <div className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                    GA4 core metrics synced. Lens interpretation comes later.
+                  </div>
+                ) : null}
                 {ga4VerificationCopy ? (
                   <div className="mt-2 text-sm font-semibold leading-6 text-slate-500">
                     {ga4VerificationCopy}
@@ -2115,10 +2234,20 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                     <FieldValue label="Account" value={ga4MetricSourceMapping.accountDisplayName ?? ga4MetricSourceMapping.accountId} />
                     <FieldValue label="Timezone" value={ga4MetricSourceMapping.timezone ?? "Not returned"} />
                     <FieldValue label="Last verified" value={ga4MetricSourceMapping.lastVerifiedAt ? displayDate(ga4MetricSourceMapping.lastVerifiedAt) : "Not verified yet"} />
+                    <FieldValue label="Latest synced" value={ga4MetricSnapshot?.syncedAt ? `${displayDate(ga4MetricSnapshot.syncedAt)} / ${ga4SnapshotRangeLabel}` : "No snapshot yet"} />
+                  </div>
+                ) : null}
+                {ga4MetricSnapshot?.status === "synced" ? (
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                    <FieldValue label="Active users" value={compactMetricValue(ga4MetricSnapshot.metrics.activeUsers)} />
+                    <FieldValue label="New users" value={compactMetricValue(ga4MetricSnapshot.metrics.newUsers)} />
+                    <FieldValue label="Sessions" value={compactMetricValue(ga4MetricSnapshot.metrics.sessions)} />
+                    <FieldValue label="Event count" value={compactMetricValue(ga4MetricSnapshot.metrics.eventCount)} />
+                    <FieldValue label="Engagement rate" value={percentMetricValue(ga4MetricSnapshot.metrics.engagementRate)} />
                   </div>
                 ) : null}
                 {connectedLensOAuthAccount ? (
-                  <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-end">
+                  <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto_auto] md:items-end">
                     <Field label="Choose GA4 property">
                       <select
                         value={selectedGa4PropertyId}
@@ -2164,11 +2293,22 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                         {ga4VerifyButtonLabel}
                       </Button>
                     ) : null}
+                    {ga4MetricSourceMapping?.verificationStatus === "verified" ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void syncGa4MetricSnapshot()}
+                        disabled={ga4SnapshotStatus === "syncing" || ga4MappingStatus === "saving" || ga4MappingStatus === "verifying"}
+                      >
+                        <icons.RefreshCw />
+                        {ga4SyncButtonLabel}
+                      </Button>
+                    ) : null}
                   </div>
                 ) : null}
-                {ga4PropertiesError || ga4MappingError ? (
+                {ga4PropertiesError || ga4MappingError || ga4SnapshotError ? (
                   <div className="mt-3 rounded-xl border border-orange-100 bg-orange-50 px-4 py-3 text-sm font-semibold text-orange-700">
-                    {ga4PropertiesError || ga4MappingError}
+                    {ga4PropertiesError || ga4MappingError || ga4SnapshotError}
                   </div>
                 ) : null}
               </div>

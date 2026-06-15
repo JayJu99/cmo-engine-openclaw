@@ -66,7 +66,14 @@ function allSourceText() {
   })
     .split(/\r?\n/)
     .filter(Boolean)
-    .filter((file) => file !== "scripts/cmo-lens-ga4-source-verification-check.mjs");
+    .filter((file) => ![
+      "scripts/cmo-lens-ga4-source-verification-check.mjs",
+      "scripts/cmo-lens-ga4-data-sync-check.mjs",
+      "src/lib/cmo/lens-ga4-data.ts",
+      "src/lib/cmo/workspace-metric-snapshots.ts",
+      "src/app/api/cmo/apps/[appId]/metric-sources/ga4/sync/route.ts",
+      "src/app/api/cmo/apps/[appId]/metric-sources/ga4/snapshots/route.ts",
+    ].includes(file));
 
   return files.map((file) => source(file)).join("\n");
 }
