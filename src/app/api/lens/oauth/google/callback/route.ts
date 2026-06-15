@@ -9,6 +9,7 @@ import {
   type LensOAuthStatePayload,
 } from "@/lib/cmo/lens-oauth-state";
 import { upsertGoogleLensOAuthAccount } from "@/lib/cmo/lens-oauth-accounts";
+import { buildLensOAuthFinalRedirect, normalizeLensOAuthReturnTo } from "@/lib/cmo/lens-oauth-redirect";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,22 +29,18 @@ interface GoogleIdTokenClaims {
   sub?: string;
 }
 
-function safeReturnTo(value: string | undefined): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) {
-    return "/apps/holdstation-mini-app?tab=dashboard";
-  }
-
-  return value;
+function getFinalRedirectBaseUrl(requestOrigin: string): string {
+  return (process.env.CMO_PUBLIC_APP_URL ?? "").trim() || requestOrigin;
 }
 
-function redirectWithStatus(origin: string, returnTo: string, status: "connected" | "error", code?: string): NextResponse {
-  const redirectUrl = new URL(safeReturnTo(returnTo), origin);
-  redirectUrl.searchParams.set("lensOAuth", status);
-
-  if (code) {
-    redirectUrl.searchParams.set("lensOAuthCode", code);
-  }
-
+function redirectWithStatus(
+  baseUrl: string,
+  returnTo: string | null | undefined,
+  status: "connected" | "error",
+  code?: string,
+  appId?: string | null,
+): NextResponse {
+  const redirectUrl = buildLensOAuthFinalRedirect(baseUrl, returnTo, status, code, appId);
   const response = NextResponse.redirect(redirectUrl);
   response.cookies.set({
     name: LENS_OAUTH_NONCE_COOKIE_NAME,
@@ -171,14 +168,14 @@ function safeFailureCode(error: unknown): string {
 
 export async function GET(request: NextRequest) {
   let state: LensOAuthStatePayload | null = null;
-  const origin = request.nextUrl.origin;
+  const baseUrl = getFinalRedirectBaseUrl(request.nextUrl.origin);
 
   try {
     const url = new URL(request.url);
     const stateText = url.searchParams.get("state");
 
     if (!stateText) {
-      return redirectWithStatus(origin, "/apps/holdstation-mini-app?tab=dashboard", "error", "missing_state");
+      return redirectWithStatus(baseUrl, null, "error", "missing_state", "holdstation-mini-app");
     }
 
     state = verifyLensOAuthState(stateText);
@@ -187,11 +184,11 @@ export async function GET(request: NextRequest) {
     const code = url.searchParams.get("code");
 
     if (!code) {
-      return redirectWithStatus(origin, safeReturnTo(state.return_to), "error", "missing_code");
+      return redirectWithStatus(baseUrl, state.return_to, "error", "missing_code", state.app_id);
     }
 
     if (!state.tenant_id) {
-      return redirectWithStatus(origin, safeReturnTo(state.return_to), "error", "missing_tenant");
+      return redirectWithStatus(baseUrl, state.return_to, "error", "missing_tenant", state.app_id);
     }
 
     const config = getLensGoogleOAuthConfig();
@@ -203,7 +200,7 @@ export async function GET(request: NextRequest) {
     });
 
     if (!tokenResponse.refresh_token) {
-      return redirectWithStatus(origin, safeReturnTo(state.return_to), "error", "missing_refresh_token");
+      return redirectWithStatus(baseUrl, state.return_to, "error", "missing_refresh_token", state.app_id);
     }
 
     const idTokenClaims = tokenResponse.id_token ? decodeGoogleIdToken(tokenResponse.id_token, config.clientId) : {};
@@ -229,8 +226,8 @@ export async function GET(request: NextRequest) {
       createdByUserId: userContext.mode === "supabase" ? userContext.userId : null,
     });
 
-    return redirectWithStatus(origin, safeReturnTo(state.return_to), "connected");
+    return redirectWithStatus(baseUrl, normalizeLensOAuthReturnTo(state.return_to, state.app_id), "connected", undefined, state.app_id);
   } catch (error) {
-    return redirectWithStatus(origin, safeReturnTo(state?.return_to), "error", safeFailureCode(error));
+    return redirectWithStatus(baseUrl, state?.return_to, "error", safeFailureCode(error), state?.app_id);
   }
 }

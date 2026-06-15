@@ -58,6 +58,7 @@ const state = loadTs("src/lib/cmo/lens-oauth-state.ts");
 const crypto = loadTs("src/lib/cmo/lens-oauth-crypto.ts");
 const google = loadTs("src/lib/cmo/lens-google-oauth.ts");
 const accounts = loadTs("src/lib/cmo/lens-oauth-accounts.ts");
+const redirects = loadTs("src/lib/cmo/lens-oauth-redirect.ts");
 
 const signedState = state.createLensOAuthState({
   tenant_id: "holdstation",
@@ -78,6 +79,32 @@ assert(oauthUrl.searchParams.get("access_type") === "offline", "OAuth URL is mis
 assert(oauthUrl.searchParams.get("prompt") === "consent", "OAuth URL is missing consent prompt");
 assert(oauthUrl.searchParams.get("include_granted_scopes") === "true", "OAuth URL is missing include_granted_scopes");
 assert(Boolean(oauthUrl.searchParams.get("state")), "OAuth URL is missing signed state");
+
+assert(
+  redirects.normalizeLensOAuthReturnTo("/apps/holdstation-mini-app?tab=dashboard", "holdstation-mini-app")
+    === "/apps/holdstation-mini-app?tab=dashboard",
+  "Relative Lens OAuth returnTo was not preserved",
+);
+assert(
+  redirects.normalizeLensOAuthReturnTo("http://localhost:3002/apps/holdstation-mini-app?tab=dashboard", "holdstation-mini-app")
+    === "/apps/holdstation-mini-app?tab=dashboard",
+  "Absolute localhost Lens OAuth returnTo was not rejected",
+);
+assert(
+  redirects.normalizeLensOAuthReturnTo("holdstation-mini-app?tab=dashboard", "holdstation-mini-app")
+    === "/apps/holdstation-mini-app?tab=dashboard",
+  "Malformed Lens OAuth returnTo did not fall back to app dashboard",
+);
+const productionRedirect = redirects.buildLensOAuthFinalRedirect(
+  "https://cmo.jayju.cloud",
+  "/apps/holdstation-mini-app?tab=dashboard",
+  "connected",
+);
+assert(
+  productionRedirect.toString() === "https://cmo.jayju.cloud/apps/holdstation-mini-app?tab=dashboard&lensOAuth=connected",
+  `Production Lens OAuth final redirect is wrong: ${productionRedirect.toString()}`,
+);
+assert(!productionRedirect.toString().includes("localhost:3002"), "Production Lens OAuth final redirect includes localhost:3002");
 
 assertThrows(() => state.verifyLensOAuthState(`${signedState}tampered`), "signature");
 const expiredState = state.createLensOAuthState({
@@ -115,6 +142,7 @@ const checkedFiles = [
   "src/lib/cmo/lens-oauth-state.ts",
   "src/lib/cmo/lens-google-oauth.ts",
   "src/lib/cmo/lens-oauth-accounts.ts",
+  "src/lib/cmo/lens-oauth-redirect.ts",
   "src/app/api/lens/oauth/google/start/route.ts",
   "src/app/api/lens/oauth/google/callback/route.ts",
   "src/app/api/lens/oauth/google/accounts/route.ts",

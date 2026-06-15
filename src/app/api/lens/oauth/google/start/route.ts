@@ -8,18 +8,11 @@ import {
   LENS_OAUTH_STATE_TTL_SECONDS,
 } from "@/lib/cmo/lens-oauth-state";
 import { requireRequestUserIfAuthRequired } from "@/lib/cmo/auth";
+import { normalizeLensOAuthReturnTo } from "@/lib/cmo/lens-oauth-redirect";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-function safeReturnTo(value: string | null, fallback: string): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) {
-    return fallback;
-  }
-
-  return value;
-}
 
 export async function GET(request: Request) {
   try {
@@ -28,7 +21,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const appId = url.searchParams.get("appId")?.trim() || "holdstation-mini-app";
     const entry = requireWorkspaceRegistryEntry(appId);
-    const returnTo = safeReturnTo(url.searchParams.get("returnTo"), `${entry.route}?tab=dashboard`);
+    const returnTo = normalizeLensOAuthReturnTo(url.searchParams.get("returnTo"), entry.appId);
     const configStatus = getLensOAuthConfigStatus();
 
     if (!configStatus.configured) {
