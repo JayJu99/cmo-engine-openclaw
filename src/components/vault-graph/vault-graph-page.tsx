@@ -707,6 +707,7 @@ function VaultGraphCanvas({
   search,
   zoom,
   sourceRoot,
+  isSourceUnavailable,
   isLoading,
   onSelectNode,
   onClearSelection,
@@ -722,6 +723,7 @@ function VaultGraphCanvas({
   search: string;
   zoom: number;
   sourceRoot: VaultGraphApiResponse["source_root"];
+  isSourceUnavailable: boolean;
   isLoading: boolean;
   onSelectNode: (node: VaultGraphNode, event: MouseEvent<SVGGElement>) => void;
   onClearSelection: () => void;
@@ -835,10 +837,15 @@ function VaultGraphCanvas({
   }
 
   if (semanticNodes.length === 0) {
+    const emptyTitle = isSourceUnavailable ? "Vault Agent graph unavailable" : "No matching nodes";
+    const emptyDescription = isSourceUnavailable
+      ? "The read-only graph source returned no nodes. Check the Vault Agent graph endpoint or deployment config."
+      : "Try another filter or search term.";
+
     return (
       <div className="relative min-h-[720px] overflow-hidden rounded-[30px] border border-white/8 bg-black/20 xl:min-h-[calc(100vh-245px)] xl:max-h-[840px]">
         <svg
-          aria-label="Vault Graph empty"
+          aria-label={isSourceUnavailable ? "Vault Graph source unavailable" : "Vault Graph empty"}
           className="relative z-10 h-[720px] min-h-[720px] w-full xl:h-[calc(100vh-245px)] xl:max-h-[840px]"
           preserveAspectRatio="xMidYMid meet"
           role="img"
@@ -860,12 +867,15 @@ function VaultGraphCanvas({
         </svg>
         <div className="pointer-events-none absolute inset-0 z-20 rounded-[30px] bg-[radial-gradient(circle_at_50%_45%,transparent_0%,transparent_54%,rgba(0,0,0,0.42)_100%)]" />
         <div className="absolute left-1/2 top-1/2 z-30 w-[min(360px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[24px] border border-white/10 bg-slate-950/68 p-5 text-center shadow-[0_24px_70px_rgba(0,0,0,0.36)] backdrop-blur-xl">
-          <div className="mx-auto grid size-11 place-items-center rounded-2xl border border-white/10 bg-white/[0.055] text-cyan-200">
-            <icons.Search className="size-5" />
+          <div className={cn(
+            "mx-auto grid size-11 place-items-center rounded-2xl border border-white/10 bg-white/[0.055]",
+            isSourceUnavailable ? "text-amber-200" : "text-cyan-200",
+          )}>
+            {isSourceUnavailable ? <icons.AlertTriangle className="size-5" /> : <icons.Search className="size-5" />}
           </div>
-          <CardTitle className="mt-4 text-lg text-white">No matching nodes</CardTitle>
+          <CardTitle className="mt-4 text-lg text-white">{emptyTitle}</CardTitle>
           <CardDescription className="mt-2 text-sm leading-5 text-slate-400">
-            Try another filter or search term.
+            {emptyDescription}
           </CardDescription>
         </div>
       </div>
@@ -1409,6 +1419,7 @@ function VaultGraphNodeDetails({
   activeFilter,
   search,
   sourceRoot,
+  isSourceUnavailable,
   isLoading,
   onSelectNode,
 }: {
@@ -1420,6 +1431,7 @@ function VaultGraphNodeDetails({
   activeFilter: VaultGraphFilter;
   search: string;
   sourceRoot: VaultGraphApiResponse["source_root"];
+  isSourceUnavailable: boolean;
   isLoading: boolean;
   onSelectNode: (nodeId: string) => void;
 }) {
@@ -1706,9 +1718,17 @@ function VaultGraphNodeDetails({
           <div className="mt-5">
             <CardTitle className="text-xl leading-tight text-white">Graph overview</CardTitle>
             <CardDescription className="mt-3 text-sm leading-5 text-slate-400">
-              Select a node to inspect metadata and connections.
+              {isSourceUnavailable
+                ? "Vault Agent did not return graph nodes for this read-only view."
+                : "Select a node to inspect metadata and connections."}
             </CardDescription>
           </div>
+
+          {isSourceUnavailable ? (
+            <div className="mt-5 rounded-2xl border border-amber-300/14 bg-amber-300/[0.055] p-3 text-xs font-semibold leading-5 text-amber-100/80">
+              Source warning: the Vault Agent graph endpoint returned an empty safe response. This is not a filter or search miss.
+            </div>
+          ) : null}
 
           <div className="mt-5 grid grid-cols-2 gap-3">
             <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-3">
@@ -1770,6 +1790,11 @@ export function VaultGraphPage() {
   const [apiStatus, setApiStatus] = useState<VaultGraphApiStatus>("loading");
   const isGraphLoading = apiStatus === "loading" || !graphResponse;
   const graphData: VaultGraphData = graphResponse ?? { nodes: [], edges: [] };
+  const isSourceUnavailable = Boolean(
+    graphResponse?.source_root === "vault-agent" &&
+      graphData.nodes.length === 0 &&
+      (graphResponse.warnings.length > 0 || graphResponse.parse_errors.length > 0),
+  );
   const clearSelection = useCallback(() => {
     setSelectedNodeId(null);
     setHoveredNodeId(null);
@@ -1930,6 +1955,7 @@ export function VaultGraphPage() {
                 hoveredNodeId={hoveredNodeId}
                 zoom={zoom}
                 sourceRoot={graphResponse?.source_root ?? "mock"}
+                isSourceUnavailable={isSourceUnavailable}
                 isLoading={isGraphLoading}
                 onSelectNode={toggleNodeSelection}
                 onClearSelection={clearSelection}
@@ -1947,6 +1973,7 @@ export function VaultGraphPage() {
                 activeFilter={activeFilter}
                 search={search}
                 sourceRoot={graphResponse?.source_root ?? "mock"}
+                isSourceUnavailable={isSourceUnavailable}
                 isLoading={isGraphLoading}
                 onSelectNode={setSelectedNodeId}
               />

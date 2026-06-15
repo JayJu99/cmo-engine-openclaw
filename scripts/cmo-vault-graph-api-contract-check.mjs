@@ -45,6 +45,7 @@ assert.match(uiSource, /function matchesFilter/, "Vault Graph UI must keep expli
 assert.match(uiSource, /semanticNodesForFilterAndSearch/, "Vault Graph UI must filter real semantic nodes by filter and search.");
 assert.match(uiSource, /decorativeNodesForVisibleClusters/, "Vault Graph UI must keep mock decorative context scoped to visible semantic clusters.");
 assert.match(uiSource, /No matching nodes/, "Vault Graph UI must show a clean empty filter or search state.");
+assert.match(uiSource, /Vault Agent graph unavailable/, "Vault Graph UI must distinguish source outages from filter or search misses.");
 assert.match(uiSource, /node\.workspace_id/, "Vault Graph search must include workspace_id metadata.");
 assert.match(uiSource, /\.\.\.node\.tags/, "Vault Graph search must include node tags.");
 assert.match(uiSource, /safeVaultGraphDisplayPath/, "Vault Graph inspector must sanitize display paths.");
