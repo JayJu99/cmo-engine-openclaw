@@ -94,7 +94,7 @@ export interface LensComparisonReadiness {
 }
 
 const COMPARISON_RANGE_KEYS: WorkspaceGa4MetricRangeKey[] = ["this_week", "last_7_days", "last_30_days", "this_month"];
-const HIGHLIGHT_KEYS = ["ga4.new_users", "ga4.sessions", "ga4.event_count", "ga4.engagement_rate"];
+const HIGHLIGHT_KEYS = ["ga4.active_users", "ga4.new_users", "ga4.sessions", "ga4.event_count", "ga4.engagement_rate"];
 
 function mappedMetrics(metricsPack: LensMetricsPack): LensMetricsPackMetric[] {
   return metricsPack.metrics.filter((metric) => metric.mappingStatus === "mapped" && typeof metric.value === "number" && Number.isFinite(metric.value));

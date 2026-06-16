@@ -1,7 +1,12 @@
 import { execFileSync } from "node:child_process";
+import strictAssert from "node:assert/strict";
+import { createRequire } from "node:module";
 import fs from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import ts from "typescript";
 
 const root = process.cwd();
 
@@ -35,12 +40,289 @@ function assertExcludes(relativePath, pattern, message) {
   assert(!pattern.test(source(relativePath)), message);
 }
 
+async function transpile(sourcePath, outputPath) {
+  const output = ts.transpileModule(fs.readFileSync(sourcePath, "utf8"), {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.CommonJS,
+      esModuleInterop: true,
+      importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
+    },
+    fileName: sourcePath,
+  }).outputText.replace(/require\("@\/lib\/cmo\/([^"]+)"\)/g, (_match, modulePath) =>
+    `require("./${path.basename(modulePath)}.js")`
+  );
+
+  await writeFile(outputPath, output, "utf8");
+}
+
+async function loadHermesChatV11Builder() {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "cmo-lens-cmo-readout-shape-"));
+  const cmoDir = repoPath("src", "lib", "cmo");
+
+  for (const file of [
+    "config",
+    "app-routing-intent",
+    "session-working-memory",
+    "user-metadata",
+    "hermes-cmo-chat-router",
+    "hermes-cmo-chat-mapper",
+    "hermes-cmo-chat-v11",
+  ]) {
+    await transpile(path.join(cmoDir, `${file}.ts`), path.join(tmpDir, `${file}.js`));
+  }
+
+  const requireFromTmp = createRequire(path.join(tmpDir, "hermes-cmo-chat-v11.js"));
+
+  return {
+    tmpDir,
+    chatV11: requireFromTmp(path.join(tmpDir, "hermes-cmo-chat-v11.js")),
+  };
+}
+
+function fakeLensReadoutContext() {
+  const metricHighlights = [
+    {
+      key: "ga4.active_users",
+      label: "Active Users",
+      value: 1210,
+      displayValue: "1,210",
+      unit: "users",
+      role: "audience",
+      source: "Lens GA4",
+    },
+    {
+      key: "ga4.new_users",
+      label: "New Users",
+      value: 850,
+      displayValue: "850",
+      unit: "users",
+      role: "acquisition",
+      source: "Lens GA4",
+    },
+    {
+      key: "ga4.sessions",
+      label: "Sessions",
+      value: 20468,
+      displayValue: "20,468",
+      unit: "sessions",
+      role: "traffic",
+      source: "Lens GA4",
+    },
+    {
+      key: "ga4.event_count",
+      label: "Event Count",
+      value: 383400,
+      displayValue: "383,400",
+      unit: "events",
+      role: "engagement",
+      source: "Lens GA4",
+    },
+    {
+      key: "ga4.engagement_rate",
+      label: "Engagement Rate",
+      value: 0.945,
+      displayValue: "94.5%",
+      unit: "ratio",
+      role: "engagement",
+      source: "Lens GA4",
+    },
+  ];
+
+  return {
+    contract: "lens.readout_context.v1",
+    readoutContract: "lens.readout.v1",
+    appId: "holdstation-mini-app",
+    workspaceId: "holdstation-mini-app",
+    tenantId: "holdstation",
+    rangeKey: "this_week",
+    generatedAt: "2026-06-16T00:00:00.000Z",
+    sourceSnapshotIds: ["snapshot_this_week"],
+    status: {
+      overall: "ready",
+      dataStatus: "fresh",
+      canAnswerBasicPerformance: true,
+      canAnswerActivation: false,
+      canAnswerRetention: false,
+      canCompareTrend: false,
+    },
+    headline: {
+      title: "GA4 performance readout is ready",
+      summary: "Lens can summarize cached GA4 performance metrics for the selected range.",
+      confidence: "high",
+    },
+    metricHighlights,
+    deterministicFindings: [
+      {
+        key: "activation_not_configured",
+        type: "configuration_gap",
+        severity: "warning",
+        title: "Activation is not configured",
+      },
+    ],
+    recommendedActions: [],
+    limitations: ["Activation and retention are blocked until definitions are configured."],
+    factsForModel: [
+      "For this_week, GA4 New Users = 850.",
+      "For this_week, GA4 Sessions = 20.5K.",
+      "For this_week, GA4 Event Count = 383.4K.",
+      "For this_week, GA4 Engagement Rate = 94.5%.",
+      "Activation metrics are not configured.",
+      "D1/D7 retention metrics are not configured.",
+    ],
+    groundingRules: [
+      "Use Lens readout facts as evidence for app performance questions.",
+      "Do not treat Active Users as Activated Users.",
+      "Do not treat Engagement Rate as Activation Rate.",
+      "Do not invent activation or retention metrics when definition_needed.",
+    ],
+  };
+}
+
+function fakeHermesInput() {
+  const contextPack = {
+    policyVersion: "context-pack-v1",
+    workspaceId: "holdstation-mini-app",
+    appId: "holdstation-mini-app",
+    sourceId: "holdstation-mini-app__holdstation-mini-app",
+    logicalAppPath: "02 Apps/World Mini App/Holdstation Mini App",
+    physicalAppVaultPath: "knowledge/holdstation/02 Apps/World Mini App/Holdstation Mini App",
+    appVaultPath: "02 Apps/World Mini App/Holdstation Mini App",
+    physicalVaultPath: "knowledge/holdstation",
+    runtimeMode: "live",
+    tokenBudget: {
+      maxInputTokens: 8000,
+      estimatedTokens: 120,
+      maxItemChars: 4000,
+    },
+    items: [],
+    exclusions: [],
+    contextQualitySummary: {
+      selectedCount: 0,
+      existingCount: 0,
+      missingCount: 0,
+      confirmedCount: 0,
+      draftCount: 0,
+      placeholderCount: 0,
+      placeholderOrDraftCount: 0,
+    },
+  };
+
+  return {
+    contextPack,
+    contextPackage: {
+      workspaceId: "holdstation-mini-app",
+      sourceId: "holdstation-mini-app__holdstation-mini-app",
+      mode: "app_context",
+      contextPack,
+      lensReadoutContext: fakeLensReadoutContext(),
+      app: {
+        id: "holdstation-mini-app",
+        name: "Holdstation Mini App",
+        vaultPath: "knowledge/holdstation/02 Apps/World Mini App/Holdstation Mini App",
+        logicalAppPath: "02 Apps/World Mini App/Holdstation Mini App",
+        physicalAppVaultPath: "knowledge/holdstation/02 Apps/World Mini App/Holdstation Mini App",
+        appVaultPath: "02 Apps/World Mini App/Holdstation Mini App",
+      },
+      userMessage: "How many new users this week?",
+      selectedContext: [],
+      missingContext: [],
+      contextQualitySummary: contextPack.contextQualitySummary,
+      instructions: {
+        role: "strategic CMO",
+        doNotOverpromise: true,
+        answerStyle: "operator-grade, concise, decision-oriented",
+        mustStateAssumptions: true,
+        mustReferenceContextUsed: true,
+        useSelectedNotesOnly: true,
+        doNotClaimAllVaultRag: true,
+        doNotPretendDurableMemoryComplete: true,
+        mustStatePlaceholderLimitations: true,
+        askForConfirmationWhenContextIsDraft: true,
+        suggestFillingAppMemoryWhenRelevant: true,
+      },
+    },
+    message: "How many new users this week?",
+    history: [],
+    request: {
+      tenantId: "holdstation",
+      workspaceId: "holdstation-mini-app",
+      appId: "holdstation-mini-app",
+      appName: "Holdstation Mini App",
+      message: "How many new users this week?",
+      context: {
+        selectedNotes: [],
+        mode: "app_context",
+      },
+    },
+    contextUsed: [],
+    missingContext: [],
+    sessionId: "session_lens_shape",
+    userMessageId: "msg_lens_shape",
+    createdAt: "2026-06-16T00:00:00.000Z",
+    userIdentity: {
+      userId: "user_lens_shape",
+      userEmail: "lens-shape@example.com",
+    },
+  };
+}
+
+async function assertSerializedLensRequestShape() {
+  const { tmpDir, chatV11 } = await loadHermesChatV11Builder();
+
+  try {
+    const request = chatV11.buildHermesCmoChatV11Request(fakeHermesInput());
+    const artifact = request.context_pack.artifacts_in.find((item) =>
+      item.contract === "lens.readout_context.v1" &&
+      item.kind === "lens_readout_context"
+    );
+
+    strictAssert.ok(Array.isArray(request.context_pack.artifacts_in), "context_pack.artifacts_in[] must exist");
+    strictAssert.ok(artifact, "Lens readout artifact must be present in context_pack.artifacts_in[]");
+    strictAssert.equal(artifact.contract, "lens.readout_context.v1");
+    strictAssert.equal(artifact.kind, "lens_readout_context");
+    strictAssert.ok(artifact.content, "Lens readout artifact must retain content");
+    strictAssert.ok(Array.isArray(artifact.content.metricHighlights), "Lens content.metricHighlights must exist");
+    strictAssert.ok(
+      artifact.content.metricHighlights.some((metric) => metric.key === "ga4.new_users" && metric.label === "New Users"),
+      "Lens content.metricHighlights must include ga4.new_users",
+    );
+    strictAssert.ok(Array.isArray(artifact.content.factsForModel), "Lens content.factsForModel must exist");
+    strictAssert.ok(Array.isArray(artifact.content.groundingRules), "Lens content.groundingRules must exist");
+
+    const serialized = JSON.stringify(request);
+
+    for (const expected of [
+      "lens.readout_context.v1",
+      "metricHighlights",
+      "ga4.new_users",
+      "New Users",
+      "factsForModel",
+    ]) {
+      strictAssert.ok(serialized.includes(expected), `serialized outbound request must include ${expected}`);
+    }
+
+    for (const forbidden of [
+      "schema_version\":\"lens.readout_context.v1",
+      "access_token",
+      "refresh_token",
+      "encrypted_refresh_token",
+    ]) {
+      strictAssert.ok(!serialized.includes(forbidden), `serialized outbound request must not include ${forbidden}`);
+    }
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
 const contextHelperPath = "src/lib/cmo/lens-readout-context.ts";
 const readoutHelperPath = "src/lib/cmo/lens-readout.ts";
 const diagnosticsPackPath = "src/lib/cmo/lens-diagnostics-pack.ts";
 const chatStorePath = "src/lib/cmo/app-chat-store.ts";
 const mapperPath = "src/lib/cmo/hermes-cmo-chat-mapper.ts";
 const chatV11Path = "src/lib/cmo/hermes-cmo-chat-v11.ts";
+const chatRoutePath = "src/app/api/cmo/chat/route.ts";
+const hermesRuntimePath = "src/lib/cmo/hermes-cmo-runtime.ts";
 const typesPath = "src/lib/cmo/app-workspace-types.ts";
 const metricsPackPath = "src/lib/cmo/lens-metrics-pack.ts";
 const forbiddenMetricFetchPattern = new RegExp(["run", "Report"].join(""), "i");
@@ -53,7 +335,7 @@ const forbiddenNewProductLlmPattern = new RegExp([
   ["gr", "oq"].join(""),
 ].join("|"), "i");
 
-for (const file of [contextHelperPath, readoutHelperPath, diagnosticsPackPath, chatStorePath, mapperPath, chatV11Path, typesPath, metricsPackPath]) {
+for (const file of [contextHelperPath, readoutHelperPath, diagnosticsPackPath, chatStorePath, mapperPath, chatV11Path, chatRoutePath, hermesRuntimePath, typesPath, metricsPackPath]) {
   assertFileExists(file, `${file} is missing`);
 }
 
@@ -62,6 +344,15 @@ assertIncludes(contextHelperPath, 'readoutContract: readout.contract', "Lens rea
 assertIncludes(contextHelperPath, "getLensReadoutForApp", "Lens readout context must use existing readout helper");
 assertIncludes(contextHelperPath, "getLensReadoutContextForAppSafe", "Lens readout context must expose fail-soft builder");
 assertIncludes(contextHelperPath, "lens_readout_context_unavailable", "Lens readout context helper must degrade gracefully");
+assertIncludes(contextHelperPath, "factsForModel", "Lens readout context must expose model-readable facts");
+assertIncludes(contextHelperPath, "groundingRules", "Lens readout context must expose grounding rules");
+assertIncludes(contextHelperPath, "Use Lens readout facts as evidence for app performance questions.", "Lens grounding rules must require using Lens facts as evidence");
+assertIncludes(contextHelperPath, "Do not treat Active Users as Activated Users.", "Lens grounding rules must prevent Active Users / Activated Users confusion");
+assertIncludes(contextHelperPath, "Do not treat Engagement Rate as Activation Rate.", "Lens grounding rules must prevent Engagement Rate / Activation Rate confusion");
+assertIncludes(contextHelperPath, "Do not invent activation or retention metrics when definition_needed.", "Lens grounding rules must prevent invented activation or retention metrics");
+assertMatches(contextHelperPath, /For \$\{readout\.range\.key\}, GA4 \$\{metric\.label\} = \$\{factDisplayValue\(metric\)\}\./, "Lens facts must be derived from real metric highlights");
+assertIncludes(contextHelperPath, "Activation metrics are not configured.", "Lens facts must state activation is not configured");
+assertIncludes(contextHelperPath, "D1/D7 retention metrics are not configured.", "Lens facts must state retention is not configured");
 
 assertIncludes(chatStorePath, "getLensReadoutContextForAppSafe", "CMO chat path must build Lens readout context");
 assertIncludes(chatStorePath, "rangeKey: request.rangeKey ?? \"this_week\"", "CMO chat Lens integration must default rangeKey to this_week");
@@ -102,6 +393,7 @@ assertMatches(
   /key === "content"[\s\S]{0,220}isLensReadoutArtifact[\s\S]{0,220}safe\[key\] = lensContent/,
   "Hermes CMO chat v1.1 sanitizer must preserve object content for Lens readout artifacts",
 );
+assertIncludes(chatV11Path, "buildHermesCmoChatV11Request", "Hermes CMO chat v1.1 must expose request construction for request-shape tests");
 assertExcludes(mapperPath, /schema_version:\s*["']lens\.readout_context\.v1["']/, "Product must not set unsupported schema_version on Lens readout artifact");
 assertExcludes(chatV11Path, /schema_version:\s*["']lens\.readout_context\.v1["']/, "Product must not set unsupported schema_version on Lens readout artifact");
 assertExcludes(contextHelperPath, /schema_version:\s*["']lens\.readout_context\.v1["']/, "Lens readout context must not carry unsupported schema_version");
@@ -116,10 +408,13 @@ assertMatches(
 assertExcludes(chatStorePath, /answer\s*=\s*.*lensReadout|answer\s*=\s*.*Lens readout|mappedHermesResult\.answer\s*=/i, "CMO chat integration must not replace Hermes answer body with Lens readout text");
 assertExcludes(chatStorePath, /performance tu\u1ea7n n\u00e0y|GA4 c\u00f3 g\u00ec|t\u00ecnh h\u00ecnh tu\u1ea7n n\u00e0y/i, "Product chat path must not contain exact hardcoded metric questions");
 assertExcludes(mapperPath, /performance tu\u1ea7n n\u00e0y|GA4 c\u00f3 g\u00ec|t\u00ecnh h\u00ecnh tu\u1ea7n n\u00e0y/i, "Hermes mapper must not contain exact hardcoded metric questions");
+assertExcludes(chatStorePath, /Tu\u1ea7n n\u00e0y c\u00f3 bao nhi\u00eau user m\u1edbi v\u1eady/i, "Product chat path must not contain the exact production metric question");
+assertExcludes(mapperPath, /Tu\u1ea7n n\u00e0y c\u00f3 bao nhi\u00eau user m\u1edbi v\u1eady/i, "Hermes mapper must not contain the exact production metric question");
 assertExcludes(chatStorePath, /if\s*\([^)]*(?:message|query|prompt)[^)]*\)\s*\{[\s\S]{0,500}(?:Active Users|Engagement Rate|GA4|Lens readout)[\s\S]{0,500}answer\s*=/i, "Product chat path must not map exact user queries to fixed metric answers");
 
 assertMatches(contextHelperPath, /key:\s*metric\.key[\s\S]{0,120}label:\s*metric\.label/, "Metric highlights must remain compact factual metric records");
 assertIncludes(contextHelperPath, "recommendedActions", "Lens readout context must carry recommended actions including missing snapshot sync");
+assertIncludes(readoutHelperPath, '"ga4.active_users"', "Readout highlights must include Active Users");
 assertIncludes(readoutHelperPath, 'key: "ga4_snapshot_missing"', "Missing snapshot must be represented in readout");
 assertIncludes(readoutHelperPath, "recommendedActions: input.diagnosticsPack.recommendedNextActions", "Readout must flow diagnostics recommended actions into context");
 assertIncludes(diagnosticsPackPath, 'key: "sync_ga4_metrics"', "Missing snapshot must recommend syncing GA4 metrics");
@@ -141,12 +436,14 @@ for (const file of [contextHelperPath, mapperPath, chatV11Path]) {
 
 assertExcludes(contextHelperPath, /\b(importGBrain|syncGBrain|embedGBrain|dreamGBrain|extractGBrain|queryGBrain|callGBrain)\b/, "Lens readout context helper must not call GBrain");
 
-for (const file of [chatStorePath]) {
+for (const file of [chatStorePath, chatRoutePath, hermesRuntimePath]) {
   assertExcludes(file, forbiddenMetricFetchPattern, `${file} integration must not call GA4 Data API metric fetch`);
   assertExcludes(file, forbiddenRealtimePattern, `${file} integration must not call GA4 realtime metrics`);
   assertExcludes(file, /\/agents\/lens|hermes[-_ ]?lens/i, `${file} must not call Hermes Lens`);
   assertExcludes(file, /\b(access_token|refresh_token|encrypted_refresh_token)\b/i, `${file} must not expose token fields`);
 }
+
+await assertSerializedLensRequestShape();
 
 execFileSync(process.execPath, [repoPath("scripts", "cmo-lens-readout-check.mjs")], {
   cwd: root,

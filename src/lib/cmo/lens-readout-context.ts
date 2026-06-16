@@ -33,7 +33,16 @@ export interface LensReadoutContext {
   deterministicFindings: LensDeterministicFinding[];
   recommendedActions: LensReadoutRecommendedAction[];
   limitations: string[];
+  factsForModel: string[];
+  groundingRules: string[];
 }
+
+export const LENS_READOUT_CONTEXT_GROUNDING_RULES = [
+  "Use Lens readout facts as evidence for app performance questions.",
+  "Do not treat Active Users as Activated Users.",
+  "Do not treat Engagement Rate as Activation Rate.",
+  "Do not invent activation or retention metrics when definition_needed.",
+] as const;
 
 export interface LensReadoutContextResult {
   context: LensReadoutContext | null;
@@ -74,7 +83,41 @@ function compactRecommendedActions(readout: LensReadout): LensReadoutRecommended
   }));
 }
 
+function factDisplayValue(metric: LensMetricHighlight): string {
+  if (metric.unit === "ratio") {
+    return metric.displayValue;
+  }
+
+  const abs = Math.abs(metric.value);
+
+  if (abs >= 1_000_000) {
+    return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(metric.value / 1_000_000)}M`;
+  }
+
+  if (abs >= 10_000) {
+    return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(metric.value / 1_000)}K`;
+  }
+
+  return metric.displayValue;
+}
+
+function factsForModel(readout: LensReadout, highlights: LensMetricHighlight[]): string[] {
+  const facts = highlights.map((metric) => `For ${readout.range.key}, GA4 ${metric.label} = ${factDisplayValue(metric)}.`);
+
+  if (!readout.status.canAnswerActivation) {
+    facts.push("Activation metrics are not configured.");
+  }
+
+  if (!readout.status.canAnswerRetention) {
+    facts.push("D1/D7 retention metrics are not configured.");
+  }
+
+  return facts;
+}
+
 export function createLensReadoutContext(readout: LensReadout): LensReadoutContext {
+  const metricHighlights = compactMetricHighlights(readout);
+
   return {
     contract: "lens.readout_context.v1",
     readoutContract: readout.contract,
@@ -93,10 +136,12 @@ export function createLensReadoutContext(readout: LensReadout): LensReadoutConte
       canCompareTrend: readout.status.canCompareTrend,
     },
     headline: readout.headline,
-    metricHighlights: compactMetricHighlights(readout),
+    metricHighlights,
     deterministicFindings: compactFindings(readout),
     recommendedActions: compactRecommendedActions(readout),
     limitations: [...readout.limitations],
+    factsForModel: factsForModel(readout, metricHighlights),
+    groundingRules: [...LENS_READOUT_CONTEXT_GROUNDING_RULES],
   };
 }
 
