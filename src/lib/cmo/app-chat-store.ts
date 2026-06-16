@@ -30,6 +30,7 @@ import type {
   CmoDecisionLayer,
   CmoDecisionReviewStatus,
   CmoIndexedContextStatus,
+  CmoLensReadoutRangeKey,
   HermesCmoActivityEventSummary,
   HermesCmoAgentUsed,
   HermesCmoChatMetadata,
@@ -94,6 +95,7 @@ import {
 } from "@/lib/cmo/config";
 import { indexChatMessages, indexChatSession, type CmoIndexResult } from "@/lib/cmo/supabase-indexing";
 import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/lib/cmo/indexed-context-canary";
+import { getLensReadoutContextForAppSafe } from "@/lib/cmo/lens-readout-context";
 import { legacyUserIdentity, normalizeCmoRuntimeUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { buildRuntimeContext, buildSourceReviewContextFromMessage } from "@/lib/cmo/source-acquisition";
@@ -133,6 +135,47 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function lensReadoutRangeKey(value: unknown): CmoLensReadoutRangeKey {
+  return value === "last_7_days" || value === "last_30_days" || value === "this_month" ? value : "this_week";
+}
+
+function isLensReadoutRangeKey(value: unknown): value is CmoLensReadoutRangeKey {
+  return value === "this_week" || value === "last_7_days" || value === "last_30_days" || value === "this_month";
+}
+
+function lensReadoutMetadata(input: {
+  context?: Record<string, unknown> | null;
+  warning?: string;
+}): Partial<HermesCmoChatMetadata> {
+  const context = input.context;
+  const status = isRecord(context?.status) ? context.status : {};
+  const rangeKey = lensReadoutRangeKey(context?.rangeKey);
+  const metadata: Partial<HermesCmoChatMetadata> = input.warning
+    ? {
+        lensReadoutAttached: false,
+        lens_readout_attached: false,
+        lensReadoutContextWarning: input.warning,
+        lens_readout_context_warning: input.warning,
+      }
+    : {};
+
+  if (context?.contract === "lens.readout_context.v1") {
+    return {
+      ...metadata,
+      lensReadoutAttached: true,
+      lens_readout_attached: true,
+      lensReadoutContract: "lens.readout_context.v1",
+      lens_readout_contract: "lens.readout_context.v1",
+      lensReadoutRangeKey: rangeKey,
+      lens_readout_range_key: rangeKey,
+      ...(typeof status.overall === "string" ? { lensReadoutStatus: status.overall, lens_readout_status: status.overall } : {}),
+      ...(typeof status.dataStatus === "string" ? { lensReadoutDataStatus: status.dataStatus, lens_readout_data_status: status.dataStatus } : {}),
+    };
+  }
+
+  return metadata;
 }
 
 function sourceReviewUserId(identity: CmoServerUserIdentity): string {
@@ -1370,6 +1413,7 @@ function normalizeAppChatRequest(body: unknown): CMOAppChatRequest {
     appId: knownApp.id,
     appName,
     sessionId: stringValue(body.sessionId) || undefined,
+    rangeKey: lensReadoutRangeKey(body.rangeKey ?? (isRecord(body.context) ? body.context.rangeKey : undefined)),
     message,
     topic: stringValue(body.topic),
     forceFallback: body.forceFallback === true || (isRecord(body.context) && body.context.forceFallback === true),
@@ -2115,6 +2159,18 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(value.cmo_call_surf_used === true ? { cmo_call_surf_used: true } : {}),
     ...(value.cmo_call_echo_used === true ? { cmo_call_echo_used: true } : {}),
     ...(typeof value.toolReadsCount === "number" && Number.isFinite(value.toolReadsCount) ? { toolReadsCount: Math.max(0, Math.floor(value.toolReadsCount)) } : {}),
+    ...(typeof value.lensReadoutAttached === "boolean" ? { lensReadoutAttached: value.lensReadoutAttached } : {}),
+    ...(typeof value.lens_readout_attached === "boolean" ? { lens_readout_attached: value.lens_readout_attached } : {}),
+    ...(stringValue(value.lensReadoutContract) ? { lensReadoutContract: stringValue(value.lensReadoutContract) } : {}),
+    ...(stringValue(value.lens_readout_contract) ? { lens_readout_contract: stringValue(value.lens_readout_contract) } : {}),
+    ...(isLensReadoutRangeKey(value.lensReadoutRangeKey) ? { lensReadoutRangeKey: value.lensReadoutRangeKey } : {}),
+    ...(isLensReadoutRangeKey(value.lens_readout_range_key) ? { lens_readout_range_key: value.lens_readout_range_key } : {}),
+    ...(stringValue(value.lensReadoutStatus) ? { lensReadoutStatus: stringValue(value.lensReadoutStatus) } : {}),
+    ...(stringValue(value.lens_readout_status) ? { lens_readout_status: stringValue(value.lens_readout_status) } : {}),
+    ...(stringValue(value.lensReadoutDataStatus) ? { lensReadoutDataStatus: stringValue(value.lensReadoutDataStatus) } : {}),
+    ...(stringValue(value.lens_readout_data_status) ? { lens_readout_data_status: stringValue(value.lens_readout_data_status) } : {}),
+    ...(stringValue(value.lensReadoutContextWarning) ? { lensReadoutContextWarning: stringValue(value.lensReadoutContextWarning) } : {}),
+    ...(stringValue(value.lens_readout_context_warning) ? { lens_readout_context_warning: stringValue(value.lens_readout_context_warning) } : {}),
     ...(isRecord(value.attachmentTraceSummary)
       ? { attachmentTraceSummary: value.attachmentTraceSummary }
       : isRecord(value.attachment_trace_summary)
@@ -3061,11 +3117,19 @@ export async function createAppChatSession(
   const hermesCmoChatV11Requested = hermesCmoRoute.endpointKind === "agent_chat";
   const hermesCmoLegacyRequested = legacyHermesCmoChatRequested || hermesCmoRoute.endpointKind === "tool_execute";
   const hermesCmoChatRequested = hermesCmoChatV11Requested || hermesCmoLegacyRequested;
+  const lensReadoutContextResult = await getLensReadoutContextForAppSafe({
+    appId: request.appId,
+    rangeKey: request.rangeKey ?? "this_week",
+  });
+  const lensReadoutContext = lensReadoutContextResult.context;
+  const lensReadoutContextWarning = lensReadoutContextResult.warning?.code;
   contextPackage = {
     ...contextPackage,
     runtimeContext,
     ...(activeSourceReviewContext ? { sourceReviewContext: activeSourceReviewContext } : {}),
     ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
+    ...(lensReadoutContext ? { lensReadoutContext: lensReadoutContext as unknown as Record<string, unknown> } : {}),
+    ...(lensReadoutContextWarning ? { lensReadoutContextWarning } : {}),
     sessionLocalSources,
     sessionLocalResearchResults,
     ...(sessionAttachments.length ? { attachments: sessionAttachments } : {}),
@@ -3327,6 +3391,13 @@ export async function createAppChatSession(
         }
 
         const mappedHermesResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesResult));
+        mappedHermesResult.hermesCmoMetadata = {
+          ...mappedHermesResult.hermesCmoMetadata,
+          ...lensReadoutMetadata({
+            context: lensReadoutContext as unknown as Record<string, unknown> | null,
+            warning: lensReadoutContextWarning,
+          }),
+        };
         const completedAt = new Date().toISOString();
         const durationMs = Date.now() - runStartedMs;
         const toolsUsed = safeCmoRunToolsUsed(mappedHermesResult.hermesCmoMetadata.agentsUsed);
@@ -4065,6 +4136,15 @@ export async function createAppChatSession(
       vault_write_performed: false,
       endpoint_kind: hermesCmoMetadata.endpoint_kind ?? "agent_chat",
       runtime_kind: hermesCmoMetadata.runtime_kind ?? "ai_agent",
+    };
+  }
+  if (hermesCmoMetadata) {
+    hermesCmoMetadata = {
+      ...hermesCmoMetadata,
+      ...lensReadoutMetadata({
+        context: lensReadoutContext as unknown as Record<string, unknown> | null,
+        warning: lensReadoutContextWarning,
+      }),
     };
   }
 

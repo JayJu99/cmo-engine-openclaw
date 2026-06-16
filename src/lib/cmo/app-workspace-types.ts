@@ -603,6 +603,7 @@ export type CmoRuntimeErrorReason =
   | "execution_error";
 export type HermesCmoChatStatus = "live" | "failed_then_existing_fallback" | "guardrail_violation_then_existing_fallback" | "interrupted";
 export type HermesCmoDelegationsMode = "proposals_only" | "echo_surf_bounded";
+export type CmoLensReadoutRangeKey = "this_week" | "last_7_days" | "last_30_days" | "this_month";
 export type CmoProductRenderSource =
   | "hermes_cmo"
   | "fallback_after_hermes_failure"
@@ -855,6 +856,18 @@ export interface HermesCmoChatMetadata {
   cmo_call_surf_used?: boolean;
   cmo_call_echo_used?: boolean;
   toolReadsCount?: number;
+  lensReadoutAttached?: boolean;
+  lens_readout_attached?: boolean;
+  lensReadoutContract?: string;
+  lens_readout_contract?: string;
+  lensReadoutRangeKey?: CmoLensReadoutRangeKey;
+  lens_readout_range_key?: CmoLensReadoutRangeKey;
+  lensReadoutStatus?: string;
+  lens_readout_status?: string;
+  lensReadoutDataStatus?: string;
+  lens_readout_data_status?: string;
+  lensReadoutContextWarning?: string;
+  lens_readout_context_warning?: string;
   attachmentTraceSummary?: Record<string, unknown>;
   attachment_trace_summary?: Record<string, unknown>;
   contextResolution?: Record<string, unknown>;
@@ -1027,6 +1040,8 @@ export interface CMOContextPackage {
   runtimeContext?: CmoRuntimeContext;
   sourceReviewContext?: CmoSourceReviewContext;
   sourceAnswerContext?: CmoSourceAnswerContext;
+  lensReadoutContext?: Record<string, unknown>;
+  lensReadoutContextWarning?: string;
   sessionLocalSources?: CmoSessionLocalSource[];
   sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
   activeSourceId?: string;
@@ -1377,6 +1392,7 @@ export interface CMOAppChatRequest {
   appId: string;
   appName: string;
   sessionId?: string;
+  rangeKey?: CmoLensReadoutRangeKey;
   message: string;
   topic?: string;
   forceFallback?: boolean;

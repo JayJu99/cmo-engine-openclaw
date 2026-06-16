@@ -26,6 +26,10 @@ import {
 
 export const HERMES_CMO_PROPOSALS_ONLY = "proposals_only" as const;
 export const HERMES_CMO_BOUNDED_DELEGATIONS = "echo_surf_bounded" as const;
+export const LENS_READOUT_CONTEXT_CONTRACT = "lens.readout_context.v1" as const;
+export const LENS_READOUT_CONTEXT_ARTIFACT_KIND = "lens_readout_context" as const;
+export const LENS_READOUT_GROUNDING_RULE =
+  "A Lens readout context may be attached under lens.readout_context.v1 in artifacts_in. Use it as evidence for app performance questions. Do not invent activation or retention metrics when the readout marks them as definition_needed. Do not treat Active Users as Activated Users. Do not treat Engagement Rate as Activation Rate. If the requested range has missing_snapshot, state that cached GA4 metrics need syncing." as const;
 
 export const HERMES_CMO_FORBIDDEN_ZERO_COUNTERS = [
   "vaultAgentCalls",
@@ -240,6 +244,18 @@ function sourceAnswerContextArtifact(input: HermesCmoChatRequestInput): Record<s
   return answerContext as unknown as Record<string, unknown>;
 }
 
+function lensReadoutContextArtifact(context: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!context || context.contract !== LENS_READOUT_CONTEXT_CONTRACT) {
+    return null;
+  }
+
+  return {
+    contract: LENS_READOUT_CONTEXT_CONTRACT,
+    kind: LENS_READOUT_CONTEXT_ARTIFACT_KIND,
+    content: context,
+  };
+}
+
 function sessionLocalSourceNavHeavy(source: CmoSessionLocalSource): boolean {
   return source.nav_heavy === true || (Array.isArray(source.warnings) && source.warnings.includes("nav_heavy"));
 }
@@ -423,6 +439,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const vaultContextPack = vaultAgentContextPackArtifact(input);
   const sourceReviewContext = sourceReviewContextArtifact(input);
   const sourceAnswerContext = sourceAnswerContextArtifact(input);
+  const lensReadoutContext = isRecord(input.contextPackage.lensReadoutContext) ? input.contextPackage.lensReadoutContext : null;
+  const lensReadoutArtifact = lensReadoutContextArtifact(lensReadoutContext);
   const sessionLocalSources = sessionLocalSourceArtifacts(input);
   const sessionWorkingMemoryResolution = resolveSessionWorkingMemory({
     scope: {
@@ -493,10 +511,11 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       selected_context: [...input.contextPackage.selectedContext.map(noteSnapshot), ...recentChatContext(input.history)],
       recent_session_summary: recentSessionSummary(input.history),
       indexed_context_supplement: indexedContextSupplement,
-      artifacts_in: [vaultContextPack, ...sessionLocalSources, ...sessionLocalResearchResults, sourceAnswerContext].filter((artifact): artifact is Record<string, unknown> => Boolean(artifact)),
+      artifacts_in: [vaultContextPack, ...sessionLocalSources, ...sessionLocalResearchResults, sourceAnswerContext, lensReadoutArtifact].filter((artifact): artifact is Record<string, unknown> => Boolean(artifact)),
       ...(input.contextPackage.activeSourceId ? { active_source_id: input.contextPackage.activeSourceId } : {}),
       ...(sourceReviewContext ? { source_review_context: sourceReviewContext } : {}),
       ...(sourceAnswerContext ? { source_answer_context: sourceAnswerContext } : {}),
+      ...(lensReadoutContext ? { lens_readout_context: lensReadoutContext } : {}),
       ...(sessionLocalResearchResults.length > 0
         ? {
             research_context: {
@@ -578,6 +597,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       todo_allowed: true,
       memory_read_allowed: true,
       delegation_allowed: true,
+      context_grounding_rules: [LENS_READOUT_GROUNDING_RULE],
       durable_writes_require_confirmation: true,
       allowed_toolsets: [
         "web",

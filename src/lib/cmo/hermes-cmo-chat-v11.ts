@@ -3,7 +3,13 @@ import path from "path";
 
 import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs } from "./config";
 import type { CMOAppChatResponse, CMOChatMessage, HermesCmoChatMetadata } from "./app-workspace-types";
-import { mapCmoChatToHermesCmoRequest, type HermesCmoChatRequestInput } from "./hermes-cmo-chat-mapper";
+import {
+  LENS_READOUT_CONTEXT_ARTIFACT_KIND,
+  LENS_READOUT_CONTEXT_CONTRACT,
+  LENS_READOUT_GROUNDING_RULE,
+  mapCmoChatToHermesCmoRequest,
+  type HermesCmoChatRequestInput,
+} from "./hermes-cmo-chat-mapper";
 import { HERMES_CMO_CHAT_V11_ENDPOINT } from "./hermes-cmo-chat-router";
 import { normalizeCmoRuntimeUserIdentity } from "./user-metadata";
 
@@ -105,6 +111,7 @@ export interface HermesCmoChatV11Request {
     allow_surf_delegation: false;
     read_web_allowed: boolean;
     read_browser_allowed: boolean;
+    context_grounding_rules: string[];
   };
 }
 
@@ -507,11 +514,22 @@ function safeRecord(
   depth = 0,
 ): Record<string, unknown> | null {
   const safe: Record<string, unknown> = {};
+  const isLensReadoutArtifact =
+    depth === 0 &&
+    value.contract === LENS_READOUT_CONTEXT_CONTRACT &&
+    value.kind === LENS_READOUT_CONTEXT_ARTIFACT_KIND &&
+    isRecord(value.content) &&
+    value.content.contract === LENS_READOUT_CONTEXT_CONTRACT;
 
   for (const [key, nested] of Object.entries(value)) {
     if (UNSAFE_ARTIFACT_KEYS.test(key)) {
       if (options.allowTopLevelContent && depth === 0 && key === "content" && typeof nested === "string" && nested.trim()) {
         safe[key] = compactText(nested, 4_000);
+      } else if (options.allowTopLevelContent && isLensReadoutArtifact && key === "content" && isRecord(nested)) {
+        const lensContent = safeRecord(nested, 8_000, options, depth + 1);
+        if (lensContent) {
+          safe[key] = lensContent;
+        }
       }
 
       continue;
@@ -961,6 +979,7 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
       allow_surf_delegation: false,
       read_web_allowed: true,
       read_browser_allowed: true,
+      context_grounding_rules: [LENS_READOUT_GROUNDING_RULE],
     },
   };
 }
