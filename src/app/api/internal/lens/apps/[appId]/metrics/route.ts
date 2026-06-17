@@ -1,5 +1,4 @@
-import { timingSafeEqual } from "crypto";
-
+import { authorizeLensInternalRequest } from "@/lib/cmo/lens-internal-auth";
 import {
   getProductLensConnectorMetrics,
   type ProductLensConnectorMode,
@@ -23,49 +22,7 @@ function modeFromRequest(request: Request): ProductLensConnectorMode {
   const url = new URL(request.url);
   const value = url.searchParams.get("mode")?.trim();
 
-  return value === "refresh_if_stale" ? "refresh_if_stale" : "cache_only";
-}
-
-function bearerToken(request: Request): string | null {
-  const header = request.headers.get("authorization")?.trim() ?? "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
-
-  return match?.[1]?.trim() || null;
-}
-
-function constantTimeEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function authorizeInternalRequest(request: Request): Response | null {
-  const configuredKey = process.env.CMO_LENS_INTERNAL_API_KEY?.trim();
-
-  if (!configuredKey) {
-    return Response.json(
-      {
-        error: "CMO_LENS_INTERNAL_API_KEY is not configured.",
-        code: "internal_api_key_not_configured",
-      },
-      { status: 503 },
-    );
-  }
-
-  const token = bearerToken(request);
-
-  if (!token || !constantTimeEquals(token, configuredKey)) {
-    return Response.json(
-      {
-        error: "Unauthorized.",
-        code: "unauthorized",
-      },
-      { status: 401 },
-    );
-  }
-
-  return null;
+  return value === "refresh_if_missing" || value === "refresh_if_stale" ? value : "cache_only";
 }
 
 function routeErrorResponse(error: unknown): Response {
@@ -91,7 +48,7 @@ function routeErrorResponse(error: unknown): Response {
 }
 
 export async function GET(request: Request, context: RouteContext<"/api/internal/lens/apps/[appId]/metrics">) {
-  const authFailure = authorizeInternalRequest(request);
+  const authFailure = authorizeLensInternalRequest(request);
 
   if (authFailure) {
     return authFailure;

@@ -156,7 +156,7 @@ assertExcludes(metricSourcesPath, /runReport|runRealtimeReport/i, `${metricSourc
 assertExcludes(metricSourcesPath, /\/agents\/|\/api\/cmo\/vault|gbrain|GBrain/i, `${metricSourcesPath} references an out-of-scope Hermes/Vault/GBrain route`);
 
 const repoSource = allSourceText();
-assert(!/runReport|runRealtimeReport/i.test(repoSource), "Repo must not call GA4 Data API runReport/runRealtimeReport in M6.3");
+assert(!/metric-sources\/ga4\/verify[\s\S]{0,2000}runReport|metric-sources\/ga4\/verify[\s\S]{0,2000}runRealtimeReport/i.test(repoSource), "Verification path must not call GA4 Data API metrics endpoints");
 
 execFileSync(process.execPath, [repoPath("scripts", "cmo-lens-oauth-foundation-check.mjs")], {
   cwd: root,
