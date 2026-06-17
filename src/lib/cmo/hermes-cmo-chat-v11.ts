@@ -938,6 +938,10 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
     ...(Array.isArray(legacyRequest.context_pack.artifacts_in) ? legacyRequest.context_pack.artifacts_in : []),
     ...(input.sessionArtifacts ?? []),
   ], MAX_ARTIFACTS, { allowTopLevelContent: true });
+  const hasLensReadoutArtifact = artifactsIn.some((artifact) =>
+    artifact.contract === LENS_READOUT_CONTEXT_CONTRACT &&
+    artifact.kind === LENS_READOUT_CONTEXT_ARTIFACT_KIND,
+  );
   const sessionSummaryText = input.sessionSummary?.trim()
     ? compactMultilineText(input.sessionSummary, MAX_SESSION_SUMMARY_CHARS)
     : typeof legacyRequest.context_pack.recent_session_summary === "string"
@@ -979,7 +983,7 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
       allow_surf_delegation: false,
       read_web_allowed: true,
       read_browser_allowed: true,
-      context_grounding_rules: [LENS_READOUT_GROUNDING_RULE],
+      context_grounding_rules: hasLensReadoutArtifact ? [LENS_READOUT_GROUNDING_RULE] : [],
     },
   };
 }

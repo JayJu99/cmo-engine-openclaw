@@ -95,7 +95,7 @@ import {
 } from "@/lib/cmo/config";
 import { indexChatMessages, indexChatSession, type CmoIndexResult } from "@/lib/cmo/supabase-indexing";
 import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/lib/cmo/indexed-context-canary";
-import { getLensReadoutContextForAppSafe } from "@/lib/cmo/lens-readout-context";
+import { getLensReadoutContextForAppSafe, isCmoLensDirectContextEnabled } from "@/lib/cmo/lens-readout-context";
 import { legacyUserIdentity, normalizeCmoRuntimeUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { buildRuntimeContext, buildSourceReviewContextFromMessage } from "@/lib/cmo/source-acquisition";
@@ -3117,10 +3117,12 @@ export async function createAppChatSession(
   const hermesCmoChatV11Requested = hermesCmoRoute.endpointKind === "agent_chat";
   const hermesCmoLegacyRequested = legacyHermesCmoChatRequested || hermesCmoRoute.endpointKind === "tool_execute";
   const hermesCmoChatRequested = hermesCmoChatV11Requested || hermesCmoLegacyRequested;
-  const lensReadoutContextResult = await getLensReadoutContextForAppSafe({
-    appId: request.appId,
-    rangeKey: request.rangeKey ?? "this_week",
-  });
+  const lensReadoutContextResult = isCmoLensDirectContextEnabled()
+    ? await getLensReadoutContextForAppSafe({
+        appId: request.appId,
+        rangeKey: request.rangeKey ?? "this_week",
+      })
+    : { context: null, warning: undefined };
   const lensReadoutContext = lensReadoutContextResult.context;
   const lensReadoutContextWarning = lensReadoutContextResult.warning?.code;
   contextPackage = {

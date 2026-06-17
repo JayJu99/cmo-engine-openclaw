@@ -441,6 +441,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const sourceAnswerContext = sourceAnswerContextArtifact(input);
   const lensReadoutContext = isRecord(input.contextPackage.lensReadoutContext) ? input.contextPackage.lensReadoutContext : null;
   const lensReadoutArtifact = lensReadoutContextArtifact(lensReadoutContext);
+  const contextGroundingRules = lensReadoutArtifact ? [LENS_READOUT_GROUNDING_RULE] : [];
   const sessionLocalSources = sessionLocalSourceArtifacts(input);
   const sessionWorkingMemoryResolution = resolveSessionWorkingMemory({
     scope: {
@@ -597,7 +598,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       todo_allowed: true,
       memory_read_allowed: true,
       delegation_allowed: true,
-      context_grounding_rules: [LENS_READOUT_GROUNDING_RULE],
+      context_grounding_rules: contextGroundingRules,
       durable_writes_require_confirmation: true,
       allowed_toolsets: [
         "web",
@@ -807,13 +808,6 @@ function classificationFromResponse(response: HermesCmoRuntimeResponse): string 
   return typeof value === "string" ? value : "";
 }
 
-function responseStyleFromResponse(response: HermesCmoRuntimeResponse): string {
-  const structured = isRecord(response.structured_output) ? response.structured_output : {};
-  const value = response.response_style ?? structured.response_style;
-
-  return typeof value === "string" ? value : "";
-}
-
 function contextResolutionFromResponse(response: HermesCmoRuntimeResponse): Record<string, unknown> {
   return isRecord(response.context_resolution) ? response.context_resolution : {};
 }
@@ -880,23 +874,9 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
   }
 
   const classification = classificationFromResponse(response);
-  const responseStyle = responseStyleFromResponse(response);
-  const contextResolution = contextResolutionFromResponse(response);
-  const isSourceTransform = classification === "source_translate" || classification === "source_transform";
-  const isResearchFollowup = classification === "research_followup" || responseStyle === "research_followup";
-  const isSessionResearchArtifact =
-    response.answer_basis.mode === "session_research_artifact" &&
-    contextResolution.schema_version === "cmo.context_resolution.v1" &&
-    contextResolution.status === "resolved";
-  const isNativeConversation =
-    classification === "native_conversation" ||
-    classification === "source_acknowledgement" ||
-    classification === "source_can_read" ||
-    classification === "source_answer" ||
-    classification === "save_to_vault";
-  const transformed = isSourceTransform && result ? sourceTransformAnswerFromDelegations(result) : null;
-  const responseMode = typeof response.mode === "string" ? response.mode : "";
-  const isToolCapableCmo = responseMode === "cmo.tool_capable" || result?.hermesCmoEndpointKind === "tool_execute";
+  const transformed = (classification === "source_translate" || classification === "source_transform") && result
+    ? sourceTransformAnswerFromDelegations(result)
+    : null;
 
   if (transformed) {
     return transformed;
@@ -905,24 +885,7 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
   const answer = response.answer;
   const body = answer.body.trim();
 
-  if (isToolCapableCmo) {
-    return body || answer.summary.trim();
-  }
-
-  if (isSourceTransform || isNativeConversation || isResearchFollowup || isSessionResearchArtifact) {
-    return body || answer.summary.trim();
-  }
-
-  if (body.startsWith("#")) {
-    return body;
-  }
-
-  return [
-    answer.title ? `## ${answer.title}` : "",
-    answer.summary,
-    answer.decision ? `Decision: ${answer.decision}` : "",
-    body,
-  ].filter(Boolean).join("\n\n");
+  return body || answer.summary.trim();
 }
 
 function labelFromUnknown(value: unknown): string | null {

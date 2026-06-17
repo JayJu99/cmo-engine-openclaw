@@ -44,6 +44,10 @@ export const LENS_READOUT_CONTEXT_GROUNDING_RULES = [
   "Do not invent activation or retention metrics when definition_needed.",
 ] as const;
 
+export function isCmoLensDirectContextEnabled(): boolean {
+  return process.env.CMO_LENS_DIRECT_CONTEXT_ENABLED === "true";
+}
+
 export interface LensReadoutContextResult {
   context: LensReadoutContext | null;
   warning?: {

@@ -2643,8 +2643,8 @@ try {
         },
       },
     });
-    assert.match(structuredReviewMapped.answer, /## CMO strategic response/);
-    assert.match(structuredReviewMapped.answer, /Decision: KEEP/);
+    assert.equal(structuredReviewMapped.answer, "Review body stays structured for explicit review requests.");
+    assert.doesNotMatch(structuredReviewMapped.answer, /CMO strategic response|Decision:|REVIEW/);
 
     const externalResearchBase = makeRuntimeResult();
     const externalResearchMapped = mapper.mapHermesCmoResponseToChatResult({
@@ -2969,9 +2969,8 @@ try {
         },
       },
     });
-    assert.match(strategyOnlyReviewMapped.answer, /## CMO strategic response/);
-    assert.match(strategyOnlyReviewMapped.answer, /Decision: KEEP/);
-    assert.match(strategyOnlyReviewMapped.answer, /Legacy strategy_only review body stays structured/);
+    assert.equal(strategyOnlyReviewMapped.answer, "Legacy strategy_only review body stays structured.");
+    assert.doesNotMatch(strategyOnlyReviewMapped.answer, /CMO strategic response|Decision:|REVIEW/);
 
     const noDelegationNeedsSurfBase = makeRuntimeResult();
     const noDelegationNeedsSurfMapped = mapper.mapHermesCmoResponseToChatResult({
