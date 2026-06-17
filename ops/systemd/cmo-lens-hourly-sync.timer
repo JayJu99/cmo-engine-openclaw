@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CMO Lens metrics sync hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=cmo-lens-hourly-sync.service
+
+[Install]
+WantedBy=timers.target

@@ -2370,6 +2370,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                 ) : null}
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Badge variant="slate">Source: Lens GA4</Badge>
+                  <Badge variant="slate">Auto sync: hourly</Badge>
                   <Badge variant={ga4SnapshotHealthBadgeVariant}>{ga4SnapshotHealth}</Badge>
                   <Badge variant="slate">Range: {ga4SnapshotSelectedRangeLabel}</Badge>
                   <Badge variant="slate">Last synced: {ga4MetricSnapshot?.syncedAt ? displayDate(ga4MetricSnapshot.syncedAt) : "No snapshot yet"}</Badge>

@@ -1,0 +1,10 @@
+[Unit]
+Description=CMO Lens hourly metrics sync
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ju/cmo-engine-openclaw
+EnvironmentFile=/home/ju/.config/cmo-engine-openclaw/dashboard.env
+ExecStart=/bin/bash -lc 'curl -fsS -X POST -H "Authorization: Bearer ${CMO_LENS_INTERNAL_API_KEY}" -H "Content-Type: application/json" http://127.0.0.1:3002/api/internal/lens/metrics/auto-sync --data-binary "{\"rangeKeys\":[\"this_week\",\"last_7_days\",\"last_30_days\",\"this_month\"],\"mode\":\"refresh_if_stale\",\"trigger\":\"hourly\"}" >/dev/null'
