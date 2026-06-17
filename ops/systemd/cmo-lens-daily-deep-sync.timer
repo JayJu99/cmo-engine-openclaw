@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CMO Lens daily GA4 deep sync
+
+[Timer]
+OnCalendar=*-*-* 07:15:00 Asia/Ho_Chi_Minh
+Persistent=true
+Unit=cmo-lens-daily-deep-sync.service
+
+[Install]
+WantedBy=timers.target

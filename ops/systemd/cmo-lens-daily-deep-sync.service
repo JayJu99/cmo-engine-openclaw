@@ -1,0 +1,10 @@
+[Unit]
+Description=CMO Lens daily GA4 deep sync
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ju/cmo-engine-openclaw
+EnvironmentFile=/home/ju/.config/cmo-engine-openclaw/dashboard.env
+ExecStart=/bin/bash -lc 'curl -fsS -X POST -H "Authorization: Bearer ${CMO_LENS_INTERNAL_API_KEY}" -H "Content-Type: application/json" http://127.0.0.1:3002/api/internal/lens/metrics/deep-sync --data-binary "{\"rangeKeys\":[\"yesterday\",\"this_week\",\"last_7_days\",\"last_30_days\"],\"packKeys\":[\"core_summary\",\"acquisition_channel\",\"source_medium\",\"campaign\",\"top_events\",\"top_pages_screens\",\"geo_country\",\"device_category\",\"platform\"],\"mode\":\"refresh_if_missing\",\"trigger\":\"daily\",\"dryRun\":false}" >/dev/null'
