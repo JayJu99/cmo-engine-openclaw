@@ -58,6 +58,14 @@ function isWorkspaceTab(value: string | null): value is AppWorkspaceTab {
   return value === "dashboard" || value === "inputs" || value === "plan" || value === "tasks" || value === "sessions";
 }
 
+function workspaceTabFromParam(value: string | null): AppWorkspaceTab {
+  if (value === "chat") {
+    return "sessions";
+  }
+
+  return isWorkspaceTab(value) ? value : "dashboard";
+}
+
 function runtimeLabel(status: CMORuntimeStatus | undefined): string {
   if (status === "connected" || status === "live" || status === "configured_but_unreachable") {
     return "CMO Hermes Active";
@@ -1535,7 +1543,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
-  const [activeTab, setActiveTab] = useState<AppWorkspaceTab>(isWorkspaceTab(tabParam) ? tabParam : "dashboard");
+  const [activeTab, setActiveTab] = useState<AppWorkspaceTab>(workspaceTabFromParam(tabParam));
   const [contextBrief, setContextBrief] = useState(state.contextBrief);
   const [priorityState, setPriorityState] = useState(state.priorityState);
   const [plans, setPlans] = useState<AppWorkspacePlanState>(state.plans);
@@ -1852,7 +1860,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   ];
 
   useEffect(() => {
-    const nextTab: AppWorkspaceTab = isWorkspaceTab(tabParam) ? tabParam : "dashboard";
+    const nextTab = workspaceTabFromParam(tabParam);
     const timeout = window.setTimeout(() => {
       setActiveTab((current) => (current === nextTab ? current : nextTab));
     }, 0);

@@ -5,6 +5,7 @@ import type {
   HermesCmoActivityEventSummary,
   HermesCmoDelegationSummaryItem,
 } from "@/lib/cmo/app-workspace-types";
+import { buildCmoActivitySteps } from "@/lib/cmo/cmo-chat-evidence-display";
 import { cn } from "@/lib/utils";
 
 type ActivityStatus = "running" | "waiting" | "completed" | "failed" | "timed_out" | "skipped";
@@ -227,6 +228,21 @@ function toolAgentFromRow(row: ActivityRow): "surf" | "echo" | null {
 }
 
 function activityRows(message: CMOChatMessage | undefined, running: boolean): ActivityRow[] {
+  if (message) {
+    const displaySteps = buildCmoActivitySteps(message, running);
+    const hasSpecificEvidenceStep = displaySteps.some((step) =>
+      step.label === "Lens queried" ||
+      step.label === "GA4 query" ||
+      step.label === "Metric snapshot" ||
+      step.label === "Cached snapshot" ||
+      step.label === "Vault report"
+    );
+
+    if (running || hasSpecificEvidenceStep) {
+      return displaySteps;
+    }
+  }
+
   if (running) {
     return [
       {
@@ -363,7 +379,8 @@ export function CmoAgentActivityPanel({ message, running = false, elapsedMs = nu
         : "CMO completed";
 
   return (
-    <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+    <details className="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3" open={running}>
+      <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-white text-indigo-700 ring-1 ring-indigo-100">
@@ -379,13 +396,14 @@ export function CmoAgentActivityPanel({ message, running = false, elapsedMs = nu
           <Badge variant={statusVariant(status)}>{statusLabel(status)}</Badge>
         </div>
       </div>
+      </summary>
 
-      <div className="mt-3 grid gap-2">
+      <div className="mt-3 flex flex-wrap gap-2">
         {rows.map((row) => (
-          <div key={row.key} className="flex min-w-0 items-start gap-2 rounded-lg bg-white px-2.5 py-2 ring-1 ring-slate-100">
+          <div key={row.key} className="flex min-w-0 items-center gap-2 rounded-full bg-white px-2.5 py-1.5 ring-1 ring-slate-100">
             <span
               className={cn(
-                "mt-0.5 grid size-5 shrink-0 place-items-center rounded-full",
+                "grid size-5 shrink-0 place-items-center rounded-full",
                 row.status === "completed" ? "bg-emerald-50 text-emerald-700" : null,
                 row.status === "failed" ? "bg-red-50 text-red-700" : null,
                 row.status === "running" ? "bg-blue-50 text-blue-700" : null,
@@ -395,16 +413,11 @@ export function CmoAgentActivityPanel({ message, running = false, elapsedMs = nu
             >
               {statusIcon(row.status)}
             </span>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-bold text-slate-900">{row.label}</span>
-                <Badge className="px-2 py-0.5" variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
-              </div>
-              {row.detail ? <div className="mt-0.5 line-clamp-2 text-xs leading-5 text-slate-600">{row.detail}</div> : null}
-            </div>
+            <span className="text-xs font-bold text-slate-900">{row.label}</span>
+            {row.detail ? <span className="max-w-52 truncate text-xs font-semibold text-slate-500">{row.detail}</span> : null}
           </div>
         ))}
       </div>
-    </div>
+    </details>
   );
 }

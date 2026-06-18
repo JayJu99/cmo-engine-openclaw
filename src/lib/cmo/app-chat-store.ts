@@ -1557,6 +1557,45 @@ function normalizeStringList(value: unknown): string[] {
   return value.map((item) => stringValue(item)).filter(Boolean);
 }
 
+function normalizeSafeTraceSummary(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const entries: Array<[string, unknown]> = [];
+
+  for (const [key, item] of Object.entries(value)) {
+    if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(key)) {
+      continue;
+    }
+
+    if (typeof item === "string") {
+      if (item.length <= 300) {
+        entries.push([key, item]);
+      }
+      continue;
+    }
+
+    if (typeof item === "number") {
+      if (Number.isFinite(item)) {
+        entries.push([key, item]);
+      }
+      continue;
+    }
+
+    if (typeof item === "boolean" || item === null) {
+      entries.push([key, item]);
+      continue;
+    }
+
+    if (Array.isArray(item) && item.length <= 20 && item.every((entry) => typeof entry === "string" && entry.length <= 120)) {
+      entries.push([key, item]);
+    }
+  }
+
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
 function normalizeSuggestedActions(value: unknown): CMOAppChatResponse["suggestedActions"] {
   if (!Array.isArray(value)) {
     return [];
@@ -2063,6 +2102,7 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     : undefined;
   const toolsUsed = normalizeStringList(value.toolsUsed);
   const toolsUsedSnake = normalizeStringList(value.tools_used);
+  const toolTraceSummary = normalizeSafeTraceSummary(value.toolTraceSummary ?? value.tool_trace_summary);
   const platformPersistenceSummary = normalizeHermesCmoPlatformPersistenceSummary(value.platformPersistenceSummary);
   const contractWarnings = normalizeContractWarnings(value.contract_warnings);
   const stateContract = normalizeStateContractMetadata(value.state_contract);
@@ -2156,6 +2196,7 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     responseStatus,
     ...(toolsUsed.length ? { toolsUsed } : {}),
     ...(toolsUsedSnake.length ? { tools_used: toolsUsedSnake } : toolsUsed.length ? { tools_used: toolsUsed } : {}),
+    ...(toolTraceSummary ? { toolTraceSummary, tool_trace_summary: toolTraceSummary } : {}),
     ...(value.cmo_call_surf_used === true ? { cmo_call_surf_used: true } : {}),
     ...(value.cmo_call_echo_used === true ? { cmo_call_echo_used: true } : {}),
     ...(typeof value.toolReadsCount === "number" && Number.isFinite(value.toolReadsCount) ? { toolReadsCount: Math.max(0, Math.floor(value.toolReadsCount)) } : {}),

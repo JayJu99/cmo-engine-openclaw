@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { CmoAgentActivityPanel } from "@/components/cmo-apps/cmo-agent-activity-panel";
 import { icons } from "@/components/dashboard/icons";
 import { assistantDisplayMarkdown } from "@/lib/cmo/assistant-markdown-display";
+import { buildCmoEvidenceSources } from "@/lib/cmo/cmo-chat-evidence-display";
 import type {
   AppWorkspace,
   CMOAppChatResponse,
@@ -497,6 +498,58 @@ function renderAssistantContent(content: string) {
       >
         {markdown || content}
       </ReactMarkdown>
+    </div>
+  );
+}
+
+function renderAssistantEvidence(message: CMOChatMessage) {
+  const sources = buildCmoEvidenceSources(message);
+
+  if (!sources.length) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 space-y-2">
+      {sources.map((source) => (
+        <details key={source.key} className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+          <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-white text-indigo-700 ring-1 ring-indigo-100">
+                <icons.FileText className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-xs font-extrabold uppercase text-slate-500">Evidence</div>
+                <div className="truncate text-sm font-bold text-slate-900">Source: {source.sourceLabel}</div>
+              </div>
+            </div>
+            {source.confidence ? <Badge variant="slate">Confidence: {source.confidence}</Badge> : null}
+          </summary>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {source.rows.map((item) => (
+              <div key={`${source.key}-${item.label}`} className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100">
+                <div className="text-[11px] font-extrabold uppercase text-slate-400">{item.label}</div>
+                <div className="mt-0.5 break-words text-xs font-bold leading-5 text-slate-800">{item.value}</div>
+              </div>
+            ))}
+          </div>
+          {source.caveats?.length ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {source.caveats.map((caveat) => <Badge key={caveat} variant="orange">{caveat}</Badge>)}
+            </div>
+          ) : null}
+          {source.warnings?.length ? (
+            <div className="mt-3 space-y-1">
+              {source.warnings.map((warning) => (
+                <div key={warning} className="flex items-start gap-2 rounded-lg border border-orange-100 bg-orange-50 px-3 py-2 text-xs font-semibold leading-5 text-orange-800">
+                  <icons.AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                  <span>{warning}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </details>
+      ))}
     </div>
   );
 }
@@ -1586,6 +1639,7 @@ export function CMOChatPanel({
                       elapsedMs={pendingAssistantMessageId === message.id ? pendingElapsedMs : null}
                     />
                   ) : null}
+                  {message.role === "assistant" ? renderAssistantEvidence(message) : null}
                   {renderAssistantRunControls(message)}
                   {renderSuggestedVaultUpdates(message)}
                   {message.role === "assistant" && assistantProvenance(message) ? (

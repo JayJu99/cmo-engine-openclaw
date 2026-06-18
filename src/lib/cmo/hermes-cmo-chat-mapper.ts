@@ -1012,6 +1012,7 @@ function metadataFromHermes(
   const activityEvents = activityEventsFromHermes(result, delegationSummary);
   const executedCounts = executedAgentCounts(delegationSummary);
   const toolsUsed = toolsUsedFromResponse(result.response);
+  const toolTraceSummary = isRecord(result.response.tool_trace_summary) ? result.response.tool_trace_summary : {};
   const toolReadsCount = toolReadsCountFromResponse(result.response, activityEvents);
   const contextResolution = contextResolutionFromResponse(result.response);
   const answerBasis = isRecord(result.response.answer_basis) ? result.response.answer_basis : {};
@@ -1040,6 +1041,7 @@ function metadataFromHermes(
     requestId: result.response.request_id,
     responseStatus: result.response.status,
     ...(toolsUsed.length > 0 ? { toolsUsed, tools_used: toolsUsed } : {}),
+    ...(Object.keys(toolTraceSummary).length > 0 ? { toolTraceSummary, tool_trace_summary: toolTraceSummary } : {}),
     ...(cmoCallSurfUsed ? { cmo_call_surf_used: true } : {}),
     ...(cmoCallEchoUsed ? { cmo_call_echo_used: true } : {}),
     ...(toolReadsCount !== undefined ? { toolReadsCount } : {}),

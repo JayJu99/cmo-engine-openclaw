@@ -803,6 +803,31 @@ export interface HermesCmoPlatformPersistenceSummary {
   supabaseIndexingStatus: "indexed" | "skipped" | "failed";
 }
 
+export interface CmoActivityStepDisplay {
+  key: string;
+  label: string;
+  status: "running" | "completed" | "failed" | "timed_out" | "waiting" | "skipped";
+  detail?: string;
+}
+
+export interface CmoEvidenceSourceDisplay {
+  key: string;
+  sourceLabel:
+    | "Lens / GA4 ad-hoc query"
+    | "Lens / Product metric-definition snapshot"
+    | "Vault / Lens Daily Report"
+    | "Lens / GA4 cached snapshot";
+  summary?: string;
+  confidence?: string;
+  rows: Array<{
+    label: string;
+    value: string;
+  }>;
+  warnings?: string[];
+  caveats?: string[];
+  collapsedByDefault: boolean;
+}
+
 export interface HermesCmoChatMetadata {
   runtimeMode: "hermes_cmo";
   runtimeStatus: "live" | "fallback";
@@ -856,6 +881,8 @@ export interface HermesCmoChatMetadata {
   cmo_call_surf_used?: boolean;
   cmo_call_echo_used?: boolean;
   toolReadsCount?: number;
+  toolTraceSummary?: Record<string, unknown>;
+  tool_trace_summary?: Record<string, unknown>;
   lensReadoutAttached?: boolean;
   lens_readout_attached?: boolean;
   lensReadoutContract?: string;
