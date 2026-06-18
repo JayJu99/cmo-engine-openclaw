@@ -511,45 +511,68 @@ function renderAssistantEvidence(message: CMOChatMessage) {
 
   return (
     <div className="mt-3 space-y-2">
-      {sources.map((source) => (
-        <details key={source.key} className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
-          <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+      {sources.map((source) => {
+        const visibleRows = source.rows.slice(0, 3);
+        const detailRows = source.rows.slice(3);
+        const hasDetails = detailRows.length > 0 || Boolean(source.caveats?.length) || Boolean(source.warnings?.length);
+
+        return (
+          <div key={source.key} className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
             <div className="flex min-w-0 items-center gap-2">
               <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-white text-indigo-700 ring-1 ring-indigo-100">
                 <icons.FileText className="size-4" />
               </span>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="text-xs font-extrabold uppercase text-slate-500">Evidence</div>
                 <div className="truncate text-sm font-bold text-slate-900">Source: {source.sourceLabel}</div>
               </div>
+              {source.confidence ? <Badge variant="slate">Confidence: {source.confidence}</Badge> : null}
             </div>
-            {source.confidence ? <Badge variant="slate">Confidence: {source.confidence}</Badge> : null}
-          </summary>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {source.rows.map((item) => (
-              <div key={`${source.key}-${item.label}`} className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100">
-                <div className="text-[11px] font-extrabold uppercase text-slate-400">{item.label}</div>
-                <div className="mt-0.5 break-words text-xs font-bold leading-5 text-slate-800">{item.value}</div>
-              </div>
-            ))}
-          </div>
-          {source.caveats?.length ? (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {source.caveats.map((caveat) => <Badge key={caveat} variant="orange">{caveat}</Badge>)}
-            </div>
-          ) : null}
-          {source.warnings?.length ? (
-            <div className="mt-3 space-y-1">
-              {source.warnings.map((warning) => (
-                <div key={warning} className="flex items-start gap-2 rounded-lg border border-orange-100 bg-orange-50 px-3 py-2 text-xs font-semibold leading-5 text-orange-800">
-                  <icons.AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                  <span>{warning}</span>
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {visibleRows.map((item) => (
+                <div key={`${source.key}-${item.label}`} className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100">
+                  <div className="text-[11px] font-extrabold uppercase text-slate-400">{item.label}</div>
+                  <div className="mt-0.5 break-words text-xs font-bold leading-5 text-slate-800">{item.value}</div>
                 </div>
               ))}
             </div>
-          ) : null}
-        </details>
-      ))}
+
+            {hasDetails ? (
+              <details className="mt-3">
+                <summary className="cursor-pointer list-none text-xs font-extrabold uppercase text-indigo-700 [&::-webkit-details-marker]:hidden">
+                  More evidence detail
+                </summary>
+                {detailRows.length ? (
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    {detailRows.map((item) => (
+                      <div key={`${source.key}-${item.label}`} className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100">
+                        <div className="text-[11px] font-extrabold uppercase text-slate-400">{item.label}</div>
+                        <div className="mt-0.5 break-words text-xs font-bold leading-5 text-slate-800">{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {source.caveats?.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {source.caveats.map((caveat) => <Badge key={caveat} variant="orange">{caveat}</Badge>)}
+                  </div>
+                ) : null}
+                {source.warnings?.length ? (
+                  <div className="mt-3 space-y-1">
+                    {source.warnings.map((warning) => (
+                      <div key={warning} className="flex items-start gap-2 rounded-lg border border-orange-100 bg-orange-50 px-3 py-2 text-xs font-semibold leading-5 text-orange-800">
+                        <icons.AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                        <span>{warning}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </details>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

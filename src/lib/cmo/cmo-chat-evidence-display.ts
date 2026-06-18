@@ -49,6 +49,31 @@ function safeList(value: unknown, maxItems = 6): string[] {
     .slice(0, maxItems);
 }
 
+function safeObjectText(value: unknown, maxChars = 4000): string | null {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return safeText(value, maxChars);
+  }
+
+  if (Array.isArray(value)) {
+    const text = value
+      .map((item) => safeObjectText(item, Math.min(maxChars, 600)))
+      .filter((item): item is string => Boolean(item))
+      .join(" ");
+
+    return safeText(text, maxChars);
+  }
+
+  if (isRecord(value)) {
+    const text = Object.entries(value)
+      .map(([key, item]) => `${key} ${safeObjectText(item, Math.min(maxChars, 600)) ?? ""}`)
+      .join(" ");
+
+    return safeText(text, maxChars);
+  }
+
+  return null;
+}
+
 function firstSafe(record: Record<string, unknown>, keys: string[], maxChars?: number): string | null {
   for (const key of keys) {
     const value = safeText(record[key], maxChars);
@@ -108,11 +133,16 @@ function metadata(message: CMOChatMessage): HermesCmoChatMetadata | undefined {
 
 function toolNames(message: CMOChatMessage): string[] {
   const data = metadata(message);
+  const trace = traceSummary(message);
 
   return [
     ...(data?.toolsUsed ?? []),
     ...(data?.tools_used ?? []),
     ...(message.cmoRunToolsUsed ?? []),
+    ...safeList(trace.tools_used, 12),
+    ...safeList(trace.toolsUsed, 12),
+    ...safeList(trace.tools, 12),
+    firstSafe(trace, ["tool", "tool_name", "toolName"], 80),
   ]
     .map((tool) => safeText(tool, 80))
     .filter((tool): tool is string => Boolean(tool));
@@ -122,24 +152,60 @@ function hasTool(message: CMOChatMessage, pattern: RegExp): boolean {
   return toolNames(message).some((tool) => pattern.test(tool));
 }
 
+function sameText(left: string | null, right: string): boolean {
+  return Boolean(left && left.toLowerCase() === right.toLowerCase());
+}
+
+function evidenceText(message: CMOChatMessage, trace: Record<string, unknown>): string {
+  return [
+    safeText(message.content, 4000),
+    safeObjectText(trace, 4000),
+  ]
+    .filter((item): item is string => Boolean(item))
+    .join(" ");
+}
+
+function evidenceHints(message: CMOChatMessage, trace: Record<string, unknown>): Set<EvidenceKind> {
+  const text = evidenceText(message, trace);
+  const hints = new Set<EvidenceKind>();
+
+  if (/Lens\s*\/\s*GA4\s+ad-?hoc\s+query/i.test(text)) {
+    hints.add("ga4_ad_hoc");
+  }
+
+  if (/Lens\s*\/\s*Product\s+metric-definition\s+snapshot/i.test(text)) {
+    hints.add("metric_definition");
+  }
+
+  if (/Vault\s*\/\s*Lens\s+Daily\s+Report/i.test(text)) {
+    hints.add("vault_daily_report");
+  }
+
+  if (/Lens\s*(?:\/\s*GA4\s*)?cached\s+snapshot/i.test(text)) {
+    hints.add("cached_snapshot");
+  }
+
+  return hints;
+}
+
 function traceLooksLike(trace: Record<string, unknown>, kind: EvidenceKind): boolean {
   const sourceLabel = firstSafe(trace, ["source_label", "sourceLabel"], 120);
 
   if (sourceLabel) {
     if (kind === "ga4_ad_hoc") {
-      return sourceLabel === "Lens / GA4 ad-hoc query";
+      return sameText(sourceLabel, "Lens / GA4 ad-hoc query");
     }
 
     if (kind === "metric_definition") {
-      return sourceLabel === "Lens / Product metric-definition snapshot";
+      return sameText(sourceLabel, "Lens / Product metric-definition snapshot");
     }
 
     if (kind === "vault_daily_report") {
-      return sourceLabel === "Vault / Lens Daily Report";
+      return sameText(sourceLabel, "Vault / Lens Daily Report");
     }
 
     if (kind === "cached_snapshot") {
-      return sourceLabel === "Lens / GA4 cached snapshot";
+      return sameText(sourceLabel, "Lens / GA4 cached snapshot") || sameText(sourceLabel, "Lens cached snapshot");
     }
   }
 
@@ -186,6 +252,15 @@ function compactRows(rows: Array<CmoEvidenceSourceDisplay["rows"][number] | null
   return rows.filter((item): item is CmoEvidenceSourceDisplay["rows"][number] => Boolean(item)).slice(0, 8);
 }
 
+function rowsOrFallback(
+  rows: Array<CmoEvidenceSourceDisplay["rows"][number] | null>,
+  sourceLabel: CmoEvidenceSourceDisplay["sourceLabel"],
+): CmoEvidenceSourceDisplay["rows"] {
+  const compacted = compactRows(rows);
+
+  return compacted.length ? compacted : [{ label: "Source", value: sourceLabel }];
+}
+
 function warningRows(trace: Record<string, unknown>): string[] {
   return [
     ...safeList(trace.warnings, 3),
@@ -193,8 +268,8 @@ function warningRows(trace: Record<string, unknown>): string[] {
   ].filter((item): item is string => Boolean(item)).slice(0, 3);
 }
 
-function ga4AdHocEvidence(trace: Record<string, unknown>): CmoEvidenceSourceDisplay | null {
-  if (!traceLooksLike(trace, "ga4_ad_hoc")) {
+function ga4AdHocEvidence(trace: Record<string, unknown>, forced = false): CmoEvidenceSourceDisplay | null {
+  if (!forced && !traceLooksLike(trace, "ga4_ad_hoc")) {
     return null;
   }
 
@@ -207,21 +282,21 @@ function ga4AdHocEvidence(trace: Record<string, unknown>): CmoEvidenceSourceDisp
   return {
     key: "ga4-ad-hoc-query",
     sourceLabel: "Lens / GA4 ad-hoc query",
-    rows: compactRows([
+    rows: rowsOrFallback([
       row("Range", rangeValue(trace)),
       row("Metrics", metrics.join(", ")),
       row("Dimensions", dimensions.join(", ")),
       row("Top dimension", topDimension),
       row("Rows", rowsCount),
       row("Cache", cache),
-    ]),
+    ], "Lens / GA4 ad-hoc query"),
     warnings: warningRows(trace),
     collapsedByDefault: true,
   };
 }
 
-function metricDefinitionEvidence(trace: Record<string, unknown>): CmoEvidenceSourceDisplay | null {
-  if (!traceLooksLike(trace, "metric_definition")) {
+function metricDefinitionEvidence(trace: Record<string, unknown>, forced = false): CmoEvidenceSourceDisplay | null {
+  if (!forced && !traceLooksLike(trace, "metric_definition")) {
     return null;
   }
 
@@ -233,22 +308,22 @@ function metricDefinitionEvidence(trace: Record<string, unknown>): CmoEvidenceSo
   return {
     key: "metric-definition-snapshot",
     sourceLabel: "Lens / Product metric-definition snapshot",
-    rows: compactRows([
+    rows: rowsOrFallback([
       row("Range", rangeValue(trace)),
       row("Activation status", firstSafe(trace, ["activation_status", "activationStatus", "status"])),
       row("Activation", activatedUsers && activationRate ? `${activatedUsers} users · ${activationRate}` : activationRate ?? activatedUsers),
       row("Definition", activationEvents.join(", ")),
       row("Denominator", firstSafe(trace, ["denominator", "activation_denominator", "activationDenominator"])),
       row("Retention", retentionStatus ?? firstSafe(trace, ["retention_reason", "retentionReason"])),
-    ]),
+    ], "Lens / Product metric-definition snapshot"),
     warnings: warningRows(trace),
     caveats: ["Activation is not conversion unless explicitly defined."],
     collapsedByDefault: true,
   };
 }
 
-function vaultDailyReportEvidence(trace: Record<string, unknown>): CmoEvidenceSourceDisplay | null {
-  if (!traceLooksLike(trace, "vault_daily_report")) {
+function vaultDailyReportEvidence(trace: Record<string, unknown>, forced = false): CmoEvidenceSourceDisplay | null {
+  if (!forced && !traceLooksLike(trace, "vault_daily_report")) {
     return null;
   }
 
@@ -257,37 +332,37 @@ function vaultDailyReportEvidence(trace: Record<string, unknown>): CmoEvidenceSo
   return {
     key: "vault-lens-daily-report",
     sourceLabel: "Vault / Lens Daily Report",
-    rows: compactRows([
+    rows: rowsOrFallback([
       row("Report date", firstSafe(trace, ["report_date", "reportDate", "date"])),
       row("Workspace", firstSafe(trace, ["workspace", "workspace_id", "workspaceId"])),
       row("Path", safeRelativePath(trace.path ?? trace.vault_path ?? trace.report_path)),
       row("Sections", sections.join(", ")),
       row("Status", firstSafe(trace, ["truth_status", "truthStatus", "review_status", "reviewStatus", "status"])),
-    ]),
+    ], "Vault / Lens Daily Report"),
     warnings: warningRows(trace),
     collapsedByDefault: true,
   };
 }
 
-function cachedSnapshotEvidence(message: CMOChatMessage, trace: Record<string, unknown>): CmoEvidenceSourceDisplay | null {
+function cachedSnapshotEvidence(message: CMOChatMessage, trace: Record<string, unknown>, forced = false): CmoEvidenceSourceDisplay | null {
   const data = metadata(message);
   const hasLensReadout = data?.lensReadoutAttached === true || data?.lens_readout_attached === true;
 
-  if (!hasLensReadout && !traceLooksLike(trace, "cached_snapshot")) {
+  if (!forced && !hasLensReadout && !traceLooksLike(trace, "cached_snapshot")) {
     return null;
   }
 
   return {
     key: "lens-ga4-cached-snapshot",
     sourceLabel: "Lens / GA4 cached snapshot",
-    rows: compactRows([
+    rows: rowsOrFallback([
       row("Current range", firstSafe(trace, ["current_range", "currentRange"]) ?? data?.lensReadoutRangeKey ?? data?.lens_readout_range_key ?? null),
       row("Comparison range", firstSafe(trace, ["comparison_range", "comparisonRange"])),
       row("Status", firstSafe(trace, ["status"]) ?? data?.lensReadoutStatus ?? data?.lens_readout_status ?? null),
       row("Data", data?.lensReadoutDataStatus ?? data?.lens_readout_data_status ?? null),
       row("Metric", firstSafe(trace, ["metric", "metric_name", "metricName"])),
       row("Delta", firstSafe(trace, ["delta", "change", "comparison_delta"])),
-    ]),
+    ], "Lens / GA4 cached snapshot"),
     warnings: [
       ...warningRows(trace),
       safeText(data?.lensReadoutContextWarning ?? data?.lens_readout_context_warning, 180),
@@ -302,11 +377,12 @@ export function buildCmoEvidenceSources(message: CMOChatMessage): CmoEvidenceSou
   }
 
   const trace = traceSummary(message);
+  const hints = evidenceHints(message, trace);
   const sources = [
-    metricDefinitionEvidence(trace),
-    ga4AdHocEvidence(trace),
-    vaultDailyReportEvidence(trace),
-    cachedSnapshotEvidence(message, trace),
+    metricDefinitionEvidence(trace, hints.has("metric_definition")),
+    ga4AdHocEvidence(trace, hints.has("ga4_ad_hoc")),
+    vaultDailyReportEvidence(trace, hints.has("vault_daily_report")),
+    cachedSnapshotEvidence(message, trace, hints.has("cached_snapshot")),
   ].filter((item): item is CmoEvidenceSourceDisplay => Boolean(item));
   const seen = new Set<string>();
 
@@ -342,10 +418,10 @@ export function buildCmoActivitySteps(message: CMOChatMessage, running = false):
   const usesLens = hasTool(message, /cmo_call_lens|lens/i) ||
     evidence.some((source) => source.sourceLabel.startsWith("Lens /"));
   const usesVaultReport = evidence.some((source) => source.sourceLabel === "Vault / Lens Daily Report");
-  const steps = [step("cmo-analyzed", "CMO analyzed")];
+  const steps = [step("cmo", "CMO")];
 
   if (usesLens) {
-    steps.push(step("lens-queried", "Lens queried"));
+    steps.push(step("lens", "Lens"));
   }
 
   if (evidence.some((source) => source.sourceLabel === "Lens / GA4 ad-hoc query")) {

@@ -231,7 +231,7 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
   if (message) {
     const displaySteps = buildCmoActivitySteps(message, running);
     const hasSpecificEvidenceStep = displaySteps.some((step) =>
-      step.label === "Lens queried" ||
+      step.label === "Lens" ||
       step.label === "GA4 query" ||
       step.label === "Metric snapshot" ||
       step.label === "Cached snapshot" ||

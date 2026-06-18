@@ -75,6 +75,28 @@ function renderedText(value) {
   return JSON.stringify(value);
 }
 
+function productionShapeMessage(sourceText) {
+  return assistantMessage({
+    content: `Hermes answer body is preserved.\n\nNguồn: ${sourceText}`,
+    hermesCmoMetadata: {
+      tool_trace_summary: {
+        tools_used: ["cmo_call_lens"],
+      },
+    },
+  });
+}
+
+function assertProductionShapeEvidence(mapper, sourceText, expectedSourceLabel, expectedChip) {
+  const message = productionShapeMessage(sourceText);
+  const evidence = mapper.buildCmoEvidenceSources(message);
+  const activity = mapper.buildCmoActivitySteps(message);
+
+  assert.equal(message.content, `Hermes answer body is preserved.\n\nNguồn: ${sourceText}`, "Hermes answer.body must not be rewritten");
+  assert.equal(evidence[0]?.sourceLabel, expectedSourceLabel, `${sourceText} must map to an evidence card`);
+  assert.match(renderedText(activity), new RegExp(`CMO[\\s\\S]*Lens[\\s\\S]*${expectedChip}[\\s\\S]*CMO answered`), `${sourceText} must map to compact activity chips`);
+  assert.doesNotMatch(renderedText(evidence), forbiddenRenderedPattern, "production-shape evidence must stay sanitized");
+}
+
 const tmpDir = await mkdtemp(path.join(os.tmpdir(), "cmo-chat-evidence-ux-"));
 
 try {
@@ -164,7 +186,7 @@ try {
 
   assert.equal(ga4Message.content, "Original Hermes answer.body stays exactly here.", "Hermes answer.body fixture must be unchanged");
   assert.equal(mapper.buildCmoEvidenceSources(ga4Message)[0].sourceLabel, "Lens / GA4 ad-hoc query");
-  assert.match(renderedText(mapper.buildCmoActivitySteps(ga4Message)), /CMO analyzed[\s\S]*Lens queried[\s\S]*GA4 query[\s\S]*CMO answered/);
+  assert.match(renderedText(mapper.buildCmoActivitySteps(ga4Message)), /CMO[\s\S]*Lens[\s\S]*GA4 query[\s\S]*CMO answered/);
 
   const metricEvidence = mapper.buildCmoEvidenceSources(metricMessage)[0];
   assert.equal(metricEvidence.sourceLabel, "Lens / Product metric-definition snapshot");
@@ -185,6 +207,12 @@ try {
   const unsafeRendered = renderedText(mapper.buildCmoEvidenceSources(unsafeMessage));
   assert.doesNotMatch(unsafeRendered, forbiddenRenderedPattern, "unsafe markers must not survive display mapping");
   assert.doesNotMatch(unsafeRendered, /\{\\?"source_label\\?":/, "raw JSON/tool payload must not be rendered directly");
+
+  assertProductionShapeEvidence(mapper, "Lens / GA4 ad-hoc query", "Lens / GA4 ad-hoc query", "GA4 query");
+  assertProductionShapeEvidence(mapper, "Lens / Product metric-definition snapshot", "Lens / Product metric-definition snapshot", "Metric snapshot");
+  assertProductionShapeEvidence(mapper, "Vault / Lens Daily Report", "Vault / Lens Daily Report", "Vault report");
+  assertProductionShapeEvidence(mapper, "Lens cached snapshot", "Lens / GA4 cached snapshot", "Cached snapshot");
+  assertProductionShapeEvidence(mapper, "Lens / GA4 cached snapshot", "Lens / GA4 cached snapshot", "Cached snapshot");
 
   const panelSource = await source("src/components/cmo-apps/cmo-chat-panel.tsx");
   const activitySource = await source("src/components/cmo-apps/cmo-agent-activity-panel.tsx");
