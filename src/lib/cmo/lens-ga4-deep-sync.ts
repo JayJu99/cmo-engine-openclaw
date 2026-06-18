@@ -15,6 +15,7 @@ import {
   type ProductLensGa4QueryRangeKey,
 } from "@/lib/cmo/lens-ga4-catalog";
 import { LensGa4DataError } from "@/lib/cmo/lens-ga4-data";
+import { runProductMetricDefinitionCompute } from "@/lib/cmo/lens-metric-definitions";
 import { getLensGoogleAccessToken, LensGoogleAccessTokenError } from "@/lib/cmo/lens-google-oauth";
 import {
   getWorkspaceGa4MetricSourceMapping,
@@ -154,6 +155,11 @@ export interface ProductLensDeepSyncResult {
     synced_count: number;
     failed_count: number;
     skipped_count: number;
+  };
+  metric_definitions?: {
+    status: "completed" | "partial" | "failed" | "skipped";
+    activation_retention_compute_attempted: boolean;
+    error?: string;
   };
   safety: ProductLensGa4Safety;
 }
@@ -1023,7 +1029,10 @@ async function recordDeepSyncRun(result: ProductLensDeepSyncResult): Promise<voi
       status: workspace.status,
       started_at: result.started_at,
       completed_at: result.completed_at,
-      summary_json: result.summary,
+      summary_json: {
+        ...result.summary,
+        metric_definitions: result.metric_definitions ?? null,
+      },
       errors_json: workspace.errors,
     }));
 
@@ -1100,6 +1109,34 @@ export async function runProductLensDailyDeepSync(input: {
     },
     safety: safety(),
   };
+
+  if (input.mode !== "dryRun") {
+    try {
+      const definitionCompute = await runProductMetricDefinitionCompute({
+        appIds: input.appIds,
+        rangeKeys,
+        definitionTypes: ["activation", "retention"],
+        mode: input.mode === "refresh_all" ? "refresh_all" : "refresh_if_stale",
+        trigger: `${input.trigger}:post_deep_sync`,
+      });
+
+      result.metric_definitions = {
+        status: definitionCompute.status,
+        activation_retention_compute_attempted: true,
+      };
+    } catch (error) {
+      result.metric_definitions = {
+        status: "skipped",
+        activation_retention_compute_attempted: true,
+        error: error instanceof Error ? error.message : "metric_definition_compute_failed",
+      };
+    }
+  } else {
+    result.metric_definitions = {
+      status: "skipped",
+      activation_retention_compute_attempted: false,
+    };
+  }
 
   if (input.recordRun !== false) {
     await recordDeepSyncRun(result);

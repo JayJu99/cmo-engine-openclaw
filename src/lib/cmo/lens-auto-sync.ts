@@ -6,6 +6,7 @@ import {
   resolveLensGa4DateRange,
 } from "@/lib/cmo/lens-ga4-data";
 import { LensGoogleAccessTokenError } from "@/lib/cmo/lens-google-oauth";
+import { runProductMetricDefinitionCompute } from "@/lib/cmo/lens-metric-definitions";
 import {
   getLatestWorkspaceGa4MetricSnapshot,
   upsertWorkspaceGa4MetricSnapshot,
@@ -65,6 +66,11 @@ export interface ProductLensAutoSyncResult {
     synced_count: number;
     failed_count: number;
     skipped_count: number;
+  };
+  metric_definitions?: {
+    status: "completed" | "partial" | "failed" | "skipped";
+    activation_compute_attempted: boolean;
+    error?: string;
   };
   safety: {
     no_tokens_returned: true;
@@ -393,7 +399,10 @@ async function recordAutoSyncRun(result: ProductLensAutoSyncResult): Promise<voi
       status: workspace.status,
       started_at: result.started_at,
       completed_at: result.completed_at,
-      summary_json: result.summary,
+      summary_json: {
+        ...result.summary,
+        metric_definitions: result.metric_definitions ?? null,
+      },
       errors_json: workspace.errors,
     }));
 
@@ -469,6 +478,34 @@ export async function runProductLensAutoSync(input: {
       hermes_called: false,
     },
   };
+
+  if (input.mode !== "dryRun") {
+    try {
+      const definitionCompute = await runProductMetricDefinitionCompute({
+        appIds: input.appIds,
+        rangeKeys: input.rangeKeys.filter((rangeKey) => rangeKey !== "this_month"),
+        definitionTypes: ["activation"],
+        mode: "refresh_if_stale",
+        trigger: `${input.trigger}:post_core_sync`,
+      });
+
+      result.metric_definitions = {
+        status: definitionCompute.status,
+        activation_compute_attempted: true,
+      };
+    } catch (error) {
+      result.metric_definitions = {
+        status: "skipped",
+        activation_compute_attempted: true,
+        error: error instanceof Error ? error.message : "metric_definition_compute_failed",
+      };
+    }
+  } else {
+    result.metric_definitions = {
+      status: "skipped",
+      activation_compute_attempted: false,
+    };
+  }
 
   if (input.recordRun !== false) {
     await recordAutoSyncRun(result);

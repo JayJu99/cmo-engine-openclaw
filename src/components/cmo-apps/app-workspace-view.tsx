@@ -194,6 +194,123 @@ function isGa4SyncedNumber(snapshot: WorkspaceGa4MetricSnapshot | null, value: n
   return snapshot?.status === "synced" && typeof value === "number" && Number.isFinite(value);
 }
 
+function definitionNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function metricDefinitionRangeKey(dateRange: CmoAppMetricDateRangePreset): ProductMetricDefinitionSnapshot["range_key"] {
+  return dateRange === "last_7_days" || dateRange === "last_30_days" ? dateRange : "this_week";
+}
+
+function metricDefinitionStatusLabel(status: ProductMetricDefinitionStatus | undefined): string {
+  if (status === "computed") {
+    return "Computed";
+  }
+
+  if (status === "configured_but_unavailable") {
+    return "Calculation unavailable";
+  }
+
+  if (status === "not_matured") {
+    return "Not enough mature data";
+  }
+
+  if (status === "no_denominator") {
+    return "No denominator";
+  }
+
+  if (status === "no_data") {
+    return "No matching data";
+  }
+
+  if (status === "failed") {
+    return "Failed";
+  }
+
+  return "Metric definition needed";
+}
+
+function metricDefinitionStatusVariant(status: ProductMetricDefinitionStatus | undefined): "green" | "orange" | "red" | "slate" {
+  if (status === "computed") {
+    return "green";
+  }
+
+  if (status === "failed") {
+    return "red";
+  }
+
+  return status ? "orange" : "slate";
+}
+
+function metricDefinitionCardCopy(input: {
+  kind: "activation_users" | "activation_rate" | "retention_d1" | "retention_d7";
+  snapshot: ProductMetricDefinitionSnapshot | undefined;
+  definition: ProductMetricDefinition | undefined;
+}): Pick<Parameters<typeof KpiCard>[0], "value" | "detail" | "muted" | "status"> {
+  if (!input.definition?.enabled) {
+    return {
+      value: "No data",
+      detail: "Requires activation/retention definition.",
+      muted: true,
+      status: <Badge variant="orange">Metric definition needed</Badge>,
+    };
+  }
+
+  const snapshot = input.snapshot;
+
+  if (!snapshot) {
+    return {
+      value: "No data",
+      detail: "Configured. Compute now to populate this metric.",
+      muted: true,
+      status: <Badge variant="orange">Configured</Badge>,
+    };
+  }
+
+  if (snapshot.status === "computed") {
+    const metricKey = input.kind === "activation_users"
+      ? "activated_users"
+      : input.kind === "activation_rate"
+        ? "activation_rate"
+        : input.kind === "retention_d1"
+          ? "d1_retention"
+          : "d7_retention";
+    const value = definitionNumber(snapshot.metrics[metricKey]);
+
+    return {
+      value: input.kind === "activation_users" ? compactMetricValue(value) : percentMetricValue(value),
+      detail: `Last computed ${snapshot.generated_at ? displayDate(snapshot.generated_at) : "recently"}.`,
+      muted: value === null,
+      status: <Badge variant={metricDefinitionStatusVariant(snapshot.status)}>{metricDefinitionStatusLabel(snapshot.status)}</Badge>,
+    };
+  }
+
+  if (snapshot.status === "not_matured") {
+    return {
+      value: "Configured",
+      detail: "Configured, not enough mature data.",
+      muted: true,
+      status: <Badge variant="orange">{metricDefinitionStatusLabel(snapshot.status)}</Badge>,
+    };
+  }
+
+  if (snapshot.status === "configured_but_unavailable") {
+    return {
+      value: "Configured",
+      detail: "Configured, calculation unavailable.",
+      muted: true,
+      status: <Badge variant="orange">{metricDefinitionStatusLabel(snapshot.status)}</Badge>,
+    };
+  }
+
+  return {
+    value: "No data",
+    detail: metricDefinitionStatusLabel(snapshot.status),
+    muted: true,
+    status: <Badge variant={metricDefinitionStatusVariant(snapshot.status)}>{metricDefinitionStatusLabel(snapshot.status)}</Badge>,
+  };
+}
+
 function ga4VerificationBadgeVariant(input: {
   loading: boolean;
   mapping: WorkspaceGa4MetricSourceMapping | null;
@@ -462,6 +579,68 @@ type WorkspaceGa4MetricSnapshotResponse = {
 };
 
 type WorkspaceGa4DashboardRangeKey = Exclude<CmoAppMetricDateRangePreset, "custom">;
+
+type ProductMetricDefinitionType = "activation" | "retention";
+type ProductMetricDefinitionStatus =
+  | "computed"
+  | "definition_needed"
+  | "configured_but_unavailable"
+  | "not_matured"
+  | "no_data"
+  | "no_denominator"
+  | "failed";
+
+type ProductMetricDefinition = {
+  definition_type: ProductMetricDefinitionType;
+  enabled: boolean;
+  definition: Record<string, unknown>;
+  updated_at?: string | null;
+};
+
+type ProductMetricDefinitionsResponse = {
+  schema_version: "product.metric_definitions.v1";
+  status: "saved" | "completed" | "failed";
+  tenant_id: string;
+  workspace_id: string;
+  app_id: string;
+  definitions: ProductMetricDefinition[];
+  safety: {
+    no_tokens_returned: true;
+    raw_ga4_response_included: false;
+    vault_write_performed: false;
+    gbrain_used: false;
+    hermes_called: false;
+  };
+};
+
+type ProductMetricDefinitionSnapshot = {
+  definition_type: ProductMetricDefinitionType;
+  range_key: "yesterday" | "this_week" | "last_7_days" | "last_30_days";
+  date_start: string;
+  date_end: string;
+  timezone: string | null;
+  status: ProductMetricDefinitionStatus;
+  metrics: Record<string, unknown>;
+  definition: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+  quality: Record<string, unknown>;
+  generated_at: string | null;
+};
+
+type ProductMetricDefinitionSnapshotsResponse = {
+  schema_version: "product.metric_definition_snapshots.v1";
+  status: "completed" | "missing" | "partial";
+  tenant_id: string;
+  workspace_id: string;
+  app_id: string;
+  range_key: "yesterday" | "this_week" | "last_7_days" | "last_30_days";
+  snapshots: ProductMetricDefinitionSnapshot[];
+};
+
+type ProductMetricDefinitionComputeResponse = {
+  schema_version: "product.metric_definition_compute_result.v1";
+  status: "completed" | "partial" | "failed";
+};
 
 const dateRangeOptions: Array<{ id: CmoAppMetricDateRangePreset; label: string }> = [
   { id: "this_week", label: "This week" },
@@ -1398,6 +1577,13 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [ga4SnapshotError, setGa4SnapshotError] = useState<string | null>(null);
   const [ga4MappingStatus, setGa4MappingStatus] = useState<"idle" | "loading" | "ready" | "saving" | "verifying" | "error">("idle");
   const [ga4MappingError, setGa4MappingError] = useState<string | null>(null);
+  const [metricDefinitions, setMetricDefinitions] = useState<ProductMetricDefinition[]>([]);
+  const [metricDefinitionSnapshots, setMetricDefinitionSnapshots] = useState<ProductMetricDefinitionSnapshot[]>([]);
+  const [metricDefinitionsStatus, setMetricDefinitionsStatus] = useState<"idle" | "loading" | "ready" | "saving" | "computing" | "error">("idle");
+  const [metricDefinitionsError, setMetricDefinitionsError] = useState<string | null>(null);
+  const [activationEventsInput, setActivationEventsInput] = useState("");
+  const [activationDenominator, setActivationDenominator] = useState<"active_users" | "new_users" | "total_users">("active_users");
+  const [retentionEventsInput, setRetentionEventsInput] = useState("");
   const [aggregatorChartMode, setAggregatorChartMode] = useState<AggregatorChartMode>("transactions");
   const [partnerChartMode, setPartnerChartMode] = useState<PartnerChartMode>("daily_volume");
   const [planTypeFilter, setPlanTypeFilter] = useState<PlanReviewTypeFilter>("all");
@@ -1552,6 +1738,35 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     mapping: ga4MetricSourceMapping,
     fallbackLabel: lensOAuthBadgeLabel,
   });
+  const metricDefinitionRange = metricDefinitionRangeKey(dateRange);
+  const activationDefinition = metricDefinitions.find((definition) => definition.definition_type === "activation");
+  const retentionDefinition = metricDefinitions.find((definition) => definition.definition_type === "retention");
+  const activationSnapshot = metricDefinitionSnapshots.find((snapshot) => snapshot.definition_type === "activation");
+  const retentionSnapshot = metricDefinitionSnapshots.find((snapshot) => snapshot.definition_type === "retention");
+  const activationDefinitionConfigured = Boolean(activationDefinition?.enabled);
+  const retentionDefinitionConfigured = Boolean(retentionDefinition?.enabled);
+  const activationStatusLabel = activationDefinitionConfigured ? "Configured" : "Not configured";
+  const retentionStatusLabel = retentionDefinitionConfigured ? "Configured" : "Not configured";
+  const activatedUsersCard = metricDefinitionCardCopy({
+    kind: "activation_users",
+    snapshot: activationSnapshot,
+    definition: activationDefinition,
+  });
+  const activationRateCard = metricDefinitionCardCopy({
+    kind: "activation_rate",
+    snapshot: activationSnapshot,
+    definition: activationDefinition,
+  });
+  const d1RetentionCard = metricDefinitionCardCopy({
+    kind: "retention_d1",
+    snapshot: retentionSnapshot,
+    definition: retentionDefinition,
+  });
+  const d7RetentionCard = metricDefinitionCardCopy({
+    kind: "retention_d7",
+    snapshot: retentionSnapshot,
+    definition: retentionDefinition,
+  });
   const ga4MappedStatus = (
     <div className="flex flex-wrap justify-end gap-1">
       <Badge variant="green">Connected</Badge>
@@ -1581,13 +1796,18 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
       }
 
       if (requiresDefinition) {
+        const definedCard = id === "activated_users"
+          ? activatedUsersCard
+          : id === "activation_rate"
+            ? activationRateCard
+            : id === "d1_retention"
+              ? d1RetentionCard
+              : d7RetentionCard;
+
         return {
           id,
           label,
-          value: "No data",
-          detail: "Requires activation/retention definition.",
-          muted: true,
-          status: <Badge variant="orange">Metric definition needed</Badge>,
+          ...definedCard,
           comparison: null,
         };
       }
@@ -1925,6 +2145,84 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   }, [app.id, ga4SnapshotRangeKey]);
 
   useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadMetricDefinitions() {
+      setMetricDefinitionsStatus("loading");
+      setMetricDefinitionsError(null);
+
+      try {
+        const payload = await readJsonResponse<ProductMetricDefinitionsResponse>(
+          await fetch(`/api/cmo/apps/${app.id}/metric-definitions`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        );
+
+        if (!controller.signal.aborted) {
+          setMetricDefinitions(payload.definitions);
+          const activation = payload.definitions.find((definition) => definition.definition_type === "activation");
+          const retention = payload.definitions.find((definition) => definition.definition_type === "retention");
+          const activationEvents = Array.isArray(activation?.definition.activation_events)
+            ? activation.definition.activation_events.filter((item): item is string => typeof item === "string")
+            : [];
+          const denominator = activation?.definition.denominator;
+          const retentionEvents = Array.isArray(retention?.definition.retention_return_events)
+            ? retention.definition.retention_return_events.filter((item): item is string => typeof item === "string")
+            : [];
+
+          setActivationEventsInput(activationEvents.join(", "));
+          setActivationDenominator(denominator === "new_users" || denominator === "total_users" ? denominator : "active_users");
+          setRetentionEventsInput(retentionEvents.join(", "));
+          setMetricDefinitionsStatus("ready");
+        }
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setMetricDefinitions([]);
+        setMetricDefinitionsStatus("error");
+        setMetricDefinitionsError(loadError instanceof Error ? loadError.message : "Metric definitions load failed");
+      }
+    }
+
+    void loadMetricDefinitions();
+
+    return () => controller.abort();
+  }, [app.id]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadMetricDefinitionSnapshots() {
+      try {
+        const payload = await readJsonResponse<ProductMetricDefinitionSnapshotsResponse>(
+          await fetch(`/api/cmo/apps/${app.id}/metric-definitions/snapshots?rangeKey=${metricDefinitionRange}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        );
+
+        if (!controller.signal.aborted) {
+          setMetricDefinitionSnapshots(payload.snapshots);
+        }
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setMetricDefinitionSnapshots([]);
+        setMetricDefinitionsError(loadError instanceof Error ? loadError.message : "Metric definition snapshots load failed");
+      }
+    }
+
+    void loadMetricDefinitionSnapshots();
+
+    return () => controller.abort();
+  }, [app.id, metricDefinitionRange]);
+
+  useEffect(() => {
     if (!connectedLensOAuthAccount) {
       return;
     }
@@ -2118,6 +2416,97 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     } catch (error) {
       setGa4SnapshotStatus("error");
       setGa4SnapshotError(error instanceof Error ? error.message : "GA4 metric sync failed");
+    }
+  }
+
+  async function reloadMetricDefinitionSnapshots() {
+    const payload = await readJsonResponse<ProductMetricDefinitionSnapshotsResponse>(
+      await fetch(`/api/cmo/apps/${app.id}/metric-definitions/snapshots?rangeKey=${metricDefinitionRange}`, {
+        cache: "no-store",
+      }),
+    );
+
+    setMetricDefinitionSnapshots(payload.snapshots);
+  }
+
+  async function saveMetricDefinitions() {
+    const activationEvents = activationEventsInput.split(",").map((item) => item.trim()).filter(Boolean);
+    const retentionEvents = retentionEventsInput.split(",").map((item) => item.trim()).filter(Boolean);
+
+    setMetricDefinitionsStatus("saving");
+    setMetricDefinitionsError(null);
+
+    try {
+      const payload = await readJsonResponse<ProductMetricDefinitionsResponse>(
+        await fetch(`/api/cmo/apps/${app.id}/metric-definitions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            definitions: [
+              {
+                definition_type: "activation",
+                enabled: activationEvents.length > 0,
+                definition: {
+                  activation_events: activationEvents,
+                  activation_logic: "any_event",
+                  denominator: activationDenominator,
+                  activation_window: "same_range",
+                },
+              },
+              {
+                definition_type: "retention",
+                enabled: retentionEvents.length > 0,
+                definition: {
+                  retention_return_events: retentionEvents,
+                  retention_days: [1, 7],
+                  retention_method: "ga4_cohort",
+                },
+              },
+            ],
+          }),
+        }),
+      );
+
+      setMetricDefinitions(payload.definitions);
+      setMetricDefinitionsStatus("ready");
+    } catch (error) {
+      setMetricDefinitionsStatus("error");
+      setMetricDefinitionsError(error instanceof Error ? error.message : "Metric definitions save failed");
+    }
+  }
+
+  async function computeMetricDefinitions() {
+    if (ga4MetricSourceMapping?.verificationStatus !== "verified") {
+      setMetricDefinitionsError("Verify the GA4 source before computing defined metrics.");
+      return;
+    }
+
+    setMetricDefinitionsStatus("computing");
+    setMetricDefinitionsError(null);
+
+    try {
+      await readJsonResponse<ProductMetricDefinitionComputeResponse>(
+        await fetch(`/api/cmo/apps/${app.id}/metric-definitions/compute`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rangeKeys: [metricDefinitionRange],
+            definitionTypes: ["activation", "retention"],
+            mode: "refresh_all",
+            trigger: "manual",
+            dryRun: false,
+          }),
+        }),
+      );
+      await reloadMetricDefinitionSnapshots();
+      setMetricDefinitionsStatus("ready");
+    } catch (error) {
+      setMetricDefinitionsStatus("error");
+      setMetricDefinitionsError(error instanceof Error ? error.message : "Metric definition compute failed");
     }
   }
 
@@ -2402,6 +2791,64 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                     <FieldValue label="Engagement rate" value={percentMetricValue(ga4MetricSnapshot.metrics.engagementRate)} />
                   </div>
                 ) : null}
+                <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <div className="text-sm font-bold text-slate-950">Metric Definitions</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Badge variant={activationDefinitionConfigured ? "green" : "orange"}>Activation: {activationStatusLabel}</Badge>
+                        <Badge variant={retentionDefinitionConfigured ? "green" : "orange"}>Retention: {retentionStatusLabel}</Badge>
+                        <Badge variant={metricDefinitionStatusVariant(activationSnapshot?.status)}>Activation compute: {metricDefinitionStatusLabel(activationSnapshot?.status)}</Badge>
+                        <Badge variant={metricDefinitionStatusVariant(retentionSnapshot?.status)}>Retention compute: {metricDefinitionStatusLabel(retentionSnapshot?.status)}</Badge>
+                      </div>
+                      <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">
+                        Last computed: {activationSnapshot?.generated_at ? displayDate(activationSnapshot.generated_at) : retentionSnapshot?.generated_at ? displayDate(retentionSnapshot.generated_at) : "No definition snapshot yet"}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <Button type="button" size="sm" variant="outline" onClick={() => void saveMetricDefinitions()} disabled={metricDefinitionsStatus === "saving" || metricDefinitionsStatus === "computing"}>
+                        <icons.Check />
+                        {metricDefinitionsStatus === "saving" ? "Saving" : "Save definitions"}
+                      </Button>
+                      <Button type="button" size="sm" onClick={() => void computeMetricDefinitions()} disabled={metricDefinitionsStatus === "saving" || metricDefinitionsStatus === "computing" || ga4MetricSourceMapping?.verificationStatus !== "verified"}>
+                        <icons.RefreshCw />
+                        {metricDefinitionsStatus === "computing" ? "Computing" : "Compute now"}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_minmax(0,1fr)]">
+                    <Field label="Activation events">
+                      <Input
+                        value={activationEventsInput}
+                        onChange={(event) => setActivationEventsInput(event.target.value)}
+                        placeholder="activation_event_one, activation_event_two"
+                      />
+                    </Field>
+                    <Field label="Activation denominator">
+                      <select
+                        value={activationDenominator}
+                        onChange={(event) => setActivationDenominator(event.target.value as typeof activationDenominator)}
+                        className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 shadow-sm outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                      >
+                        <option value="active_users">Active users</option>
+                        <option value="new_users">New users</option>
+                        <option value="total_users">Total users</option>
+                      </select>
+                    </Field>
+                    <Field label="Retention return events">
+                      <Input
+                        value={retentionEventsInput}
+                        onChange={(event) => setRetentionEventsInput(event.target.value)}
+                        placeholder="session_start, user_engagement"
+                      />
+                    </Field>
+                  </div>
+                  {metricDefinitionsError ? (
+                    <div className="mt-3 rounded-xl border border-orange-100 bg-orange-50 px-4 py-3 text-sm font-semibold text-orange-700">
+                      {metricDefinitionsError}
+                    </div>
+                  ) : null}
+                </div>
                 {connectedLensOAuthAccount ? (
                   <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto_auto] md:items-end">
                     <Field label="Choose GA4 property">

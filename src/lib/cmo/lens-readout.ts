@@ -108,6 +108,15 @@ function missingDefinitions(metricsPack: LensMetricsPack): string[] {
   return [...metricsPack.quality.missingDefinitions];
 }
 
+function hasMappedRole(metricsPack: LensMetricsPack, role: LensMetricsPackMetric["semanticRole"]): boolean {
+  return metricsPack.metrics.some((metric) =>
+    metric.semanticRole === role
+    && metric.mappingStatus === "mapped"
+    && typeof metric.value === "number"
+    && Number.isFinite(metric.value),
+  );
+}
+
 function displayValue(metric: LensMetricsPackMetric): string {
   if (metric.displayValue) {
     return metric.displayValue;
@@ -246,6 +255,22 @@ function configurationFindings(metricsPack: LensMetricsPack): LensDeterministicF
     });
   }
 
+  const unavailableDefinitions = metricsPack.metrics.filter((metric) =>
+    (metric.semanticRole === "activation" || metric.semanticRole === "retention")
+    && metric.mappingStatus === "unavailable"
+    && metric.definitionStatus,
+  );
+
+  for (const metric of unavailableDefinitions) {
+    findings.push({
+      key: `${metric.key}.unavailable`,
+      type: "configuration_gap",
+      severity: "warning",
+      title: `${metric.label} is not available`,
+      body: `${metric.label} is configured but currently ${metric.definitionStatus}${metric.unavailableReason ? ` (${metric.unavailableReason})` : ""}.`,
+    });
+  }
+
   return findings;
 }
 
@@ -255,7 +280,6 @@ function limitations(input: {
 }): string[] {
   const items = [
     "This readout is deterministic and does not use LLM interpretation.",
-    "Activation and retention are blocked until definitions are configured.",
   ];
 
   if (!input.comparisonReadiness.canCompareTrend) {
@@ -331,8 +355,8 @@ export function createLensReadout(input: {
     mappedMetricCount: mapped.length,
   });
   const canAnswerBasicPerformance = input.diagnosticsPack.summary.dataStatus !== "missing_snapshot" && input.diagnosticsPack.summary.dataStatus !== "error" && mapped.length > 0;
-  const canAnswerActivation = !input.metricsPack.quality.missingDefinitions.includes("activation_event");
-  const canAnswerRetention = !input.metricsPack.quality.missingDefinitions.includes("cohort_retention_logic");
+  const canAnswerActivation = hasMappedRole(input.metricsPack, "activation");
+  const canAnswerRetention = hasMappedRole(input.metricsPack, "retention");
 
   return {
     contract: "lens.readout.v1",

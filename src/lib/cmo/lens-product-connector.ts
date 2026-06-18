@@ -5,6 +5,7 @@ import {
   LensGa4DataError,
   resolveLensGa4DateRange,
 } from "@/lib/cmo/lens-ga4-data";
+import { getLatestProductMetricDefinitionSnapshots } from "@/lib/cmo/lens-metric-definitions";
 import { LensGoogleAccessTokenError } from "@/lib/cmo/lens-google-oauth";
 import {
   getLatestWorkspaceGa4MetricSnapshot,
@@ -51,8 +52,8 @@ export interface ProductLensConnectorMetricsResponse {
     engagement_rate: number | null;
   };
   definitions: {
-    activation_event: null;
-    retention_logic: null;
+    activation_event: null | Record<string, unknown>;
+    retention_logic: null | Record<string, unknown>;
   };
   quality: {
     status: ProductLensConnectorMetricsStatus;
@@ -338,6 +339,39 @@ function batchRangeFromResponse(response: ProductLensConnectorMetricsResponse): 
   };
 }
 
+function connectorDefinitions(input: Awaited<ReturnType<typeof getLatestProductMetricDefinitionSnapshots>>): ProductLensConnectorMetricsResponse["definitions"] {
+  const activation = input.snapshots.find((snapshot) => snapshot.definition_type === "activation");
+  const retention = input.snapshots.find((snapshot) => snapshot.definition_type === "retention");
+
+  return {
+    activation_event: activation
+      ? {
+          status: activation.status,
+          metrics: activation.metrics,
+          definition: activation.definition,
+          generated_at: activation.generated_at,
+          warnings: activation.quality.warnings ?? [],
+        }
+      : {
+          status: "definition_needed",
+          warning: "activation_definition_missing_or_not_computed",
+        },
+    retention_logic: retention
+      ? {
+          status: retention.status,
+          metrics: retention.metrics,
+          definition: retention.definition,
+          reason: retention.evidence.reason,
+          generated_at: retention.generated_at,
+          warnings: retention.quality.warnings ?? [],
+        }
+      : {
+          status: "definition_needed",
+          warning: "retention_definition_missing_or_not_computed",
+        },
+  };
+}
+
 export async function getProductLensConnectorMetrics(input: {
   appId: string;
   rangeKey: WorkspaceGa4MetricRangeKey;
@@ -358,6 +392,10 @@ export async function getProductLensConnectorMetrics(input: {
       appId: entry.appId,
     }),
   ]);
+  const definitionSnapshots = await getLatestProductMetricDefinitionSnapshots({
+    appId: entry.appId,
+    rangeKey: input.rangeKey === "this_month" ? "this_week" : input.rangeKey,
+  });
   let snapshot = initialSnapshot;
   let stale = isSnapshotStale(snapshot, input.rangeKey, nowIso);
   const refreshNeeded = shouldRefresh({
@@ -408,8 +446,7 @@ export async function getProductLensConnectorMetrics(input: {
     },
     metrics: connectorMetrics(snapshot?.metrics),
     definitions: {
-      activation_event: null,
-      retention_logic: null,
+      ...connectorDefinitions(definitionSnapshots),
     },
     quality: quality({ snapshot, stale }),
     safety: {

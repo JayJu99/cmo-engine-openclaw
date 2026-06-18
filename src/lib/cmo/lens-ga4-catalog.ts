@@ -61,7 +61,8 @@ export interface ProductLensGa4QueryOrderBy {
 export interface ProductLensGa4QueryFilter {
   type: "dimension";
   name: string;
-  value: string;
+  value?: string;
+  values?: string[];
 }
 
 export interface ProductLensGa4QueryRequest {
@@ -779,8 +780,11 @@ function normalizeQueryRequest(body: Record<string, unknown>): ProductLensGa4Que
     ? body.filters.filter(isRecord).map((filter) => ({
         type: "dimension" as const,
         name: typeof filter.name === "string" ? filter.name.trim() : "",
-        value: typeof filter.value === "string" ? filter.value.trim() : "",
-      })).filter((filter) => Boolean(filter.name && filter.value))
+        value: typeof filter.value === "string" ? filter.value.trim() : undefined,
+        values: Array.isArray(filter.values)
+          ? Array.from(new Set(filter.values.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim())))
+          : undefined,
+      })).filter((filter) => Boolean(filter.name && (filter.value || filter.values?.length)))
     : [];
   const orderBy = Array.isArray(body.orderBy)
     ? body.orderBy.filter(isRecord).map((item) => ({
@@ -965,18 +969,13 @@ function metricOrDimensionExpression(input: { type: ProductLensGa4QueryOrderByTy
     : { metric: { metricName: input.name }, desc: input.desc };
 }
 
-function filterExpression(filters: ProductLensGa4QueryFilter[]): Record<string, unknown> | undefined {
-  if (filters.length === 0) {
-    return undefined;
-  }
-
-  if (filters.length === 1) {
+function singleFilterExpression(filter: ProductLensGa4QueryFilter): Record<string, unknown> {
+  if (filter.values?.length) {
     return {
       filter: {
-        fieldName: filters[0].name,
-        stringFilter: {
-          matchType: "EXACT",
-          value: filters[0].value,
+        fieldName: filter.name,
+        inListFilter: {
+          values: filter.values,
           caseSensitive: false,
         },
       },
@@ -984,17 +983,29 @@ function filterExpression(filters: ProductLensGa4QueryFilter[]): Record<string, 
   }
 
   return {
+    filter: {
+      fieldName: filter.name,
+      stringFilter: {
+        matchType: "EXACT",
+        value: filter.value ?? "",
+        caseSensitive: false,
+      },
+    },
+  };
+}
+
+function filterExpression(filters: ProductLensGa4QueryFilter[]): Record<string, unknown> | undefined {
+  if (filters.length === 0) {
+    return undefined;
+  }
+
+  if (filters.length === 1) {
+    return singleFilterExpression(filters[0]);
+  }
+
+  return {
     andGroup: {
-      expressions: filters.map((filter) => ({
-        filter: {
-          fieldName: filter.name,
-          stringFilter: {
-            matchType: "EXACT",
-            value: filter.value,
-            caseSensitive: false,
-          },
-        },
-      })),
+      expressions: filters.map(singleFilterExpression),
     },
   };
 }

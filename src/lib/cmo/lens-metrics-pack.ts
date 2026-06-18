@@ -5,6 +5,7 @@ import {
   type WorkspaceGa4MetricRangeKey,
   type WorkspaceGa4MetricSnapshot,
 } from "@/lib/cmo/workspace-metric-snapshots";
+import { getLatestProductMetricDefinitionSnapshots } from "@/lib/cmo/lens-metric-definitions";
 import {
   getWorkspaceGa4MetricSourceMapping,
   type WorkspaceGa4MetricSourceMapping,
@@ -50,6 +51,9 @@ export interface LensMetricsPackMetric {
   confidence: LensMetricsPackConfidence;
   semanticRole: LensMetricsPackSemanticRole;
   missingDefinition?: "activation_event" | "cohort_retention_logic";
+  definitionStatus?: string;
+  unavailableReason?: string;
+  definition?: Record<string, unknown>;
 }
 
 export interface LensMetricsPack {
@@ -81,12 +85,11 @@ interface CreateLensMetricsPackInput {
   rangeKey: WorkspaceGa4MetricRangeKey;
   snapshot: WorkspaceGa4MetricSnapshot | null;
   mapping: WorkspaceGa4MetricSourceMapping | null;
+  metricDefinitionSnapshots?: Awaited<ReturnType<typeof getLatestProductMetricDefinitionSnapshots>>["snapshots"];
   generatedAt?: string;
 }
 
 const DEFAULT_TIMEZONE = process.env.CMO_VAULT_TIME_ZONE ?? "Asia/Saigon";
-const MISSING_DEFINITIONS: LensMetricsPack["quality"]["missingDefinitions"] = ["activation_event", "cohort_retention_logic"];
-
 function staleThresholdHours(rangeKey: WorkspaceGa4MetricRangeKey): number {
   return rangeKey === "last_30_days" || rangeKey === "this_month" ? 48 : 24;
 }
@@ -151,7 +154,7 @@ function fallbackRange(rangeKey: WorkspaceGa4MetricRangeKey, timezone: string, g
   };
 }
 
-function numberOrNull(value: number | null | undefined): number | null {
+function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
@@ -206,6 +209,170 @@ function definitionNeededMetric(input: {
     semanticRole: input.semanticRole,
     missingDefinition: input.missingDefinition,
   };
+}
+
+function metricDefinitionMetric(input: {
+  key: string;
+  label: string;
+  unit: LensMetricsPackMetricUnit;
+  semanticRole: "activation" | "retention";
+  value: number | null;
+  displayValue?: string;
+  definitionStatus: string;
+  unavailableReason?: string;
+  definition?: Record<string, unknown>;
+}): LensMetricsPackMetric {
+  return {
+    key: input.key,
+    label: input.label,
+    value: input.value,
+    unit: input.unit,
+    displayValue: input.displayValue,
+    mappingStatus: input.definitionStatus === "computed" && input.value !== null ? "mapped" : "unavailable",
+    confidence: input.definitionStatus === "computed" && input.value !== null ? "high" : "none",
+    semanticRole: input.semanticRole,
+    definitionStatus: input.definitionStatus,
+    unavailableReason: input.unavailableReason,
+    definition: input.definition,
+  };
+}
+
+function metricDefinitionValue(snapshot: NonNullable<CreateLensMetricsPackInput["metricDefinitionSnapshots"]>[number] | undefined, key: string): number | null {
+  return numberOrNull(snapshot?.metrics[key]);
+}
+
+function metricDefinitionDisplayValue(value: number | null, unit: LensMetricsPackMetricUnit): string | undefined {
+  if (value === null) {
+    return undefined;
+  }
+
+  if (unit === "ratio") {
+    return percentDisplayValue(value);
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function metricDefinitionMetrics(input: {
+  snapshots: CreateLensMetricsPackInput["metricDefinitionSnapshots"];
+}): {
+  metrics: LensMetricsPackMetric[];
+  missingDefinitions: LensMetricsPack["quality"]["missingDefinitions"];
+  warnings: string[];
+} {
+  const activation = input.snapshots?.find((snapshot) => snapshot.definition_type === "activation");
+  const retention = input.snapshots?.find((snapshot) => snapshot.definition_type === "retention");
+  const missingDefinitions: LensMetricsPack["quality"]["missingDefinitions"] = [];
+  const warnings: string[] = [];
+  const metrics: LensMetricsPackMetric[] = [];
+
+  if (activation) {
+    const activatedUsers = metricDefinitionValue(activation, "activated_users");
+    const activationRate = metricDefinitionValue(activation, "activation_rate");
+
+    metrics.push(
+      metricDefinitionMetric({
+        key: "activation.activated_users",
+        label: "Activated Users",
+        value: activatedUsers,
+        unit: "users",
+        displayValue: metricDefinitionDisplayValue(activatedUsers, "users"),
+        semanticRole: "activation",
+        definitionStatus: activation.status,
+        unavailableReason: typeof activation.evidence.reason === "string" ? activation.evidence.reason : undefined,
+        definition: activation.definition,
+      }),
+      metricDefinitionMetric({
+        key: "activation.activation_rate",
+        label: "Activation Rate",
+        value: activationRate,
+        unit: "ratio",
+        displayValue: metricDefinitionDisplayValue(activationRate, "ratio"),
+        semanticRole: "activation",
+        definitionStatus: activation.status,
+        unavailableReason: typeof activation.evidence.reason === "string" ? activation.evidence.reason : undefined,
+        definition: activation.definition,
+      }),
+    );
+
+    if (activation.status !== "computed") {
+      warnings.push(`activation_${activation.status}`);
+    }
+  } else {
+    missingDefinitions.push("activation_event");
+    metrics.push(
+      definitionNeededMetric({
+        key: "activation.activated_users",
+        label: "Activated Users",
+        unit: "users",
+        semanticRole: "activation",
+        missingDefinition: "activation_event",
+      }),
+      definitionNeededMetric({
+        key: "activation.activation_rate",
+        label: "Activation Rate",
+        unit: "ratio",
+        semanticRole: "activation",
+        missingDefinition: "activation_event",
+      }),
+    );
+  }
+
+  if (retention) {
+    const d1 = metricDefinitionValue(retention, "d1_retention");
+    const d7 = metricDefinitionValue(retention, "d7_retention");
+
+    metrics.push(
+      metricDefinitionMetric({
+        key: "retention.d1",
+        label: "D1 Retention",
+        value: d1,
+        unit: "ratio",
+        displayValue: metricDefinitionDisplayValue(d1, "ratio"),
+        semanticRole: "retention",
+        definitionStatus: retention.status,
+        unavailableReason: typeof retention.evidence.reason === "string" ? retention.evidence.reason : undefined,
+        definition: retention.definition,
+      }),
+      metricDefinitionMetric({
+        key: "retention.d7",
+        label: "D7 Retention",
+        value: d7,
+        unit: "ratio",
+        displayValue: metricDefinitionDisplayValue(d7, "ratio"),
+        semanticRole: "retention",
+        definitionStatus: retention.status,
+        unavailableReason: typeof retention.evidence.reason === "string" ? retention.evidence.reason : undefined,
+        definition: retention.definition,
+      }),
+    );
+
+    if (retention.status !== "computed") {
+      warnings.push(`retention_${retention.status}`);
+    }
+  } else {
+    missingDefinitions.push("cohort_retention_logic");
+    metrics.push(
+      definitionNeededMetric({
+        key: "retention.d1",
+        label: "D1 Retention",
+        unit: "ratio",
+        semanticRole: "retention",
+        missingDefinition: "cohort_retention_logic",
+      }),
+      definitionNeededMetric({
+        key: "retention.d7",
+        label: "D7 Retention",
+        unit: "ratio",
+        semanticRole: "retention",
+        missingDefinition: "cohort_retention_logic",
+      }),
+    );
+  }
+
+  return { metrics, missingDefinitions, warnings };
 }
 
 function sourceMetadata(input: {
@@ -303,42 +470,19 @@ export function createLensMetricsPackFromSnapshot(input: CreateLensMetricsPackIn
       semanticRole: "engagement",
     }),
   ];
+  const definedMetrics = metricDefinitionMetrics({
+    snapshots: input.metricDefinitionSnapshots,
+  });
   const allMetrics: LensMetricsPackMetric[] = [
     ...ga4Metrics,
-    definitionNeededMetric({
-      key: "activation.activated_users",
-      label: "Activated Users",
-      unit: "users",
-      semanticRole: "activation",
-      missingDefinition: "activation_event",
-    }),
-    definitionNeededMetric({
-      key: "activation.activation_rate",
-      label: "Activation Rate",
-      unit: "ratio",
-      semanticRole: "activation",
-      missingDefinition: "activation_event",
-    }),
-    definitionNeededMetric({
-      key: "retention.d1",
-      label: "D1 Retention",
-      unit: "ratio",
-      semanticRole: "retention",
-      missingDefinition: "cohort_retention_logic",
-    }),
-    definitionNeededMetric({
-      key: "retention.d7",
-      label: "D7 Retention",
-      unit: "ratio",
-      semanticRole: "retention",
-      missingDefinition: "cohort_retention_logic",
-    }),
+    ...definedMetrics.metrics,
   ];
   const warnings = [
     !input.snapshot ? "missing_ga4_snapshot" : null,
     input.snapshot?.status === "error" ? input.snapshot.lastError || "ga4_snapshot_error" : null,
     input.mapping ? null : "missing_ga4_source_mapping",
     ...ga4Metrics.filter((metric) => metric.mappingStatus !== "mapped").map((metric) => `missing_${metric.sourceMetric}`),
+    ...definedMetrics.warnings,
   ].filter((warning): warning is string => Boolean(warning));
   const isStale = isSnapshotStale(input.snapshot, input.rangeKey, generatedAt);
 
@@ -359,7 +503,7 @@ export function createLensMetricsPackFromSnapshot(input: CreateLensMetricsPackIn
       status: qualityStatus({ snapshot: input.snapshot, ga4Metrics }),
       isStale,
       staleThresholdHours: staleThresholdHours(input.rangeKey),
-      missingDefinitions: MISSING_DEFINITIONS,
+      missingDefinitions: definedMetrics.missingDefinitions.length ? definedMetrics.missingDefinitions : [],
       warnings,
     },
   };
@@ -375,7 +519,7 @@ export async function getLensMetricsPackForApp(input: {
     workspaceId: entry.workspaceId,
     appId: entry.appId,
   };
-  const [snapshot, mapping] = await Promise.all([
+  const [snapshot, mapping, metricDefinitionSnapshots] = await Promise.all([
     getLatestWorkspaceGa4MetricSnapshot({
       tenantId: scope.tenantId,
       workspaceId: scope.workspaceId,
@@ -387,6 +531,10 @@ export async function getLensMetricsPackForApp(input: {
       workspaceId: scope.workspaceId,
       appId: scope.appId,
     }),
+    getLatestProductMetricDefinitionSnapshots({
+      appId: scope.appId,
+      rangeKey: input.rangeKey === "this_month" ? "this_week" : input.rangeKey,
+    }),
   ]);
 
   return createLensMetricsPackFromSnapshot({
@@ -394,5 +542,6 @@ export async function getLensMetricsPackForApp(input: {
     rangeKey: input.rangeKey,
     snapshot,
     mapping,
+    metricDefinitionSnapshots: metricDefinitionSnapshots.snapshots,
   });
 }
