@@ -619,8 +619,18 @@ export type CmoProductRenderSource =
   | "local_session_command";
 export type CmoStrategyMode = "DIAGNOSE" | "FOCUS" | "PRIORITIZE" | "REVIEW" | "RESET";
 export type CmoDecisionLabel = "KEEP" | "CUT" | "TEST" | "SCALE" | "WAIT";
-export type HermesCmoAgentUsed = "cmo" | "echo" | "surf";
-export type HermesCmoExecutableMode = "echo.default" | "echo.source_translate" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
+export type HermesCmoAgentUsed = "cmo" | "echo" | "surf" | "creative";
+export type HermesCmoExecutableMode =
+  | "echo.default"
+  | "echo.source_translate"
+  | "surf.default"
+  | "surf.x"
+  | "surf.trend"
+  | "surf.pulse"
+  | "creative"
+  | "creative.default"
+  | "creative.generate_image"
+  | "creative.image_generation";
 
 export interface HermesCmoSafetyCounters {
   surfCalls: number;
@@ -794,7 +804,7 @@ export interface HermesCmoActivityEventSummary {
 
 export interface HermesCmoDelegationSummaryItem {
   delegationId: string;
-  targetAgent: "echo" | "surf";
+  targetAgent: "echo" | "surf" | "creative";
   mode: HermesCmoExecutableMode;
   objective: string;
   status: "completed" | "failed" | "skipped";

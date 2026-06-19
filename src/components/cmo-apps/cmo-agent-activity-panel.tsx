@@ -31,13 +31,18 @@ function normalizeStatus(value: string | undefined, fallback: ActivityStatus): A
   return fallback;
 }
 
-function agentLabel(agent: "cmo" | "echo" | "surf" | undefined): string {
+function agentLabel(agent: "cmo" | "echo" | "surf" | "creative" | undefined): string {
+  if (agent === "creative") return "Creative Agent";
   if (agent === "surf") return "Surf Agent";
   if (agent === "echo") return "Echo Agent";
   return "CMO";
 }
 
 function eventLabel(event: HermesCmoActivityEventSummary): string {
+  if (event.sourceAgent === "creative" || event.type.startsWith("creative.")) {
+    return "Creative Agent";
+  }
+
   if (event.type === "delegation.started") {
     return agentLabel(event.sourceAgent);
   }
@@ -61,7 +66,27 @@ function eventLabel(event: HermesCmoActivityEventSummary): string {
   return "CMO";
 }
 
-function delegationMatchKey(agent: "echo" | "surf" | undefined, mode: string | undefined): string | null {
+function displayStatusForCreativeEvent(event: HermesCmoActivityEventSummary): ActivityStatus {
+  if (event.type === "creative.started" || event.type === "creative.generating") {
+    return event.status === "failed" ? "failed" : "running";
+  }
+
+  if (event.type === "creative.asset_ready") {
+    return "completed";
+  }
+
+  if (event.type === "creative.partial" || event.type === "creative.blocked") {
+    return event.type === "creative.blocked" ? "failed" : "waiting";
+  }
+
+  if (event.type === "creative.failed") {
+    return "failed";
+  }
+
+  return normalizeStatus(event.status, "completed");
+}
+
+function delegationMatchKey(agent: "echo" | "surf" | "creative" | undefined, mode: string | undefined): string | null {
   if (!agent) {
     return null;
   }
@@ -69,7 +94,7 @@ function delegationMatchKey(agent: "echo" | "surf" | undefined, mode: string | u
   return `${agent}:${mode ?? "*"}`;
 }
 
-function hasDelegationMatch(matches: Set<string>, agent: "echo" | "surf" | undefined, mode: string | undefined): boolean {
+function hasDelegationMatch(matches: Set<string>, agent: "echo" | "surf" | "creative" | undefined, mode: string | undefined): boolean {
   if (!agent) {
     return false;
   }
@@ -83,7 +108,7 @@ function delegationOutcomeSets(
 ): { completed: Set<string>; failed: Set<string> } {
   const completed = new Set<string>();
   const failed = new Set<string>();
-  const addMatch = (target: Set<string>, agent: "echo" | "surf" | undefined, mode: string | undefined) => {
+  const addMatch = (target: Set<string>, agent: "echo" | "surf" | "creative" | undefined, mode: string | undefined) => {
     const key = delegationMatchKey(agent, mode);
 
     if (key) {
@@ -97,12 +122,12 @@ function delegationOutcomeSets(
     }
 
     if (event.status === "failed") {
-      addMatch(failed, event.sourceAgent === "echo" || event.sourceAgent === "surf" ? event.sourceAgent : undefined, event.sourceMode);
+      addMatch(failed, event.sourceAgent === "echo" || event.sourceAgent === "surf" || event.sourceAgent === "creative" ? event.sourceAgent : undefined, event.sourceMode);
       return;
     }
 
     if (event.status === "completed") {
-      addMatch(completed, event.sourceAgent === "echo" || event.sourceAgent === "surf" ? event.sourceAgent : undefined, event.sourceMode);
+      addMatch(completed, event.sourceAgent === "echo" || event.sourceAgent === "surf" || event.sourceAgent === "creative" ? event.sourceAgent : undefined, event.sourceMode);
     }
   });
 
@@ -126,7 +151,7 @@ function displayStatusForEvent(
 ): ActivityStatus {
   const fallback = normalizeStatus(event.status, event.type === "delegation.started" ? "running" : "completed");
 
-  if (event.type !== "delegation.started" || (event.sourceAgent !== "echo" && event.sourceAgent !== "surf")) {
+  if (event.type !== "delegation.started" || (event.sourceAgent !== "echo" && event.sourceAgent !== "surf" && event.sourceAgent !== "creative")) {
     return fallback;
   }
 
@@ -174,7 +199,7 @@ function statusFromCmoRun(value: CMOChatMessage["cmoRunStatus"] | undefined): Ac
   return null;
 }
 
-function friendlyToolsUsed(message: CMOChatMessage | undefined): Array<"surf" | "echo"> {
+function friendlyToolsUsed(message: CMOChatMessage | undefined): Array<"surf" | "echo" | "creative"> {
   const rawTools = [
     ...(message?.cmoRunToolsUsed ?? []),
     ...(message?.agentsUsed ?? []),
@@ -182,7 +207,7 @@ function friendlyToolsUsed(message: CMOChatMessage | undefined): Array<"surf" | 
     ...(message?.hermesCmoMetadata?.toolsUsed ?? []),
     ...(message?.hermesCmoMetadata?.tools_used ?? []),
   ];
-  const tools = new Set<"surf" | "echo">();
+  const tools = new Set<"surf" | "echo" | "creative">();
 
   if (message?.hermesCmoMetadata?.cmo_call_surf_used === true) {
     tools.add("surf");
@@ -200,12 +225,16 @@ function friendlyToolsUsed(message: CMOChatMessage | undefined): Array<"surf" | 
     if (tool === "echo" || tool === "cmo_call_echo") {
       tools.add("echo");
     }
+
+    if (tool === "creative" || tool === "cmo_call_creative") {
+      tools.add("creative");
+    }
   });
 
   return Array.from(tools);
 }
 
-function toolMetadataRows(message: CMOChatMessage | undefined, existingAgents: Set<"surf" | "echo">): ActivityRow[] {
+function toolMetadataRows(message: CMOChatMessage | undefined, existingAgents: Set<"surf" | "echo" | "creative">): ActivityRow[] {
   const runStatus = statusFromCmoRun(message?.cmoRunStatus);
 
   if (runStatus !== "completed" && runStatus !== "failed" && runStatus !== "timed_out") {
@@ -221,9 +250,10 @@ function toolMetadataRows(message: CMOChatMessage | undefined, existingAgents: S
     }));
 }
 
-function toolAgentFromRow(row: ActivityRow): "surf" | "echo" | null {
+function toolAgentFromRow(row: ActivityRow): "surf" | "echo" | "creative" | null {
   if (row.label === "Surf Agent") return "surf";
   if (row.label === "Echo Agent") return "echo";
+  if (row.label === "Creative Agent") return "creative";
   return null;
 }
 
@@ -260,6 +290,7 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
   const rows: ActivityRow[] = [];
   const firstCmoEvent = events.find((event) => event.userVisible && event.sourceAgent === "cmo");
   const delegationEvents = events.filter((event) => event.userVisible && (event.type === "delegation.started" || event.type === "delegation.completed"));
+  const creativeEvents = events.filter((event) => event.userVisible && (event.sourceAgent === "creative" || event.type.startsWith("creative.")));
   const hasDelegationEvents = delegationEvents.length > 0;
   const delegationOutcomes = delegationOutcomeSets(events, delegations);
   const hasFriendlyTools = friendlyToolsUsed(message).length > 0;
@@ -283,12 +314,21 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
       })),
   );
 
+  rows.push(
+    ...creativeEvents.map((event, index): ActivityRow => ({
+      key: `${event.eventId}-creative-${index}`,
+      label: eventLabel(event),
+      status: displayStatusForCreativeEvent(event),
+      detail: event.type.replace(/^creative\./, ""),
+    })),
+  );
+
   rows.push(...delegationRows(delegations, hasDelegationEvents));
 
   const existingAgents = new Set(
     rows
       .map(toolAgentFromRow)
-      .filter((agent): agent is "surf" | "echo" => Boolean(agent)),
+      .filter((agent): agent is "surf" | "echo" | "creative" => Boolean(agent)),
   );
   rows.push(...toolMetadataRows(message, existingAgents));
 

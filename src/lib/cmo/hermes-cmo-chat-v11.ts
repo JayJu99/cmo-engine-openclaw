@@ -10,6 +10,7 @@ import {
   mapCmoChatToHermesCmoRequest,
   type HermesCmoChatRequestInput,
 } from "./hermes-cmo-chat-mapper";
+import { redactSensitiveText } from "./creative-agent";
 import { HERMES_CMO_CHAT_V11_ENDPOINT } from "./hermes-cmo-chat-router";
 import { normalizeCmoRuntimeUserIdentity } from "./user-metadata";
 
@@ -175,8 +176,9 @@ const safeTraceId = (value: string) => value.replace(/[^a-z0-9_.-]+/gi, "_").sli
 
 function compactText(value: string, maxChars: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
+  const redacted = redactSensitiveText(compact, Math.max(maxChars, 1200));
 
-  return compact.length > maxChars ? `${compact.slice(0, maxChars - 3).trimEnd()}...` : compact;
+  return redacted.length > maxChars ? `${redacted.slice(0, maxChars - 3).trimEnd()}...` : redacted;
 }
 
 function compactMultilineText(value: string, maxChars: number): string {

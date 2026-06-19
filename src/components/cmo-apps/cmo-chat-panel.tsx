@@ -12,6 +12,7 @@ import { CmoAgentActivityPanel } from "@/components/cmo-apps/cmo-agent-activity-
 import { icons } from "@/components/dashboard/icons";
 import { assistantDisplayMarkdown } from "@/lib/cmo/assistant-markdown-display";
 import { buildCmoEvidenceSources } from "@/lib/cmo/cmo-chat-evidence-display";
+import { isBrowserPreviewUrl } from "@/lib/cmo/creative-agent";
 import type {
   AppWorkspace,
   CMOAppChatResponse,
@@ -502,6 +503,27 @@ function renderAssistantContent(content: string) {
   );
 }
 
+function recordNumber(record: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function creativeAssetRecords(message: CMOChatMessage): Record<string, unknown>[] {
+  return (message.sessionArtifacts ?? []).filter((artifact) =>
+    isRecord(artifact) &&
+    artifact.schema_version === "cmo.creative_asset.v1" &&
+    artifact.type === "creative_asset" &&
+    artifact.agent === "creative",
+  ) as Record<string, unknown>[];
+}
+
 function renderAssistantEvidence(message: CMOChatMessage) {
   const sources = buildCmoEvidenceSources(message);
 
@@ -667,6 +689,7 @@ export function CMOChatPanel({
   const [sendStatus, setSendStatus] = useState<string | null>(null);
   const [reviewStatusMessage, setReviewStatusMessage] = useState<string | null>(null);
   const [reviewingCandidateKey, setReviewingCandidateKey] = useState<string | null>(null);
+  const [approvedCreativeAssetIds, setApprovedCreativeAssetIds] = useState<Set<string>>(() => new Set());
   const [dryRunStatusMessage, setDryRunStatusMessage] = useState<string | null>(null);
   const [dryRunningApprovalId, setDryRunningApprovalId] = useState<string | null>(null);
   const [writeStatusMessage, setWriteStatusMessage] = useState<string | null>(null);
@@ -1555,6 +1578,132 @@ export function CMOChatPanel({
     );
   }
 
+  function approveCreativeAsset(assetId: string) {
+    setApprovedCreativeAssetIds((current) => {
+      const next = new Set(current);
+      next.add(assetId);
+      return next;
+    });
+    setReviewStatusMessage("Creative asset approved for review. Vault save and publish remain manual.");
+  }
+
+  function renderCreativeAssets(message: CMOChatMessage) {
+    const assets = creativeAssetRecords(message);
+
+    if (message.role !== "assistant" || !assets.length) {
+      return null;
+    }
+
+    return (
+      <div className="mt-4 border-t border-slate-100 pt-4">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase text-slate-500">
+            <icons.Sparkles className="size-4" />
+            Creative Assets
+          </div>
+          <Badge variant="orange">review required</Badge>
+          <Badge variant="slate">{assets.length}</Badge>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {assets.map((asset, index) => {
+            const assetId = recordString(asset, ["asset_id", "id"]) || `creative_asset_${index}`;
+            const status = recordString(asset, ["status"]) || "artifact_transport_missing";
+            const assetType = recordString(asset, ["asset_type", "type"]) || "image";
+            const previewUrl = isBrowserPreviewUrl(asset.preview_url)
+              ? String(asset.preview_url)
+              : isBrowserPreviewUrl(asset.signed_url)
+                ? String(asset.signed_url)
+                : "";
+            const visualSummary = recordString(asset, ["visual_summary", "summary"]);
+            const model = recordString(asset, ["model"]);
+            const operation = recordString(asset, ["operation"]);
+            const bytes = recordNumber(asset, ["bytes"]);
+            const width = recordNumber(asset, ["width"]);
+            const height = recordNumber(asset, ["height"]);
+            const approved = approvedCreativeAssetIds.has(assetId);
+            const canPreview = Boolean(previewUrl);
+            const dimensions = width && height ? `${width} x ${height}` : "";
+
+            return (
+              <div key={assetId} className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                <div className="aspect-square bg-white">
+                  {canPreview && assetType === "image" ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={previewUrl} alt={visualSummary || "Creative asset preview"} className="size-full object-cover" />
+                  ) : canPreview && assetType === "video" ? (
+                    <video src={previewUrl} controls className="size-full bg-black object-contain" />
+                  ) : (
+                    <div className="flex size-full flex-col items-center justify-center gap-2 px-4 text-center">
+                      <icons.AlertTriangle className="size-6 text-orange-600" />
+                      <div className="text-sm font-bold text-slate-900">Artifact transport missing</div>
+                      <p className="max-w-xs text-xs leading-5 text-slate-600">
+                        Creative generated an asset, but Product cannot fetch the local artifact yet.
+                      </p>
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-3 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={status === "stored" ? "green" : status === "failed" || status === "blocked" ? "red" : "orange"}>
+                      {status}
+                    </Badge>
+                    <Badge variant="slate">{assetType}</Badge>
+                    {dimensions ? <Badge variant="slate">{dimensions}</Badge> : null}
+                    {bytes ? <Badge variant="slate">{formatBytes(bytes)}</Badge> : null}
+                  </div>
+                  {visualSummary ? <p className="break-words text-sm leading-6 text-slate-700">{visualSummary}</p> : null}
+                  {model || operation ? (
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {model ? (
+                        <div className="rounded bg-white px-3 py-2 ring-1 ring-slate-100">
+                          <div className="text-[11px] font-extrabold uppercase text-slate-400">Model</div>
+                          <div className="truncate text-xs font-bold text-slate-800">{model}</div>
+                        </div>
+                      ) : null}
+                      {operation ? (
+                        <div className="rounded bg-white px-3 py-2 ring-1 ring-slate-100">
+                          <div className="text-[11px] font-extrabold uppercase text-slate-400">Operation</div>
+                          <div className="truncate text-xs font-bold text-slate-800">{operation}</div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" size="sm" variant="outline" disabled={approved} onClick={() => approveCreativeAsset(assetId)}>
+                      <icons.Check />
+                      {approved ? "Approved" : "Approve"}
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" disabled title="Vault save requires the approved asset workflow.">
+                      <icons.Database />
+                      Save to Vault
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" disabled={!approved} title={approved ? "Approved for video workflow." : "Approve before using for video."}>
+                      <icons.Play />
+                      Use for video
+                    </Button>
+                    {canPreview ? (
+                      <Button asChild type="button" size="sm" variant="outline">
+                        <a href={previewUrl} download target="_blank" rel="noopener noreferrer">
+                          <icons.Download />
+                          Download
+                        </a>
+                      </Button>
+                    ) : (
+                      <Button type="button" size="sm" variant="outline" disabled title="Download becomes available after artifact ingestion.">
+                        <icons.Download />
+                        Download
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   function renderAssistantRunControls(message: CMOChatMessage) {
     if (message.role !== "assistant") {
       return null;
@@ -1662,6 +1811,7 @@ export function CMOChatPanel({
                       elapsedMs={pendingAssistantMessageId === message.id ? pendingElapsedMs : null}
                     />
                   ) : null}
+                  {message.role === "assistant" ? renderCreativeAssets(message) : null}
                   {message.role === "assistant" ? renderAssistantEvidence(message) : null}
                   {renderAssistantRunControls(message)}
                   {renderSuggestedVaultUpdates(message)}

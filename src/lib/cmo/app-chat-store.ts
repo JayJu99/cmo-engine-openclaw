@@ -62,6 +62,7 @@ import { buildContextPack, withContextPackMessage } from "@/lib/cmo/context-pack
 import { summarizeContextQuality } from "@/lib/cmo/context-quality";
 import { buildDecisionLayer } from "@/lib/cmo/decision-layer";
 import { CmoAdapterError } from "@/lib/cmo/errors";
+import { extractCreativeAssetsFromHermesResponse } from "@/lib/cmo/creative-agent";
 import { routeIntentForMessage } from "@/lib/cmo/app-routing-intent";
 import { executeMixedCmoEcho, isMixedCmoEchoRequest, mixedEchoNeedsClarification, buildMixedCmoEchoRuntimeMessage, maybeHandleEchoBridge } from "@/lib/cmo/echo-bridge";
 import { buildCmoEvidenceRuntimeMessage, executeCmoSurfEvidence } from "@/lib/cmo/cmo-surf-orchestrator";
@@ -118,6 +119,23 @@ const INDEXED_SUPPLEMENT_WARNING_CHARS = 4_000;
 const LEGACY_AUTO_CAPTURE_WRITE_REMOTE_SKIP_REASON = "skipped_legacy_auto_capture_because_vault_agent_write_remote_enabled";
 const MAX_SUGGESTED_VAULT_UPDATES_SESSION = 24;
 const MAX_VAULT_UPDATE_APPROVAL_EVENTS = 80;
+
+function creativeAssetsFromHermesPayload(input: {
+  response: unknown;
+  tenantId: string;
+  workspaceId: string;
+  appId: string;
+  jobId?: string;
+  createdAt: string;
+}): Record<string, unknown>[] {
+  return extractCreativeAssetsFromHermesResponse(input.response, {
+    tenantId: input.tenantId,
+    workspaceId: input.workspaceId,
+    appId: input.appId,
+    jobId: input.jobId,
+    createdAt: input.createdAt,
+  }).map((asset) => ({ ...asset }));
+}
 const MAX_VAULT_UPDATE_DRY_RUN_RESULTS = 40;
 const MAX_VAULT_UPDATE_WRITE_RESULTS = 40;
 const VAULT_AGENT_APPROVED_WRITE_DRY_RUN_ENDPOINT = "/agents/vault-agent/approved-write-dry-run";
@@ -1881,7 +1899,7 @@ function normalizeDecisionLabel(value: unknown): CmoDecisionLabel | undefined {
 }
 
 function normalizeHermesCmoAgentUsed(value: unknown): HermesCmoAgentUsed | undefined {
-  return value === "cmo" || value === "echo" || value === "surf" ? value : undefined;
+  return value === "cmo" || value === "echo" || value === "surf" || value === "creative" ? value : undefined;
 }
 
 function normalizeHermesCmoActivityEvents(value: unknown): HermesCmoActivityEventSummary[] | undefined {
@@ -1926,7 +1944,7 @@ function normalizeHermesCmoDelegationSummary(value: unknown): HermesCmoDelegatio
         return null;
       }
 
-      const targetAgent = item.targetAgent === "echo" || item.targetAgent === "surf" ? item.targetAgent : null;
+      const targetAgent = item.targetAgent === "echo" || item.targetAgent === "surf" || item.targetAgent === "creative" ? item.targetAgent : null;
       const mode = stringValue(item.mode) as HermesCmoDelegationSummaryItem["mode"];
       const status =
         item.status === "completed" || item.status === "failed" || item.status === "skipped" ? item.status : null;
@@ -2678,7 +2696,7 @@ function isTimedOutHermesError(reason: string): boolean {
 }
 
 function safeCmoRunToolsUsed(agentsUsed: HermesCmoAgentUsed[] | undefined): HermesCmoAgentUsed[] | undefined {
-  return agentsUsed?.filter((agent) => agent === "cmo" || agent === "surf" || agent === "echo");
+  return agentsUsed?.filter((agent) => agent === "cmo" || agent === "surf" || agent === "echo" || agent === "creative");
 }
 
 function messageUserMetadata(identity: CmoServerUserIdentity): Pick<CMOChatMessage, "authMode" | "userId" | "userEmail" | "userDisplayName" | "userSlug"> {
@@ -3458,6 +3476,17 @@ export async function createAppChatSession(
             userQuestion: request.message,
           }),
         );
+        const completedSessionArtifacts = mergeHermesCmoChatV11Artifacts(
+          sessionArtifacts,
+          creativeAssetsFromHermesPayload({
+            response: hermesResult.response,
+            tenantId: requestTenantId,
+            workspaceId: request.workspaceId,
+            appId: request.appId,
+            jobId: cmoRunId,
+            createdAt: completedAt,
+          }),
+        );
         const completedDecisionLayer = buildDecisionLayer({
           workspaceId: request.workspaceId,
           appId: request.appId,
@@ -3509,6 +3538,7 @@ export async function createAppChatSession(
           echoCalls: mappedHermesResult.hermesCmoMetadata.echoCalls,
           forbiddenCounters: mappedHermesResult.hermesCmoMetadata.forbiddenCounters,
           delegationsMode: mappedHermesResult.delegationsMode,
+          ...(completedSessionArtifacts.length ? { sessionArtifacts: completedSessionArtifacts } : {}),
           sessionLocalResearchResults: completedResearchResults,
           decisionLayer: completedDecisionLayer,
           rawCaptureStatus: "pending",
@@ -3534,6 +3564,7 @@ export async function createAppChatSession(
             echoCalls: mappedHermesResult.hermesCmoMetadata.echoCalls,
             forbiddenCounters: mappedHermesResult.hermesCmoMetadata.forbiddenCounters,
             delegationsMode: mappedHermesResult.delegationsMode,
+            ...(completedSessionArtifacts.length ? { sessionArtifacts: completedSessionArtifacts } : {}),
             sessionLocalResearchResults: completedResearchResults,
             ...completionMetadata,
           } : message),
@@ -3729,7 +3760,17 @@ export async function createAppChatSession(
       forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
       delegationsMode = mappedChat.metadata.delegationsMode;
       productRenderSource = "hermes_cmo";
-      sessionArtifacts = mergeHermesCmoChatV11Artifacts(sessionArtifacts, mappedChat.artifactsOut);
+      sessionArtifacts = mergeHermesCmoChatV11Artifacts(sessionArtifacts, [
+        ...mappedChat.artifactsOut,
+        ...creativeAssetsFromHermesPayload({
+          response: { artifacts: mappedChat.artifactsOut },
+          tenantId: requestTenantId,
+          workspaceId: request.workspaceId,
+          appId: request.appId,
+          jobId: `creative_${messageId}`,
+          createdAt: now,
+        }),
+      ]);
       sessionSummary = mergeHermesCmoChatV11SessionSummary(sessionSummary, mappedChat.suggestedSessionSummaryUpdate);
       suggestedVaultUpdates = mergeSuggestedVaultUpdates(suggestedVaultUpdates, mappedChat.suggestedVaultUpdates);
       usedHermesCmoChat = true;
@@ -3788,6 +3829,17 @@ export async function createAppChatSession(
         }
 
         const mappedHermesFallbackResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesFallbackResult));
+        sessionArtifacts = mergeHermesCmoChatV11Artifacts(
+          sessionArtifacts,
+          creativeAssetsFromHermesPayload({
+            response: hermesFallbackResult.response,
+            tenantId: requestTenantId,
+            workspaceId: request.workspaceId,
+            appId: request.appId,
+            jobId: `creative_${messageId}`,
+            createdAt: now,
+          }),
+        );
 
         answer = mappedHermesFallbackResult.answer;
         status = "completed";
@@ -3912,6 +3964,17 @@ export async function createAppChatSession(
       }
 
       const mappedHermesResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesResult));
+      sessionArtifacts = mergeHermesCmoChatV11Artifacts(
+        sessionArtifacts,
+        creativeAssetsFromHermesPayload({
+          response: hermesResult.response,
+          tenantId: requestTenantId,
+          workspaceId: request.workspaceId,
+          appId: request.appId,
+          jobId: `creative_${messageId}`,
+          createdAt: now,
+        }),
+      );
       answer = mappedHermesResult.answer;
       status = "completed";
       assumptions = mappedHermesResult.assumptions;

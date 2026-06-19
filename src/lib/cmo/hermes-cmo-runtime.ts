@@ -6,10 +6,14 @@ import {
   getCmoHermesCmoToolEndpoint,
   getCmoHermesCmoToolChatCanaryApps,
   getCmoHermesCmoToolTimeoutMs,
+  getCmoHermesCreativeCallMode,
+  getCmoHermesCreativeProfile,
   isCmoHermesCmoOrchestrationEnabled,
   isCmoHermesCmoToolChatEnabled,
   isCmoHermesCmoToolExecuteEnabled,
+  isCmoHermesCreativeEnabled,
 } from "./config";
+import { CMO_CREATIVE_LIFECYCLE_STATES, redactSensitiveText } from "./creative-agent";
 import {
   executeHermesCmoDelegations,
   executableDelegations,
@@ -35,9 +39,10 @@ const HERMES_CMO_AGENT_PATH = "/agents/cmo/execute" as const;
 const HERMES_CMO_TOOL_AGENT_DEFAULT_PATH = "/agents/cmo/tool-execute" as const;
 
 export type HermesCmoRuntimeMode = typeof HERMES_CMO_RUNTIME_MODE;
-export type HermesAllowedAgent = "echo" | "surf" | "vault_agent";
+export type HermesAllowedAgent = "echo" | "surf" | "vault_agent" | "creative";
 export type HermesEchoMode = "echo.default" | "echo.source_translate";
 export type HermesSurfMode = "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
+export type HermesCreativeMode = "creative" | "creative.default" | "creative.generate_image" | "creative.image_generation";
 export type HermesCmoClassification =
   | "native_conversation"
   | "source_acknowledgement"
@@ -87,6 +92,12 @@ export type HermesActivityType =
   | "vault_agent.delegation.started"
   | "vault_agent.delegation.completed"
   | "vault_agent.delegation.failed"
+  | "creative.started"
+  | "creative.generating"
+  | "creative.asset_ready"
+  | "creative.partial"
+  | "creative.blocked"
+  | "creative.failed"
   | "run.completed"
   | "run.failed";
 
@@ -179,8 +190,8 @@ export interface HermesCmoRuntimeActivityEvent {
   seq: number;
   created_at: string;
   source: {
-    agent: "cmo" | "echo" | "surf";
-    mode: "cmo.default" | "cmo.tool_capable" | HermesEchoMode | HermesSurfMode;
+    agent: "cmo" | "echo" | "surf" | "creative";
+    mode: "cmo.default" | "cmo.tool_capable" | HermesEchoMode | HermesSurfMode | HermesCreativeMode;
   };
   type: HermesActivityType;
   status: HermesActivityStatus;
@@ -274,7 +285,7 @@ export interface HermesCmoRuntimeResult {
   decisionLabel?: CmoDecisionLabel;
   currentStep?: string;
   delegationSummary: HermesCmoDelegationExecution[];
-  agentsUsed: Array<"cmo" | "echo" | "surf">;
+  agentsUsed: Array<"cmo" | "echo" | "surf" | "creative">;
   surfCalls: number;
   echoCalls: number;
   safety_flags: HermesCmoRuntimeSafetyFlags;
@@ -320,8 +331,9 @@ interface HermesCmoActivityValidationOptions {
   allowToolCapableCmoSource?: boolean;
 }
 
-const allowedAgents = new Set<HermesAllowedAgent>(["echo", "surf", "vault_agent"]);
+const allowedAgents = new Set<HermesAllowedAgent>(["echo", "surf", "vault_agent", "creative"]);
 const allowedSurfModes = new Set<HermesSurfMode>(["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
+const allowedCreativeModes = new Set<HermesCreativeMode>(["creative", "creative.default", "creative.generate_image", "creative.image_generation"]);
 const MAX_M1_ORCHESTRATION_ROUNDS = 3;
 const MAX_M1_ECHO_RETRIES = 1;
 const MAX_M1_FINALIZATION_ATTEMPTS = 1;
@@ -419,6 +431,7 @@ const activityTypes = new Set<HermesActivityType>([
   "vault_agent.delegation.started",
   "vault_agent.delegation.completed",
   "vault_agent.delegation.failed",
+  ...CMO_CREATIVE_LIFECYCLE_STATES,
   "run.completed",
   "run.failed",
 ]);
@@ -532,7 +545,7 @@ const m44bActivityDataKeysByType: Partial<Record<HermesActivityType, Set<string>
 const m44aUnsafeActivityDataKeyPattern =
   /^(api_key|artifacts_in|authorization|body|content|context_pack|cookie|cookies|credential|credentials|env|file_body|file_content|file_contents|full_content|full_source|full_text|headers|html|markdown|password|private_key|raw|raw_.*|relevant_snippets|secret|secrets|source_text.*|text|token|tool_args|tool_result|vault_write_path)$/i;
 const m44aUnsafeActivityDataTextPattern =
-  /(Bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|AKIA[0-9A-Z]{12,}|BEGIN (?:RSA |OPENSSH |EC |PRIVATE )?PRIVATE KEY|api[_-]?key\s*[:=]|password\s*[:=])/i;
+  /(Bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|AKIA[0-9A-Z]{12,}|BEGIN (?:RSA |OPENSSH |EC |PRIVATE )?PRIVATE KEY|api[_-]?key\s*[:=]|password\s*[:=]|\.codex[\\/].*auth\.json|auth\.json)/i;
 const executableDelegationEventTypes = new Set<HermesActivityType>([
   "delegation.started",
   "delegation.waiting",
@@ -1078,12 +1091,13 @@ const activityValidationFailureReason = (
   if (forbiddenDelegationEventTypes.has(eventType as HermesActivityType) || forbiddenActivityTypePattern.test(String(eventType))) return `forbidden_type=${String(eventType)}`;
   if (!activityTypes.has(eventType as HermesActivityType)) return `type=${String(eventType)}`;
   if (!activityStatuses.has(status as HermesActivityStatus)) return `status=${String(status)}`;
-  if (sourceAgent !== "cmo" && sourceAgent !== "echo" && sourceAgent !== "surf") return `source_invalid:agent=${String(sourceAgent)}`;
+  if (sourceAgent !== "cmo" && sourceAgent !== "echo" && sourceAgent !== "surf" && sourceAgent !== "creative") return `source_invalid:agent=${String(sourceAgent)}`;
   if (sourceAgent === "cmo" && sourceMode !== "cmo.default" && !(options.allowToolCapableCmoSource === true && sourceMode === "cmo.tool_capable")) {
     return `source_invalid:mode=${String(sourceMode)}`;
   }
   if (sourceAgent === "echo" && sourceMode !== "echo.default" && sourceMode !== "echo.source_translate") return `source_invalid:mode=${String(sourceMode)}`;
   if (sourceAgent === "surf" && !allowedSurfModes.has(sourceMode as HermesSurfMode)) return `source_invalid:mode=${String(sourceMode)}`;
+  if (sourceAgent === "creative" && !allowedCreativeModes.has(sourceMode as HermesCreativeMode)) return `source_invalid:mode=${String(sourceMode)}`;
   if (!isRecord(event.data)) return "data_invalid";
   const dataRejection = m44aActivityEventDataRejection(eventType as HermesActivityType, event.data);
   if (dataRejection) return dataRejection;
@@ -1551,8 +1565,9 @@ const safeTraceId = (value: string) => value.replace(/[^a-z0-9_.-]+/gi, "_").sli
 
 const traceString = (value: string, max = 1200) => {
   const compact = value.replace(/\s+/g, " ").trim();
+  const redacted = redactSensitiveText(compact, Math.max(max, 1200));
 
-  return compact.length > max ? `${compact.slice(0, max - 3).trimEnd()}...` : compact;
+  return redacted.length > max ? `${redacted.slice(0, max - 3).trimEnd()}...` : redacted;
 };
 
 const traceValue = (value: unknown, depth = 0): unknown => {
@@ -1813,7 +1828,11 @@ const buildHermesCmoLiveRequest = (
     options.allowEchoRetry === true && options.finalSynthesis === true && (options.echoRetriesUsed ?? 0) < MAX_M1_ECHO_RETRIES;
   const boundedDelegationAllowed = subAgentExecutionAllowed || iterativeDelegationAllowed;
   const echoExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed;
-  const allowedAgentsForRequest: HermesAllowedAgent[] = boundedDelegationAllowed ? ["echo", "surf"] : echoRetryAllowed ? ["echo"] : [];
+  const creativeViaCmoAllowed = isCmoHermesCreativeEnabled() && getCmoHermesCreativeCallMode() === "via_cmo";
+  const allowedAgentsForRequest: HermesAllowedAgent[] = [
+    ...(boundedDelegationAllowed ? ["echo", "surf"] as const : echoRetryAllowed ? ["echo"] as const : []),
+    ...(creativeViaCmoAllowed ? ["creative"] as const : []),
+  ];
   const allowedSurfModesForRequest: HermesSurfMode[] = boundedDelegationAllowed ? ["surf.default", "surf.x", "surf.trend", "surf.pulse"] : [];
   const delegationsMode = boundedDelegationAllowed ? "echo_surf_bounded" : echoRetryAllowed ? "echo_retry_bounded" : "proposals_only";
   const delegationResultsArtifact = options.delegationResults?.length
@@ -1856,6 +1875,9 @@ const buildHermesCmoLiveRequest = (
       allowSubAgentExecution: boundedDelegationAllowed || echoRetryAllowed,
       allowSurfExecution: boundedDelegationAllowed,
       allowEchoExecution: echoExecutionAllowed,
+      allowCreativeExecution: creativeViaCmoAllowed,
+      creative_call_mode: getCmoHermesCreativeCallMode(),
+      creative_profile: getCmoHermesCreativeProfile(),
       allowVaultAgentExecution: false,
       allowVaultWrites: false,
       allowDirectSupabaseMutations: false,
@@ -1884,6 +1906,14 @@ const buildHermesCmoLiveRequest = (
             "Use the completed specialist results already provided. Do not request the same delegation again. Produce final user-facing answer or state that result is insufficient.",
         },
         forbidden_targets: ["vault_agent", "openclaw", "supabase", "memory", "arbitrary_tools"],
+        creative_policy: {
+          enabled: creativeViaCmoAllowed,
+          profile: getCmoHermesCreativeProfile(),
+          call_mode: "via_cmo",
+          role: "visual_execution_specialist",
+          no_auto_publish: true,
+          requires_product_artifact_ingestion_for_preview: true,
+        },
         surf_mode_policy: {
           "surf.default": "Evidence gathering, evidence gaps, source checks, and general research.",
           "surf.x": "Only explicit X/Twitter/social-signal research. Never use surf.x just because Echo will write X posts.",
@@ -1902,6 +1932,8 @@ const buildHermesCmoLiveRequest = (
         delegation_policy: boundedDelegationAllowed ? "echo_surf_only_bounded" : echoRetryAllowed ? "echo_retry_bounded" : "disabled",
         allowed_agents: allowedAgentsForRequest,
         allowed_surf_modes: allowedSurfModesForRequest,
+        creative_profile: creativeViaCmoAllowed ? getCmoHermesCreativeProfile() : null,
+        creative_call_mode: creativeViaCmoAllowed ? "via_cmo" : "disabled",
         vault_writes_allowed: false,
         direct_supabase_mutations_allowed: false,
         openclaw_calls_allowed: false,
@@ -1911,6 +1943,8 @@ const buildHermesCmoLiveRequest = (
         sub_agent_execution_allowed: boundedDelegationAllowed || echoRetryAllowed,
         surf_execution_allowed: boundedDelegationAllowed,
         echo_execution_allowed: echoExecutionAllowed,
+        creative_execution_allowed: creativeViaCmoAllowed,
+        creative_artifact_ingest_required_for_preview: creativeViaCmoAllowed,
         vault_agent_execution_allowed: false,
         vault_writes_allowed: false,
         direct_supabase_mutations_allowed: false,
@@ -1982,6 +2016,24 @@ const isEchoOrSurfDelegation = (delegation: Record<string, unknown>) => {
   return agent === "echo" || agent === "surf";
 };
 
+const isCreativeDelegation = (delegation: Record<string, unknown>) =>
+  delegationTargetAgent(delegation) === "creative";
+
+const isAllowedDelegationAgent = (delegation: Record<string, unknown>) =>
+  isEchoOrSurfDelegation(delegation) || isCreativeDelegation(delegation);
+
+const isCreativeDelegationResultOrProposal = (delegation: Record<string, unknown>) =>
+  isCreativeDelegation(delegation) &&
+  (
+    isNonExecutedDelegationProposal(delegation) ||
+    delegation.status === "completed" ||
+    delegation.status === "asset_ready" ||
+    delegation.status === "creative.asset_ready" ||
+    delegation.status === "partial" ||
+    delegation.status === "blocked" ||
+    delegation.status === "failed"
+  );
+
 const isEchoRetryDelegation = (delegation: Record<string, unknown>) => {
   const normalized = executableDelegations([delegation], 1);
 
@@ -2006,7 +2058,7 @@ const validateDelegations = (
     return false;
   }
 
-  if (delegations.some((delegation) => !isEchoOrSurfDelegation(delegation))) {
+  if (delegations.some((delegation) => !isAllowedDelegationAgent(delegation))) {
     return false;
   }
 
@@ -2019,15 +2071,18 @@ const validateDelegations = (
       return true;
     }
 
-    return delegations.every(isNonExecutedDelegationProposal);
+    return delegations.every((delegation) => isNonExecutedDelegationProposal(delegation) || isCreativeDelegationResultOrProposal(delegation));
   }
 
-  const normalizedDelegations = executableDelegations(delegations, Number.MAX_SAFE_INTEGER);
+  const executableEchoSurfDelegations = delegations.filter(isEchoOrSurfDelegation);
+  const creativeDelegations = delegations.filter(isCreativeDelegation);
+  const normalizedDelegations = executableDelegations(executableEchoSurfDelegations, Number.MAX_SAFE_INTEGER);
 
   return (
-    normalizedDelegations.length === delegations.length &&
-    delegations.length <= options.maxDelegations &&
-    delegations.every((delegation) => {
+    normalizedDelegations.length === executableEchoSurfDelegations.length &&
+    executableEchoSurfDelegations.length <= options.maxDelegations &&
+    creativeDelegations.every(isCreativeDelegationResultOrProposal) &&
+    executableEchoSurfDelegations.every((delegation) => {
       const normalized = executableDelegations([delegation], 1)[0];
 
       return normalized?.mode !== "echo.source_translate" || isAllowedEchoSourceTranslationDelegation(delegation);
@@ -2135,7 +2190,8 @@ const validateHermesCmoRuntimeActivityEvent = (
   const sourceMatches =
     (sourceAgent === "cmo" && (sourceMode === "cmo.default" || options.allowToolCapableCmoSource === true && sourceMode === "cmo.tool_capable")) ||
     (sourceAgent === "echo" && (sourceMode === "echo.default" || sourceMode === "echo.source_translate")) ||
-    (sourceAgent === "surf" && allowedSurfModes.has(sourceMode as HermesSurfMode));
+    (sourceAgent === "surf" && allowedSurfModes.has(sourceMode as HermesSurfMode)) ||
+    (sourceAgent === "creative" && allowedCreativeModes.has(sourceMode as HermesCreativeMode));
 
   if (forbiddenDelegationEventTypes.has(eventType) || forbiddenActivityTypePattern.test(String(eventType))) {
     return false;
@@ -2648,8 +2704,8 @@ const mergeDelegationResults = (
   };
 };
 
-const agentsUsedFrom = (delegationResult: HermesCmoDelegationExecutionResult): Array<"cmo" | "echo" | "surf"> =>
-  Array.from(new Set<"cmo" | "echo" | "surf">(["cmo", ...delegationResult.agentsUsed]));
+const agentsUsedFrom = (delegationResult: HermesCmoDelegationExecutionResult): Array<"cmo" | "echo" | "surf" | "creative"> =>
+  Array.from(new Set<"cmo" | "echo" | "surf" | "creative">(["cmo", ...delegationResult.agentsUsed]));
 
 const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: HermesCmoAgentConfig): Promise<unknown> => {
   const controller = new AbortController();

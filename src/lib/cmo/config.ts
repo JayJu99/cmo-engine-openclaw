@@ -150,6 +150,18 @@ export function getCmoHermesCmoAsyncToolRunTimeoutMs(): number {
   return positiveIntEnv("CMO_HERMES_CMO_ASYNC_TOOL_RUN_TIMEOUT_MS", 300_000);
 }
 
+export function isCmoHermesCreativeEnabled(): boolean {
+  return booleanEnv("CMO_HERMES_CREATIVE_ENABLED", true);
+}
+
+export function getCmoHermesCreativeCallMode(): "via_cmo" | "direct" {
+  return process.env.CMO_HERMES_CREATIVE_CALL_MODE === "direct" ? "direct" : "via_cmo";
+}
+
+export function getCmoHermesCreativeProfile(): string {
+  return process.env.CMO_HERMES_CREATIVE_PROFILE?.trim() || "creative";
+}
+
 export function getCmoVaultAgentHandoffMode(): CmoVaultAgentHandoffMode {
   const mode = process.env.CMO_VAULT_AGENT_HANDOFF_MODE;
 

@@ -974,6 +974,18 @@ function agentsUsedFromExecutedDelegations(delegationSummary: HermesCmoDelegatio
   return Array.from(new Set<HermesCmoAgentUsed>(["cmo", ...delegationSummary.map((delegation) => delegation.targetAgent)]));
 }
 
+function agentsUsedFromMetadata(
+  delegationSummary: HermesCmoDelegationSummaryItem[],
+  activityEvents: HermesCmoActivityEventSummary[],
+): HermesCmoAgentUsed[] {
+  return Array.from(new Set<HermesCmoAgentUsed>([
+    ...agentsUsedFromExecutedDelegations(delegationSummary),
+    ...activityEvents
+      .map((event) => event.sourceAgent)
+      .filter((agent): agent is HermesCmoAgentUsed => agent === "cmo" || agent === "echo" || agent === "surf" || agent === "creative"),
+  ]));
+}
+
 function executedDelegationMatchKeys(delegationSummary: HermesCmoDelegationSummaryItem[]): Set<string> {
   return new Set(delegationSummary.map((delegation) => `${delegation.targetAgent}:${delegation.mode}`));
 }
@@ -1055,7 +1067,7 @@ function metadataFromHermes(
     activityEventsCount: activityEvents.length,
     activityEvents,
     delegationSummary,
-    agentsUsed: agentsUsedFromExecutedDelegations(delegationSummary),
+    agentsUsed: agentsUsedFromMetadata(delegationSummary, activityEvents),
     surfCalls: executedCounts.surfCalls,
     echoCalls: executedCounts.echoCalls,
   };
@@ -1078,7 +1090,7 @@ export function sanitizeHermesCmoMappedChatResult(result: HermesCmoMappedChatRes
     activityEventsCount: activityEvents.length,
     activityEvents,
     delegationSummary,
-    agentsUsed: agentsUsedFromExecutedDelegations(delegationSummary),
+    agentsUsed: agentsUsedFromMetadata(delegationSummary, activityEvents),
     surfCalls: executedCounts.surfCalls,
     echoCalls: executedCounts.echoCalls,
   };
