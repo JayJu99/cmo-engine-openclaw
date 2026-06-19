@@ -224,6 +224,23 @@ function sampleAggregatorRows(dateEnd) {
   ];
 }
 
+function samplePartnerRows(dateEnd) {
+  return [
+    {
+      partnerCode: "alpha",
+      evt_block_date: "2026-06-18",
+      volume: 100,
+      count_tx: 10,
+    },
+    {
+      partnerCode: "beta",
+      evt_block_date: dateEnd,
+      volume: 200,
+      count_tx: 20,
+    },
+  ];
+}
+
 function loadHelperWithMockFetch(fetchImpl, options = {}) {
   const transpiled = ts.transpileModule(contents.helper, {
     compilerOptions: {
@@ -352,7 +369,134 @@ const nativeAggregatorSnapshot = adapterHelper.transformDuneBusinessRows(
   sampleAggregatorRows("2026-06-19"),
   "2026-06-19T00:05:00.000Z",
 );
+const nativePartnerSnapshot = adapterHelper.transformDuneBusinessRows(
+  {
+    tenantId: "holdstation",
+    workspaceId: "holdstation-mini-app",
+    appId: "holdstation-mini-app",
+    sourceId: "holdstation-mini-app",
+  },
+  "wld_partner_stats_daily",
+  samplePartnerRows("2026-06-19"),
+  "2026-06-19T00:05:00.000Z",
+);
 const nativeBusinessSnapshot = adapterHelper.nativeDuneSnapshotToBusinessMetrics(nativeAggregatorSnapshot);
+
+function loadReportPacksRouteWithSnapshots(snapshots) {
+  const transpiled = ts.transpileModule(contents.reportPacksRoute, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  }).outputText;
+  const cjsModule = { exports: {} };
+  const sandbox = {
+    module: cjsModule,
+    exports: cjsModule.exports,
+    console,
+    URL,
+    Request,
+    Response,
+    require: (id) => {
+      if (id === "@/lib/cmo/dune-business-metrics") {
+        return {
+          DUNE_BUSINESS_QUERY_REGISTRY: {
+            wld_aggregator_daily: { metricGroup: "wld_aggregator_daily" },
+            wld_partner_stats_daily: { metricGroup: "wld_partner_stats_daily" },
+          },
+          DUNE_BUSINESS_SAFETY: {
+            no_api_key_returned: true,
+            raw_dune_response_included: false,
+            vault_write_performed: false,
+            gbrain_used: false,
+            hermes_called: false,
+          },
+          getNativeDuneBusinessSnapshots: async () => snapshots,
+          snapshotsStatus: (items) => items.length === 2 ? "completed" : items.length ? "partial" : "missing",
+        };
+      }
+
+      if (id === "@/lib/cmo/lens-internal-auth") {
+        return {
+          authorizeLensInternalRequest: (request) =>
+            request.headers.get("authorization") === "Bearer internal-test-key"
+              ? null
+              : Response.json({ error: "unauthorized" }, { status: 401 }),
+        };
+      }
+
+      throw new Error(`Unexpected require: ${id}`);
+    },
+  };
+
+  vm.runInNewContext(transpiled, sandbox, { filename: "dune-report-packs-route.ts" });
+
+  return cjsModule.exports;
+}
+
+async function readReportPacks(route, query = "") {
+  const response = await route.GET(new Request(`http://local/api/internal/lens/apps/holdstation-mini-app/business/dune/report-packs${query}`, {
+    headers: { Authorization: "Bearer internal-test-key" },
+  }), { params: Promise.resolve({ appId: "holdstation-mini-app" }) });
+
+  return response.json();
+}
+
+function assertReportPacksPayload(payload, expectedRangeKey) {
+  const packKeys = payload.packs.map((pack) => pack.pack_key);
+  const aggregator = payload.packs.find((pack) => pack.pack_key === "wld_aggregator_daily");
+  const partners = payload.packs.find((pack) => pack.pack_key === "wld_partner_stats_daily");
+
+  check(
+    expectedRangeKey
+      ? `report-packs with rangeKey=${expectedRangeKey} returns both packs`
+      : "report-packs without rangeKey returns both packs",
+    payload.schema_version === "product.lens_dune_business_pack.v1" &&
+      packKeys.join(",") === "wld_aggregator_daily,wld_partner_stats_daily" &&
+      (!expectedRangeKey || payload.selected_range?.rangeKey === expectedRangeKey),
+    JSON.stringify({ packKeys, selectedRange: payload.selected_range ?? null }),
+  );
+
+  check(
+    expectedRangeKey
+      ? `report-packs with rangeKey=${expectedRangeKey} keeps aggregator series points`
+      : "report-packs without rangeKey keeps aggregator series points",
+    aggregator?.date_range?.startDate === "2026-05-04" &&
+      aggregator?.date_range?.endDate === "2026-06-19" &&
+      aggregator?.date_range?.start_date === "2026-05-04" &&
+      aggregator?.date_range?.end_date === "2026-06-19" &&
+      aggregator?.series?.[0]?.points?.length > 0,
+  );
+
+  check(
+    expectedRangeKey
+      ? `report-packs with rangeKey=${expectedRangeKey} keeps partner table rows`
+      : "report-packs without rangeKey keeps partner table rows",
+    partners?.date_range?.startDate === "2026-06-18" &&
+      partners?.date_range?.endDate === "2026-06-19" &&
+      partners?.date_range?.start_date === "2026-06-18" &&
+      partners?.date_range?.end_date === "2026-06-19" &&
+      partners?.tables?.[0]?.rows?.length > 0,
+  );
+
+  const rendered = JSON.stringify(payload);
+  check(
+    expectedRangeKey
+      ? `report-packs with rangeKey=${expectedRangeKey} stays sanitized`
+      : "report-packs without rangeKey stays sanitized",
+    !/mock-dune-key|do-not-return|raw_response|CMO_DUNE_API_KEY|Authorization|Bearer internal-test-key/i.test(rendered) &&
+      payload.safety.no_api_key_returned === true &&
+      payload.safety.raw_dune_response_included === false &&
+      payload.safety.vault_write_performed === false &&
+      payload.safety.gbrain_used === false &&
+      payload.safety.hermes_called === false,
+  );
+}
+
+const reportPacksRoute = loadReportPacksRouteWithSnapshots([nativePartnerSnapshot, nativeAggregatorSnapshot]);
+assertReportPacksPayload(await readReportPacks(reportPacksRoute), undefined);
+assertReportPacksPayload(await readReportPacks(reportPacksRoute, "?rangeKey=yesterday&mode=cache_only"), "yesterday");
 
 check(
   "dashboard data adapter consumes native snapshots with existing card/chart structure",

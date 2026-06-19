@@ -1,15 +1,58 @@
-import { DUNE_BUSINESS_SAFETY, getNativeDuneBusinessSnapshots, snapshotsStatus } from "@/lib/cmo/dune-business-metrics";
+import {
+  DUNE_BUSINESS_QUERY_REGISTRY,
+  DUNE_BUSINESS_SAFETY,
+  getNativeDuneBusinessSnapshots,
+  snapshotsStatus,
+} from "@/lib/cmo/dune-business-metrics";
 import { authorizeLensInternalRequest } from "@/lib/cmo/lens-internal-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function packFromSnapshot(snapshot: Awaited<ReturnType<typeof getNativeDuneBusinessSnapshots>>[number]) {
+type NativeDuneBusinessSnapshot = Awaited<ReturnType<typeof getNativeDuneBusinessSnapshots>>[number];
+
+const EXPECTED_DUNE_BUSINESS_PACK_KEYS = Object.values(DUNE_BUSINESS_QUERY_REGISTRY).map((config) => config.metricGroup);
+
+function selectedRangeFromRequest(request: Request) {
+  const url = new URL(request.url);
+  const rangeKey = url.searchParams.get("rangeKey")?.trim() || null;
+  const mode = url.searchParams.get("mode")?.trim() || null;
+
+  return rangeKey || mode
+    ? {
+      ...(rangeKey ? { rangeKey, range_key: rangeKey } : {}),
+      ...(mode ? { mode } : {}),
+      note: "Selection context only. Dune report packs include full native snapshot metrics, series, and tables.",
+    }
+    : null;
+}
+
+function orderedSnapshots(snapshots: NativeDuneBusinessSnapshot[]): NativeDuneBusinessSnapshot[] {
+  const byGroup = new Map(snapshots.map((snapshot) => [snapshot.metricGroup, snapshot]));
+
+  return EXPECTED_DUNE_BUSINESS_PACK_KEYS
+    .map((packKey) => byGroup.get(packKey))
+    .filter((snapshot): snapshot is NativeDuneBusinessSnapshot => Boolean(snapshot));
+}
+
+function packFromSnapshot(snapshot: NativeDuneBusinessSnapshot, selectedRange: ReturnType<typeof selectedRangeFromRequest>) {
+  const dateRange = {
+    preset: snapshot.rangePreset,
+    dateStart: snapshot.dateStart,
+    dateEnd: snapshot.dateEnd,
+    startDate: snapshot.dateStart,
+    endDate: snapshot.dateEnd,
+    start_date: snapshot.dateStart,
+    end_date: snapshot.dateEnd,
+    timezone: snapshot.timezone,
+  };
+
   return {
     pack_key: snapshot.metricGroup,
     status: snapshot.status,
     syncedAt: snapshot.syncedAt,
     synced_at: snapshot.syncedAt,
+    ...(selectedRange ? { selected_range: selectedRange } : {}),
     source: {
       type: snapshot.sourceType,
       sourceId: snapshot.sourceId,
@@ -19,14 +62,8 @@ function packFromSnapshot(snapshot: Awaited<ReturnType<typeof getNativeDuneBusin
       syncedAt: snapshot.syncedAt,
       synced_at: snapshot.syncedAt,
     },
-    range: {
-      preset: snapshot.rangePreset,
-      dateStart: snapshot.dateStart,
-      dateEnd: snapshot.dateEnd,
-      start_date: snapshot.dateStart,
-      end_date: snapshot.dateEnd,
-      timezone: snapshot.timezone,
-    },
+    date_range: dateRange,
+    range: dateRange,
     metrics: snapshot.metrics,
     series: snapshot.series,
     tables: snapshot.tables,
@@ -62,13 +99,16 @@ export async function GET(request: Request, context: RouteContext<"/api/internal
   const { appId } = await context.params;
 
   try {
+    const selectedRange = selectedRangeFromRequest(request);
     const snapshots = await getNativeDuneBusinessSnapshots(appId);
+    const packs = orderedSnapshots(snapshots).map((snapshot) => packFromSnapshot(snapshot, selectedRange));
 
     return Response.json({
       schema_version: "product.lens_dune_business_pack.v1",
       status: snapshotsStatus(snapshots),
       app_id: appId,
-      packs: snapshots.map(packFromSnapshot),
+      ...(selectedRange ? { selected_range: selectedRange } : {}),
+      packs,
       safety: DUNE_BUSINESS_SAFETY,
     });
   } catch (error) {
