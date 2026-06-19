@@ -121,6 +121,20 @@ function displayDate(value: string | undefined): string {
   }).format(date);
 }
 
+function maskExternalId(value: string | null | undefined): string {
+  const id = value?.trim() ?? "";
+
+  if (!id) {
+    return "unknown";
+  }
+
+  if (id.length <= 8) {
+    return id;
+  }
+
+  return `${id.slice(0, 4)}...${id.slice(-4)}`;
+}
+
 function compactMetricValue(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "No data";
@@ -511,6 +525,84 @@ type LensOAuthAccountsResponse = {
   data: LensOAuthSafeAccount[];
   oauthConfigured: boolean;
   missingConfig: string[];
+};
+
+type FacebookNativeOAuthAccount = {
+  id: string;
+  tenantId: string;
+  provider: "meta";
+  accountName: string | null;
+  scopes: string[];
+  updatedAt?: string | null;
+};
+
+type FacebookNativeSource = {
+  tenantId: string;
+  workspaceId: string;
+  appId: string;
+  sourceType: "facebook_page";
+  sourceId: "facebook_native";
+  provider: "meta";
+  pageId: string;
+  pageName: string | null;
+  authRef: string | null;
+  enabled: boolean;
+  verifiedAt: string | null;
+  quality: {
+    status?: string;
+    warnings?: string[];
+    lastError?: string | null;
+  };
+  config: {
+    hasEncryptedPageAccessToken: boolean;
+  };
+};
+
+type FacebookNativeConnectorStatus = {
+  nativeEnabled: boolean;
+  oauthConfigured: boolean;
+  missingConfig: string[];
+  account: FacebookNativeOAuthAccount | null;
+  source: FacebookNativeSource | null;
+  status: "not_configured" | "not_connected" | "page_mapping_missing" | "mapped";
+};
+
+type FacebookNativeConnectorStatusResponse = {
+  data: FacebookNativeConnectorStatus;
+};
+
+type FacebookNativePage = {
+  id: string;
+  name: string | null;
+  category?: string | null;
+  accessTokenAvailable: boolean;
+};
+
+type FacebookNativePagesResponse = {
+  status: "completed" | "missing";
+  pages: FacebookNativePage[];
+  warnings: string[];
+};
+
+type FacebookNativeSaveResponse = {
+  data: FacebookNativeSource;
+};
+
+type FacebookNativeVerifyResponse = {
+  status: "connected" | "missing" | "failed";
+  source: FacebookNativeSource | null;
+  warnings: string[];
+};
+
+type FacebookNativeSyncResponse = {
+  schema_version: "product.facebook_channel_sync_result.v1";
+  status: "completed" | "partial" | "failed" | "missing";
+  source: FacebookNativeSource | null;
+  freshness: {
+    synced_at: string | null;
+    stale: boolean;
+  };
+  warnings: string[];
 };
 
 type LensGa4Property = {
@@ -1570,6 +1662,13 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const [channelMetricsError, setChannelMetricsError] = useState<string | null>(null);
   const [channelSyncStatus, setChannelSyncStatus] = useState<CmoChannelMetricsSyncStatus | null>(null);
   const [channelSyncLoadStatus, setChannelSyncLoadStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [facebookNativeStatus, setFacebookNativeStatus] = useState<FacebookNativeConnectorStatus | null>(null);
+  const [facebookNativeStatusLoad, setFacebookNativeStatusLoad] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [facebookNativePages, setFacebookNativePages] = useState<FacebookNativePage[]>([]);
+  const [facebookNativePagesLoad, setFacebookNativePagesLoad] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [facebookNativeActionStatus, setFacebookNativeActionStatus] = useState<"idle" | "saving" | "verifying" | "syncing" | "error">("idle");
+  const [facebookNativeError, setFacebookNativeError] = useState<string | null>(null);
+  const [selectedFacebookNativePageId, setSelectedFacebookNativePageId] = useState("");
   const [dexBusinessMetricsSnapshot, setDexBusinessMetricsSnapshot] = useState<CmoBusinessMetricsSnapshot | null>(null);
   const [feesBusinessMetricsSnapshot, setFeesBusinessMetricsSnapshot] = useState<CmoBusinessMetricsSnapshot | null>(null);
   const [businessMetricsStatus, setBusinessMetricsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -1677,6 +1776,36 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const channelMetricsLastSuccess = channelSyncStatus?.lastSuccessAt ? displayDate(channelSyncStatus.lastSuccessAt) : "Not tracked";
   const channelSyncLabel = channelSyncLoadStatus === "loading" ? "Loading" : channelSyncStatusLabel(channelSyncStatus?.status);
   const channelSyncVariant = channelSyncLoadStatus === "loading" ? "slate" : channelSyncStatusVariant(channelSyncStatus?.status);
+  const facebookNativePanelVisible = showChannelPerformance && facebookNativeStatus?.nativeEnabled === true;
+  const facebookNativeAccount = facebookNativeStatus?.account ?? null;
+  const facebookNativeSource = facebookNativeStatus?.source ?? null;
+  const selectedFacebookNativePage = facebookNativePages.find((page) => page.id === selectedFacebookNativePageId) ?? null;
+  const facebookNativeConnectHref = `/api/cmo/apps/${app.id}/social-sources/facebook/connect?${new URLSearchParams({
+    returnTo: `${pathname}?tab=dashboard`,
+  }).toString()}`;
+  const facebookNativeMappedPageLabel = facebookNativeSource?.pageName || facebookNativeSource?.pageId || "No Page saved";
+  const facebookNativeStatusLabel = facebookNativeStatusLoad === "loading"
+    ? "Loading"
+    : facebookNativeStatus?.status === "mapped"
+      ? "Page saved"
+      : facebookNativeStatus?.status === "page_mapping_missing"
+        ? "Page mapping missing"
+        : facebookNativeStatus?.status === "not_connected"
+          ? "Not connected"
+          : facebookNativeStatus?.status === "not_configured"
+            ? "Config missing"
+            : "Not loaded";
+  const facebookNativeStatusVariant: "green" | "orange" | "red" | "slate" = facebookNativeStatus?.status === "mapped"
+    ? "green"
+    : facebookNativeStatus?.status === "not_configured"
+      ? "red"
+      : facebookNativeStatus?.status === "page_mapping_missing" || facebookNativeStatus?.status === "not_connected"
+        ? "orange"
+        : "slate";
+  const facebookNativeBusy = facebookNativePagesLoad === "loading" ||
+    facebookNativeActionStatus === "saving" ||
+    facebookNativeActionStatus === "verifying" ||
+    facebookNativeActionStatus === "syncing";
   const dexBusinessMetricById = useMemo(() => {
     const lookup = new Map<string, CmoBusinessMetric>();
 
@@ -2071,6 +2200,46 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   }, [app.id, showChannelPerformance]);
 
   useEffect(() => {
+    if (!showChannelPerformance) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function loadFacebookNativeConnectorStatus() {
+      setFacebookNativeStatusLoad("loading");
+      setFacebookNativeError(null);
+
+      try {
+        const payload = await readJsonResponse<FacebookNativeConnectorStatusResponse>(
+          await fetch(`/api/cmo/apps/${app.id}/social-sources/facebook`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        );
+
+        if (!controller.signal.aborted) {
+          setFacebookNativeStatus(payload.data);
+          setSelectedFacebookNativePageId((current) => payload.data.source?.pageId ?? current);
+          setFacebookNativeStatusLoad("ready");
+        }
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setFacebookNativeStatus(null);
+        setFacebookNativeStatusLoad("error");
+        setFacebookNativeError(loadError instanceof Error ? loadError.message : "Facebook Native connector status load failed");
+      }
+    }
+
+    void loadFacebookNativeConnectorStatus();
+
+    return () => controller.abort();
+  }, [app.id, showChannelPerformance]);
+
+  useEffect(() => {
     const controller = new AbortController();
     const params = new URLSearchParams({
       appId: app.id,
@@ -2367,6 +2536,173 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
     }
 
     router.replace(target, { scroll: false });
+  }
+
+  async function refreshFacebookNativeConnectorStatus() {
+    const payload = await readJsonResponse<FacebookNativeConnectorStatusResponse>(
+      await fetch(`/api/cmo/apps/${app.id}/social-sources/facebook`, { cache: "no-store" }),
+    );
+
+    setFacebookNativeStatus(payload.data);
+    setSelectedFacebookNativePageId((current) => payload.data.source?.pageId ?? current);
+    setFacebookNativeStatusLoad("ready");
+
+    return payload.data;
+  }
+
+  async function refreshChannelPerformanceData() {
+    const params = new URLSearchParams({
+      channel: "facebook",
+      range: dateRange,
+    });
+    const [metricsResult, syncStatusResult] = await Promise.allSettled([
+      readJsonResponse<{ data: CmoChannelMetricsSnapshot }>(
+        await fetch(`/api/cmo/apps/${app.id}/channel-metrics?${params.toString()}`, { cache: "no-store" }),
+      ),
+      readJsonResponse<{ data: CmoChannelMetricsSyncStatus }>(
+        await fetch(`/api/cmo/apps/${app.id}/channel-metrics/sync-status?channel=facebook`, { cache: "no-store" }),
+      ),
+    ]);
+
+    if (metricsResult.status === "fulfilled") {
+      setChannelMetricsSnapshot(metricsResult.value.data);
+      setChannelMetricsStatus("ready");
+      setChannelMetricsError(null);
+    }
+
+    if (syncStatusResult.status === "fulfilled") {
+      setChannelSyncStatus(syncStatusResult.value.data);
+      setChannelSyncLoadStatus("ready");
+    }
+  }
+
+  async function loadFacebookNativePages() {
+    if (!facebookNativeAccount) {
+      setFacebookNativeError("Connect Facebook before loading Pages.");
+      return;
+    }
+
+    setFacebookNativePagesLoad("loading");
+    setFacebookNativeError(null);
+
+    try {
+      const params = new URLSearchParams({ authRef: facebookNativeAccount.id });
+      const payload = await readJsonResponse<FacebookNativePagesResponse>(
+        await fetch(`/api/cmo/apps/${app.id}/social-sources/facebook/pages?${params.toString()}`, {
+          cache: "no-store",
+        }),
+      );
+
+      setFacebookNativePages(payload.pages);
+      setSelectedFacebookNativePageId((current) => {
+        if (facebookNativeSource?.pageId && payload.pages.some((page) => page.id === facebookNativeSource.pageId)) {
+          return facebookNativeSource.pageId;
+        }
+
+        if (current && payload.pages.some((page) => page.id === current)) {
+          return current;
+        }
+
+        return payload.pages[0]?.id ?? "";
+      });
+      setFacebookNativePagesLoad(payload.status === "completed" ? "ready" : "error");
+      setFacebookNativeError(payload.status === "completed" ? null : payload.warnings.join(", ") || "No Facebook Pages available.");
+    } catch (error) {
+      setFacebookNativePages([]);
+      setFacebookNativePagesLoad("error");
+      setFacebookNativeError(error instanceof Error ? error.message : "Facebook Page list failed");
+    }
+  }
+
+  async function saveFacebookNativePage() {
+    if (!facebookNativeAccount || !selectedFacebookNativePage) {
+      setFacebookNativeError("Load and choose a Facebook Page before saving.");
+      return;
+    }
+
+    setFacebookNativeActionStatus("saving");
+    setFacebookNativeError(null);
+
+    try {
+      const payload = await readJsonResponse<FacebookNativeSaveResponse>(
+        await fetch(`/api/cmo/apps/${app.id}/social-sources/facebook`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            authRef: facebookNativeAccount.id,
+            pageId: selectedFacebookNativePage.id,
+            pageName: selectedFacebookNativePage.name,
+          }),
+        }),
+      );
+
+      setFacebookNativeStatus((current) => current ? { ...current, source: payload.data, status: "mapped" } : current);
+      setFacebookNativeActionStatus("idle");
+      await refreshFacebookNativeConnectorStatus();
+    } catch (error) {
+      setFacebookNativeActionStatus("error");
+      setFacebookNativeError(error instanceof Error ? error.message : "Facebook Page save failed");
+    }
+  }
+
+  async function verifyFacebookNativePage() {
+    if (!facebookNativeSource?.enabled) {
+      setFacebookNativeError("Save a Facebook Page before verification.");
+      return;
+    }
+
+    setFacebookNativeActionStatus("verifying");
+    setFacebookNativeError(null);
+
+    try {
+      const payload = await readJsonResponse<FacebookNativeVerifyResponse>(
+        await fetch(`/api/cmo/apps/${app.id}/social-sources/facebook/verify`, {
+          method: "POST",
+          cache: "no-store",
+        }),
+      );
+
+      setFacebookNativeStatus((current) => current ? { ...current, source: payload.source, status: payload.source ? "mapped" : current.status } : current);
+      setFacebookNativeActionStatus("idle");
+      await refreshFacebookNativeConnectorStatus();
+    } catch (error) {
+      setFacebookNativeActionStatus("error");
+      setFacebookNativeError(error instanceof Error ? error.message : "Facebook Page verification failed");
+    }
+  }
+
+  async function syncFacebookNativeMetrics() {
+    if (!facebookNativeSource?.enabled) {
+      setFacebookNativeError("Save a Facebook Page before syncing metrics.");
+      return;
+    }
+
+    setFacebookNativeActionStatus("syncing");
+    setFacebookNativeError(null);
+
+    try {
+      await readJsonResponse<FacebookNativeSyncResponse>(
+        await fetch(`/api/cmo/apps/${app.id}/social-sources/facebook/sync`, {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rangeKey: dateRange,
+            mode: "refresh_all",
+          }),
+        }),
+      );
+
+      setFacebookNativeActionStatus("idle");
+      await Promise.all([refreshFacebookNativeConnectorStatus(), refreshChannelPerformanceData()]);
+    } catch (error) {
+      setFacebookNativeActionStatus("error");
+      setFacebookNativeError(error instanceof Error ? error.message : "Facebook Native sync failed");
+    }
   }
 
   async function saveGa4MetricSource() {
@@ -2997,6 +3333,115 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                       ? `Native Facebook snapshots are unavailable for this view, so Product is using the legacy Facebook handoff fallback. ${channelStatusCopy(channelMetricsSnapshot?.status)}`
                       : `${channelStatusCopy(channelMetricsSnapshot?.status)} ${channelSyncStatusCopy(channelSyncStatus)}`)}
               </div>
+
+              {facebookNativePanelVisible ? (
+                <div className="mb-4 rounded-xl border border-slate-100 bg-white p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <div className="text-sm font-bold text-slate-950">Facebook Native connector</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Badge variant={facebookNativeAccount ? "green" : "orange"}>
+                          OAuth: {facebookNativeAccount?.accountName || (facebookNativeAccount ? "Connected Meta account" : "Not connected")}
+                        </Badge>
+                        <Badge variant={facebookNativeStatusVariant}>{facebookNativeStatusLabel}</Badge>
+                        {facebookNativeSource ? <Badge variant="slate">Page: {facebookNativeMappedPageLabel}</Badge> : null}
+                        {facebookNativeSource?.quality.status ? <Badge variant="slate">Native status: {facebookNativeSource.quality.status}</Badge> : null}
+                        {facebookNativeSource?.verifiedAt ? <Badge variant="slate">Verified: {displayDate(facebookNativeSource.verifiedAt)}</Badge> : null}
+                      </div>
+                      {facebookNativeStatus?.status === "page_mapping_missing" ? (
+                        <div className="mt-2 text-xs font-semibold text-orange-600">OAuth connected. Page mapping missing.</div>
+                      ) : null}
+                      {facebookNativeStatus?.missingConfig.length ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {facebookNativeStatus.missingConfig.map((name) => (
+                            <Badge key={name} variant="orange">{name}</Badge>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    <Button asChild size="sm" variant={facebookNativeAccount ? "outline" : "default"}>
+                      <a href={facebookNativeConnectHref}>
+                        <icons.KeyRound />
+                        {facebookNativeAccount ? "Reconnect Facebook" : "Connect Facebook"}
+                      </a>
+                    </Button>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)_auto_auto_auto] lg:items-end">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void loadFacebookNativePages()}
+                      disabled={!facebookNativeAccount || facebookNativePagesLoad === "loading" || facebookNativeActionStatus === "saving"}
+                    >
+                      <icons.RefreshCw />
+                      {facebookNativePagesLoad === "loading" ? "Loading Pages" : "Load Pages"}
+                    </Button>
+                    <Field label="Facebook Page">
+                      <select
+                        value={selectedFacebookNativePageId}
+                        onChange={(event) => setSelectedFacebookNativePageId(event.target.value)}
+                        disabled={!facebookNativePages.length || facebookNativeBusy}
+                        className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 shadow-sm outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 disabled:bg-slate-50 disabled:text-slate-400"
+                      >
+                        {facebookNativePages.length ? (
+                          facebookNativePages.map((page) => (
+                            <option key={page.id} value={page.id}>
+                              {page.name || "Unnamed Page"} / {maskExternalId(page.id)}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="">
+                            {facebookNativePagesLoad === "loading" ? "Loading Facebook Pages..." : "No Pages loaded"}
+                          </option>
+                        )}
+                      </select>
+                    </Field>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => void saveFacebookNativePage()}
+                      disabled={!selectedFacebookNativePage || facebookNativeActionStatus === "saving" || facebookNativePagesLoad === "loading"}
+                    >
+                      <icons.Check />
+                      {facebookNativeActionStatus === "saving" ? "Saving" : "Save Page"}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void verifyFacebookNativePage()}
+                      disabled={!facebookNativeSource?.enabled || facebookNativeActionStatus === "verifying" || facebookNativeActionStatus === "saving"}
+                    >
+                      <icons.RefreshCw />
+                      {facebookNativeActionStatus === "verifying" ? "Verifying" : "Verify Page"}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void syncFacebookNativeMetrics()}
+                      disabled={!facebookNativeSource?.enabled || facebookNativeActionStatus === "syncing" || facebookNativeActionStatus === "saving" || facebookNativeActionStatus === "verifying"}
+                    >
+                      <icons.RefreshCw />
+                      {facebookNativeActionStatus === "syncing" ? "Syncing" : "Sync Facebook metrics"}
+                    </Button>
+                  </div>
+                  {facebookNativeSource ? (
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
+                      <span>Source: Facebook Native</span>
+                      <span>Page ID: {maskExternalId(facebookNativeSource.pageId)}</span>
+                      <span>Last synced: {channelMetricsUsingNative && channelMetricsSnapshot?.sourceMeta?.syncedAt ? displayDate(channelMetricsSnapshot.sourceMeta.syncedAt) : "No native snapshot yet"}</span>
+                    </div>
+                  ) : null}
+                  {facebookNativeError ? (
+                    <div className="mt-3 rounded-xl border border-orange-100 bg-orange-50 px-4 py-3 text-sm font-semibold text-orange-700">
+                      {facebookNativeError}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <ChannelMetricTile metric={channelMetric("facebook_views")} label="Views" size="primary" />

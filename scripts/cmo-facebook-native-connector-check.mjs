@@ -80,6 +80,7 @@ const routePaths = [
   "src/app/api/cmo/apps/[appId]/social-sources/facebook/pages/route.ts",
   "src/app/api/cmo/apps/[appId]/social-sources/facebook/route.ts",
   "src/app/api/cmo/apps/[appId]/social-sources/facebook/verify/route.ts",
+  "src/app/api/cmo/apps/[appId]/social-sources/facebook/sync/route.ts",
   "src/app/api/internal/lens/apps/[appId]/social/facebook/sync/route.ts",
   "src/app/api/internal/lens/apps/[appId]/social/facebook/snapshots/route.ts",
   "src/app/api/internal/lens/apps/[appId]/social/facebook/report-packs/route.ts",
@@ -91,6 +92,13 @@ for (const [index, routeSource] of routeSources.entries()) {
 for (const internalRoute of routeSources.slice(-3)) {
   assertIncludes(internalRoute, "authorizeLensInternalRequest", "internal Facebook routes must require bearer auth");
 }
+const facebookSourceRoute = routeSources[3];
+const facebookSyncProxyRoute = routeSources[5];
+assertIncludes(facebookSourceRoute, "getFacebookNativeConnectorStatus", "Facebook source route must expose safe connector status");
+assertMatch(facebookSourceRoute, /export\s+async\s+function\s+GET/, "Facebook source route must support GET status");
+assertIncludes(facebookSyncProxyRoute, "requireRequestUserIfAuthRequired", "manual Facebook sync route must require user auth");
+assertIncludes(facebookSyncProxyRoute, "runNativeFacebookChannelSync", "manual Facebook sync route must call server sync helper");
+assertNoMatch(facebookSyncProxyRoute, /CMO_LENS_INTERNAL_API_KEY|authorizeLensInternalRequest|Authorization|Bearer/i, "manual Facebook sync route must not expose or require internal bearer keys");
 
 assertIncludes(helper, "FACEBOOK_CHANNEL_SAFETY", "helper must declare safety flags");
 assertIncludes(helper, "createSupabaseAdminClient", "Facebook server writes must use Supabase admin client");
@@ -103,6 +111,10 @@ assertIncludes(helper, "token_encryption_error", "helper must map token encrypti
 assertIncludes(helper, "supabase_oauth_account_write_error", "helper must map OAuth account write failures safely");
 assertIncludes(helper, "page_list_error", "helper must map Page list failures safely");
 assertIncludes(helper, "page_mapping_write_error", "helper must map Page mapping failures safely");
+assertIncludes(helper, "getFacebookNativeConnectorStatus", "helper must expose safe connector status");
+assertIncludes(helper, "page_mapping_missing", "connector status must represent OAuth-connected/page-mapping-missing state");
+assertMatch(helper, /\.select\("id,tenant_id,provider,account_name,scopes_json,updated_at"\)/, "safe OAuth status read must not select encrypted token material");
+assertMatch(helper, /const latestAccount = input\.authRef \|\| source\?\.auth_ref \? null : await getLatestMetaOAuthAccount/, "Page listing must fall back to latest OAuth account when mapping is missing");
 assertMatch(helper, /no_tokens_returned:\s*true/, "safety must declare no tokens returned");
 assertMatch(helper, /raw_meta_response_included:\s*false/, "safety must declare no raw Meta response");
 assertMatch(helper, /vault_write_performed:\s*false/, "safety must declare no Vault writes");
@@ -162,6 +174,19 @@ assertIncludes(channelMetrics, "Fallback: Facebook handoff", "dashboard reader m
 assertIncludes(workspaceView, "Facebook Native", "dashboard must label native source");
 assertIncludes(workspaceView, "Fallback: Facebook handoff", "dashboard must show legacy fallback badge");
 assertIncludes(workspaceView, "Product-owned source for Page/channel metrics", "dashboard must include native cutover copy");
+assertIncludes(workspaceView, "Facebook Native connector", "dashboard must show native connector panel");
+assertIncludes(workspaceView, "Connect Facebook", "native connector panel must expose OAuth connect action");
+assertIncludes(workspaceView, "Load Pages", "native connector panel must expose Page list action");
+assertIncludes(workspaceView, "Save Page", "native connector panel must expose Page save action");
+assertIncludes(workspaceView, "Verify Page", "native connector panel must expose Page verification action");
+assertIncludes(workspaceView, "Sync Facebook metrics", "native connector panel must expose manual sync action");
+assertIncludes(workspaceView, "page_mapping_missing", "dashboard must handle OAuth-connected/page-mapping-missing state");
+assertIncludes(workspaceView, "/social-sources/facebook/pages", "dashboard must call Page listing route");
+assertIncludes(workspaceView, "/social-sources/facebook/verify", "dashboard must call Page verification route");
+assertIncludes(workspaceView, "/social-sources/facebook/sync", "dashboard must call safe manual sync route");
+assertIncludes(workspaceView, 'method: "POST"', "dashboard must use POST for save/verify/sync actions");
+assertIncludes(workspaceView, "<select", "dashboard must render a Page selection dropdown");
+assertNoMatch(workspaceView, /CMO_LENS_INTERNAL_API_KEY|Authorization|Bearer/i, "dashboard must not expose internal bearer keys");
 
 for (const fragment of [
   "Facebook\\s+channel\\s+metrics",

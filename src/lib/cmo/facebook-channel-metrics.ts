@@ -162,6 +162,25 @@ export interface FacebookChannelSource {
   };
 }
 
+export interface FacebookNativeOAuthAccount {
+  id: string;
+  tenantId: string;
+  provider: "meta";
+  accountName: string | null;
+  scopes: string[];
+  updatedAt: string | null;
+}
+
+export interface FacebookNativeConnectorStatus {
+  nativeEnabled: boolean;
+  oauthConfigured: boolean;
+  missingConfig: string[];
+  account: FacebookNativeOAuthAccount | null;
+  source: FacebookChannelSource | null;
+  status: "not_configured" | "not_connected" | "page_mapping_missing" | "mapped";
+  safety: FacebookChannelSafety;
+}
+
 export interface NativeFacebookChannelSnapshot {
   tenantId: string;
   workspaceId: string;
@@ -498,6 +517,17 @@ function toSafeSource(row: ChannelSourceRow): FacebookChannelSource {
   };
 }
 
+function toSafeOAuthAccount(row: Pick<SocialOAuthAccountRow, "id" | "tenant_id" | "provider" | "account_name" | "scopes_json" | "updated_at">): FacebookNativeOAuthAccount {
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    provider: "meta",
+    accountName: row.account_name,
+    scopes: jsonStringArray(row.scopes_json),
+    updatedAt: row.updated_at ?? null,
+  };
+}
+
 export async function upsertMetaOAuthAccount(input: {
   tenantId: string;
   providerUserId?: string | null;
@@ -610,6 +640,42 @@ async function getMetaOAuthAccount(authRef: string): Promise<SocialOAuthAccountR
   return data ? data as SocialOAuthAccountRow : null;
 }
 
+async function getLatestMetaOAuthAccount(tenantId: string): Promise<SocialOAuthAccountRow | null> {
+  const supabase = await getSupabase();
+  const { data, error } = await supabase
+    .from("workspace_social_oauth_accounts")
+    .select("id,tenant_id,provider,provider_user_id,account_name,encrypted_access_token,token_expires_at,scopes_json,metadata_json,created_at,updated_at")
+    .eq("tenant_id", tenantId)
+    .eq("provider", "meta")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`facebook_oauth_account_lookup_failed:${error.message}`);
+  }
+
+  return data ? data as SocialOAuthAccountRow : null;
+}
+
+async function getLatestSafeMetaOAuthAccount(tenantId: string): Promise<FacebookNativeOAuthAccount | null> {
+  const supabase = await getSupabase();
+  const { data, error } = await supabase
+    .from("workspace_social_oauth_accounts")
+    .select("id,tenant_id,provider,account_name,scopes_json,updated_at")
+    .eq("tenant_id", tenantId)
+    .eq("provider", "meta")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`facebook_oauth_account_lookup_failed:${error.message}`);
+  }
+
+  return data ? toSafeOAuthAccount(data as Pick<SocialOAuthAccountRow, "id" | "tenant_id" | "provider" | "account_name" | "scopes_json" | "updated_at">) : null;
+}
+
 async function getFacebookChannelSource(appId: string): Promise<ChannelSourceRow | null> {
   const entry = requireWorkspaceRegistryEntry(appId);
   const supabase = await getSupabase();
@@ -634,6 +700,32 @@ export async function getSafeFacebookChannelSource(appId: string): Promise<Faceb
   const row = await getFacebookChannelSource(appId);
 
   return row ? toSafeSource(row) : null;
+}
+
+export async function getFacebookNativeConnectorStatus(appId: string): Promise<FacebookNativeConnectorStatus> {
+  const entry = requireWorkspaceRegistryEntry(appId);
+  const configStatus = getMetaOAuthConfigStatus();
+  const [account, source] = await Promise.all([
+    getLatestSafeMetaOAuthAccount(entry.tenantId),
+    getSafeFacebookChannelSource(entry.appId),
+  ]);
+  const status = !configStatus.configured
+    ? "not_configured"
+    : !account
+      ? "not_connected"
+      : !source
+        ? "page_mapping_missing"
+        : "mapped";
+
+  return {
+    nativeEnabled: isCmoFacebookNativeEnabled(),
+    oauthConfigured: configStatus.configured,
+    missingConfig: configStatus.missing,
+    account,
+    source,
+    status,
+    safety: FACEBOOK_CHANNEL_SAFETY,
+  };
 }
 
 async function pageAccessTokenForSource(source: ChannelSourceRow): Promise<string> {
@@ -666,13 +758,15 @@ export async function listAccessibleFacebookPages(input: {
   }
 
   const source = await getFacebookChannelSource(input.appId);
-  const authRef = input.authRef ?? source?.auth_ref ?? null;
+  const entry = requireWorkspaceRegistryEntry(input.appId);
+  const latestAccount = input.authRef || source?.auth_ref ? null : await getLatestMetaOAuthAccount(entry.tenantId);
+  const authRef = input.authRef ?? source?.auth_ref ?? latestAccount?.id ?? null;
 
   if (!authRef) {
     return { status: "missing", pages: [], warnings: ["oauth_account_missing"], safety: FACEBOOK_CHANNEL_SAFETY };
   }
 
-  const account = await getMetaOAuthAccount(authRef);
+  const account = latestAccount?.id === authRef ? latestAccount : await getMetaOAuthAccount(authRef);
 
   if (!account) {
     return { status: "missing", pages: [], warnings: ["oauth_account_missing"], safety: FACEBOOK_CHANNEL_SAFETY };

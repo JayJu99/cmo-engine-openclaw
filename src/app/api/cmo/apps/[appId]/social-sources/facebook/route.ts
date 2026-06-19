@@ -1,5 +1,5 @@
 import { requireRequestUserIfAuthRequired } from "@/lib/cmo/auth";
-import { saveFacebookPageMapping } from "@/lib/cmo/facebook-channel-metrics";
+import { getFacebookNativeConnectorStatus, saveFacebookPageMapping } from "@/lib/cmo/facebook-channel-metrics";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,6 +10,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+export async function GET(_request: Request, context: RouteContext<"/api/cmo/apps/[appId]/social-sources/facebook">) {
+  try {
+    await requireRequestUserIfAuthRequired();
+
+    const { appId } = await context.params;
+    const data = await getFacebookNativeConnectorStatus(appId);
+
+    return Response.json({ data });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Facebook Native connector status failed";
+
+    return Response.json(
+      {
+        error: message,
+        code: "facebook_native_status_failed",
+      },
+      { status: message.includes("Authentication required") ? 401 : 500 },
+    );
+  }
 }
 
 export async function POST(request: Request, context: RouteContext<"/api/cmo/apps/[appId]/social-sources/facebook">) {
@@ -53,4 +74,3 @@ export async function POST(request: Request, context: RouteContext<"/api/cmo/app
     );
   }
 }
-
