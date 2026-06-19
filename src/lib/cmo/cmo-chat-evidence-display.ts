@@ -5,10 +5,20 @@ import type {
   HermesCmoChatMetadata,
 } from "@/lib/cmo/app-workspace-types";
 
-type EvidenceKind = "ga4_ad_hoc" | "metric_definition" | "vault_daily_report" | "cached_snapshot";
+type EvidenceKind = "ga4_ad_hoc" | "metric_definition" | "dune_business" | "vault_daily_report" | "cached_snapshot";
 
 const SENSITIVE_TEXT_PATTERN =
-  /\b(access_token|refresh_token|id_token|encrypted_refresh_token|CMO_LENS_INTERNAL_API_KEY|Authorization|Bearer|raw_ga4_response|raw connector payload|stack trace)\b|(?:^|\s)at\s+[A-Za-z0-9_$.[\]]+\s+\(|[A-Za-z]:[\\/](?:Users|Windows|Holdstation|tmp|var|etc)[\\/]/i;
+  /\b(access_token|refresh_token|id_token|encrypted_refresh_token|CMO_LENS_INTERNAL_API_KEY|CMO_DUNE_API_KEY|DUNE_API_KEY|Authorization|Bearer|raw_ga4_response|raw_dune_response|rawDuneResponse|raw connector payload|stack trace)\b|(?:^|\s)at\s+[A-Za-z0-9_$.[\]]+\s+\(|[A-Za-z]:[\\/](?:Users|Windows|Holdstation|tmp|var|etc)[\\/]/i;
+
+const DUNE_BUSINESS_SOURCE_LABEL_PATTERNS = [
+  /Lens\s*\/\s*Dune\s+business\s+metrics/i,
+  /Lens\s*\/\s*Dune\s+Business\s+Pack/i,
+  /Product\s*\/\s*Dune\s+native/i,
+  /Dune\s+Native/i,
+  /Worldchain\s+business\s+metrics/i,
+  /WLD\s+Aggregator/i,
+  /Partner\s+Stats\s+on\s+WLD/i,
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -156,6 +166,10 @@ function sameText(left: string | null, right: string): boolean {
   return Boolean(left && left.toLowerCase() === right.toLowerCase());
 }
 
+function isDuneBusinessText(text: string | null): boolean {
+  return Boolean(text && DUNE_BUSINESS_SOURCE_LABEL_PATTERNS.some((pattern) => pattern.test(text)));
+}
+
 function evidenceText(message: CMOChatMessage, trace: Record<string, unknown>): string {
   return [
     safeText(message.content, 4000),
@@ -175,6 +189,10 @@ function evidenceHints(message: CMOChatMessage, trace: Record<string, unknown>):
 
   if (/Lens\s*\/\s*Product\s+metric-definition\s+snapshot/i.test(text)) {
     hints.add("metric_definition");
+  }
+
+  if (isDuneBusinessText(text)) {
+    hints.add("dune_business");
   }
 
   if (/Vault\s*\/\s*Lens\s+Daily\s+Report/i.test(text)) {
@@ -200,6 +218,10 @@ function traceLooksLike(trace: Record<string, unknown>, kind: EvidenceKind): boo
       return sameText(sourceLabel, "Lens / Product metric-definition snapshot");
     }
 
+    if (kind === "dune_business") {
+      return isDuneBusinessText(sourceLabel);
+    }
+
     if (kind === "vault_daily_report") {
       return sameText(sourceLabel, "Vault / Lens Daily Report");
     }
@@ -219,6 +241,10 @@ function traceLooksLike(trace: Record<string, unknown>, kind: EvidenceKind): boo
 
   if (kind === "metric_definition") {
     return /metric.?definition|activation|retention|activated_users|activation_rate|not_matured/i.test(joined);
+  }
+
+  if (kind === "dune_business") {
+    return /dune|worldchain|world.?chain|wld|aggregator|partner.?stats|daily_volume|cumulative_volume|fee_amount|count_tx|partnerCode|product\.lens_dune_business_pack|lens\.business_metrics_pack/i.test(joined);
   }
 
   if (kind === "vault_daily_report") {
@@ -242,6 +268,27 @@ function rangeValue(trace: Record<string, unknown>): string | null {
   }
 
   return key;
+}
+
+function dateRangeValue(trace: Record<string, unknown>): string | null {
+  if (isRecord(trace.date_range) || isRecord(trace.dateRange)) {
+    const range = (isRecord(trace.date_range) ? trace.date_range : trace.dateRange) as Record<string, unknown>;
+    const preset = firstSafe(range, ["preset", "range_key", "rangeKey"]);
+    const start = firstSafe(range, ["start", "date_start", "dateStart", "start_date", "startDate"]);
+    const end = firstSafe(range, ["end", "date_end", "dateEnd", "end_date", "endDate"]);
+
+    if (preset && start && end) {
+      return `${preset} Â· ${start} -> ${end}`;
+    }
+
+    if (start && end) {
+      return `${start} -> ${end}`;
+    }
+
+    return preset;
+  }
+
+  return rangeValue(trace);
 }
 
 function row(label: string, value: string | null | undefined): CmoEvidenceSourceDisplay["rows"][number] | null {
@@ -322,6 +369,31 @@ function metricDefinitionEvidence(trace: Record<string, unknown>, forced = false
   };
 }
 
+function duneBusinessEvidence(trace: Record<string, unknown>, forced = false): CmoEvidenceSourceDisplay | null {
+  if (!forced && !traceLooksLike(trace, "dune_business")) {
+    return null;
+  }
+
+  const packs = firstSafeList(trace, ["packs", "pack_keys", "packKeys"], 6);
+  const latestDate = firstSafe(trace, ["latest_date", "latestDate", "dune_latest_date", "duneLatestDate", "date"]);
+
+  return {
+    key: "lens-dune-business-metrics",
+    sourceLabel: "Lens / Dune business metrics",
+    rows: rowsOrFallback([
+      row("Backend", "Product native Dune connector"),
+      row("Provider", firstSafe(trace, ["provider"]) ?? "dune"),
+      row("Status", firstSafe(trace, ["source_status", "sourceStatus", "status"])),
+      row("Date range", dateRangeValue(trace)),
+      row("Latest date", latestDate),
+      row("Synced", firstSafe(trace, ["synced_at", "syncedAt", "latest_synced_at", "latestSyncedAt"])),
+      row("Packs", packs.join(", ")),
+    ], "Lens / Dune business metrics"),
+    warnings: warningRows(trace),
+    collapsedByDefault: true,
+  };
+}
+
 function vaultDailyReportEvidence(trace: Record<string, unknown>, forced = false): CmoEvidenceSourceDisplay | null {
   if (!forced && !traceLooksLike(trace, "vault_daily_report")) {
     return null;
@@ -381,6 +453,7 @@ export function buildCmoEvidenceSources(message: CMOChatMessage): CmoEvidenceSou
   const sources = [
     metricDefinitionEvidence(trace, hints.has("metric_definition")),
     ga4AdHocEvidence(trace, hints.has("ga4_ad_hoc")),
+    duneBusinessEvidence(trace, hints.has("dune_business")),
     vaultDailyReportEvidence(trace, hints.has("vault_daily_report")),
     cachedSnapshotEvidence(message, trace, hints.has("cached_snapshot")),
   ].filter((item): item is CmoEvidenceSourceDisplay => Boolean(item));
@@ -426,6 +499,11 @@ export function buildCmoActivitySteps(message: CMOChatMessage, running = false):
 
   if (evidence.some((source) => source.sourceLabel === "Lens / GA4 ad-hoc query")) {
     steps.push(step("ga4-query", "GA4 query"));
+  }
+
+  if (evidence.some((source) => source.sourceLabel === "Lens / Dune business metrics")) {
+    steps.push(step("dune-business", "Dune business"));
+    steps.push(step("product-dune-native", "Product Dune native"));
   }
 
   if (evidence.some((source) => source.sourceLabel === "Lens / Product metric-definition snapshot")) {

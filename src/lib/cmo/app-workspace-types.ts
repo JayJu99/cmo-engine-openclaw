@@ -815,6 +815,7 @@ export interface CmoEvidenceSourceDisplay {
   sourceLabel:
     | "Lens / GA4 ad-hoc query"
     | "Lens / Product metric-definition snapshot"
+    | "Lens / Dune business metrics"
     | "Vault / Lens Daily Report"
     | "Lens / GA4 cached snapshot";
   summary?: string;

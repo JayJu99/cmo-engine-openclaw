@@ -233,6 +233,8 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
     const hasSpecificEvidenceStep = displaySteps.some((step) =>
       step.label === "Lens" ||
       step.label === "GA4 query" ||
+      step.label === "Dune business" ||
+      step.label === "Product Dune native" ||
       step.label === "Metric snapshot" ||
       step.label === "Cached snapshot" ||
       step.label === "Vault report"

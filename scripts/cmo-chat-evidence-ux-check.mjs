@@ -210,6 +210,13 @@ try {
 
   assertProductionShapeEvidence(mapper, "Lens / GA4 ad-hoc query", "Lens / GA4 ad-hoc query", "GA4 query");
   assertProductionShapeEvidence(mapper, "Lens / Product metric-definition snapshot", "Lens / Product metric-definition snapshot", "Metric snapshot");
+  assertProductionShapeEvidence(mapper, "Lens / Dune business metrics", "Lens / Dune business metrics", "Dune business");
+  assertProductionShapeEvidence(mapper, "Lens / Dune Business Pack", "Lens / Dune business metrics", "Product Dune native");
+  assertProductionShapeEvidence(mapper, "Product / Dune native", "Lens / Dune business metrics", "Product Dune native");
+  assertProductionShapeEvidence(mapper, "Dune Native", "Lens / Dune business metrics", "Dune business");
+  assertProductionShapeEvidence(mapper, "Worldchain business metrics", "Lens / Dune business metrics", "Dune business");
+  assertProductionShapeEvidence(mapper, "WLD Aggregator", "Lens / Dune business metrics", "Dune business");
+  assertProductionShapeEvidence(mapper, "Partner Stats on WLD", "Lens / Dune business metrics", "Dune business");
   assertProductionShapeEvidence(mapper, "Vault / Lens Daily Report", "Vault / Lens Daily Report", "Vault report");
   assertProductionShapeEvidence(mapper, "Lens cached snapshot", "Lens / GA4 cached snapshot", "Cached snapshot");
   assertProductionShapeEvidence(mapper, "Lens / GA4 cached snapshot", "Lens / GA4 cached snapshot", "Cached snapshot");
