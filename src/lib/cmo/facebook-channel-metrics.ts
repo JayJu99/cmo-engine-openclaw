@@ -33,6 +33,39 @@ const META_SCOPES = [
 export type FacebookChannelSyncMode = "refresh_all" | "refresh_if_stale" | "cache_only";
 export type FacebookChannelSnapshotStatus = "connected" | "partial" | "missing" | "stale" | "failed";
 export type FacebookChannelSyncStatus = "completed" | "partial" | "failed" | "missing";
+export type FacebookConnectorSafeErrorCode =
+  | "token_exchange_error"
+  | "token_encryption_error"
+  | "supabase_oauth_account_write_error"
+  | "page_list_error"
+  | "page_mapping_write_error"
+  | "invalid_state";
+
+export class FacebookConnectorError extends Error {
+  safeCode: FacebookConnectorSafeErrorCode;
+  stage: string;
+  tableName?: string;
+  supabaseCode?: string;
+  supabaseMessage?: string;
+
+  constructor(input: {
+    safeCode: FacebookConnectorSafeErrorCode;
+    stage: string;
+    message: string;
+    tableName?: string;
+    supabaseCode?: string | null;
+    supabaseMessage?: string | null;
+    cause?: unknown;
+  }) {
+    super(input.message, { cause: input.cause });
+    this.name = "FacebookConnectorError";
+    this.safeCode = input.safeCode;
+    this.stage = input.stage;
+    this.tableName = input.tableName;
+    this.supabaseCode = input.supabaseCode ?? undefined;
+    this.supabaseMessage = input.supabaseMessage ?? undefined;
+  }
+}
 
 export interface FacebookChannelSafety {
   no_tokens_returned: true;
@@ -218,6 +251,28 @@ function jsonStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+function safeErrorText(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const text = value.replace(/\s+/g, " ").trim();
+
+  if (!text || /\b(access_token|client_secret|META_APP_SECRET|Bearer|Authorization)\b/i.test(text)) {
+    return null;
+  }
+
+  return text.slice(0, 240);
+}
+
+function supabaseErrorCode(error: unknown): string | null {
+  return isRecord(error) ? safeErrorText(error.code) : null;
+}
+
+function supabaseErrorMessage(error: unknown): string | null {
+  return isRecord(error) ? safeErrorText(error.message) : null;
+}
+
 function displayCount(value: number | null): string {
   return value === null ? "No data" : new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
 }
@@ -352,7 +407,11 @@ async function metaJsonRequest(url: URL, errorCode: string): Promise<unknown> {
   const payload = await response.json().catch(() => ({})) as unknown;
 
   if (!response.ok) {
-    throw new Error(errorCode);
+    throw new FacebookConnectorError({
+      safeCode: errorCode === "facebook_pages_fetch_failed" ? "page_list_error" : "token_exchange_error",
+      stage: errorCode === "facebook_pages_fetch_failed" ? "page_list" : "token_exchange",
+      message: errorCode,
+    });
   }
 
   return payload;
@@ -378,7 +437,11 @@ export async function exchangeMetaCodeForToken(code: string): Promise<{
   const data = await metaJsonRequest(url, "meta_token_exchange_failed") as GraphTokenResponse;
 
   if (!data.access_token) {
-    throw new Error("meta_token_exchange_failed");
+    throw new FacebookConnectorError({
+      safeCode: "token_exchange_error",
+      stage: "token_exchange",
+      message: "meta_token_exchange_failed",
+    });
   }
 
   return {
@@ -445,31 +508,79 @@ export async function upsertMetaOAuthAccount(input: {
   metadata?: Record<string, unknown>;
 }): Promise<{ id: string; tenantId: string; provider: "meta"; accountName: string | null; scopes: string[] }> {
   const supabase = await getSupabase();
+  let encryptedAccessToken: string;
+
+  try {
+    encryptedAccessToken = encryptLensOAuthToken(input.accessToken);
+  } catch (error) {
+    throw new FacebookConnectorError({
+      safeCode: "token_encryption_error",
+      stage: "token_encryption",
+      message: "facebook_oauth_token_encryption_failed",
+      cause: error,
+    });
+  }
+
   const row = {
     tenant_id: input.tenantId,
     provider: "meta",
     provider_user_id: input.providerUserId ?? null,
     account_name: input.accountName ?? null,
-    encrypted_access_token: encryptLensOAuthToken(input.accessToken),
+    encrypted_access_token: encryptedAccessToken,
     token_expires_at: input.tokenExpiresAt ?? null,
     scopes_json: input.scopes,
     metadata_json: input.metadata ?? {},
   };
-  const query = input.providerUserId
+  let existingId: string | null = null;
+
+  if (input.providerUserId) {
+    const { data: existing, error: lookupError } = await supabase
+      .from("workspace_social_oauth_accounts")
+      .select("id")
+      .eq("tenant_id", input.tenantId)
+      .eq("provider", "meta")
+      .eq("provider_user_id", input.providerUserId)
+      .maybeSingle();
+
+    if (lookupError) {
+      throw new FacebookConnectorError({
+        safeCode: "supabase_oauth_account_write_error",
+        stage: "oauth_account_lookup_before_write",
+        tableName: "workspace_social_oauth_accounts",
+        message: "facebook_oauth_account_lookup_before_write_failed",
+        supabaseCode: supabaseErrorCode(lookupError),
+        supabaseMessage: supabaseErrorMessage(lookupError),
+        cause: lookupError,
+      });
+    }
+
+    existingId = isRecord(existing) && typeof existing.id === "string" ? existing.id : null;
+  }
+
+  const query = existingId
     ? supabase
-        .from("workspace_social_oauth_accounts")
-        .upsert(row, { onConflict: "tenant_id,provider,provider_user_id" })
-        .select("id,tenant_id,provider,account_name,scopes_json")
-        .single()
+      .from("workspace_social_oauth_accounts")
+      .update(row)
+      .eq("id", existingId)
+      .select("id,tenant_id,provider,account_name,scopes_json")
+      .single()
     : supabase
-        .from("workspace_social_oauth_accounts")
-        .insert(row)
-        .select("id,tenant_id,provider,account_name,scopes_json")
-        .single();
+      .from("workspace_social_oauth_accounts")
+      .insert(row)
+      .select("id,tenant_id,provider,account_name,scopes_json")
+      .single();
   const { data, error } = await query;
 
   if (error) {
-    throw new Error(`facebook_oauth_account_write_failed:${error.message}`);
+    throw new FacebookConnectorError({
+      safeCode: "supabase_oauth_account_write_error",
+      stage: existingId ? "oauth_account_update" : "oauth_account_insert",
+      tableName: "workspace_social_oauth_accounts",
+      message: "facebook_oauth_account_write_failed",
+      supabaseCode: supabaseErrorCode(error),
+      supabaseMessage: supabaseErrorMessage(error),
+      cause: error,
+    });
   }
 
   const saved = data as Pick<SocialOAuthAccountRow, "id" | "tenant_id" | "provider" | "account_name" | "scopes_json">;
@@ -635,14 +746,24 @@ export async function saveFacebookPageMapping(input: {
     page_name: pageName,
     auth_ref: input.authRef,
     enabled: true,
-    config_json: {
-      ...(pageAccessToken ? { encryptedPageAccessToken: encryptLensOAuthToken(pageAccessToken) } : {}),
-    },
+    config_json: {},
     quality_json: {
       status: "pending_verification",
       warnings: [],
     },
   };
+  if (pageAccessToken) {
+    try {
+      row.config_json = { encryptedPageAccessToken: encryptLensOAuthToken(pageAccessToken) };
+    } catch (error) {
+      throw new FacebookConnectorError({
+        safeCode: "token_encryption_error",
+        stage: "page_token_encryption",
+        message: "facebook_page_token_encryption_failed",
+        cause: error,
+      });
+    }
+  }
   const supabase = await getSupabase();
   const { data, error } = await supabase
     .from("workspace_channel_sources")
@@ -651,7 +772,15 @@ export async function saveFacebookPageMapping(input: {
     .single();
 
   if (error) {
-    throw new Error(`facebook_page_mapping_write_failed:${error.message}`);
+    throw new FacebookConnectorError({
+      safeCode: "page_mapping_write_error",
+      stage: "page_mapping_write",
+      tableName: "workspace_channel_sources",
+      message: "facebook_page_mapping_write_failed",
+      supabaseCode: supabaseErrorCode(error),
+      supabaseMessage: supabaseErrorMessage(error),
+      cause: error,
+    });
   }
 
   return toSafeSource(data as ChannelSourceRow);

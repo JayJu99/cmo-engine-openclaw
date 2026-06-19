@@ -39,6 +39,7 @@ const envExample = await source(".env.example");
 const config = await source("src/lib/cmo/config.ts");
 const migration = await source("supabase/migrations/202606200001_workspace_social_facebook_native.sql");
 const helper = await source("src/lib/cmo/facebook-channel-metrics.ts");
+const metaCallback = await source("src/app/api/cmo/oauth/meta/callback/route.ts");
 const channelMetrics = await source("src/lib/cmo/channel-metrics.ts");
 const workspaceTypes = await source("src/lib/cmo/app-workspace-types.ts");
 const workspaceView = await source("src/components/cmo-apps/app-workspace-view.tsx");
@@ -92,6 +93,16 @@ for (const internalRoute of routeSources.slice(-3)) {
 }
 
 assertIncludes(helper, "FACEBOOK_CHANNEL_SAFETY", "helper must declare safety flags");
+assertIncludes(helper, "createSupabaseAdminClient", "Facebook server writes must use Supabase admin client");
+assertIncludes(helper, "workspace_social_oauth_accounts", "OAuth account write path must target service-role-only OAuth table");
+assertIncludes(helper, "encrypted_access_token", "OAuth account write path must persist encrypted_access_token");
+assertNoMatch(helper, /access_token:\s*input\.accessToken|access_token:\s*token\.accessToken/, "helper must not write raw Meta access token columns");
+assertNoMatch(helper, /\.upsert\([^)]*workspace_social_oauth_accounts|onConflict:\s*"tenant_id,provider,provider_user_id"/, "OAuth account write must not use upsert on partial unique provider_user index");
+assertMatch(helper, /\.from\("workspace_social_oauth_accounts"\)[\s\S]*?\.select\("id"\)[\s\S]*?\.eq\("tenant_id"/, "OAuth account write must lookup existing account before update/insert");
+assertIncludes(helper, "token_encryption_error", "helper must map token encryption failures safely");
+assertIncludes(helper, "supabase_oauth_account_write_error", "helper must map OAuth account write failures safely");
+assertIncludes(helper, "page_list_error", "helper must map Page list failures safely");
+assertIncludes(helper, "page_mapping_write_error", "helper must map Page mapping failures safely");
 assertMatch(helper, /no_tokens_returned:\s*true/, "safety must declare no tokens returned");
 assertMatch(helper, /raw_meta_response_included:\s*false/, "safety must declare no raw Meta response");
 assertMatch(helper, /vault_write_performed:\s*false/, "safety must declare no Vault writes");
@@ -118,6 +129,29 @@ for (const packKey of ["page_summary", "top_posts", "followers"]) {
 }
 assertIncludes(helper, "request_context", "report pack must preserve requested range context");
 assertIncludes(helper, "selected_range", "report pack must expose selected range metadata");
+
+assertIncludes(metaCallback, "FacebookConnectorError", "Meta callback must consume typed safe connector errors");
+assertIncludes(metaCallback, "cmo_meta_oauth_callback_failed", "Meta callback must log safe server-side diagnostics");
+assertIncludes(metaCallback, "supabaseCode", "Meta callback diagnostic log must include Supabase code");
+assertIncludes(metaCallback, "supabaseMessage", "Meta callback diagnostic log must include Supabase message");
+assertIncludes(metaCallback, "appId", "Meta callback diagnostic log must include safe appId");
+assertIncludes(metaCallback, "workspaceId", "Meta callback diagnostic log must include safe workspaceId");
+assertIncludes(metaCallback, 'searchParams.set("metaOAuth"', "Meta callback must emit metaOAuth status");
+assertIncludes(metaCallback, 'searchParams.set("metaOAuthCode"', "Meta callback must emit metaOAuthCode");
+assertNoMatch(metaCallback, /buildLensOAuthFinalRedirect/, "Meta callback must not use Lens OAuth redirect builder");
+assertNoMatch(metaCallback, /searchParams\.set\("lensOAuth|searchParams\.set\("lensOAuthCode/, "Meta callback must not emit lensOAuth params");
+assertNoMatch(metaCallback, /console\.error[\s\S]{0,300}(?:accessToken|clientSecret|getMetaAppSecret|META_APP_SECRET)/, "Meta callback logs must not include token/app secret material");
+assertNoMatch(metaCallback, /searchParams\.set\([^)]*(?:accessToken|clientSecret|getMetaAppSecret|META_APP_SECRET)/, "Meta callback redirects must not include token/app secret material");
+for (const code of [
+  "token_exchange_error",
+  "token_encryption_error",
+  "supabase_oauth_account_write_error",
+  "page_list_error",
+  "page_mapping_write_error",
+  "invalid_state",
+]) {
+  assertIncludes(metaCallback + helper, code, `Meta callback/write path must support ${code}`);
+}
 
 assertIncludes(workspaceTypes, '"facebook_native"', "channel snapshot type must accept facebook_native");
 assertIncludes(workspaceTypes, "sourceMeta", "channel snapshot type must expose safe source metadata");
