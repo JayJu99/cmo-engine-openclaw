@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily CMO Product native Facebook channel metrics sync timer
+
+[Timer]
+OnCalendar=*-*-* 00:20:00
+Persistent=true
+Unit=cmo-facebook-channel-sync.service
+
+[Install]
+WantedBy=timers.target

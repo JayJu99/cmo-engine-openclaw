@@ -171,3 +171,23 @@ export function isCmoDuneNativeDashboardEnabled(): boolean {
 export function getCmoDuneApiKey(): string {
   return process.env.CMO_DUNE_API_KEY?.trim() ?? "";
 }
+
+export function isCmoFacebookNativeEnabled(): boolean {
+  return booleanEnv("CMO_FACEBOOK_NATIVE_ENABLED", false);
+}
+
+export function isCmoFacebookNativeDashboardEnabled(): boolean {
+  return booleanEnv("CMO_FACEBOOK_NATIVE_DASHBOARD_ENABLED", false);
+}
+
+export function getMetaAppId(): string {
+  return process.env.META_APP_ID?.trim() ?? "";
+}
+
+export function getMetaAppSecret(): string {
+  return process.env.META_APP_SECRET?.trim() ?? "";
+}
+
+export function getMetaRedirectUri(): string {
+  return process.env.META_REDIRECT_URI?.trim() ?? "";
+}

@@ -5,10 +5,10 @@ import type {
   HermesCmoChatMetadata,
 } from "@/lib/cmo/app-workspace-types";
 
-type EvidenceKind = "ga4_ad_hoc" | "metric_definition" | "dune_business" | "vault_daily_report" | "cached_snapshot";
+type EvidenceKind = "ga4_ad_hoc" | "metric_definition" | "dune_business" | "facebook_channel" | "vault_daily_report" | "cached_snapshot";
 
 const SENSITIVE_TEXT_PATTERN =
-  /\b(access_token|refresh_token|id_token|encrypted_refresh_token|CMO_LENS_INTERNAL_API_KEY|CMO_DUNE_API_KEY|DUNE_API_KEY|Authorization|Bearer|raw_ga4_response|raw_dune_response|rawDuneResponse|raw connector payload|stack trace)\b|(?:^|\s)at\s+[A-Za-z0-9_$.[\]]+\s+\(|[A-Za-z]:[\\/](?:Users|Windows|Holdstation|tmp|var|etc)[\\/]/i;
+  /\b(access_token|page_access_token|meta_access_token|refresh_token|id_token|encrypted_refresh_token|encryptedPageAccessToken|META_APP_SECRET|CMO_LENS_INTERNAL_API_KEY|CMO_DUNE_API_KEY|DUNE_API_KEY|Authorization|Bearer|raw_ga4_response|raw_dune_response|rawDuneResponse|raw_meta_response|rawMetaResponse|raw connector payload|stack trace)\b|(?:^|\s)at\s+[A-Za-z0-9_$.[\]]+\s+\(|[A-Za-z]:[\\/](?:Users|Windows|Holdstation|tmp|var|etc)[\\/]/i;
 
 const DUNE_BUSINESS_SOURCE_LABEL_PATTERNS = [
   /Lens\s*\/\s*Dune\s+business\s+metrics/i,
@@ -18,6 +18,14 @@ const DUNE_BUSINESS_SOURCE_LABEL_PATTERNS = [
   /Worldchain\s+business\s+metrics/i,
   /WLD\s+Aggregator/i,
   /Partner\s+Stats\s+on\s+WLD/i,
+];
+
+const FACEBOOK_CHANNEL_SOURCE_LABEL_PATTERNS = [
+  /Lens\s*\/\s*Facebook\s+channel\s+metrics/i,
+  /Product\s+native\s+Facebook\s+connector/i,
+  /Facebook\s+Native/i,
+  /Meta\s+Page\s+Insights/i,
+  /Channel\s+Performance\s*[—-]\s*Facebook/i,
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -170,6 +178,10 @@ function isDuneBusinessText(text: string | null): boolean {
   return Boolean(text && DUNE_BUSINESS_SOURCE_LABEL_PATTERNS.some((pattern) => pattern.test(text)));
 }
 
+function isFacebookChannelText(text: string | null): boolean {
+  return Boolean(text && FACEBOOK_CHANNEL_SOURCE_LABEL_PATTERNS.some((pattern) => pattern.test(text)));
+}
+
 function evidenceText(message: CMOChatMessage, trace: Record<string, unknown>): string {
   return [
     safeText(message.content, 4000),
@@ -193,6 +205,10 @@ function evidenceHints(message: CMOChatMessage, trace: Record<string, unknown>):
 
   if (isDuneBusinessText(text)) {
     hints.add("dune_business");
+  }
+
+  if (isFacebookChannelText(text)) {
+    hints.add("facebook_channel");
   }
 
   if (/Vault\s*\/\s*Lens\s+Daily\s+Report/i.test(text)) {
@@ -222,6 +238,10 @@ function traceLooksLike(trace: Record<string, unknown>, kind: EvidenceKind): boo
       return isDuneBusinessText(sourceLabel);
     }
 
+    if (kind === "facebook_channel") {
+      return isFacebookChannelText(sourceLabel);
+    }
+
     if (kind === "vault_daily_report") {
       return sameText(sourceLabel, "Vault / Lens Daily Report");
     }
@@ -245,6 +265,10 @@ function traceLooksLike(trace: Record<string, unknown>, kind: EvidenceKind): boo
 
   if (kind === "dune_business") {
     return /dune|worldchain|world.?chain|wld|aggregator|partner.?stats|daily_volume|cumulative_volume|fee_amount|count_tx|partnerCode|product\.lens_dune_business_pack|lens\.business_metrics_pack/i.test(joined);
+  }
+
+  if (kind === "facebook_channel") {
+    return /facebook|meta.?page|page.?insights|channel.?performance|product\.lens_facebook_channel_pack|product\.facebook_channel|facebook_native|page_summary|top_posts|followers/i.test(joined);
   }
 
   if (kind === "vault_daily_report") {
@@ -394,6 +418,31 @@ function duneBusinessEvidence(trace: Record<string, unknown>, forced = false): C
   };
 }
 
+function facebookChannelEvidence(trace: Record<string, unknown>, forced = false): CmoEvidenceSourceDisplay | null {
+  if (!forced && !traceLooksLike(trace, "facebook_channel")) {
+    return null;
+  }
+
+  const packs = firstSafeList(trace, ["packs", "pack_keys", "packKeys", "groups"], 6);
+  const page = firstSafe(trace, ["page_name", "pageName"]);
+
+  return {
+    key: "lens-facebook-channel-metrics",
+    sourceLabel: "Lens / Facebook channel metrics",
+    rows: rowsOrFallback([
+      row("Backend", "Product native Facebook connector"),
+      row("Provider", firstSafe(trace, ["provider"]) ?? "meta/facebook"),
+      row("Status", firstSafe(trace, ["source_status", "sourceStatus", "status"])),
+      row("Date range", dateRangeValue(trace)),
+      row("Synced", firstSafe(trace, ["synced_at", "syncedAt", "latest_synced_at", "latestSyncedAt"])),
+      row("Page", page),
+      row("Packs", packs.join(", ")),
+    ], "Lens / Facebook channel metrics"),
+    warnings: warningRows(trace),
+    collapsedByDefault: true,
+  };
+}
+
 function vaultDailyReportEvidence(trace: Record<string, unknown>, forced = false): CmoEvidenceSourceDisplay | null {
   if (!forced && !traceLooksLike(trace, "vault_daily_report")) {
     return null;
@@ -454,6 +503,7 @@ export function buildCmoEvidenceSources(message: CMOChatMessage): CmoEvidenceSou
     metricDefinitionEvidence(trace, hints.has("metric_definition")),
     ga4AdHocEvidence(trace, hints.has("ga4_ad_hoc")),
     duneBusinessEvidence(trace, hints.has("dune_business")),
+    facebookChannelEvidence(trace, hints.has("facebook_channel")),
     vaultDailyReportEvidence(trace, hints.has("vault_daily_report")),
     cachedSnapshotEvidence(message, trace, hints.has("cached_snapshot")),
   ].filter((item): item is CmoEvidenceSourceDisplay => Boolean(item));
@@ -504,6 +554,11 @@ export function buildCmoActivitySteps(message: CMOChatMessage, running = false):
   if (evidence.some((source) => source.sourceLabel === "Lens / Dune business metrics")) {
     steps.push(step("dune-business", "Dune business"));
     steps.push(step("product-dune-native", "Product Dune native"));
+  }
+
+  if (evidence.some((source) => source.sourceLabel === "Lens / Facebook channel metrics")) {
+    steps.push(step("facebook-channel", "Facebook channel"));
+    steps.push(step("product-facebook-native", "Product Facebook native"));
   }
 
   if (evidence.some((source) => source.sourceLabel === "Lens / Product metric-definition snapshot")) {

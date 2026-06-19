@@ -783,6 +783,10 @@ function channelMetricStatusVariant(status: CmoChannelMetric["status"] | CmoChan
 }
 
 function channelSourceLabel(source: CmoChannelMetricsSnapshot["source"] | undefined): string {
+  if (source === "facebook_native") {
+    return "Facebook Native";
+  }
+
   if (source === "lens.facebook_page") {
     return "Lens Facebook";
   }
@@ -840,14 +844,14 @@ function channelSyncStatusCopy(status: CmoChannelMetricsSyncStatus | null): stri
 
 function channelStatusCopy(status: CmoChannelMetricsSnapshot["status"] | undefined): string {
   if (status === "connected") {
-    return "Lens Facebook metrics connected.";
+    return "Facebook channel metrics connected.";
   }
 
   if (status === "partial") {
-    return "Some Facebook metrics are available from Lens. Link clicks and CTR are not connected yet.";
+    return "Some Facebook channel metrics are available. Link clicks and CTR are not connected yet.";
   }
 
-  return "Lens Facebook data not normalized yet.";
+  return "Facebook channel data not normalized yet.";
 }
 
 function channelMetricDisplayValue(metric: CmoChannelMetric | undefined): string {
@@ -1660,6 +1664,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const channelMetricsHealthLabel = channelMetricsStatus === "loading" ? "Loading" : channelMetricStatusLabel(channelMetricsSnapshot?.status);
   const channelMetricsHealthVariant = channelMetricsStatus === "loading" ? "slate" : channelMetricStatusVariant(channelMetricsSnapshot?.status);
   const channelMetricsSource = channelSourceLabel(channelMetricsSnapshot?.source);
+  const channelMetricsUsingNative = channelMetricsSnapshot?.source === "facebook_native";
+  const channelMetricsUsingNativeFallback = channelMetricsSnapshot?.source !== "facebook_native" &&
+    channelMetricsSnapshot?.diagnostics.notes.some((note) => /facebook_native_fallback|Fallback: Facebook handoff/i.test(note)) === true;
+  const nativeChannelStatus = channelMetricsSnapshot?.sourceMeta?.nativeStatus;
+  const nativeChannelPageName = channelMetricsSnapshot?.sourceMeta?.pageName;
   const channelMetricsLastUpdated = channelSyncStatus?.lastFinishedAt
     ? displayDate(channelSyncStatus.lastFinishedAt)
     : channelMetricsSnapshot?.lastUpdatedAt
@@ -2972,13 +2981,21 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             >
               <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
                 <Badge variant="slate">Source: {channelMetricsSource}</Badge>
+                {channelMetricsUsingNativeFallback ? <Badge variant="orange">Fallback: Facebook handoff</Badge> : null}
+                {channelMetricsUsingNative ? <Badge variant="blue">Native status: {nativeChannelStatus || channelMetricsHealthLabel}</Badge> : null}
+                {nativeChannelPageName ? <Badge variant="slate">Page: {nativeChannelPageName}</Badge> : null}
                 <Badge variant="slate">Last synced: {channelMetricsLastUpdated}</Badge>
                 <Badge variant="slate">Last success: {channelMetricsLastSuccess}</Badge>
                 <Badge variant={channelSyncVariant}>Sync: {channelSyncLabel}</Badge>
                 <Badge variant="slate">Range: {dateRangeOptions.find((option) => option.id === dateRange)?.label}</Badge>
               </div>
               <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold leading-6 text-slate-600">
-                {channelMetricsError || `${channelStatusCopy(channelMetricsSnapshot?.status)} ${channelSyncStatusCopy(channelSyncStatus)}`}
+                {channelMetricsError
+                  || (channelMetricsUsingNative
+                    ? `Facebook Native is the Product-owned source for Page/channel metrics. Legacy n8n handoff remains fallback during cutover. ${channelStatusCopy(channelMetricsSnapshot?.status)}`
+                    : channelMetricsUsingNativeFallback
+                      ? `Native Facebook snapshots are unavailable for this view, so Product is using the legacy Facebook handoff fallback. ${channelStatusCopy(channelMetricsSnapshot?.status)}`
+                      : `${channelStatusCopy(channelMetricsSnapshot?.status)} ${channelSyncStatusCopy(channelSyncStatus)}`)}
               </div>
 
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">

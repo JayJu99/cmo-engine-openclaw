@@ -2,6 +2,8 @@ import { readFile } from "fs/promises";
 import path from "path";
 
 import { getAppWorkspace } from "@/lib/cmo/app-workspaces";
+import { isCmoFacebookNativeDashboardEnabled } from "@/lib/cmo/config";
+import { readNativeFacebookChannelMetricsSnapshot } from "@/lib/cmo/facebook-channel-metrics";
 import type {
   CmoChannel,
   CmoChannelMetric,
@@ -303,7 +305,13 @@ function normalizeSnapshot(value: unknown, fallback: CmoChannelMetricsSnapshot):
 
   return {
     ...fallback,
-    source: value.source === "lens.facebook_page" || value.source === "placeholder" || value.source === "not_connected" ? value.source : "placeholder",
+    source: value.source === "facebook_native" || value.source === "lens.facebook_page" || value.source === "placeholder" || value.source === "not_connected" ? value.source : "placeholder",
+    sourceMeta: isRecord(value.sourceMeta) ? {
+      provider: typeof value.sourceMeta.provider === "string" ? value.sourceMeta.provider : undefined,
+      pageName: typeof value.sourceMeta.pageName === "string" ? value.sourceMeta.pageName : null,
+      nativeStatus: typeof value.sourceMeta.nativeStatus === "string" ? value.sourceMeta.nativeStatus : null,
+      syncedAt: typeof value.sourceMeta.syncedAt === "string" ? value.sourceMeta.syncedAt : null,
+    } : undefined,
     status: channelStatus(value.status, snapshotStatus(metrics)),
     lastUpdatedAt: typeof value.lastUpdatedAt === "string" && !Number.isNaN(Date.parse(value.lastUpdatedAt)) ? value.lastUpdatedAt : null,
     metrics,
@@ -410,8 +418,27 @@ export async function readChannelMetricsSnapshot(options: ReadChannelMetricsOpti
       notes: ["No Lens Facebook channel metrics file connected yet."],
     },
   };
+  const nativeFallbackNotes = [
+    "Fallback: Facebook handoff",
+    "facebook_native_fallback:native_snapshot_missing_failed_or_empty",
+  ];
+
+  if (isCmoFacebookNativeDashboardEnabled()) {
+    const nativeSnapshot = await readNativeFacebookChannelMetricsSnapshot({
+      appId: app.id,
+      rangeKey: dateRange.preset,
+    });
+
+    if (nativeSnapshot) {
+      return nativeSnapshot;
+    }
+  }
+
   const fileSnapshot = normalizeSnapshot(await readMetricsFile(app.id, channel), fallback);
   const metrics = fileSnapshot.metrics;
+  const fallbackNotes = isCmoFacebookNativeDashboardEnabled() && fileSnapshot.source !== "facebook_native"
+    ? nativeFallbackNotes
+    : [];
 
   return {
     ...fileSnapshot,
@@ -420,11 +447,14 @@ export async function readChannelMetricsSnapshot(options: ReadChannelMetricsOpti
     diagnostics: {
       availableMetrics: availableMetricIds(metrics),
       missingMetrics: missingMetricIds(metrics),
-      notes: fileSnapshot.diagnostics.notes.length
-        ? fileSnapshot.diagnostics.notes
-        : fileSnapshot.source === "lens.facebook_page"
+      notes: [
+        ...fallbackNotes,
+        ...(fileSnapshot.diagnostics.notes.length
+          ? fileSnapshot.diagnostics.notes
+          : fileSnapshot.source === "lens.facebook_page"
           ? ["Loaded from normalized Lens Facebook file bridge."]
-          : ["No Lens Facebook channel metrics file connected yet."],
+          : ["No Lens Facebook channel metrics file connected yet."]),
+      ],
     },
   };
 }

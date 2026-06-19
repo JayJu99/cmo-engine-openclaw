@@ -355,7 +355,13 @@ export interface CmoChannelMetricsSnapshot {
   appId: string;
   sourceId: string;
   channel: CmoChannel;
-  source: "lens.facebook_page" | "placeholder" | "not_connected";
+  source: "facebook_native" | "lens.facebook_page" | "placeholder" | "not_connected";
+  sourceMeta?: {
+    provider?: "meta" | "facebook" | string;
+    pageName?: string | null;
+    nativeStatus?: string | null;
+    syncedAt?: string | null;
+  };
   dateRange: {
     preset: CmoChannelMetricDateRangePreset;
     startDate: string;
@@ -816,6 +822,7 @@ export interface CmoEvidenceSourceDisplay {
     | "Lens / GA4 ad-hoc query"
     | "Lens / Product metric-definition snapshot"
     | "Lens / Dune business metrics"
+    | "Lens / Facebook channel metrics"
     | "Vault / Lens Daily Report"
     | "Lens / GA4 cached snapshot";
   summary?: string;

@@ -69,7 +69,7 @@ function assistantMessage(overrides = {}) {
 }
 
 const forbiddenRenderedPattern =
-  /access_token|refresh_token|id_token|encrypted_refresh_token|CMO_LENS_INTERNAL_API_KEY|Authorization|Bearer|raw_ga4_response|raw connector payload|stack trace|C:\\Users\\ADMIN/i;
+  /access_token|page_access_token|meta_access_token|refresh_token|id_token|encrypted_refresh_token|encryptedPageAccessToken|META_APP_SECRET|CMO_LENS_INTERNAL_API_KEY|Authorization|Bearer|raw_ga4_response|raw_meta_response|raw connector payload|stack trace|C:\\Users\\ADMIN/i;
 
 function renderedText(value) {
   return JSON.stringify(value);
@@ -183,6 +183,25 @@ try {
       },
     },
   });
+  const facebookMessage = assistantMessage({
+    hermesCmoMetadata: {
+      toolTraceSummary: {
+        source_label: "Lens / Facebook channel metrics",
+        provider: "meta/facebook",
+        source_status: "connected",
+        date_range: {
+          range_key: "yesterday",
+          start_date: "2026-06-18",
+          end_date: "2026-06-18",
+        },
+        synced_at: "2026-06-19T00:20:00.000Z",
+        page_name: "Holdstation",
+        packs: ["page_summary", "top_posts", "followers"],
+        raw_meta_response: "must not render",
+        page_access_token: "must not render",
+      },
+    },
+  });
 
   assert.equal(ga4Message.content, "Original Hermes answer.body stays exactly here.", "Hermes answer.body fixture must be unchanged");
   assert.equal(mapper.buildCmoEvidenceSources(ga4Message)[0].sourceLabel, "Lens / GA4 ad-hoc query");
@@ -204,6 +223,13 @@ try {
   assert.match(renderedText(cachedEvidence), /this_week/);
   assert.match(renderedText(cachedEvidence), /last_7_days/);
 
+  const facebookEvidence = mapper.buildCmoEvidenceSources(facebookMessage)[0];
+  assert.equal(facebookEvidence.sourceLabel, "Lens / Facebook channel metrics");
+  assert.match(renderedText(facebookEvidence), /Product native Facebook connector/);
+  assert.match(renderedText(facebookEvidence), /meta\/facebook/);
+  assert.match(renderedText(facebookEvidence), /2026-06-18/);
+  assert.doesNotMatch(renderedText(facebookEvidence), forbiddenRenderedPattern);
+
   const unsafeRendered = renderedText(mapper.buildCmoEvidenceSources(unsafeMessage));
   assert.doesNotMatch(unsafeRendered, forbiddenRenderedPattern, "unsafe markers must not survive display mapping");
   assert.doesNotMatch(unsafeRendered, /\{\\?"source_label\\?":/, "raw JSON/tool payload must not be rendered directly");
@@ -217,6 +243,11 @@ try {
   assertProductionShapeEvidence(mapper, "Worldchain business metrics", "Lens / Dune business metrics", "Dune business");
   assertProductionShapeEvidence(mapper, "WLD Aggregator", "Lens / Dune business metrics", "Dune business");
   assertProductionShapeEvidence(mapper, "Partner Stats on WLD", "Lens / Dune business metrics", "Dune business");
+  assertProductionShapeEvidence(mapper, "Lens / Facebook channel metrics", "Lens / Facebook channel metrics", "Facebook channel");
+  assertProductionShapeEvidence(mapper, "Product native Facebook connector", "Lens / Facebook channel metrics", "Product Facebook native");
+  assertProductionShapeEvidence(mapper, "Facebook Native", "Lens / Facebook channel metrics", "Facebook channel");
+  assertProductionShapeEvidence(mapper, "Meta Page Insights", "Lens / Facebook channel metrics", "Facebook channel");
+  assertProductionShapeEvidence(mapper, "Channel Performance — Facebook", "Lens / Facebook channel metrics", "Facebook channel");
   assertProductionShapeEvidence(mapper, "Vault / Lens Daily Report", "Vault / Lens Daily Report", "Vault report");
   assertProductionShapeEvidence(mapper, "Lens cached snapshot", "Lens / GA4 cached snapshot", "Cached snapshot");
   assertProductionShapeEvidence(mapper, "Lens / GA4 cached snapshot", "Lens / GA4 cached snapshot", "Cached snapshot");
