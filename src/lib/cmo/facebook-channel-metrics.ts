@@ -177,6 +177,12 @@ export interface FacebookNativeConnectorStatus {
   missingConfig: string[];
   account: FacebookNativeOAuthAccount | null;
   source: FacebookChannelSource | null;
+  nativeMetrics: {
+    source_status: "connected" | "partial" | "missing" | "stale" | "failed" | "permission_missing";
+    warnings: string[];
+    missingPermissions: string[];
+    syncedAt: string | null;
+  } | null;
   status: "not_configured" | "not_connected" | "page_mapping_missing" | "mapped";
   safety: FacebookChannelSafety;
 }
@@ -528,6 +534,26 @@ function toSafeOAuthAccount(row: Pick<SocialOAuthAccountRow, "id" | "tenant_id" 
   };
 }
 
+function facebookNativeMissingPermissions(warnings: string[]): string[] {
+  const permissions = new Set<string>();
+
+  if (warnings.includes("page_insights_permission_missing")) {
+    permissions.add("read_insights");
+  }
+
+  if (warnings.includes("top_posts_permission_missing")) {
+    permissions.add("pages_read_engagement");
+  }
+
+  return Array.from(permissions);
+}
+
+function facebookNativeSourceStatus(snapshot: Pick<NativeFacebookChannelSnapshot, "status" | "diagnostics"> | null | undefined): "connected" | "partial" | "missing" | "stale" | "failed" | "permission_missing" {
+  const warnings = snapshot?.diagnostics.warnings ?? [];
+
+  return facebookNativeMissingPermissions(warnings).length ? "permission_missing" : snapshot?.status ?? "missing";
+}
+
 export async function upsertMetaOAuthAccount(input: {
   tenantId: string;
   providerUserId?: string | null;
@@ -709,6 +735,8 @@ export async function getFacebookNativeConnectorStatus(appId: string): Promise<F
     getLatestSafeMetaOAuthAccount(entry.tenantId),
     getSafeFacebookChannelSource(entry.appId),
   ]);
+  const snapshots = source ? await getNativeFacebookChannelSnapshots(entry.appId) : [];
+  const selectedSnapshot = latestSnapshot(snapshots);
   const status = !configStatus.configured
     ? "not_configured"
     : !account
@@ -723,6 +751,17 @@ export async function getFacebookNativeConnectorStatus(appId: string): Promise<F
     missingConfig: configStatus.missing,
     account,
     source,
+    nativeMetrics: selectedSnapshot ? {
+      source_status: facebookNativeSourceStatus(selectedSnapshot),
+      warnings: selectedSnapshot.diagnostics.warnings,
+      missingPermissions: facebookNativeMissingPermissions(selectedSnapshot.diagnostics.warnings),
+      syncedAt: selectedSnapshot.syncedAt,
+    } : source ? {
+      source_status: "missing",
+      warnings: ["snapshot_missing"],
+      missingPermissions: [],
+      syncedAt: null,
+    } : null,
     status,
     safety: FACEBOOK_CHANNEL_SAFETY,
   };
@@ -1450,6 +1489,7 @@ export async function runNativeFacebookChannelSync(input: {
       metric_count: persisted.metrics.length,
       post_count: persisted.posts.length,
       freshness: { stale: false, synced_at: persisted.syncedAt },
+      source_status: facebookNativeSourceStatus(persisted),
       warnings: persisted.diagnostics.warnings,
       safety: FACEBOOK_CHANNEL_SAFETY,
     };
@@ -1473,7 +1513,7 @@ export async function buildFacebookChannelSnapshotsResponse(appId: string) {
     source,
     snapshots: snapshots.map((snapshot) => ({
       page: { page_id: snapshot.pageId, page_name: snapshot.pageName },
-      source_status: snapshot.status,
+      source_status: facebookNativeSourceStatus(snapshot),
       synced_at: snapshot.syncedAt,
       syncedAt: snapshot.syncedAt,
       range_key: snapshot.rangeKey,
@@ -1519,7 +1559,7 @@ export async function buildFacebookChannelReportPacks(appId: string, rangeKeyInp
     status: selected ? "completed" : "missing",
     app_id: appId,
     page,
-    source_status: selected?.status ?? source?.quality.status ?? "missing",
+    source_status: selected ? facebookNativeSourceStatus(selected) : source?.quality.status ?? "missing",
     synced_at: selected?.syncedAt ?? null,
     syncedAt: selected?.syncedAt ?? null,
     range_key: selected?.rangeKey ?? rangeKey,

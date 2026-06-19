@@ -564,6 +564,12 @@ type FacebookNativeConnectorStatus = {
   missingConfig: string[];
   account: FacebookNativeOAuthAccount | null;
   source: FacebookNativeSource | null;
+  nativeMetrics: {
+    source_status: "connected" | "partial" | "missing" | "stale" | "failed" | "permission_missing";
+    warnings: string[];
+    missingPermissions: string[];
+    syncedAt: string | null;
+  } | null;
   status: "not_configured" | "not_connected" | "page_mapping_missing" | "mapped";
 };
 
@@ -1766,6 +1772,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const channelMetricsUsingNative = channelMetricsSnapshot?.source === "facebook_native";
   const channelMetricsUsingNativeFallback = channelMetricsSnapshot?.source !== "facebook_native" &&
     channelMetricsSnapshot?.diagnostics.notes.some((note) => /facebook_native_fallback|Fallback: Facebook handoff/i.test(note)) === true;
+  const channelMetricsActiveSourceLabel = channelMetricsUsingNativeFallback ? "Lens Facebook fallback" : channelMetricsSource;
   const nativeChannelStatus = channelMetricsSnapshot?.sourceMeta?.nativeStatus;
   const nativeChannelPageName = channelMetricsSnapshot?.sourceMeta?.pageName;
   const channelMetricsLastUpdated = channelSyncStatus?.lastFinishedAt
@@ -1779,6 +1786,14 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const facebookNativePanelVisible = showChannelPerformance && facebookNativeStatus?.nativeEnabled === true;
   const facebookNativeAccount = facebookNativeStatus?.account ?? null;
   const facebookNativeSource = facebookNativeStatus?.source ?? null;
+  const facebookNativeMetrics = facebookNativeStatus?.nativeMetrics ?? null;
+  const facebookNativePermissionBlocked = facebookNativeMetrics?.source_status === "permission_missing";
+  const facebookNativeMissingPermissions = facebookNativeMetrics?.missingPermissions ?? [];
+  const facebookNativeMissingPermissionsLabel = facebookNativeMissingPermissions.length
+    ? facebookNativeMissingPermissions.join(" / ")
+    : facebookNativePermissionBlocked
+      ? "read_insights / pages_read_engagement"
+      : "";
   const selectedFacebookNativePage = facebookNativePages.find((page) => page.id === selectedFacebookNativePageId) ?? null;
   const facebookNativeConnectHref = `/api/cmo/apps/${app.id}/social-sources/facebook/connect?${new URLSearchParams({
     returnTo: `${pathname}?tab=dashboard`,
@@ -3316,8 +3331,9 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               }
             >
               <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
-                <Badge variant="slate">Source: {channelMetricsSource}</Badge>
+                <Badge variant="slate">Source: {channelMetricsActiveSourceLabel}</Badge>
                 {channelMetricsUsingNativeFallback ? <Badge variant="orange">Fallback: Facebook handoff</Badge> : null}
+                {channelMetricsUsingNativeFallback && facebookNativePermissionBlocked ? <Badge variant="orange">Native Facebook: connected but blocked by Meta permissions</Badge> : null}
                 {channelMetricsUsingNative ? <Badge variant="blue">Native status: {nativeChannelStatus || channelMetricsHealthLabel}</Badge> : null}
                 {nativeChannelPageName ? <Badge variant="slate">Page: {nativeChannelPageName}</Badge> : null}
                 <Badge variant="slate">Last synced: {channelMetricsLastUpdated}</Badge>
@@ -3330,7 +3346,9 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                   || (channelMetricsUsingNative
                     ? `Facebook Native is the Product-owned source for Page/channel metrics. Legacy n8n handoff remains fallback during cutover. ${channelStatusCopy(channelMetricsSnapshot?.status)}`
                     : channelMetricsUsingNativeFallback
-                      ? `Native Facebook snapshots are unavailable for this view, so Product is using the legacy Facebook handoff fallback. ${channelStatusCopy(channelMetricsSnapshot?.status)}`
+                      ? facebookNativePermissionBlocked
+                        ? `Native Facebook is connected, but Meta permissions are blocking native metrics, so Product is using the legacy Facebook handoff fallback. ${channelStatusCopy(channelMetricsSnapshot?.status)}`
+                        : `Native Facebook snapshots are unavailable for this view, so Product is using the legacy Facebook handoff fallback. ${channelStatusCopy(channelMetricsSnapshot?.status)}`
                       : `${channelStatusCopy(channelMetricsSnapshot?.status)} ${channelSyncStatusCopy(channelSyncStatus)}`)}
               </div>
 
@@ -3344,8 +3362,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                           OAuth: {facebookNativeAccount?.accountName || (facebookNativeAccount ? "Connected Meta account" : "Not connected")}
                         </Badge>
                         <Badge variant={facebookNativeStatusVariant}>{facebookNativeStatusLabel}</Badge>
-                        {facebookNativeSource ? <Badge variant="slate">Page: {facebookNativeMappedPageLabel}</Badge> : null}
+                        {facebookNativeSource ? <Badge variant="green">Page saved: {facebookNativeMappedPageLabel}</Badge> : null}
+                        {facebookNativeSource?.quality.status === "connected" ? <Badge variant="green">Verify: connected</Badge> : null}
                         {facebookNativeSource?.quality.status ? <Badge variant="slate">Native status: {facebookNativeSource.quality.status}</Badge> : null}
+                        {facebookNativeMetrics ? <Badge variant={facebookNativePermissionBlocked ? "orange" : facebookNativeMetrics.source_status === "connected" ? "green" : "slate"}>Native metrics: {facebookNativeMetrics.source_status}</Badge> : null}
+                        {facebookNativeMissingPermissionsLabel ? <Badge variant="orange">Missing permissions: {facebookNativeMissingPermissionsLabel}</Badge> : null}
                         {facebookNativeSource?.verifiedAt ? <Badge variant="slate">Verified: {displayDate(facebookNativeSource.verifiedAt)}</Badge> : null}
                       </div>
                       {facebookNativeStatus?.status === "page_mapping_missing" ? (
@@ -3356,6 +3377,11 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                           {facebookNativeStatus.missingConfig.map((name) => (
                             <Badge key={name} variant="orange">{name}</Badge>
                           ))}
+                        </div>
+                      ) : null}
+                      {facebookNativePermissionBlocked ? (
+                        <div className="mt-2 text-xs font-semibold text-orange-600">
+                          Native Facebook is connected but blocked by Meta permissions. Displayed metrics remain Lens Facebook fallback.
                         </div>
                       ) : null}
                     </div>
@@ -3430,9 +3456,10 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                   </div>
                   {facebookNativeSource ? (
                     <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
-                      <span>Source: Facebook Native</span>
+                      <span>Connector: Facebook Native</span>
+                      <span>Active source: {channelMetricsActiveSourceLabel}</span>
                       <span>Page ID: {maskExternalId(facebookNativeSource.pageId)}</span>
-                      <span>Last synced: {channelMetricsUsingNative && channelMetricsSnapshot?.sourceMeta?.syncedAt ? displayDate(channelMetricsSnapshot.sourceMeta.syncedAt) : "No native snapshot yet"}</span>
+                      <span>Native last synced: {facebookNativeMetrics?.syncedAt ? displayDate(facebookNativeMetrics.syncedAt) : "No native snapshot yet"}</span>
                     </div>
                   ) : null}
                   {facebookNativeError ? (

@@ -113,6 +113,13 @@ assertIncludes(helper, "page_list_error", "helper must map Page list failures sa
 assertIncludes(helper, "page_mapping_write_error", "helper must map Page mapping failures safely");
 assertIncludes(helper, "getFacebookNativeConnectorStatus", "helper must expose safe connector status");
 assertIncludes(helper, "page_mapping_missing", "connector status must represent OAuth-connected/page-mapping-missing state");
+assertIncludes(helper, "nativeMetrics", "connector status must expose native metrics health separately from displayed metrics");
+assertIncludes(helper, "facebookNativeMissingPermissions", "helper must map Meta warning codes to missing permissions");
+assertIncludes(helper, "read_insights", "helper must surface read_insights as a missing permission");
+assertIncludes(helper, "pages_read_engagement", "helper must surface pages_read_engagement as a missing permission");
+assertMatch(helper, /source_status:\s*facebookNativeSourceStatus\(snapshot\)/, "snapshots response must expose permission-aware source_status");
+assertMatch(helper, /source_status:\s*selected \? facebookNativeSourceStatus\(selected\)/, "report pack must expose permission-aware source_status");
+assertMatch(helper, /source_status:\s*facebookNativeSourceStatus\(persisted\)/, "sync response must expose permission-aware source_status");
 assertMatch(helper, /\.select\("id,tenant_id,provider,account_name,scopes_json,updated_at"\)/, "safe OAuth status read must not select encrypted token material");
 assertMatch(helper, /const latestAccount = input\.authRef \|\| source\?\.auth_ref \? null : await getLatestMetaOAuthAccount/, "Page listing must fall back to latest OAuth account when mapping is missing");
 assertMatch(helper, /no_tokens_returned:\s*true/, "safety must declare no tokens returned");
@@ -181,6 +188,13 @@ assertIncludes(workspaceView, "Save Page", "native connector panel must expose P
 assertIncludes(workspaceView, "Verify Page", "native connector panel must expose Page verification action");
 assertIncludes(workspaceView, "Sync Facebook metrics", "native connector panel must expose manual sync action");
 assertIncludes(workspaceView, "page_mapping_missing", "dashboard must handle OAuth-connected/page-mapping-missing state");
+assertIncludes(workspaceView, "permission_missing", "dashboard must render native permission_missing state");
+assertIncludes(workspaceView, "Missing permissions:", "dashboard must show missing Meta permissions");
+assertIncludes(workspaceView, "read_insights", "dashboard must show read_insights missing permission");
+assertIncludes(workspaceView, "pages_read_engagement", "dashboard must show pages_read_engagement missing permission");
+assertIncludes(workspaceView, "Lens Facebook fallback", "dashboard must label active fallback source explicitly");
+assertIncludes(workspaceView, "Native Facebook: connected but blocked by Meta permissions", "dashboard must explain native connected but permission-blocked state");
+assertIncludes(workspaceView, "Displayed metrics remain Lens Facebook fallback", "dashboard must not claim native metrics are displayed while fallback is active");
 assertIncludes(workspaceView, "/social-sources/facebook/pages", "dashboard must call Page listing route");
 assertIncludes(workspaceView, "/social-sources/facebook/verify", "dashboard must call Page verification route");
 assertIncludes(workspaceView, "/social-sources/facebook/sync", "dashboard must call safe manual sync route");
