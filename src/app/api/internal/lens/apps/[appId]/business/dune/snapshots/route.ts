@@ -8,6 +8,8 @@ function safeSnapshot(snapshot: Awaited<ReturnType<typeof getNativeDuneBusinessS
   return {
     metric_group: snapshot.metricGroup,
     status: snapshot.status,
+    syncedAt: snapshot.syncedAt,
+    synced_at: snapshot.syncedAt,
     metrics: snapshot.metrics,
     series: snapshot.series,
     tables: snapshot.tables,

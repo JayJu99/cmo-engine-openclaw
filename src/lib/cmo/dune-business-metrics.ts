@@ -838,6 +838,8 @@ export function transformDuneBusinessRows(entry: WorkspaceRegistryEntry, queryKe
 }
 
 function toRow(snapshot: NativeDuneBusinessSnapshot): Record<string, unknown> {
+  const syncedAt = snapshot.syncedAt ?? new Date().toISOString();
+
   return {
     tenant_id: snapshot.tenantId,
     workspace_id: snapshot.workspaceId,
@@ -859,7 +861,7 @@ function toRow(snapshot: NativeDuneBusinessSnapshot): Record<string, unknown> {
     tables_json: snapshot.tables,
     diagnostics_json: snapshot.diagnostics,
     provenance_json: snapshot.provenance,
-    synced_at: snapshot.syncedAt,
+    synced_at: syncedAt,
   };
 }
 

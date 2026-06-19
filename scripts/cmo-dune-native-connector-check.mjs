@@ -114,9 +114,13 @@ check(
 check(
   "snapshot and report-pack routes expose safety metadata",
   contents.snapshotsRoute.includes("DUNE_BUSINESS_SAFETY") &&
+    contents.snapshotsRoute.includes("syncedAt: snapshot.syncedAt") &&
+    contents.snapshotsRoute.includes("synced_at: snapshot.syncedAt") &&
     contents.snapshotsRoute.includes("start_date") &&
     contents.snapshotsRoute.includes("end_date") &&
     contents.reportPacksRoute.includes("DUNE_BUSINESS_SAFETY") &&
+    contents.reportPacksRoute.includes("syncedAt: snapshot.syncedAt") &&
+    contents.reportPacksRoute.includes("synced_at: snapshot.syncedAt") &&
     contents.reportPacksRoute.includes("status: snapshot.status"),
 );
 
@@ -148,7 +152,17 @@ check(
     contents.businessMetrics.includes("nativeFallback") &&
     helper.includes("isCmoDuneNativeDashboardEnabled()") &&
     helper.includes("nativeSnapshotHasDashboardPayload") &&
-    contents.dashboard.includes("dune_native"),
+    contents.dashboard.includes("dune_native") &&
+    contents.dashboard.includes("businessMetricsUsingNativeFallback"),
+);
+
+check(
+  "dashboard copy uses Dune Native as source and legacy fallback only as fallback",
+  contents.dashboard.includes("Dune Native is the Product-owned source for business metrics.") &&
+    contents.dashboard.includes("Legacy n8n handoff remains available only as fallback during cutover.") &&
+    contents.dashboard.includes("Fallback: Dune handoff") &&
+    contents.dashboard.includes("businessMetricsUsingNativeFallback ? <Badge") &&
+    !contents.dashboard.includes("JSON files remain the machine-readable source of truth"),
 );
 
 check(
@@ -168,6 +182,7 @@ check(
     contents.systemdService.includes("dryRun\":false") &&
     contents.systemdTimer.includes("OnCalendar=*-*-* 00:05:00") &&
     contents.systemdTimer.includes("Timezone=UTC") &&
+    contents.systemdTimer.includes("WantedBy=timers.target") &&
     !/OnCalendar=.*(?:hourly|\*:05|\*\/\d+)/i.test(contents.systemdTimer),
 );
 
@@ -209,7 +224,7 @@ function sampleAggregatorRows(dateEnd) {
   ];
 }
 
-function loadHelperWithMockFetch(fetchImpl) {
+function loadHelperWithMockFetch(fetchImpl, options = {}) {
   const transpiled = ts.transpileModule(contents.helper, {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,
@@ -261,7 +276,7 @@ function loadHelperWithMockFetch(fetchImpl) {
 
                 return {
                   select: () => ({
-                    single: async () => ({ data: row, error: null }),
+                    single: async () => ({ data: options.upsertRow ? options.upsertRow(row) : row, error: null }),
                   }),
                 };
               },
@@ -269,7 +284,7 @@ function loadHelperWithMockFetch(fetchImpl) {
                 eq() {
                   return this;
                 },
-                order: async () => ({ data: [], error: null }),
+                order: async () => ({ data: options.selectRows ?? [], error: null }),
               }),
             }),
           }),
@@ -354,6 +369,83 @@ const returnedSnapshot = await adapterHelper.upsertNativeDuneBusinessSnapshot(na
 check(
   "syncedAt mapping is non-null when DB row has synced_at",
   returnedSnapshot.syncedAt === "2026-06-19T00:05:00.000Z",
+);
+
+const snapshotRowBase = {
+  tenant_id: nativeAggregatorSnapshot.tenantId,
+  workspace_id: nativeAggregatorSnapshot.workspaceId,
+  app_id: nativeAggregatorSnapshot.appId,
+  source_type: nativeAggregatorSnapshot.sourceType,
+  source_id: nativeAggregatorSnapshot.sourceId,
+  provider: nativeAggregatorSnapshot.provider,
+  metric_domain: nativeAggregatorSnapshot.metricDomain,
+  metric_group: nativeAggregatorSnapshot.metricGroup,
+  query_id: nativeAggregatorSnapshot.queryId,
+  query_name: nativeAggregatorSnapshot.queryName,
+  range_preset: nativeAggregatorSnapshot.rangePreset,
+  date_start: nativeAggregatorSnapshot.dateStart,
+  date_end: nativeAggregatorSnapshot.dateEnd,
+  timezone: nativeAggregatorSnapshot.timezone,
+  status: nativeAggregatorSnapshot.status,
+  metrics_json: nativeAggregatorSnapshot.metrics,
+  series_json: nativeAggregatorSnapshot.series,
+  tables_json: nativeAggregatorSnapshot.tables,
+  diagnostics_json: nativeAggregatorSnapshot.diagnostics,
+  provenance_json: nativeAggregatorSnapshot.provenance,
+};
+const { helper: updatedFallbackHelper } = loadHelperWithMockFetch(
+  async () => {
+    throw new Error("unexpected_fetch");
+  },
+  {
+    selectRows: [{
+      ...snapshotRowBase,
+      synced_at: null,
+      updated_at: "2026-06-19T00:06:00.000Z",
+      created_at: "2026-06-19T00:04:00.000Z",
+    }],
+  },
+);
+const [updatedFallbackSnapshot] = await updatedFallbackHelper.getNativeDuneBusinessSnapshots("holdstation-mini-app");
+
+check(
+  "syncedAt mapping falls back to updated_at when synced_at is null",
+  updatedFallbackSnapshot.syncedAt === "2026-06-19T00:06:00.000Z",
+);
+
+const { helper: createdFallbackHelper } = loadHelperWithMockFetch(
+  async () => {
+    throw new Error("unexpected_fetch");
+  },
+  {
+    selectRows: [{
+      ...snapshotRowBase,
+      synced_at: null,
+      updated_at: null,
+      created_at: "2026-06-19T00:04:00.000Z",
+    }],
+  },
+);
+const [createdFallbackSnapshot] = await createdFallbackHelper.getNativeDuneBusinessSnapshots("holdstation-mini-app");
+
+check(
+  "syncedAt mapping falls back to created_at when synced_at and updated_at are null",
+  createdFallbackSnapshot.syncedAt === "2026-06-19T00:04:00.000Z",
+);
+
+const { helper: upsertFreshnessHelper, capturedRows: upsertFreshnessRows } = loadHelperWithMockFetch(async () => {
+  throw new Error("unexpected_fetch");
+});
+const autoSyncedSnapshot = await upsertFreshnessHelper.upsertNativeDuneBusinessSnapshot({
+  ...nativeAggregatorSnapshot,
+  syncedAt: null,
+});
+
+check(
+  "upsert sets synced_at when successful snapshot has no syncedAt",
+  typeof upsertFreshnessRows[0]?.synced_at === "string" &&
+    !Number.isNaN(Date.parse(upsertFreshnessRows[0].synced_at)) &&
+    autoSyncedSnapshot.syncedAt === upsertFreshnessRows[0].synced_at,
 );
 
 const callsLatest = [];

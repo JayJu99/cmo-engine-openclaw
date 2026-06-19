@@ -1137,7 +1137,7 @@ function partnerDailyRows(points: DunePartnerPoint[], field: "volume" | "countTx
 
 function EmptyChart({ message }: { message: string }) {
   return (
-    <div className="flex h-64 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-white text-sm font-semibold text-slate-400">
+    <div className="flex h-56 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-white text-sm font-semibold text-slate-400">
       {message}
     </div>
   );
@@ -1153,14 +1153,14 @@ function ChartTabs({
   onChange: (id: string) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap gap-1.5">
       {options.map((option) => (
         <button
           key={option.id}
           type="button"
           onClick={() => onChange(option.id)}
           className={cn(
-            "rounded-lg border px-3 py-2 text-xs font-bold transition",
+            "rounded-md border px-2.5 py-1.5 text-xs font-bold transition",
             active === option.id
               ? "border-slate-950 bg-slate-950 text-white"
               : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50",
@@ -1181,11 +1181,11 @@ function AggregatorComboChart({ snapshot, mode }: { snapshot: CmoBusinessMetrics
   }
 
   const width = 720;
-  const height = 286;
-  const left = 54;
-  const right = 34;
-  const top = 28;
-  const bottom = 48;
+  const height = 260;
+  const left = 46;
+  const right = 24;
+  const top = 20;
+  const bottom = 34;
   const plotWidth = width - left - right;
   const plotHeight = height - top - bottom;
   const barField = mode === "transactions" ? "countTx" : "dailyVolume";
@@ -1203,8 +1203,8 @@ function AggregatorComboChart({ snapshot, mode }: { snapshot: CmoBusinessMetrics
   const labelIndexes = new Set([0, Math.floor((points.length - 1) / 2), points.length - 1]);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-100 bg-white">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={mode === "transactions" ? "Count Daily Transaction chart" : "Daily Volume in USD chart"} className="h-72 w-full">
+    <div className="overflow-hidden rounded-lg border border-slate-100 bg-white">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={mode === "transactions" ? "Count Daily Transaction chart" : "Daily Volume in USD chart"} className="h-64 w-full">
         <rect x="0" y="0" width={width} height={height} fill="white" />
         {[0, 0.25, 0.5, 0.75, 1].map((tick) => (
           <g key={tick}>
@@ -1220,7 +1220,7 @@ function AggregatorComboChart({ snapshot, mode }: { snapshot: CmoBusinessMetrics
             <g key={`${point.date}-${index}`}>
               <title>{`${point.date}\n${barLabel}: ${format(point[barField])}\n${lineLabel}: ${format(point[lineField])}`}</title>
               <rect x={x - barWidth / 2} y={y} width={barWidth} height={barHeight} rx="4" fill="#2563eb" opacity="0.76" />
-              {labelIndexes.has(index) ? <text x={x} y={height - 18} textAnchor="middle" className="fill-slate-400 text-[11px] font-semibold">{shortDateLabel(point.date)}</text> : null}
+              {labelIndexes.has(index) ? <text x={x} y={height - 12} textAnchor="middle" className="fill-slate-400 text-[11px] font-semibold">{shortDateLabel(point.date)}</text> : null}
             </g>
           );
         })}
@@ -1255,11 +1255,11 @@ function PartnerStackedBarChart({
   }
 
   const width = 720;
-  const height = 286;
-  const left = 54;
-  const right = 28;
-  const top = 28;
-  const bottom = 62;
+  const height = 260;
+  const left = 46;
+  const right = 22;
+  const top = 20;
+  const bottom = 44;
   const plotWidth = width - left - right;
   const plotHeight = height - top - bottom;
   const maxTotal = Math.max(...rows.map((row) => row.total), 1);
@@ -1269,8 +1269,8 @@ function PartnerStackedBarChart({
   const labelIndexes = new Set([0, Math.floor((rows.length - 1) / 2), rows.length - 1]);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-100 bg-white">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={field === "volume" ? "Daily Partner Volume chart" : "Daily Partner Transaction Count chart"} className="h-72 w-full">
+    <div className="overflow-hidden rounded-lg border border-slate-100 bg-white">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={field === "volume" ? "Daily Partner Volume chart" : "Daily Partner Transaction Count chart"} className="h-64 w-full">
         <rect x="0" y="0" width={width} height={height} fill="white" />
         {[0, 0.25, 0.5, 0.75, 1].map((tick) => (
           <line key={tick} x1={left} x2={width - right} y1={top + plotHeight * tick} y2={top + plotHeight * tick} stroke="#e2e8f0" strokeDasharray={tick === 1 ? "0" : "4 5"} />
@@ -1297,14 +1297,14 @@ function PartnerStackedBarChart({
                   </rect>
                 );
               })}
-              {labelIndexes.has(rowIndex) ? <text x={x} y={height - 28} textAnchor="middle" className="fill-slate-400 text-[11px] font-semibold">{shortDateLabel(row.date)}</text> : null}
+              {labelIndexes.has(rowIndex) ? <text x={x} y={height - 18} textAnchor="middle" className="fill-slate-400 text-[11px] font-semibold">{shortDateLabel(row.date)}</text> : null}
             </g>
           );
         })}
         <text x={left} y="18" className="fill-slate-500 text-[11px] font-bold">{field === "volume" ? "Stacked daily volume" : "Stacked daily tx"}</text>
         <text x={left} y={top + 8} className="fill-slate-400 text-[10px] font-semibold">{format(maxTotal)}</text>
       </svg>
-      <div className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-3">
+      <div className="flex flex-wrap gap-2 border-t border-slate-100 px-3 py-2">
         {partners.map((partner, index) => (
           <span key={partner} className="inline-flex items-center gap-2 text-xs font-semibold text-slate-500">
             <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: DUNE_CHART_COLORS[index % DUNE_CHART_COLORS.length] }} />
@@ -1341,8 +1341,8 @@ function PartnerDonutChart({
   }, []);
 
   return (
-    <div className="grid gap-4 rounded-xl border border-slate-100 bg-white p-4 md:grid-cols-[220px_1fr]">
-      <svg viewBox="0 0 220 220" role="img" aria-label={field === "totalVolume" ? "Partner Volume donut chart" : "Partner Transaction Count donut chart"} className="mx-auto h-56 w-56">
+    <div className="grid gap-3 rounded-lg border border-slate-100 bg-white p-3 md:grid-cols-[200px_1fr]">
+      <svg viewBox="0 0 220 220" role="img" aria-label={field === "totalVolume" ? "Partner Volume donut chart" : "Partner Transaction Count donut chart"} className="mx-auto h-52 w-52">
         <circle cx="110" cy="110" r={radius} fill="none" stroke="#e2e8f0" strokeWidth="28" />
         {segments.map(({ row, dash, offset }, index) => {
           const value = row[field];
@@ -1403,9 +1403,9 @@ function DuneBusinessCharts({
   onPartnerModeChange: (mode: PartnerChartMode) => void;
 }) {
   return (
-    <div className="mt-5 grid gap-4">
-      <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+    <div className="mt-4 grid gap-3">
+      <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+        <div className="mb-3 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <div className="text-sm font-bold text-slate-950">WLD Aggregator Charts</div>
             <div className="mt-1 text-xs font-semibold text-slate-500">Bars show daily values. Lines show cumulative values from the stored Dune series.</div>
@@ -1422,8 +1422,8 @@ function DuneBusinessCharts({
         <AggregatorComboChart snapshot={aggregatorSnapshot} mode={aggregatorMode} />
       </div>
 
-      <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+        <div className="mb-3 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <div className="text-sm font-bold text-slate-950">Partner Stats Charts</div>
             <div className="mt-1 text-xs font-semibold text-slate-500">Top 8 partners are shown individually; the rest are grouped into Other.</div>
@@ -1698,6 +1698,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const businessMetricRangeEnds = businessMetricSnapshots.map((snapshot) => snapshot.dateRange.endDate).filter((value): value is string => typeof value === "string" && Boolean(value.trim())).sort();
   const businessMetricDateStart = businessMetricRangeStarts[0] ?? null;
   const businessMetricDateEnd = businessMetricRangeEnds[businessMetricRangeEnds.length - 1] ?? null;
+  const businessMetricsSourceLabel = businessMetricsUsingNative ? "Dune Native" : "Dune / Worldchain";
   const nativeBusinessStatuses = Array.from(new Set(businessMetricSnapshots
     .filter((snapshot) => snapshot.source.sourceId === "dune_native")
     .map((snapshot) => {
@@ -3050,16 +3051,14 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             }
           >
             <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
-              <Badge variant="slate">Source: {businessMetricsUsingNative ? "Dune Native" : "Dune / Worldchain"}</Badge>
+              <Badge variant="slate">Source: {businessMetricsSourceLabel}</Badge>
               {businessMetricsUsingNativeFallback ? <Badge variant="orange">Fallback: Dune handoff</Badge> : null}
               <Badge variant={businessMetricsHealthVariant}>Status: {businessMetricsHealthLabel}</Badge>
               <Badge variant="slate">App: {app.name}</Badge>
               {(businessMetricQueryNames.length ? businessMetricQueryNames : ["holdstation_wld_aggregator_tx", "Partner Stats on WLD"]).map((queryName) => (
                 <Badge key={queryName} variant="slate">Query: {queryName}</Badge>
               ))}
-              {businessMetricQueryIdsForDisplay.map((queryId) => (
-                <Badge key={queryId} variant="slate">Query ID: {queryId}</Badge>
-              ))}
+              <Badge variant="slate">Query IDs: {businessMetricQueryIdsForDisplay.join(", ")}</Badge>
               {businessMetricsUsingNative ? <Badge variant="blue">Native status: {nativeBusinessStatuses.length ? nativeBusinessStatuses.join(" / ") : businessMetricsHealthLabel}</Badge> : null}
               <Badge variant="slate">Last synced: {businessMetricsLastUpdated ? displayDate(businessMetricsLastUpdated) : "Not connected"}</Badge>
               <Badge variant="slate">Date range: {businessMetricDateStart && businessMetricDateEnd ? `${businessMetricDateStart} -> ${businessMetricDateEnd}` : "Not connected"}</Badge>
@@ -3071,8 +3070,10 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
               {businessMetricsError
                 || (hasAnyBusinessMetrics
                   ? businessMetricsUsingNative
-                    ? "Business metrics are loaded from Product native Dune snapshots. n8n handoff remains fallback during cutover."
-                    : "Business metrics are loaded from normalized Dune / Worldchain handoff JSON. Dune is authoritative for Holdstation Mini App metrics."
+                    ? "Business metrics are loaded from Product native Dune snapshots. Legacy handoff remains fallback during cutover."
+                    : businessMetricsUsingNativeFallback
+                      ? "Native Dune snapshots are unavailable for this view, so Product is using the legacy Dune handoff fallback."
+                      : "Business metrics are loaded from Dune / Worldchain handoff fallback data."
                   : "No Dune business metrics connected yet.")}
             </div>
 
@@ -3122,7 +3123,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             />
 
             <div className="mt-3 rounded-xl border border-slate-100 bg-white px-4 py-3 text-xs font-semibold leading-5 text-slate-500">
-              Dune / Worldchain JSON files remain the machine-readable source of truth. n8n exports Dune data into CMO, CMO does not call Dune directly, and deprecated DefiLlama data is not used for Mini App metric answers.
+              Dune Native is the Product-owned source for business metrics. Legacy n8n handoff remains available only as fallback during cutover.
             </div>
           </SectionCard>
           ) : null}

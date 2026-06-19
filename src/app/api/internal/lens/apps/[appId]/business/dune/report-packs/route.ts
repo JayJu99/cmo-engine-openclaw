@@ -8,6 +8,8 @@ function packFromSnapshot(snapshot: Awaited<ReturnType<typeof getNativeDuneBusin
   return {
     pack_key: snapshot.metricGroup,
     status: snapshot.status,
+    syncedAt: snapshot.syncedAt,
+    synced_at: snapshot.syncedAt,
     source: {
       type: snapshot.sourceType,
       sourceId: snapshot.sourceId,
