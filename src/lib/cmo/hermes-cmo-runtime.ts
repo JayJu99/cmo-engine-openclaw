@@ -13,7 +13,7 @@ import {
   isCmoHermesCmoToolExecuteEnabled,
   isCmoHermesCreativeEnabled,
 } from "./config";
-import { CMO_CREATIVE_LIFECYCLE_STATES, redactSensitiveText } from "./creative-agent";
+import { CMO_CREATIVE_LIFECYCLE_STATES, redactSensitiveText, redactedLocalArtifactPath } from "./creative-agent";
 import {
   executeHermesCmoDelegations,
   executableDelegations,
@@ -1565,7 +1565,8 @@ const safeTraceId = (value: string) => value.replace(/[^a-z0-9_.-]+/gi, "_").sli
 
 const traceString = (value: string, max = 1200) => {
   const compact = value.replace(/\s+/g, " ").trim();
-  const redacted = redactSensitiveText(compact, Math.max(max, 1200));
+  const redactedLocalPath = redactedLocalArtifactPath(compact);
+  const redacted = redactSensitiveText(redactedLocalPath ?? compact, Math.max(max, 1200));
 
   return redacted.length > max ? `${redacted.slice(0, max - 3).trimEnd()}...` : redacted;
 };
@@ -1627,6 +1628,138 @@ const writeHermesTrace = async (
   }
 };
 
+const nestedRecord = (record: Record<string, unknown>, key: string): Record<string, unknown> =>
+  isRecord(record[key]) ? record[key] : {};
+
+const firstDefined = (values: unknown[]): unknown => values.find((value) => value !== undefined && value !== null);
+
+const pathKind = (value: unknown): "local_artifact_path" | "browser_url" | "relative_or_storage_path" | null => {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  if (redactedLocalArtifactPath(trimmed)?.startsWith("[hermes_local_artifact_path_redacted]")) {
+    return "local_artifact_path";
+  }
+
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "http:" || url.protocol === "https:" ? "browser_url" : "relative_or_storage_path";
+  } catch {
+    return "relative_or_storage_path";
+  }
+};
+
+const creativeTraceSummary = (payload: unknown): Record<string, unknown> => {
+  const root = isRecord(payload) ? payload : {};
+  const response = isRecord(root.response) ? root.response : root;
+  const structuredOutput = nestedRecord(response, "structured_output");
+  const structuredCreativeResponse = nestedRecord(structuredOutput, "creative_response");
+  const structuredCreative = nestedRecord(structuredOutput, "creative");
+  const answer = nestedRecord(response, "answer");
+  const artifacts = Array.isArray(response.artifacts)
+    ? response.artifacts
+    : Array.isArray(root.artifacts)
+      ? root.artifacts
+      : [];
+  const firstArtifact = artifacts.find(isRecord) as Record<string, unknown> | undefined;
+  const candidates = [response, structuredOutput, structuredCreativeResponse, structuredCreative, answer, firstArtifact].filter(isRecord);
+  const firstCandidateValue = (keys: string[]) => {
+    for (const candidate of candidates) {
+      for (const key of keys) {
+        if (candidate[key] !== undefined && candidate[key] !== null) {
+          return candidate[key];
+        }
+      }
+    }
+
+    return undefined;
+  };
+  const images = candidates
+    .flatMap((candidate) => Array.isArray(candidate.images) ? candidate.images.filter(isRecord) : [])
+    .filter(isRecord);
+  const firstImage = images[0];
+  const imagePath = firstDefined([
+    firstCandidateValue(["image_path", "path"]),
+    firstImage?.image_path,
+    firstImage?.path,
+  ]);
+  const previewValue = firstDefined([
+    firstCandidateValue(["preview_url", "signed_url", "url"]),
+    firstImage?.preview_url,
+    firstImage?.signed_url,
+    firstImage?.url,
+  ]);
+  const storagePath = firstDefined([
+    firstCandidateValue(["storage_path", "storagePath"]),
+    firstImage?.storage_path,
+    firstImage?.storagePath,
+  ]);
+  const sha256 = firstDefined([firstCandidateValue(["sha256"]), firstImage?.sha256]);
+  const bytes = firstDefined([firstCandidateValue(["bytes"]), firstImage?.bytes]);
+  const width = firstDefined([firstCandidateValue(["width"]), firstImage?.width]);
+  const height = firstDefined([firstCandidateValue(["height"]), firstImage?.height]);
+  const model = firstDefined([firstCandidateValue(["model"]), firstImage?.model]);
+  const operation = firstDefined([firstCandidateValue(["operation"]), firstImage?.operation]);
+  const routedToCreative = firstCandidateValue(["routed_to_creative", "routedToCreative"]);
+  const imagePathKind = pathKind(imagePath);
+  const previewKind = pathKind(previewValue);
+
+  return {
+    routed_to_creative: routedToCreative === true ? true : routedToCreative === false ? false : undefined,
+    image_metadata_present: Boolean(imagePath || previewValue || storagePath || sha256 || bytes),
+    image_count: images.length || (imagePath || previewValue || storagePath || sha256 ? 1 : 0),
+    image_path_present: Boolean(imagePath),
+    image_path_kind: imagePathKind,
+    preview_url_present: Boolean(previewValue),
+    preview_url_kind: previewKind,
+    storage_path_present: Boolean(storagePath),
+    sha256_present: typeof sha256 === "string" && /^[a-f0-9]{64}$/i.test(sha256),
+    bytes: typeof bytes === "number" && Number.isFinite(bytes) ? bytes : undefined,
+    width: typeof width === "number" && Number.isFinite(width) ? width : undefined,
+    height: typeof height === "number" && Number.isFinite(height) ? height : undefined,
+    model: typeof model === "string" && model.trim() ? traceString(model, 160) : undefined,
+    operation: typeof operation === "string" && operation.trim() ? traceString(operation, 220) : undefined,
+    product_artifact_status:
+      imagePathKind === "local_artifact_path" && !previewValue && !storagePath
+        ? "artifact_transport_missing"
+        : imagePath || previewValue || storagePath || sha256
+          ? "available_or_metadata_only"
+          : "not_detected",
+  };
+};
+
+const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: HermesCmoAgentConfig): Record<string, unknown> => {
+  const constraints: Record<string, unknown> = request.constraints;
+  const executionBoundary = nestedRecord(constraints, "execution_boundary");
+  const h5LiveAdapter = nestedRecord(constraints, "h5_live_adapter");
+  const creativePolicy = nestedRecord(nestedRecord(constraints, "m1_clean_cmo_skill_kernel"), "creative_policy");
+  const allowedAgents = Array.isArray(constraints.allowed_agents) ? constraints.allowed_agents : [];
+
+  return {
+    endpoint_path: config.endpointPath,
+    endpoint_kind: config.endpointKind,
+    tool_endpoint_enabled: config.toolEndpointEnabled,
+    creative_agent_allowed: allowedAgents.includes("creative"),
+    product_requested_execution:
+      constraints.allowCreativeExecution === true ||
+      executionBoundary.creative_execution_allowed === true ||
+      creativePolicy.enabled === true,
+    product_requested_brief_only:
+      constraints.allowCreativeExecution !== true &&
+      executionBoundary.creative_execution_allowed !== true &&
+      creativePolicy.enabled !== true,
+    allow_sub_agent_execution: constraints.allowSubAgentExecution === true,
+    allow_creative_execution: constraints.allowCreativeExecution === true,
+    creative_call_mode: constraints.creative_call_mode ?? h5LiveAdapter.creative_call_mode ?? creativePolicy.call_mode,
+    creative_profile: constraints.creative_profile ?? h5LiveAdapter.creative_profile ?? creativePolicy.profile,
+    delegations_mode: constraints.delegations_mode,
+    product_artifact_ingest_required: executionBoundary.creative_artifact_ingest_required_for_preview === true,
+  };
+};
+
 const responseTraceSummary = (payload: unknown): Record<string, unknown> => {
   const root = isRecord(payload) ? payload : {};
   const response = isRecord(root.response) ? root.response : root;
@@ -1681,6 +1814,7 @@ const responseTraceSummary = (payload: unknown): Record<string, unknown> => {
       openclaw_call: response.openclaw_call,
       gbrain_mutation: response.gbrain_mutation,
     },
+    creative_trace: creativeTraceSummary(payload),
     answer_body_preview: typeof answerPreview === "string" ? traceString(answerPreview, 1000) : undefined,
   };
 };
@@ -1829,6 +1963,7 @@ const buildHermesCmoLiveRequest = (
   const boundedDelegationAllowed = subAgentExecutionAllowed || iterativeDelegationAllowed;
   const echoExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed;
   const creativeViaCmoAllowed = isCmoHermesCreativeEnabled() && getCmoHermesCreativeCallMode() === "via_cmo";
+  const specialistExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed || creativeViaCmoAllowed;
   const allowedAgentsForRequest: HermesAllowedAgent[] = [
     ...(boundedDelegationAllowed ? ["echo", "surf"] as const : echoRetryAllowed ? ["echo"] as const : []),
     ...(creativeViaCmoAllowed ? ["creative"] as const : []),
@@ -1872,7 +2007,7 @@ const buildHermesCmoLiveRequest = (
       allowed_agents: allowedAgentsForRequest,
       allowed_surf_modes: allowedSurfModesForRequest,
       delegations_mode: delegationsMode,
-      allowSubAgentExecution: boundedDelegationAllowed || echoRetryAllowed,
+      allowSubAgentExecution: specialistExecutionAllowed,
       allowSurfExecution: boundedDelegationAllowed,
       allowEchoExecution: echoExecutionAllowed,
       allowCreativeExecution: creativeViaCmoAllowed,
@@ -1928,7 +2063,7 @@ const buildHermesCmoLiveRequest = (
       h5_live_adapter: {
         live_only: true,
         call_only: "hermes_cmo_agent",
-        sub_agent_execution_allowed: boundedDelegationAllowed || echoRetryAllowed,
+        sub_agent_execution_allowed: specialistExecutionAllowed,
         delegation_policy: boundedDelegationAllowed ? "echo_surf_only_bounded" : echoRetryAllowed ? "echo_retry_bounded" : "disabled",
         allowed_agents: allowedAgentsForRequest,
         allowed_surf_modes: allowedSurfModesForRequest,
@@ -1940,7 +2075,7 @@ const buildHermesCmoLiveRequest = (
         platform_persistence_owner: "cmo_engine_app_chat_store",
       },
       execution_boundary: {
-        sub_agent_execution_allowed: boundedDelegationAllowed || echoRetryAllowed,
+        sub_agent_execution_allowed: specialistExecutionAllowed,
         surf_execution_allowed: boundedDelegationAllowed,
         echo_execution_allowed: echoExecutionAllowed,
         creative_execution_allowed: creativeViaCmoAllowed,
@@ -2718,6 +2853,7 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       endpoint_kind: config.endpointKind,
       tool_endpoint_enabled: config.toolEndpointEnabled,
       timeout_ms: config.timeoutMs,
+      creative_trace: creativeRequestTraceSummary(request, config),
       request,
     });
     const response = await fetch(config.endpoint, {

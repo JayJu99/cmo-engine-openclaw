@@ -217,7 +217,33 @@ export function normalizeCreativeResponse(
   const promptUsed = stringValue(value.prompt_used, 3000);
   const visualSummary = stringValue(value.visual_summary, 2000);
   const notes = stringValue(value.notes, 1200);
-  const images = Array.isArray(value.images) ? value.images.filter(isRecord) : [];
+  const images = Array.isArray(value.images)
+    ? value.images.filter(isRecord)
+    : (
+        value.image_path ||
+        value.path ||
+        value.preview_url ||
+        value.signed_url ||
+        value.url ||
+        value.storage_path ||
+        value.storagePath ||
+        value.sha256
+      )
+      ? [{
+          path: value.image_path ?? value.path,
+          preview_url: value.preview_url,
+          signed_url: value.signed_url,
+          url: value.url,
+          storage_path: value.storage_path ?? value.storagePath,
+          provider: value.provider,
+          bytes: value.bytes,
+          sha256: value.sha256,
+          width: value.width,
+          height: value.height,
+          model: value.model,
+          operation: value.operation,
+        }]
+      : [];
 
   return images.map((image, index) => {
     const path = stringValue(image.path, 600);

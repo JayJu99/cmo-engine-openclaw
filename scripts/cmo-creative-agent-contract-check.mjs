@@ -26,7 +26,24 @@ function isBrowserPreviewUrl(value) {
 }
 
 function normalizeCreativeResponse(value) {
-  const images = Array.isArray(value.images) ? value.images : [];
+  const images = Array.isArray(value.images)
+    ? value.images
+    : value.image_path || value.path || value.preview_url || value.signed_url || value.url || value.storage_path || value.sha256
+      ? [{
+          path: value.image_path ?? value.path,
+          preview_url: value.preview_url,
+          signed_url: value.signed_url,
+          url: value.url,
+          storage_path: value.storage_path,
+          provider: value.provider,
+          bytes: value.bytes,
+          sha256: value.sha256,
+          width: value.width,
+          height: value.height,
+          model: value.model,
+          operation: value.operation,
+        }]
+      : [];
 
   return images.map((image, index) => {
     const previewUrl = isBrowserPreviewUrl(image.preview_url) ? image.preview_url : undefined;
@@ -97,6 +114,7 @@ const [
   storeSource,
   uiSource,
   configSource,
+  creativeAgentSource,
   ingestRouteSource,
   migrationSource,
 ] = await Promise.all([
@@ -106,6 +124,7 @@ const [
   read("src/lib/cmo/app-chat-store.ts"),
   read("src/components/cmo-apps/cmo-chat-panel.tsx"),
   read("src/lib/cmo/config.ts"),
+  read("src/lib/cmo/creative-agent.ts"),
   read("src/app/api/cmo/apps/[appId]/creative/artifact-ingest/route.ts"),
   read("supabase/migrations/202606200002_cmo_creative_assets.sql"),
 ]);
@@ -128,6 +147,8 @@ assert.match(configSource, /CMO_HERMES_CREATIVE_ENABLED/, "Creative enabled conf
 assert.match(configSource, /CMO_HERMES_CREATIVE_CALL_MODE/, "Creative call mode config is required");
 assert.match(configSource, /CMO_HERMES_CREATIVE_PROFILE/, "Creative profile config is required");
 assert.match(runtimeSource, /creative_call_mode.*via_cmo/s, "default Creative call mode must route through CMO");
+assert.match(runtimeSource, /creative_trace/, "Hermes CMO trace must include Creative routing diagnostics");
+assert.match(runtimeSource, /allowSubAgentExecution: specialistExecutionAllowed/, "Creative execution must not be blocked by Echo/Surf orchestration mode");
 assert.match(mapperSource, /agentsUsedFromMetadata/, "Creative activity metadata must survive mapping");
 assert.match(storeSource, /extractCreativeAssetsFromHermesResponse/, "Creative responses must become session artifacts");
 assert.match(uiSource, /Creative Assets/, "Chat UI must render Creative asset cards");
@@ -135,6 +156,7 @@ assert.match(uiSource, /Artifact transport missing/, "UI must show missing trans
 assert.match(uiSource, /isBrowserPreviewUrl/, "UI must not render local paths as previews");
 assert.match(ingestRouteSource, /uploadCmoCreativeArtifact/, "Creative artifact ingest endpoint must exist");
 assert.match(ingestRouteSource, /x-cmo-creative-ingest-key/, "Creative ingest endpoint must require server-to-server key when configured");
+assert.match(creativeAgentSource, /value\.image_path/, "Product must parse Hermes Creative image_path execution responses");
 assert.match(migrationSource, /cmo_creative_jobs/, "Creative jobs table migration is required");
 assert.match(migrationSource, /cmo_creative_assets/, "Creative assets table migration is required");
 assert.match(migrationSource, /cmo-creative-assets/, "Creative Supabase Storage bucket is required");
@@ -157,8 +179,21 @@ const creativeResponse = {
   visual_summary: "A mascot thumbnail.",
 };
 const assets = normalizeCreativeResponse(creativeResponse);
+const hermesSingleImageAssets = normalizeCreativeResponse({
+  schema_version: "cmo.creative_response.v1",
+  status: "success",
+  routed_to_creative: true,
+  image_path: "/tmp/creative-agent-smoke/hermes-output.png",
+  bytes: 101,
+  sha256: "b".repeat(64),
+  model: "gpt-5.5",
+  operation: "responses image_generation",
+});
 
 assert.equal(assets.length, 1, "Creative image metadata must parse");
+assert.equal(hermesSingleImageAssets.length, 1, "Hermes single-image execution metadata must parse");
+assert.equal(hermesSingleImageAssets[0].status, "artifact_transport_missing", "Hermes local image_path must require Product artifact transport");
+assert.ok(!JSON.stringify(hermesSingleImageAssets).includes("/tmp/creative-agent-smoke"), "Hermes local image_path must be redacted");
 assert.equal(assets[0].status, "artifact_transport_missing", "local-path-only assets must not be treated as previews");
 assert.equal(assets[0].preview_url, undefined, "local /tmp path must not be rendered as browser preview");
 assert.ok(assets[0].source_local_path_redacted?.startsWith("[hermes_local_artifact_path_redacted]"), "local path must be redacted");
