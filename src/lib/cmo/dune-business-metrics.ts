@@ -140,6 +140,8 @@ interface WorkspaceBusinessMetricSnapshotRow {
   diagnostics_json: unknown;
   provenance_json: unknown;
   synced_at: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 interface DuneBusinessSyncResultItem {
@@ -868,6 +870,7 @@ function jsonArray(value: unknown): Record<string, unknown>[] {
 function toNativeSnapshot(row: WorkspaceBusinessMetricSnapshotRow): NativeDuneBusinessSnapshot {
   const config = DUNE_BUSINESS_QUERY_REGISTRY[row.metric_group === "wld_partner_stats_daily" ? "wld_partner_stats_daily" : "wld_aggregator_daily"];
   const diagnostics = isRecord(row.diagnostics_json) ? row.diagnostics_json : {};
+  const syncedAt = row.synced_at ?? row.updated_at ?? row.created_at ?? null;
 
   return {
     tenantId: row.tenant_id,
@@ -912,7 +915,7 @@ function toNativeSnapshot(row: WorkspaceBusinessMetricSnapshotRow): NativeDuneBu
       } : null,
     },
     provenance: isRecord(row.provenance_json) ? row.provenance_json : {},
-    syncedAt: row.synced_at,
+    syncedAt,
   };
 }
 
@@ -923,7 +926,7 @@ export async function upsertNativeDuneBusinessSnapshot(snapshot: NativeDuneBusin
     .upsert(toRow(snapshot), {
       onConflict: "tenant_id,workspace_id,app_id,source_type,source_id,metric_group",
     })
-    .select("tenant_id,workspace_id,app_id,source_type,source_id,provider,metric_domain,metric_group,query_id,query_name,range_preset,date_start,date_end,timezone,status,metrics_json,series_json,tables_json,diagnostics_json,provenance_json,synced_at")
+    .select("tenant_id,workspace_id,app_id,source_type,source_id,provider,metric_domain,metric_group,query_id,query_name,range_preset,date_start,date_end,timezone,status,metrics_json,series_json,tables_json,diagnostics_json,provenance_json,synced_at,created_at,updated_at")
     .single();
 
   if (error) {
@@ -938,7 +941,7 @@ export async function getNativeDuneBusinessSnapshots(appId: string): Promise<Nat
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("workspace_business_metric_snapshots")
-    .select("tenant_id,workspace_id,app_id,source_type,source_id,provider,metric_domain,metric_group,query_id,query_name,range_preset,date_start,date_end,timezone,status,metrics_json,series_json,tables_json,diagnostics_json,provenance_json,synced_at")
+    .select("tenant_id,workspace_id,app_id,source_type,source_id,provider,metric_domain,metric_group,query_id,query_name,range_preset,date_start,date_end,timezone,status,metrics_json,series_json,tables_json,diagnostics_json,provenance_json,synced_at,created_at,updated_at")
     .eq("tenant_id", entry.tenantId)
     .eq("workspace_id", entry.workspaceId)
     .eq("app_id", entry.appId)
@@ -979,6 +982,10 @@ function seriesRowCount(snapshot: NativeDuneBusinessSnapshot): number {
 
 function tableRowCount(snapshot: NativeDuneBusinessSnapshot): number {
   return snapshot.tables.reduce((sum, table) => sum + table.rows.length, 0);
+}
+
+function nativeSnapshotHasDashboardPayload(snapshot: NativeDuneBusinessSnapshot): boolean {
+  return snapshot.metrics.some((metric) => metric.status === "connected") || seriesRowCount(snapshot) > 0 || tableRowCount(snapshot) > 0;
 }
 
 function executionForSnapshot(snapshot: NativeDuneBusinessSnapshot, fallback: DuneExecutionSummary): DuneExecutionSummary {
@@ -1119,7 +1126,11 @@ export async function readNativeDuneBusinessMetricsSnapshot(appId: string, group
   try {
     const snapshot = await getNativeDuneBusinessSnapshot(appId, group);
 
-    return snapshot ? nativeDuneSnapshotToBusinessMetrics(snapshot) : null;
+    if (!snapshot || snapshot.status === "missing" || snapshot.status === "failed" || !nativeSnapshotHasDashboardPayload(snapshot)) {
+      return null;
+    }
+
+    return nativeDuneSnapshotToBusinessMetrics(snapshot);
   } catch {
     return null;
   }

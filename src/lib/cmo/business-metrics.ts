@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 
 import { getAppWorkspace } from "@/lib/cmo/app-workspaces";
+import { isCmoDuneNativeDashboardEnabled } from "@/lib/cmo/config";
 import { readNativeDuneBusinessMetricsSnapshot } from "@/lib/cmo/dune-business-metrics";
 import type {
   CmoBusinessMetric,
@@ -609,6 +610,7 @@ export async function ingestBusinessMetricsHandoff(options: IngestBusinessMetric
 export async function readBusinessMetricsSnapshot(options: ReadBusinessMetricsOptions): Promise<CmoBusinessMetricsSnapshot | null> {
   const source = options.source ? businessSource(options.source) : AUTHORITATIVE_SOURCE;
   const group = businessGroup(options.group);
+  const nativeDashboardRequested = source === "dune" && isCmoDuneNativeDashboardEnabled();
 
   if (options.appId !== SUPPORTED_APP_ID || !source || !group || !allowedGroupsBySource[source].includes(group)) {
     return null;
@@ -663,6 +665,15 @@ export async function readBusinessMetricsSnapshot(options: ReadBusinessMetricsOp
     return {
       ...snapshot,
       status: snapshotStatus(metrics),
+      sourceStats: {
+        ...(snapshot.sourceStats ?? {}),
+        ...(nativeDashboardRequested ? {
+          nativeDashboardEnabled: true,
+          nativeFallback: true,
+          nativeFallbackReason: "native_snapshot_missing_failed_or_empty",
+          fallbackSource: "dune_handoff",
+        } : {}),
+      },
       diagnostics: {
         availableMetrics: availableMetricIds(metrics),
         missingMetrics: missingMetricIds(metrics),
@@ -672,6 +683,20 @@ export async function readBusinessMetricsSnapshot(options: ReadBusinessMetricsOp
       },
     };
   } catch {
-    return fallback;
+    return nativeDashboardRequested
+      ? {
+        ...fallback,
+        sourceStats: {
+          nativeDashboardEnabled: true,
+          nativeFallback: true,
+          nativeFallbackReason: "native_snapshot_missing_failed_or_empty",
+          fallbackSource: "dune_handoff",
+        },
+        diagnostics: {
+          ...fallback.diagnostics,
+          notes: [...fallback.diagnostics.notes, "Native Dune dashboard snapshot was unavailable, so Product fell back to the Dune handoff path."],
+        },
+      }
+      : fallback;
   }
 }

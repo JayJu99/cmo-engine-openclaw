@@ -26,6 +26,7 @@ function safeSnapshot(snapshot: Awaited<ReturnType<typeof getNativeDuneBusinessS
       queryId: snapshot.queryId,
       queryName: snapshot.queryName,
       syncedAt: snapshot.syncedAt,
+      synced_at: snapshot.syncedAt,
     },
     diagnostics: snapshot.diagnostics,
   };

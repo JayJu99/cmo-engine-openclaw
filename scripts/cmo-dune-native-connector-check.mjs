@@ -144,7 +144,10 @@ check(
   "dashboard read path is gated and keeps fallback",
   contents.businessMetrics.includes("readNativeDuneBusinessMetricsSnapshot") &&
     contents.businessMetrics.includes("if (nativeSnapshot)") &&
+    contents.businessMetrics.includes("isCmoDuneNativeDashboardEnabled") &&
+    contents.businessMetrics.includes("nativeFallback") &&
     helper.includes("isCmoDuneNativeDashboardEnabled()") &&
+    helper.includes("nativeSnapshotHasDashboardPayload") &&
     contents.dashboard.includes("dune_native"),
 );
 
@@ -158,11 +161,14 @@ check(
 );
 
 check(
-  "systemd templates schedule refresh_if_stale daily at 07:05 Asia/Ho_Chi_Minh",
+  "systemd templates schedule daily 00:05 UTC and execute_if_stale",
   contents.systemdService.includes("refresh_if_stale") &&
+    contents.systemdService.includes('"resultMode":"execute_if_stale"') &&
+    !contents.systemdService.includes('"resultMode":"execute_and_poll"') &&
     contents.systemdService.includes("dryRun\":false") &&
-    contents.systemdTimer.includes("07:05:00") &&
-    contents.systemdTimer.includes("Asia/Ho_Chi_Minh"),
+    contents.systemdTimer.includes("OnCalendar=*-*-* 00:05:00") &&
+    contents.systemdTimer.includes("Timezone=UTC") &&
+    !/OnCalendar=.*(?:hourly|\*:05|\*\/\d+)/i.test(contents.systemdTimer),
 );
 
 const forbiddenCallPattern = /(from\s+["'][^"']*(?:hermes|gbrain|vault)[^"']*["'])|(?:fetch|axios|ky)\([^)]*(?:hermes|gbrain|vault)/i;
@@ -312,6 +318,43 @@ async function runMockedSync(fetchImpl, input) {
 
   return { result, capturedRows };
 }
+
+function loadHelperWithoutFetch() {
+  return loadHelperWithMockFetch(async () => {
+    throw new Error("unexpected_fetch");
+  });
+}
+
+const { helper: adapterHelper } = loadHelperWithoutFetch();
+const nativeAggregatorSnapshot = adapterHelper.transformDuneBusinessRows(
+  {
+    tenantId: "holdstation",
+    workspaceId: "holdstation-mini-app",
+    appId: "holdstation-mini-app",
+    sourceId: "holdstation-mini-app",
+  },
+  "wld_aggregator_daily",
+  sampleAggregatorRows("2026-06-19"),
+  "2026-06-19T00:05:00.000Z",
+);
+const nativeBusinessSnapshot = adapterHelper.nativeDuneSnapshotToBusinessMetrics(nativeAggregatorSnapshot);
+
+check(
+  "dashboard data adapter consumes native snapshots with existing card/chart structure",
+  nativeBusinessSnapshot.source.sourceId === "dune_native" &&
+    nativeBusinessSnapshot.source.queryId === "5057875" &&
+    nativeBusinessSnapshot.lastUpdatedAt === "2026-06-19T00:05:00.000Z" &&
+    nativeBusinessSnapshot.metrics.some((metric) => metric.id === "wld_aggregator_latest_daily_tx") &&
+    nativeBusinessSnapshot.metrics.some((metric) => metric.id === "wld_aggregator_cumulative_volume_usd") &&
+    nativeBusinessSnapshot.series?.some((series) => series.id === "wld_aggregator_daily_series" && series.points.length === 2),
+);
+
+const returnedSnapshot = await adapterHelper.upsertNativeDuneBusinessSnapshot(nativeAggregatorSnapshot);
+
+check(
+  "syncedAt mapping is non-null when DB row has synced_at",
+  returnedSnapshot.syncedAt === "2026-06-19T00:05:00.000Z",
+);
 
 const callsLatest = [];
 await runMockedSync(async (url, init = {}) => {

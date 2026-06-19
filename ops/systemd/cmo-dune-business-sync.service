@@ -11,7 +11,7 @@ ExecStart=/usr/bin/curl --fail --show-error --silent --max-time 300 \
   -X POST "${CMO_PUBLIC_APP_URL}/api/internal/lens/apps/holdstation-mini-app/business/dune/sync" \
   -H "Authorization: Bearer ${CMO_LENS_INTERNAL_API_KEY}" \
   -H "Content-Type: application/json" \
-  --data '{"queryKeys":["wld_aggregator_daily","wld_partner_stats_daily"],"mode":"refresh_if_stale","trigger":"systemd_timer","dryRun":false}'
+  --data '{"queryKeys":["wld_aggregator_daily","wld_partner_stats_daily"],"mode":"refresh_if_stale","resultMode":"execute_if_stale","trigger":"systemd_timer","dryRun":false}'
 
 [Install]
 WantedBy=multi-user.target

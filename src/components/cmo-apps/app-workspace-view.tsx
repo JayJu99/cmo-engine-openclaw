@@ -1690,8 +1690,14 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const businessMetricsLastUpdated = businessLatestTimestamp([dexBusinessMetricsSnapshot, feesBusinessMetricsSnapshot]);
   const businessMetricSnapshots = [dexBusinessMetricsSnapshot, feesBusinessMetricsSnapshot].filter((snapshot): snapshot is CmoBusinessMetricsSnapshot => Boolean(snapshot));
   const businessMetricsUsingNative = businessMetricSnapshots.some((snapshot) => snapshot.source.sourceId === "dune_native");
+  const businessMetricsUsingNativeFallback = businessMetricSnapshots.some((snapshot) => snapshot.sourceStats?.nativeFallback === true);
   const businessMetricQueryNames = Array.from(new Set(businessMetricSnapshots.map((snapshot) => snapshot.source.queryName).filter((value): value is string => typeof value === "string" && Boolean(value.trim()))));
   const businessMetricQueryIds = Array.from(new Set(businessMetricSnapshots.map((snapshot) => snapshot.source.queryId).filter((value): value is string => typeof value === "string" && Boolean(value.trim()))));
+  const businessMetricQueryIdsForDisplay = businessMetricQueryIds.length ? businessMetricQueryIds : ["5057875", "5454333"];
+  const businessMetricRangeStarts = businessMetricSnapshots.map((snapshot) => snapshot.dateRange.startDate).filter((value): value is string => typeof value === "string" && Boolean(value.trim())).sort();
+  const businessMetricRangeEnds = businessMetricSnapshots.map((snapshot) => snapshot.dateRange.endDate).filter((value): value is string => typeof value === "string" && Boolean(value.trim())).sort();
+  const businessMetricDateStart = businessMetricRangeStarts[0] ?? null;
+  const businessMetricDateEnd = businessMetricRangeEnds[businessMetricRangeEnds.length - 1] ?? null;
   const nativeBusinessStatuses = Array.from(new Set(businessMetricSnapshots
     .filter((snapshot) => snapshot.source.sourceId === "dune_native")
     .map((snapshot) => {
@@ -3045,15 +3051,18 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
           >
             <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
               <Badge variant="slate">Source: {businessMetricsUsingNative ? "Dune Native" : "Dune / Worldchain"}</Badge>
+              {businessMetricsUsingNativeFallback ? <Badge variant="orange">Fallback: Dune handoff</Badge> : null}
+              <Badge variant={businessMetricsHealthVariant}>Status: {businessMetricsHealthLabel}</Badge>
               <Badge variant="slate">App: {app.name}</Badge>
               {(businessMetricQueryNames.length ? businessMetricQueryNames : ["holdstation_wld_aggregator_tx", "Partner Stats on WLD"]).map((queryName) => (
                 <Badge key={queryName} variant="slate">Query: {queryName}</Badge>
               ))}
-              {businessMetricQueryIds.map((queryId) => (
+              {businessMetricQueryIdsForDisplay.map((queryId) => (
                 <Badge key={queryId} variant="slate">Query ID: {queryId}</Badge>
               ))}
               {businessMetricsUsingNative ? <Badge variant="blue">Native status: {nativeBusinessStatuses.length ? nativeBusinessStatuses.join(" / ") : businessMetricsHealthLabel}</Badge> : null}
-              <Badge variant="slate">Last updated: {businessMetricsLastUpdated ? displayDate(businessMetricsLastUpdated) : "Not connected"}</Badge>
+              <Badge variant="slate">Last synced: {businessMetricsLastUpdated ? displayDate(businessMetricsLastUpdated) : "Not connected"}</Badge>
+              <Badge variant="slate">Date range: {businessMetricDateStart && businessMetricDateEnd ? `${businessMetricDateStart} -> ${businessMetricDateEnd}` : "Not connected"}</Badge>
               <Badge variant={hasAnyBusinessMetrics ? "green" : "slate"}>Available to CMO Chat</Badge>
               <Badge variant="slate">Contract: cmo.business-metrics.v1</Badge>
             </div>

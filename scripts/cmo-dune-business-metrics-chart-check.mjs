@@ -186,6 +186,18 @@ const partner = existingPartner ?? fixtures.partner;
 const aggregatorChartPoints = aggregatorPoints(aggregator);
 const partnerChartPoints = partnerPoints(partner);
 const partnerTableRows = partnerSummaryRows(partner);
+const nativeAggregatorChartPoints = aggregatorPoints({
+  ...aggregator,
+  source: { ...aggregator.source, sourceId: "dune_native", queryId: "5057875" },
+});
+const nativePartnerChartPoints = partnerPoints({
+  ...partner,
+  source: { ...partner.source, sourceId: "dune_native", queryId: "5454333" },
+});
+const nativePartnerTableRows = partnerSummaryRows({
+  ...partner,
+  source: { ...partner.source, sourceId: "dune_native", queryId: "5454333" },
+});
 const partnerVolumeTop = topNPlusOther(partnerTableRows, (row) => row.totalVolume, 8);
 const partnerTxTop = topNPlusOther(partnerTableRows, (row) => row.totalTransactions, 8);
 const dailyVolumePartners = partnerCodesByTotal(partnerChartPoints, "volume", 8);
@@ -200,6 +212,9 @@ assert(partner.source?.type === "dune", "Expected Dune partner source", partner.
 assert(aggregatorChartPoints.length > 0, "Expected aggregator daily series points", aggregator.series);
 assert(partnerChartPoints.length > 0, "Expected partner daily series points", partner.series);
 assert(partnerTableRows.length > 0, "Expected partner summary table rows", partner.tables);
+assert(nativeAggregatorChartPoints.length === aggregatorChartPoints.length, "Expected native aggregator chart adapter parity", nativeAggregatorChartPoints);
+assert(nativePartnerChartPoints.length === partnerChartPoints.length, "Expected native partner chart adapter parity", nativePartnerChartPoints);
+assert(nativePartnerTableRows.length === partnerTableRows.length, "Expected native partner summary adapter parity", nativePartnerTableRows);
 assert(partnerVolumeTop.length > 0, "Expected topNPlusOther volume data", partnerVolumeTop);
 assert(partnerTxTop.length > 0, "Expected topNPlusOther transaction data", partnerTxTop);
 assert(dailyVolumePartners.length > 0, "Expected daily volume partner keys", dailyVolumePartners);
@@ -215,6 +230,9 @@ console.log(
       aggregatorPoints: aggregatorChartPoints.length,
       partnerPoints: partnerChartPoints.length,
       partnerSummaryRows: partnerTableRows.length,
+      nativeAggregatorPoints: nativeAggregatorChartPoints.length,
+      nativePartnerPoints: nativePartnerChartPoints.length,
+      nativePartnerSummaryRows: nativePartnerTableRows.length,
       volumePartners: dailyVolumePartners.length,
       transactionPartners: dailyTxPartners.length,
     },
