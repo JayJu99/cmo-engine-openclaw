@@ -159,3 +159,15 @@ export function getCmoVaultAgentHandoffMode(): CmoVaultAgentHandoffMode {
 export function getCmoVaultContextPackMode(): CmoVaultContextPackMode {
   return process.env.CMO_VAULT_CONTEXT_PACK_MODE === "pilot_remote" ? "pilot_remote" : "off";
 }
+
+export function isCmoDuneNativeEnabled(): boolean {
+  return booleanEnv("CMO_DUNE_NATIVE_ENABLED", false);
+}
+
+export function isCmoDuneNativeDashboardEnabled(): boolean {
+  return booleanEnv("CMO_DUNE_NATIVE_DASHBOARD_ENABLED", false);
+}
+
+export function getCmoDuneApiKey(): string {
+  return process.env.CMO_DUNE_API_KEY?.trim() ?? "";
+}

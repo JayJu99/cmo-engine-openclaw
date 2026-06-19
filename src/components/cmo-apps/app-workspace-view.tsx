@@ -1688,6 +1688,19 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
   const businessMetricsHealthLabel = businessMetricsStatus === "loading" ? "Loading" : businessMetricStatusLabel(businessMetricsCombinedStatus);
   const businessMetricsHealthVariant = businessMetricsStatus === "loading" ? "slate" : businessMetricStatusVariant(businessMetricsCombinedStatus);
   const businessMetricsLastUpdated = businessLatestTimestamp([dexBusinessMetricsSnapshot, feesBusinessMetricsSnapshot]);
+  const businessMetricSnapshots = [dexBusinessMetricsSnapshot, feesBusinessMetricsSnapshot].filter((snapshot): snapshot is CmoBusinessMetricsSnapshot => Boolean(snapshot));
+  const businessMetricsUsingNative = businessMetricSnapshots.some((snapshot) => snapshot.source.sourceId === "dune_native");
+  const businessMetricQueryNames = Array.from(new Set(businessMetricSnapshots.map((snapshot) => snapshot.source.queryName).filter((value): value is string => typeof value === "string" && Boolean(value.trim()))));
+  const businessMetricQueryIds = Array.from(new Set(businessMetricSnapshots.map((snapshot) => snapshot.source.queryId).filter((value): value is string => typeof value === "string" && Boolean(value.trim()))));
+  const nativeBusinessStatuses = Array.from(new Set(businessMetricSnapshots
+    .filter((snapshot) => snapshot.source.sourceId === "dune_native")
+    .map((snapshot) => {
+      const sourceStats = snapshot.sourceStats ?? {};
+      const stale = sourceStats.stale === true;
+      const status = typeof sourceStats.status === "string" && sourceStats.status.trim() ? sourceStats.status.trim() : snapshot.status;
+
+      return stale ? "stale" : status;
+    })));
   const hasDexBusinessMetrics = businessSnapshotHasData(dexBusinessMetricsSnapshot);
   const hasFeesBusinessMetrics = businessSnapshotHasData(feesBusinessMetricsSnapshot);
   const hasAnyBusinessMetrics = hasDexBusinessMetrics || hasFeesBusinessMetrics;
@@ -3031,10 +3044,15 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             }
           >
             <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
-              <Badge variant="slate">Source: Dune / Worldchain</Badge>
+              <Badge variant="slate">Source: {businessMetricsUsingNative ? "Dune Native" : "Dune / Worldchain"}</Badge>
               <Badge variant="slate">App: {app.name}</Badge>
-              <Badge variant="slate">Query: holdstation_wld_aggregator_tx</Badge>
-              <Badge variant="slate">Query: Partner Stats on WLD</Badge>
+              {(businessMetricQueryNames.length ? businessMetricQueryNames : ["holdstation_wld_aggregator_tx", "Partner Stats on WLD"]).map((queryName) => (
+                <Badge key={queryName} variant="slate">Query: {queryName}</Badge>
+              ))}
+              {businessMetricQueryIds.map((queryId) => (
+                <Badge key={queryId} variant="slate">Query ID: {queryId}</Badge>
+              ))}
+              {businessMetricsUsingNative ? <Badge variant="blue">Native status: {nativeBusinessStatuses.length ? nativeBusinessStatuses.join(" / ") : businessMetricsHealthLabel}</Badge> : null}
               <Badge variant="slate">Last updated: {businessMetricsLastUpdated ? displayDate(businessMetricsLastUpdated) : "Not connected"}</Badge>
               <Badge variant={hasAnyBusinessMetrics ? "green" : "slate"}>Available to CMO Chat</Badge>
               <Badge variant="slate">Contract: cmo.business-metrics.v1</Badge>
@@ -3043,7 +3061,9 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
             <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold leading-6 text-slate-600">
               {businessMetricsError
                 || (hasAnyBusinessMetrics
-                  ? "Business metrics are loaded from normalized Dune / Worldchain handoff JSON. Dune is authoritative for Holdstation Mini App metrics."
+                  ? businessMetricsUsingNative
+                    ? "Business metrics are loaded from Product native Dune snapshots. n8n handoff remains fallback during cutover."
+                    : "Business metrics are loaded from normalized Dune / Worldchain handoff JSON. Dune is authoritative for Holdstation Mini App metrics."
                   : "No Dune business metrics connected yet.")}
             </div>
 
@@ -3052,7 +3072,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-bold text-slate-950">WLD Aggregator Daily</div>
-                    <div className="mt-1 text-xs font-semibold text-slate-500">{hasDexBusinessMetrics ? "Loaded from Dune handoff." : "No data for this group yet."}</div>
+                    <div className="mt-1 text-xs font-semibold text-slate-500">{hasDexBusinessMetrics ? (dexBusinessMetricsSnapshot?.source.sourceId === "dune_native" ? "Loaded from Dune Native." : "Loaded from Dune handoff.") : "No data for this group yet."}</div>
                   </div>
                   <Badge variant={businessMetricStatusVariant(dexBusinessMetricsSnapshot?.status)}>{businessMetricStatusLabel(dexBusinessMetricsSnapshot?.status)}</Badge>
                 </div>
@@ -3069,7 +3089,7 @@ export function AppWorkspaceView({ state }: { state: AppWorkspaceState }) {
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-bold text-slate-950">Partner Stats</div>
-                    <div className="mt-1 text-xs font-semibold text-slate-500">{hasFeesBusinessMetrics ? "Loaded from Dune handoff." : "No data for this group yet."}</div>
+                    <div className="mt-1 text-xs font-semibold text-slate-500">{hasFeesBusinessMetrics ? (feesBusinessMetricsSnapshot?.source.sourceId === "dune_native" ? "Loaded from Dune Native." : "Loaded from Dune handoff.") : "No data for this group yet."}</div>
                   </div>
                   <Badge variant={businessMetricStatusVariant(feesBusinessMetricsSnapshot?.status)}>{businessMetricStatusLabel(feesBusinessMetricsSnapshot?.status)}</Badge>
                 </div>

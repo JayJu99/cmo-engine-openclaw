@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 
 import { getAppWorkspace } from "@/lib/cmo/app-workspaces";
+import { readNativeDuneBusinessMetricsSnapshot } from "@/lib/cmo/dune-business-metrics";
 import type {
   CmoBusinessMetric,
   CmoBusinessMetricGroup,
@@ -617,6 +618,14 @@ export async function readBusinessMetricsSnapshot(options: ReadBusinessMetricsOp
 
   if (!app) {
     return null;
+  }
+
+  if (source === "dune") {
+    const nativeSnapshot = await readNativeDuneBusinessMetricsSnapshot(app.id, group);
+
+    if (nativeSnapshot) {
+      return nativeSnapshot;
+    }
   }
 
   const fallback: CmoBusinessMetricsSnapshot = {

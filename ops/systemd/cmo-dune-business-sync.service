@@ -1,0 +1,17 @@
+[Unit]
+Description=CMO Product native Dune business metrics sync
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/cmo-engine/cmo-engine.env
+WorkingDirectory=/home/ju/cmo-engine-openclaw
+ExecStart=/usr/bin/curl --fail --show-error --silent --max-time 300 \
+  -X POST "${CMO_PUBLIC_APP_URL}/api/internal/lens/apps/holdstation-mini-app/business/dune/sync" \
+  -H "Authorization: Bearer ${CMO_LENS_INTERNAL_API_KEY}" \
+  -H "Content-Type: application/json" \
+  --data '{"queryKeys":["wld_aggregator_daily","wld_partner_stats_daily"],"mode":"refresh_if_stale","trigger":"systemd_timer","dryRun":false}'
+
+[Install]
+WantedBy=multi-user.target
