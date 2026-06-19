@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import vm from "node:vm";
+import ts from "typescript";
 
 const files = {
   helper: "src/lib/cmo/dune-business-metrics.ts",
@@ -76,12 +78,28 @@ check(
   !/(?:dune[_-]?api[_-]?key|x-dune-api-key)['"`]?\s*[:=]\s*['"`][A-Za-z0-9_-]{20,}/i.test(allSource),
 );
 
-const dryRunIndex = helper.indexOf("if (dryRun)");
-const fetchIndex = helper.indexOf("fetchDuneRows(config)");
+const runSyncIndex = helper.indexOf("export async function runNativeDuneBusinessSync");
+const runSyncBody = runSyncIndex >= 0 ? helper.slice(runSyncIndex) : helper;
+const dryRunIndex = runSyncBody.indexOf("if (dryRun)");
+const fetchIndex = runSyncBody.indexOf("fetchDuneRowsForResultMode");
 check(
   "dryRun path is before the Dune fetch path",
   dryRunIndex >= 0 && fetchIndex > dryRunIndex,
   `dryRunIndex=${dryRunIndex} fetchIndex=${fetchIndex}`,
+);
+
+check(
+  "result modes and Dune execution endpoints are wired",
+  includesAll(helper, [
+    '"latest_result"',
+    '"execute_and_poll"',
+    '"execute_if_stale"',
+    "/execute",
+    "/status",
+    "/results?limit=",
+    "QUERY_STATE_COMPLETED",
+    "DEFAULT_RESULT_STALE_AFTER_DAYS = 2",
+  ]) && contents.syncRoute.includes("resultMode"),
 );
 
 check(
@@ -95,7 +113,11 @@ check(
 
 check(
   "snapshot and report-pack routes expose safety metadata",
-  contents.snapshotsRoute.includes("DUNE_BUSINESS_SAFETY") && contents.reportPacksRoute.includes("DUNE_BUSINESS_SAFETY"),
+  contents.snapshotsRoute.includes("DUNE_BUSINESS_SAFETY") &&
+    contents.snapshotsRoute.includes("start_date") &&
+    contents.snapshotsRoute.includes("end_date") &&
+    contents.reportPacksRoute.includes("DUNE_BUSINESS_SAFETY") &&
+    contents.reportPacksRoute.includes("status: snapshot.status"),
 );
 
 check(
@@ -158,6 +180,250 @@ check(
     "gbrain_used: false",
     "hermes_called: false",
   ]),
+);
+
+function sampleAggregatorRows(dateEnd) {
+  return [
+    {
+      evt_block_date: "2026-05-04",
+      count_tx: 10,
+      cumulative_tx_count: 100,
+      daily_volume: 25.5,
+      cumulative_volume: 1000,
+      fee_amount: 1.25,
+    },
+    {
+      evt_block_date: dateEnd,
+      count_tx: 12,
+      cumulative_tx_count: 112,
+      daily_volume: 30,
+      cumulative_volume: 1030,
+      fee_amount: 1.5,
+    },
+  ];
+}
+
+function loadHelperWithMockFetch(fetchImpl) {
+  const transpiled = ts.transpileModule(contents.helper, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  }).outputText;
+  const capturedRows = [];
+  const cjsModule = { exports: {} };
+  const sandbox = {
+    module: cjsModule,
+    exports: cjsModule.exports,
+    console,
+    process: { env: { CMO_VAULT_TIME_ZONE: "Asia/Saigon" } },
+    Date,
+    Intl,
+    Promise,
+    Number,
+    Array,
+    Object,
+    Set,
+    Map,
+    JSON,
+    RegExp,
+    fetch: fetchImpl,
+    setTimeout: (callback) => {
+      callback();
+      return 0;
+    },
+    require: (id) => {
+      if (id === "server-only") {
+        return {};
+      }
+
+      if (id === "@/lib/cmo/config") {
+        return {
+          getCmoDuneApiKey: () => "mock-dune-key",
+          isCmoDuneNativeDashboardEnabled: () => false,
+          isCmoDuneNativeEnabled: () => true,
+        };
+      }
+
+      if (id === "@/lib/supabase/admin") {
+        return {
+          createSupabaseAdminClient: () => ({
+            from: () => ({
+              upsert: (row) => {
+                capturedRows.push(row);
+
+                return {
+                  select: () => ({
+                    single: async () => ({ data: row, error: null }),
+                  }),
+                };
+              },
+              select: () => ({
+                eq() {
+                  return this;
+                },
+                order: async () => ({ data: [], error: null }),
+              }),
+            }),
+          }),
+        };
+      }
+
+      if (id === "@/lib/cmo/workspace-registry") {
+        return {
+          requireWorkspaceRegistryEntry: () => ({
+            tenantId: "holdstation",
+            workspaceId: "holdstation-mini-app",
+            appId: "holdstation-mini-app",
+            sourceId: "holdstation-mini-app",
+          }),
+        };
+      }
+
+      if (id === "@/lib/cmo/app-workspace-types") {
+        return {};
+      }
+
+      throw new Error(`Unexpected require: ${id}`);
+    },
+  };
+
+  vm.runInNewContext(transpiled, sandbox, { filename: "dune-business-metrics.ts" });
+
+  return { helper: cjsModule.exports, capturedRows };
+}
+
+function mockJsonResponse(payload) {
+  return {
+    ok: true,
+    json: async () => payload,
+  };
+}
+
+async function runMockedSync(fetchImpl, input) {
+  const { helper, capturedRows } = loadHelperWithMockFetch(fetchImpl);
+  const result = await helper.runNativeDuneBusinessSync({
+    appId: "holdstation-mini-app",
+    queryKeys: ["wld_aggregator_daily"],
+    mode: "refresh_all",
+    ...input,
+  });
+
+  return { result, capturedRows };
+}
+
+const callsLatest = [];
+await runMockedSync(async (url, init = {}) => {
+  callsLatest.push({ url: String(url), method: init.method ?? "GET" });
+
+  return mockJsonResponse({ result: { rows: sampleAggregatorRows("2026-06-18") }, api_key: "do-not-return", raw_response: "do-not-return" });
+}, { resultMode: "latest_result" });
+
+check(
+  "mocked latest_result does not execute",
+  callsLatest.length === 1 &&
+    callsLatest[0].method === "GET" &&
+    callsLatest[0].url.includes("/query/5057875/results") &&
+    !callsLatest.some((call) => call.url.includes("/execute")),
+);
+
+const callsExecute = [];
+const executeAndPoll = await runMockedSync(async (url, init = {}) => {
+  callsExecute.push({ url: String(url), method: init.method ?? "GET" });
+
+  if (String(url).includes("/execute")) {
+    return mockJsonResponse({ execution_id: "exec-123", state: "QUERY_STATE_PENDING", raw_response: "do-not-return" });
+  }
+
+  if (String(url).includes("/status")) {
+    return mockJsonResponse({ execution_id: "exec-123", state: "QUERY_STATE_COMPLETED", execution_cost_credits: 3 });
+  }
+
+  return mockJsonResponse({ result: { rows: sampleAggregatorRows("2026-06-19") }, api_key: "do-not-return" });
+}, { resultMode: "execute_and_poll" });
+
+check(
+  "mocked execute_and_poll calls execute/status/results in order",
+  callsExecute.map((call) => `${call.method} ${call.url.replace(/^https:\/\/api\.dune\.com\/api\/v1/, "")}`).join(" > ") ===
+    "POST /query/5057875/execute > GET /execution/exec-123/status > GET /execution/exec-123/results?limit=1000" &&
+    executeAndPoll.result.results[0].executionState === "QUERY_STATE_COMPLETED" &&
+    executeAndPoll.result.results[0].executionCostCredits === 3,
+);
+
+const callsStale = [];
+await runMockedSync(async (url, init = {}) => {
+  callsStale.push({ url: String(url), method: init.method ?? "GET" });
+
+  if (String(url).includes("/query/5057875/results")) {
+    return mockJsonResponse({ result: { rows: sampleAggregatorRows("2026-05-05") } });
+  }
+
+  if (String(url).includes("/execute")) {
+    return mockJsonResponse({ execution_id: "exec-stale", state: "QUERY_STATE_PENDING" });
+  }
+
+  if (String(url).includes("/status")) {
+    return mockJsonResponse({ execution_id: "exec-stale", state: "QUERY_STATE_COMPLETED" });
+  }
+
+  return mockJsonResponse({ result: { rows: sampleAggregatorRows("2026-06-19") } });
+}, { resultMode: "execute_if_stale" });
+
+check(
+  "mocked execute_if_stale executes when latest max date is stale",
+  callsStale.some((call) => call.url.includes("/query/5057875/results")) &&
+    callsStale.some((call) => call.url.includes("/execute")) &&
+    callsStale.some((call) => call.url.includes("/execution/exec-stale/results")),
+);
+
+const callsFresh = [];
+const fresh = await runMockedSync(async (url, init = {}) => {
+  callsFresh.push({ url: String(url), method: init.method ?? "GET" });
+
+  return mockJsonResponse({ result: { rows: sampleAggregatorRows("2026-06-18") } });
+}, { resultMode: "execute_if_stale" });
+
+check(
+  "mocked execute_if_stale skips execution when latest max date is fresh",
+  callsFresh.length === 1 &&
+    callsFresh[0].url.includes("/query/5057875/results") &&
+    !callsFresh.some((call) => call.url.includes("/execute")) &&
+    fresh.result.results[0].executionState === "SKIPPED_FRESH_LATEST_RESULT",
+);
+
+for (const state of ["QUERY_STATE_FAILED", "QUERY_STATE_CANCELED", "QUERY_STATE_EXPIRED"]) {
+  const failed = await runMockedSync(async (url) => {
+    if (String(url).includes("/execute")) {
+      return mockJsonResponse({ execution_id: `exec-${state}`, state: "QUERY_STATE_PENDING" });
+    }
+
+    return mockJsonResponse({
+      execution_id: `exec-${state}`,
+      state,
+      error: { type: "query_error", message: "safe mocked failure" },
+    });
+  }, { resultMode: "execute_and_poll" });
+
+  check(
+    `mocked ${state} returns a clear safe error`,
+    failed.result.status === "failed" &&
+      failed.result.results[0].status === "failed" &&
+      failed.result.results[0].executionState === state &&
+      failed.result.results[0].errorCode === `dune_execution_${state.toLowerCase()}` &&
+      failed.result.results[0].errorMessage === "safe mocked failure",
+  );
+}
+
+const slimOutput = JSON.stringify(executeAndPoll.result);
+check(
+  "sync response is slim and does not include full series points or raw/API key output",
+    !slimOutput.includes('"snapshot"') &&
+    !slimOutput.includes('"series"') &&
+    !slimOutput.includes('"points"') &&
+    !slimOutput.includes('"executionId"') &&
+    !slimOutput.includes("do-not-return") &&
+    !slimOutput.includes("mock-dune-key"),
 );
 
 const failed = checks.filter((item) => !item.passed);

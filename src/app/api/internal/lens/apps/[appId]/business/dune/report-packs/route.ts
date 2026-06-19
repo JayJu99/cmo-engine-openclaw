@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 function packFromSnapshot(snapshot: Awaited<ReturnType<typeof getNativeDuneBusinessSnapshots>>[number]) {
   return {
     pack_key: snapshot.metricGroup,
+    status: snapshot.status,
     source: {
       type: snapshot.sourceType,
       sourceId: snapshot.sourceId,

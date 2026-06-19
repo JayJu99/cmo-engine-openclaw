@@ -11,12 +11,24 @@ import type {
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { requireWorkspaceRegistryEntry, type WorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 
-const DUNE_RESULTS_BASE_URL = "https://api.dune.com/api/v1/query";
+const DUNE_QUERY_BASE_URL = "https://api.dune.com/api/v1/query";
+const DUNE_EXECUTION_BASE_URL = "https://api.dune.com/api/v1/execution";
 const DEFAULT_TIMEZONE = process.env.CMO_VAULT_TIME_ZONE ?? "Asia/Saigon";
 const STALE_AFTER_MS = 3 * 60 * 60 * 1000;
+const DEFAULT_RESULT_STALE_AFTER_DAYS = 2;
+const DEFAULT_EXECUTION_POLL_INTERVAL_MS = 5_000;
+const DEFAULT_EXECUTION_TIMEOUT_MS = 5 * 60 * 1000;
+const TERMINAL_EXECUTION_STATES = new Set([
+  "QUERY_STATE_COMPLETED",
+  "QUERY_STATE_COMPLETED_PARTIAL",
+  "QUERY_STATE_FAILED",
+  "QUERY_STATE_CANCELED",
+  "QUERY_STATE_EXPIRED",
+]);
 
 export type DuneBusinessQueryKey = "wld_aggregator_daily" | "wld_partner_stats_daily";
 export type DuneBusinessSyncMode = "refresh_all" | "refresh_if_stale";
+export type DuneBusinessResultMode = "latest_result" | "execute_and_poll" | "execute_if_stale";
 export type DuneBusinessSnapshotStatus = "connected" | "partial" | "missing" | "stale" | "failed";
 
 export interface DuneBusinessQueryConfig {
@@ -25,9 +37,25 @@ export interface DuneBusinessQueryConfig {
   queryName: string;
   queryId: string;
   limit: number;
+  resultMode: DuneBusinessResultMode;
+  staleAfterDays: number;
   sourceFields: string[];
   seriesId: string;
   tableId?: string;
+}
+
+export interface DuneExecutionSummary {
+  executionId?: string;
+  state: string;
+  costCredits: number | null;
+  submittedAt?: string;
+  executionStartedAt?: string;
+  executionEndedAt?: string;
+  expiresAt?: string;
+  pollCount: number;
+  resultSource: "latest_result" | "execute_and_poll" | "skipped_fresh_latest_result" | "local_snapshot" | "dry_run";
+  errorType?: string;
+  errorMessage?: string;
 }
 
 export const DUNE_BUSINESS_QUERY_REGISTRY: Record<DuneBusinessQueryKey, DuneBusinessQueryConfig> = {
@@ -37,6 +65,8 @@ export const DUNE_BUSINESS_QUERY_REGISTRY: Record<DuneBusinessQueryKey, DuneBusi
     queryName: "holdstation_wld_aggregator_tx",
     queryId: "5057875",
     limit: 1000,
+    resultMode: "execute_if_stale",
+    staleAfterDays: DEFAULT_RESULT_STALE_AFTER_DAYS,
     sourceFields: ["evt_block_date", "count_tx", "cumulative_tx_count", "daily_volume", "cumulative_volume", "fee_amount"],
     seriesId: "wld_aggregator_daily_series",
   },
@@ -46,6 +76,8 @@ export const DUNE_BUSINESS_QUERY_REGISTRY: Record<DuneBusinessQueryKey, DuneBusi
     queryName: "Partner Stats on WLD",
     queryId: "5454333",
     limit: 3000,
+    resultMode: "latest_result",
+    staleAfterDays: DEFAULT_RESULT_STALE_AFTER_DAYS,
     sourceFields: ["partnerCode", "evt_block_date", "volume", "count_tx"],
     seriesId: "wld_partner_daily_series",
     tableId: "wld_partner_summary",
@@ -77,6 +109,10 @@ export interface NativeDuneBusinessSnapshot {
     notes: string[];
     sourceRows: number;
     qualityStatus: DuneBusinessSnapshotStatus;
+    resultMode?: DuneBusinessResultMode;
+    latestResultMaxDate?: string | null;
+    latestResultWasStale?: boolean;
+    execution?: DuneExecutionSummary | null;
   };
   provenance: Record<string, unknown>;
   syncedAt: string | null;
@@ -111,9 +147,18 @@ interface DuneBusinessSyncResultItem {
   metricGroup: DuneBusinessQueryConfig["metricGroup"];
   queryId: string;
   queryName: string;
+  resultMode: DuneBusinessResultMode;
   status: "synced" | "skipped" | "dry_run" | "failed";
-  snapshot?: NativeDuneBusinessSnapshot;
+  dateStart: string | null;
+  dateEnd: string | null;
+  metricCount: number;
+  seriesRowCount: number;
+  tableRowCount: number;
+  executionState: string | null;
+  executionCostCredits: number | null;
+  resultSource?: DuneExecutionSummary["resultSource"];
   errorCode?: string;
+  errorMessage?: string;
 }
 
 export interface DuneBusinessSyncResult {
@@ -165,6 +210,14 @@ function asRows(value: unknown): Record<string, unknown>[] {
   const rows = Array.isArray(result.rows) ? result.rows : Array.isArray(value.rows) ? value.rows : [];
 
   return rows.filter(isRecord);
+}
+
+function safeErrorMessage(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+
+  return value.replace(/\s+/g, " ").trim().slice(0, 240);
 }
 
 function numberValue(value: unknown): number | null {
@@ -256,6 +309,22 @@ function rangeForRows(rows: Record<string, unknown>[]): { dateStart: string | nu
   };
 }
 
+function maxDateForQueryRows(queryKey: DuneBusinessQueryKey, rows: Record<string, unknown>[]): string | null {
+  const normalized = queryKey === "wld_aggregator_daily" ? normalizeAggregatorRows(rows) : normalizePartnerRows(rows);
+
+  return rangeForRows(normalized).dateEnd;
+}
+
+function isResultDateStale(dateEnd: string | null, staleAfterDays: number, now = Date.now()): boolean {
+  if (!dateEnd) {
+    return true;
+  }
+
+  const parsed = Date.parse(`${dateEnd}T00:00:00.000Z`);
+
+  return !Number.isFinite(parsed) || now - parsed > staleAfterDays * 24 * 60 * 60 * 1000;
+}
+
 function normalizeAggregatorRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
   return sortedRowsByDate(rows)
     .map((row) => ({
@@ -280,7 +349,14 @@ function normalizePartnerRows(rows: Record<string, unknown>[]): Record<string, u
     .filter((row) => row.evt_block_date);
 }
 
-function buildAggregatorSnapshot(entry: WorkspaceRegistryEntry, config: DuneBusinessQueryConfig, rows: Record<string, unknown>[], syncedAt: string): NativeDuneBusinessSnapshot {
+interface DuneBusinessTransformMetadata {
+  resultMode?: DuneBusinessResultMode;
+  latestResultMaxDate?: string | null;
+  latestResultWasStale?: boolean;
+  execution?: DuneExecutionSummary | null;
+}
+
+function buildAggregatorSnapshot(entry: WorkspaceRegistryEntry, config: DuneBusinessQueryConfig, rows: Record<string, unknown>[], syncedAt: string, metadata: DuneBusinessTransformMetadata = {}): NativeDuneBusinessSnapshot {
   const points = normalizeAggregatorRows(rows);
   const latest = points[points.length - 1];
   const latestDailyTx = latest ? numberValue(latest.count_tx) : null;
@@ -338,6 +414,7 @@ function buildAggregatorSnapshot(entry: WorkspaceRegistryEntry, config: DuneBusi
     status,
     sourceRows: rows.length,
     syncedAt,
+    ...metadata,
   });
 }
 
@@ -375,7 +452,7 @@ function buildPartnerSummaryRows(points: Record<string, unknown>[]): Record<stri
   }));
 }
 
-function buildPartnerSnapshot(entry: WorkspaceRegistryEntry, config: DuneBusinessQueryConfig, rows: Record<string, unknown>[], syncedAt: string): NativeDuneBusinessSnapshot {
+function buildPartnerSnapshot(entry: WorkspaceRegistryEntry, config: DuneBusinessQueryConfig, rows: Record<string, unknown>[], syncedAt: string, metadata: DuneBusinessTransformMetadata = {}): NativeDuneBusinessSnapshot {
   const points = normalizePartnerRows(rows);
   const tableRows = buildPartnerSummaryRows(points);
   const totalVolume = tableRows.reduce((sum, row) => sum + numberOrZero(row.total_volume), 0);
@@ -434,6 +511,7 @@ function buildPartnerSnapshot(entry: WorkspaceRegistryEntry, config: DuneBusines
     status,
     sourceRows: rows.length,
     syncedAt,
+    ...metadata,
   });
 }
 
@@ -447,7 +525,13 @@ function nativeSnapshot(input: {
   status: DuneBusinessSnapshotStatus;
   sourceRows: number;
   syncedAt: string;
+  resultMode?: DuneBusinessResultMode;
+  latestResultMaxDate?: string | null;
+  latestResultWasStale?: boolean;
+  execution?: DuneExecutionSummary | null;
 }): NativeDuneBusinessSnapshot {
+  const resultMode = input.resultMode ?? input.config.resultMode;
+
   return {
     tenantId: input.entry.tenantId,
     workspaceId: input.entry.workspaceId,
@@ -476,12 +560,22 @@ function nativeSnapshot(input: {
       ],
       sourceRows: input.sourceRows,
       qualityStatus: input.status,
+      resultMode,
+      latestResultMaxDate: input.latestResultMaxDate ?? input.range.dateEnd,
+      latestResultWasStale: input.latestResultWasStale,
+      execution: input.execution ?? null,
     },
     provenance: {
       sourceWorkflow: "product_native_dune_connector",
       queryKey: input.config.queryKey,
       queryId: input.config.queryId,
       queryName: input.config.queryName,
+      resultMode,
+      latestResultMaxDate: input.latestResultMaxDate ?? input.range.dateEnd,
+      latestResultWasStale: input.latestResultWasStale,
+      executionId: input.execution?.executionId,
+      executionState: input.execution?.state,
+      executionCostCredits: input.execution?.costCredits ?? null,
       nativeConnector: true,
       rawDuneResponseStored: false,
       vaultWritePerformed: false,
@@ -498,38 +592,247 @@ export function configuredDuneBusinessQueryKeys(input?: string[]): DuneBusinessQ
   return Array.from(new Set(requested.length ? requested : ["wld_aggregator_daily", "wld_partner_stats_daily"]));
 }
 
-async function fetchDuneRows(config: DuneBusinessQueryConfig): Promise<Record<string, unknown>[]> {
+export function configuredDuneBusinessResultMode(input: unknown, fallback: DuneBusinessResultMode): DuneBusinessResultMode {
+  return input === "latest_result" || input === "execute_and_poll" || input === "execute_if_stale" ? input : fallback;
+}
+
+function duneApiHeaders(apiKey: string, json = false): HeadersInit {
+  return {
+    "x-dune-api-key": apiKey,
+    ...(json ? { "content-type": "application/json" } : {}),
+  };
+}
+
+async function duneJsonRequest(url: string, init: RequestInit, errorCode: string): Promise<unknown> {
+  const response = await fetch(url, {
+    ...init,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`${errorCode}_${response.status}`);
+  }
+
+  return response.json() as Promise<unknown>;
+}
+
+async function fetchLatestDuneRows(config: DuneBusinessQueryConfig): Promise<Record<string, unknown>[]> {
   const apiKey = getCmoDuneApiKey();
 
   if (!apiKey) {
     throw new Error("dune_api_key_not_configured");
   }
 
-  const url = `${DUNE_RESULTS_BASE_URL}/${encodeURIComponent(config.queryId)}/results?limit=${config.limit}`;
-  const response = await fetch(url, {
-    headers: {
-      "x-dune-api-key": apiKey,
-    },
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    throw new Error(`dune_results_request_failed_${response.status}`);
-  }
-
-  const payload = await response.json() as unknown;
+  const url = `${DUNE_QUERY_BASE_URL}/${encodeURIComponent(config.queryId)}/results?limit=${config.limit}`;
+  const payload = await duneJsonRequest(url, { headers: duneApiHeaders(apiKey) }, "dune_latest_results_request_failed");
 
   return asRows(payload);
 }
 
-export function transformDuneBusinessRows(entry: WorkspaceRegistryEntry, queryKey: DuneBusinessQueryKey, rows: Record<string, unknown>[], syncedAt = new Date().toISOString()): NativeDuneBusinessSnapshot {
+function executionIdFromPayload(payload: unknown): string {
+  if (!isRecord(payload)) {
+    return "";
+  }
+
+  return stringValue(payload.execution_id);
+}
+
+function executionSummaryFromPayload(payload: unknown, resultSource: DuneExecutionSummary["resultSource"], pollCount: number): DuneExecutionSummary {
+  const record = isRecord(payload) ? payload : {};
+  const error = isRecord(record.error) ? record.error : {};
+
+  return {
+    executionId: stringValue(record.execution_id) || undefined,
+    state: stringValue(record.state) || "QUERY_STATE_UNKNOWN",
+    costCredits: numberValue(record.execution_cost_credits),
+    submittedAt: stringValue(record.submitted_at) || undefined,
+    executionStartedAt: stringValue(record.execution_started_at) || undefined,
+    executionEndedAt: stringValue(record.execution_ended_at) || undefined,
+    expiresAt: stringValue(record.expires_at) || undefined,
+    pollCount,
+    resultSource,
+    errorType: stringValue(error.type) || undefined,
+    errorMessage: safeErrorMessage(error.message),
+  };
+}
+
+class DuneExecutionError extends Error {
+  code: string;
+  execution: DuneExecutionSummary;
+
+  constructor(code: string, execution: DuneExecutionSummary) {
+    super(code);
+    this.name = "DuneExecutionError";
+    this.code = code;
+    this.execution = execution;
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function executeDuneQuery(config: DuneBusinessQueryConfig): Promise<DuneExecutionSummary> {
+  const apiKey = getCmoDuneApiKey();
+
+  if (!apiKey) {
+    throw new Error("dune_api_key_not_configured");
+  }
+
+  const url = `${DUNE_QUERY_BASE_URL}/${encodeURIComponent(config.queryId)}/execute`;
+  const payload = await duneJsonRequest(url, {
+    method: "POST",
+    headers: duneApiHeaders(apiKey, true),
+    body: JSON.stringify({}),
+  }, "dune_execute_request_failed");
+  const executionId = executionIdFromPayload(payload);
+
+  if (!executionId) {
+    throw new Error("dune_execute_missing_execution_id");
+  }
+
+  return {
+    ...executionSummaryFromPayload(payload, "execute_and_poll", 0),
+    executionId,
+  };
+}
+
+async function fetchDuneExecutionStatus(executionId: string, pollCount: number): Promise<DuneExecutionSummary> {
+  const apiKey = getCmoDuneApiKey();
+
+  if (!apiKey) {
+    throw new Error("dune_api_key_not_configured");
+  }
+
+  const url = `${DUNE_EXECUTION_BASE_URL}/${encodeURIComponent(executionId)}/status`;
+  const payload = await duneJsonRequest(url, { headers: duneApiHeaders(apiKey) }, "dune_execution_status_request_failed");
+
+  return executionSummaryFromPayload(payload, "execute_and_poll", pollCount);
+}
+
+async function fetchDuneExecutionRows(config: DuneBusinessQueryConfig, executionId: string): Promise<Record<string, unknown>[]> {
+  const apiKey = getCmoDuneApiKey();
+
+  if (!apiKey) {
+    throw new Error("dune_api_key_not_configured");
+  }
+
+  const url = `${DUNE_EXECUTION_BASE_URL}/${encodeURIComponent(executionId)}/results?limit=${config.limit}`;
+  const payload = await duneJsonRequest(url, { headers: duneApiHeaders(apiKey) }, "dune_execution_results_request_failed");
+
+  return asRows(payload);
+}
+
+async function executeAndPollDuneRows(config: DuneBusinessQueryConfig, options: { timeoutMs?: number; pollIntervalMs?: number } = {}): Promise<{ rows: Record<string, unknown>[]; execution: DuneExecutionSummary }> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
+  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_EXECUTION_POLL_INTERVAL_MS;
+  const startedAt = Date.now();
+  let execution = await executeDuneQuery(config);
+  let pollCount = 0;
+
+  while (Date.now() - startedAt <= timeoutMs) {
+    if (execution.executionId && TERMINAL_EXECUTION_STATES.has(execution.state)) {
+      if (execution.state === "QUERY_STATE_COMPLETED") {
+        const rows = await fetchDuneExecutionRows(config, execution.executionId);
+
+        return { rows, execution };
+      }
+
+      throw new DuneExecutionError(`dune_execution_${execution.state.toLowerCase()}`, execution);
+    }
+
+    await sleep(pollIntervalMs);
+    pollCount += 1;
+
+    if (!execution.executionId) {
+      throw new Error("dune_execution_missing_execution_id");
+    }
+
+    execution = await fetchDuneExecutionStatus(execution.executionId, pollCount);
+  }
+
+  throw new DuneExecutionError("dune_execution_poll_timeout", {
+    ...execution,
+    state: execution.state || "QUERY_STATE_TIMEOUT",
+    pollCount,
+  });
+}
+
+async function fetchDuneRowsForResultMode(queryKey: DuneBusinessQueryKey, config: DuneBusinessQueryConfig, resultMode: DuneBusinessResultMode): Promise<{
+  rows: Record<string, unknown>[];
+  resultMode: DuneBusinessResultMode;
+  latestResultMaxDate: string | null;
+  latestResultWasStale?: boolean;
+  execution: DuneExecutionSummary;
+}> {
+  if (resultMode === "latest_result") {
+    const rows = await fetchLatestDuneRows(config);
+    const latestResultMaxDate = maxDateForQueryRows(queryKey, rows);
+
+    return {
+      rows,
+      resultMode,
+      latestResultMaxDate,
+      latestResultWasStale: false,
+      execution: {
+        state: "LATEST_RESULT",
+        costCredits: null,
+        pollCount: 0,
+        resultSource: "latest_result",
+      },
+    };
+  }
+
+  if (resultMode === "execute_and_poll") {
+    const { rows, execution } = await executeAndPollDuneRows(config);
+
+    return {
+      rows,
+      resultMode,
+      latestResultMaxDate: maxDateForQueryRows(queryKey, rows),
+      latestResultWasStale: true,
+      execution,
+    };
+  }
+
+  const latestRows = await fetchLatestDuneRows(config);
+  const latestResultMaxDate = maxDateForQueryRows(queryKey, latestRows);
+  const latestResultWasStale = isResultDateStale(latestResultMaxDate, config.staleAfterDays);
+
+  if (!latestResultWasStale) {
+    return {
+      rows: latestRows,
+      resultMode,
+      latestResultMaxDate,
+      latestResultWasStale,
+      execution: {
+        state: "SKIPPED_FRESH_LATEST_RESULT",
+        costCredits: null,
+        pollCount: 0,
+        resultSource: "skipped_fresh_latest_result",
+      },
+    };
+  }
+
+  const { rows, execution } = await executeAndPollDuneRows(config);
+
+  return {
+    rows,
+    resultMode,
+    latestResultMaxDate,
+    latestResultWasStale,
+    execution,
+  };
+}
+
+export function transformDuneBusinessRows(entry: WorkspaceRegistryEntry, queryKey: DuneBusinessQueryKey, rows: Record<string, unknown>[], syncedAt = new Date().toISOString(), metadata: DuneBusinessTransformMetadata = {}): NativeDuneBusinessSnapshot {
   const config = DUNE_BUSINESS_QUERY_REGISTRY[queryKey];
 
   if (queryKey === "wld_aggregator_daily") {
-    return buildAggregatorSnapshot(entry, config, rows, syncedAt);
+    return buildAggregatorSnapshot(entry, config, rows, syncedAt, metadata);
   }
 
-  return buildPartnerSnapshot(entry, config, rows, syncedAt);
+  return buildPartnerSnapshot(entry, config, rows, syncedAt, metadata);
 }
 
 function toRow(snapshot: NativeDuneBusinessSnapshot): Record<string, unknown> {
@@ -591,6 +894,22 @@ function toNativeSnapshot(row: WorkspaceBusinessMetricSnapshotRow): NativeDuneBu
       notes: Array.isArray(diagnostics.notes) ? diagnostics.notes.filter((value): value is string => typeof value === "string") : [],
       sourceRows: numberOrZero(diagnostics.sourceRows),
       qualityStatus: row.status,
+      resultMode: configuredDuneBusinessResultMode(diagnostics.resultMode, config.resultMode),
+      latestResultMaxDate: typeof diagnostics.latestResultMaxDate === "string" ? diagnostics.latestResultMaxDate : null,
+      latestResultWasStale: typeof diagnostics.latestResultWasStale === "boolean" ? diagnostics.latestResultWasStale : undefined,
+      execution: isRecord(diagnostics.execution) ? {
+        executionId: stringValue(diagnostics.execution.executionId) || undefined,
+        state: stringValue(diagnostics.execution.state) || "QUERY_STATE_UNKNOWN",
+        costCredits: numberValue(diagnostics.execution.costCredits),
+        submittedAt: stringValue(diagnostics.execution.submittedAt) || undefined,
+        executionStartedAt: stringValue(diagnostics.execution.executionStartedAt) || undefined,
+        executionEndedAt: stringValue(diagnostics.execution.executionEndedAt) || undefined,
+        expiresAt: stringValue(diagnostics.execution.expiresAt) || undefined,
+        pollCount: numberOrZero(diagnostics.execution.pollCount),
+        resultSource: stringValue(diagnostics.execution.resultSource) === "execute_and_poll" ? "execute_and_poll" : stringValue(diagnostics.execution.resultSource) === "skipped_fresh_latest_result" ? "skipped_fresh_latest_result" : stringValue(diagnostics.execution.resultSource) === "local_snapshot" ? "local_snapshot" : stringValue(diagnostics.execution.resultSource) === "dry_run" ? "dry_run" : "latest_result",
+        errorType: stringValue(diagnostics.execution.errorType) || undefined,
+        errorMessage: safeErrorMessage(diagnostics.execution.errorMessage),
+      } : null,
     },
     provenance: isRecord(row.provenance_json) ? row.provenance_json : {},
     syncedAt: row.synced_at,
@@ -652,6 +971,98 @@ function isStale(snapshot: NativeDuneBusinessSnapshot | null): boolean {
   const syncedAt = Date.parse(snapshot.syncedAt);
 
   return !Number.isFinite(syncedAt) || Date.now() - syncedAt > STALE_AFTER_MS;
+}
+
+function seriesRowCount(snapshot: NativeDuneBusinessSnapshot): number {
+  return snapshot.series.reduce((sum, series) => sum + series.points.length, 0);
+}
+
+function tableRowCount(snapshot: NativeDuneBusinessSnapshot): number {
+  return snapshot.tables.reduce((sum, table) => sum + table.rows.length, 0);
+}
+
+function executionForSnapshot(snapshot: NativeDuneBusinessSnapshot, fallback: DuneExecutionSummary): DuneExecutionSummary {
+  return snapshot.diagnostics.execution ?? fallback;
+}
+
+function syncItemFromSnapshot(input: {
+  queryKey: DuneBusinessQueryKey;
+  config: DuneBusinessQueryConfig;
+  resultMode: DuneBusinessResultMode;
+  status: DuneBusinessSyncResultItem["status"];
+  snapshot: NativeDuneBusinessSnapshot;
+  execution?: DuneExecutionSummary;
+}): DuneBusinessSyncResultItem {
+  const execution = executionForSnapshot(input.snapshot, input.execution ?? {
+    state: input.status === "skipped" ? "SKIPPED_PRODUCT_SNAPSHOT_FRESH" : "UNKNOWN",
+    costCredits: null,
+    pollCount: 0,
+    resultSource: input.status === "skipped" ? "local_snapshot" : "latest_result",
+  });
+
+  return {
+    queryKey: input.queryKey,
+    metricGroup: input.config.metricGroup,
+    queryId: input.config.queryId,
+    queryName: input.config.queryName,
+    resultMode: input.resultMode,
+    status: input.status,
+    dateStart: input.snapshot.dateStart,
+    dateEnd: input.snapshot.dateEnd,
+    metricCount: input.snapshot.metrics.length,
+    seriesRowCount: seriesRowCount(input.snapshot),
+    tableRowCount: tableRowCount(input.snapshot),
+    executionState: execution.state,
+    executionCostCredits: execution.costCredits,
+    resultSource: execution.resultSource,
+  };
+}
+
+function dryRunSyncItem(queryKey: DuneBusinessQueryKey, config: DuneBusinessQueryConfig, resultMode: DuneBusinessResultMode): DuneBusinessSyncResultItem {
+  return {
+    queryKey,
+    metricGroup: config.metricGroup,
+    queryId: config.queryId,
+    queryName: config.queryName,
+    resultMode,
+    status: "dry_run",
+    dateStart: null,
+    dateEnd: null,
+    metricCount: 0,
+    seriesRowCount: 0,
+    tableRowCount: 0,
+    executionState: "DRY_RUN",
+    executionCostCredits: null,
+    resultSource: "dry_run",
+  };
+}
+
+function failedSyncItem(input: {
+  queryKey: DuneBusinessQueryKey;
+  config: DuneBusinessQueryConfig;
+  resultMode: DuneBusinessResultMode;
+  errorCode: string;
+  errorMessage?: string;
+  execution?: DuneExecutionSummary;
+}): DuneBusinessSyncResultItem {
+  return {
+    queryKey: input.queryKey,
+    metricGroup: input.config.metricGroup,
+    queryId: input.config.queryId,
+    queryName: input.config.queryName,
+    resultMode: input.resultMode,
+    status: "failed",
+    dateStart: null,
+    dateEnd: null,
+    metricCount: 0,
+    seriesRowCount: 0,
+    tableRowCount: 0,
+    executionState: input.execution?.state ?? null,
+    executionCostCredits: input.execution?.costCredits ?? null,
+    resultSource: input.execution?.resultSource,
+    errorCode: input.errorCode,
+    errorMessage: input.errorMessage,
+  };
 }
 
 export function nativeDuneSnapshotToBusinessMetrics(snapshot: NativeDuneBusinessSnapshot): CmoBusinessMetricsSnapshot {
@@ -718,6 +1129,7 @@ export async function runNativeDuneBusinessSync(input: {
   appId: string;
   queryKeys?: DuneBusinessQueryKey[];
   mode?: DuneBusinessSyncMode;
+  resultMode?: DuneBusinessResultMode;
   trigger?: string;
   dryRun?: boolean;
 }): Promise<DuneBusinessSyncResult> {
@@ -729,27 +1141,20 @@ export async function runNativeDuneBusinessSync(input: {
 
   for (const queryKey of requestedQueryKeys) {
     const config = DUNE_BUSINESS_QUERY_REGISTRY[queryKey];
+    const resultMode = input.resultMode ?? config.resultMode;
 
     if (dryRun) {
-      results.push({
-        queryKey,
-        metricGroup: config.metricGroup,
-        queryId: config.queryId,
-        queryName: config.queryName,
-        status: "dry_run",
-      });
+      results.push(dryRunSyncItem(queryKey, config, resultMode));
       continue;
     }
 
     if (!nativeEnabled) {
-      results.push({
+      results.push(failedSyncItem({
         queryKey,
-        metricGroup: config.metricGroup,
-        queryId: config.queryId,
-        queryName: config.queryName,
-        status: "failed",
+        config,
+        resultMode,
         errorCode: "native_dune_disabled",
-      });
+      }));
       continue;
     }
 
@@ -758,39 +1163,51 @@ export async function runNativeDuneBusinessSync(input: {
         const existing = await getNativeDuneBusinessSnapshot(entry.appId, config.metricGroup);
 
         if (existing && !isStale(existing)) {
-          results.push({
+          results.push(syncItemFromSnapshot({
             queryKey,
-            metricGroup: config.metricGroup,
-            queryId: config.queryId,
-            queryName: config.queryName,
+            config,
+            resultMode,
             status: "skipped",
             snapshot: existing,
-          });
+            execution: {
+              state: "SKIPPED_PRODUCT_SNAPSHOT_FRESH",
+              costCredits: null,
+              pollCount: 0,
+              resultSource: "local_snapshot",
+            },
+          }));
           continue;
         }
       }
 
-      const rows = await fetchDuneRows(config);
-      const snapshot = transformDuneBusinessRows(entry, queryKey, rows);
+      const result = await fetchDuneRowsForResultMode(queryKey, config, resultMode);
+      const snapshot = transformDuneBusinessRows(entry, queryKey, result.rows, new Date().toISOString(), {
+        resultMode: result.resultMode,
+        latestResultMaxDate: result.latestResultMaxDate,
+        latestResultWasStale: result.latestResultWasStale,
+        execution: result.execution,
+      });
       const persisted = await upsertNativeDuneBusinessSnapshot(snapshot);
 
-      results.push({
+      results.push(syncItemFromSnapshot({
         queryKey,
-        metricGroup: config.metricGroup,
-        queryId: config.queryId,
-        queryName: config.queryName,
+        config,
+        resultMode,
         status: "synced",
         snapshot: persisted,
-      });
+        execution: result.execution,
+      }));
     } catch (error) {
-      results.push({
+      const executionError = error instanceof DuneExecutionError ? error : null;
+
+      results.push(failedSyncItem({
         queryKey,
-        metricGroup: config.metricGroup,
-        queryId: config.queryId,
-        queryName: config.queryName,
-        status: "failed",
-        errorCode: error instanceof Error ? error.message.split(":")[0] : "native_dune_sync_failed",
-      });
+        config,
+        resultMode,
+        errorCode: executionError?.code ?? (error instanceof Error ? error.message.split(":")[0] : "native_dune_sync_failed"),
+        errorMessage: executionError?.execution.errorMessage,
+        execution: executionError?.execution,
+      }));
     }
   }
 

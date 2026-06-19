@@ -2,6 +2,7 @@ import { authorizeLensInternalRequest } from "@/lib/cmo/lens-internal-auth";
 import {
   configuredDuneBusinessQueryKeys,
   runNativeDuneBusinessSync,
+  type DuneBusinessResultMode,
   type DuneBusinessSyncMode,
 } from "@/lib/cmo/dune-business-metrics";
 
@@ -36,6 +37,12 @@ function queryKeysFromBody(body: Record<string, unknown>) {
 
 function triggerFromBody(body: Record<string, unknown>): string {
   return typeof body.trigger === "string" && body.trigger.trim() ? body.trigger.trim() : "manual";
+}
+
+function resultModeFromBody(body: Record<string, unknown>): DuneBusinessResultMode | undefined {
+  const resultMode = typeof body.resultMode === "string" ? body.resultMode.trim() : "";
+
+  return resultMode === "latest_result" || resultMode === "execute_and_poll" || resultMode === "execute_if_stale" ? resultMode : undefined;
 }
 
 function routeErrorResponse(error: unknown): Response {
@@ -74,6 +81,7 @@ export async function POST(request: Request, context: RouteContext<"/api/interna
       appId,
       queryKeys: queryKeysFromBody(body),
       mode: modeFromBody(body),
+      resultMode: resultModeFromBody(body),
       trigger: triggerFromBody(body),
       dryRun: body.dryRun === true,
     });

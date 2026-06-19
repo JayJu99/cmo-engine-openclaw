@@ -15,6 +15,8 @@ function safeSnapshot(snapshot: Awaited<ReturnType<typeof getNativeDuneBusinessS
       preset: snapshot.rangePreset,
       startDate: snapshot.dateStart,
       endDate: snapshot.dateEnd,
+      start_date: snapshot.dateStart,
+      end_date: snapshot.dateEnd,
       timezone: snapshot.timezone,
     },
     source: {
