@@ -192,9 +192,9 @@ assert.match(mapperSource, /const MAX_REPLAY_MESSAGES = 16/, "recent message rep
 assert.match(mapperSource, /isPendingToolRunPlaceholder/, "request mapper must filter pending assistant placeholders");
 assert.match(mapperSource, /CMO is working/, "pending placeholder content must be excluded from semantic replay");
 assert.match(mapperSource, /traceSummary\.tools_used/, "mapper must read tool_trace_summary.tools_used fallback");
-assert.match(mapperSource, /isToolCapableCmo/, "tool-capable CMO answers must preserve the Hermes answer body");
 assert.match(mapperSource, /const body = answer\.body\.trim\(\)/, "mapper must read Hermes answer.body directly");
 assert.match(mapperSource, /return body \|\| answer\.summary\.trim\(\)/, "tool-capable CMO answer mapping must return body without Product templating");
+assert.doesNotMatch(mapperSource, /answer\.body[\s\S]{0,160}replace\(/, "tool-capable CMO answers must preserve the Hermes answer body");
 assert.equal(cleanMappedAnswer, cleanNumberedHermesAnswer.body, "Product mapped answer must equal Hermes answer.body for proper numbered lists");
 assert.equal(cleanMappedAnswer, cleanNumberedHermesAnswer.body, "Product session content should store the same mapped answer body");
 assert.equal(repeatedMappedAnswer, repeatedNumberingHermesAnswer.body, "Product must preserve raw repeated numbering if Hermes emits it");

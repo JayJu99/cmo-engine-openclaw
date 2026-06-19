@@ -1314,6 +1314,21 @@ const requestIsSourceBackedOrSeeking = (request: HermesCmoRuntimeRequest): boole
   );
 };
 
+const requestIsCreativeExecution = (request: HermesCmoRuntimeRequest): boolean => {
+  const input = isRecord(request.input) ? request.input : {};
+  const creativeIntent = isRecord(input.creative_execution_intent) ? input.creative_execution_intent : {};
+  const toolPolicy = isRecord(request.tool_policy) ? request.tool_policy : {};
+
+  return (
+    request.intent.explicit_command === "creative.generate_image" ||
+    request.intent.explicit_command === "creative.image_generation" ||
+    request.intent.explicit_command === "creative" ||
+    creativeIntent.requested === true ||
+    request.constraints.creative_execution_requested === true ||
+    toolPolicy.creative_execution_requested === true
+  );
+};
+
 const positiveTimeoutOverride = (value: unknown): number | undefined => {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 };
@@ -1325,7 +1340,8 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: Herm
   const toolChatCanaryEnabled = isCmoHermesCmoToolChatEnabled() &&
     appIsConfiguredCanary(request.workspace.app_id, getCmoHermesCmoToolChatCanaryApps());
   const externalResearch = requestIsExternalResearch(request);
-  const useToolEndpoint = toolChatCanaryEnabled || (toolEndpointEnabled && (externalResearch || requestIsSourceBackedOrSeeking(request)));
+  const creativeExecution = requestIsCreativeExecution(request);
+  const useToolEndpoint = !creativeExecution && (toolChatCanaryEnabled || (toolEndpointEnabled && (externalResearch || requestIsSourceBackedOrSeeking(request))));
   const configuredToolEndpoint = getCmoHermesCmoToolEndpoint();
   const endpointPath = useToolEndpoint ? endpointPathFromConfig(configuredToolEndpoint) : HERMES_CMO_AGENT_PATH;
   const timeoutMs = useToolEndpoint ? positiveTimeoutOverride(options.toolTimeoutMs) ?? getCmoHermesCmoToolTimeoutMs() : hermesTimeoutMs();
@@ -1744,15 +1760,16 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
     tool_endpoint_enabled: config.toolEndpointEnabled,
     creative_agent_allowed: allowedAgents.includes("creative"),
     product_requested_execution:
-      constraints.allowCreativeExecution === true ||
-      executionBoundary.creative_execution_allowed === true ||
-      creativePolicy.enabled === true,
+      constraints.creative_execution_requested === true ||
+      executionBoundary.creative_execution_requested === true ||
+      creativePolicy.execution_requested === true,
     product_requested_brief_only:
-      constraints.allowCreativeExecution !== true &&
-      executionBoundary.creative_execution_allowed !== true &&
-      creativePolicy.enabled !== true,
+      constraints.creative_execution_requested !== true &&
+      executionBoundary.creative_execution_requested !== true &&
+      creativePolicy.execution_requested !== true,
     allow_sub_agent_execution: constraints.allowSubAgentExecution === true,
     allow_creative_execution: constraints.allowCreativeExecution === true,
+    creative_execution_requested: constraints.creative_execution_requested === true,
     creative_call_mode: constraints.creative_call_mode ?? h5LiveAdapter.creative_call_mode ?? creativePolicy.call_mode,
     creative_profile: constraints.creative_profile ?? h5LiveAdapter.creative_profile ?? creativePolicy.profile,
     delegations_mode: constraints.delegations_mode,
@@ -1963,10 +1980,12 @@ const buildHermesCmoLiveRequest = (
   const boundedDelegationAllowed = subAgentExecutionAllowed || iterativeDelegationAllowed;
   const echoExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed;
   const creativeViaCmoAllowed = isCmoHermesCreativeEnabled() && getCmoHermesCreativeCallMode() === "via_cmo";
-  const specialistExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed || creativeViaCmoAllowed;
+  const creativeExecutionRequested = requestIsCreativeExecution(request) && creativeViaCmoAllowed;
+  const creativeAgentAllowed = creativeViaCmoAllowed && creativeExecutionRequested;
+  const specialistExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed || creativeExecutionRequested;
   const allowedAgentsForRequest: HermesAllowedAgent[] = [
     ...(boundedDelegationAllowed ? ["echo", "surf"] as const : echoRetryAllowed ? ["echo"] as const : []),
-    ...(creativeViaCmoAllowed ? ["creative"] as const : []),
+    ...(creativeAgentAllowed ? ["creative"] as const : []),
   ];
   const allowedSurfModesForRequest: HermesSurfMode[] = boundedDelegationAllowed ? ["surf.default", "surf.x", "surf.trend", "surf.pulse"] : [];
   const delegationsMode = boundedDelegationAllowed ? "echo_surf_bounded" : echoRetryAllowed ? "echo_retry_bounded" : "proposals_only";
@@ -2010,9 +2029,11 @@ const buildHermesCmoLiveRequest = (
       allowSubAgentExecution: specialistExecutionAllowed,
       allowSurfExecution: boundedDelegationAllowed,
       allowEchoExecution: echoExecutionAllowed,
-      allowCreativeExecution: creativeViaCmoAllowed,
-      creative_call_mode: getCmoHermesCreativeCallMode(),
-      creative_profile: getCmoHermesCreativeProfile(),
+      allowCreativeExecution: creativeAgentAllowed,
+      creative_execution_requested: creativeExecutionRequested,
+      creative_execution_mode: creativeExecutionRequested ? "creative.generate_image" : null,
+      creative_call_mode: creativeAgentAllowed ? getCmoHermesCreativeCallMode() : "disabled",
+      creative_profile: creativeAgentAllowed ? getCmoHermesCreativeProfile() : null,
       allowVaultAgentExecution: false,
       allowVaultWrites: false,
       allowDirectSupabaseMutations: false,
@@ -2042,12 +2063,14 @@ const buildHermesCmoLiveRequest = (
         },
         forbidden_targets: ["vault_agent", "openclaw", "supabase", "memory", "arbitrary_tools"],
         creative_policy: {
-          enabled: creativeViaCmoAllowed,
-          profile: getCmoHermesCreativeProfile(),
-          call_mode: "via_cmo",
+          enabled: creativeAgentAllowed,
+          execution_requested: creativeExecutionRequested,
+          execution_mode: creativeExecutionRequested ? "creative.generate_image" : null,
+          profile: creativeAgentAllowed ? getCmoHermesCreativeProfile() : null,
+          call_mode: creativeAgentAllowed ? "via_cmo" : "disabled",
           role: "visual_execution_specialist",
           no_auto_publish: true,
-          requires_product_artifact_ingestion_for_preview: true,
+          requires_product_artifact_ingestion_for_preview: creativeAgentAllowed,
         },
         surf_mode_policy: {
           "surf.default": "Evidence gathering, evidence gaps, source checks, and general research.",
@@ -2067,8 +2090,9 @@ const buildHermesCmoLiveRequest = (
         delegation_policy: boundedDelegationAllowed ? "echo_surf_only_bounded" : echoRetryAllowed ? "echo_retry_bounded" : "disabled",
         allowed_agents: allowedAgentsForRequest,
         allowed_surf_modes: allowedSurfModesForRequest,
-        creative_profile: creativeViaCmoAllowed ? getCmoHermesCreativeProfile() : null,
-        creative_call_mode: creativeViaCmoAllowed ? "via_cmo" : "disabled",
+        creative_profile: creativeAgentAllowed ? getCmoHermesCreativeProfile() : null,
+        creative_call_mode: creativeAgentAllowed ? "via_cmo" : "disabled",
+        creative_execution_requested: creativeExecutionRequested,
         vault_writes_allowed: false,
         direct_supabase_mutations_allowed: false,
         openclaw_calls_allowed: false,
@@ -2078,8 +2102,9 @@ const buildHermesCmoLiveRequest = (
         sub_agent_execution_allowed: specialistExecutionAllowed,
         surf_execution_allowed: boundedDelegationAllowed,
         echo_execution_allowed: echoExecutionAllowed,
-        creative_execution_allowed: creativeViaCmoAllowed,
-        creative_artifact_ingest_required_for_preview: creativeViaCmoAllowed,
+        creative_execution_allowed: creativeAgentAllowed,
+        creative_execution_requested: creativeExecutionRequested,
+        creative_artifact_ingest_required_for_preview: creativeAgentAllowed,
         vault_agent_execution_allowed: false,
         vault_writes_allowed: false,
         direct_supabase_mutations_allowed: false,

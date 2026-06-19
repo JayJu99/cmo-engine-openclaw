@@ -109,6 +109,8 @@ async function optionalLiveIngestCheck() {
 
 const [
   runtimeSource,
+  routeIntentSource,
+  routeSource,
   typesSource,
   mapperSource,
   storeSource,
@@ -119,6 +121,8 @@ const [
   migrationSource,
 ] = await Promise.all([
   read("src/lib/cmo/hermes-cmo-runtime.ts"),
+  read("src/lib/cmo/app-routing-intent.ts"),
+  read("src/lib/cmo/hermes-cmo-chat-router.ts"),
   read("src/lib/cmo/app-workspace-types.ts"),
   read("src/lib/cmo/hermes-cmo-chat-mapper.ts"),
   read("src/lib/cmo/app-chat-store.ts"),
@@ -147,6 +151,11 @@ assert.match(configSource, /CMO_HERMES_CREATIVE_ENABLED/, "Creative enabled conf
 assert.match(configSource, /CMO_HERMES_CREATIVE_CALL_MODE/, "Creative call mode config is required");
 assert.match(configSource, /CMO_HERMES_CREATIVE_PROFILE/, "Creative profile config is required");
 assert.match(runtimeSource, /creative_call_mode.*via_cmo/s, "default Creative call mode must route through CMO");
+assert.match(routeIntentSource, /creative_execution/, "Product routing intent must classify explicit Creative execution");
+assert.match(routeSource, /reason: "creative_execution"/, "Creative execution must select a non-tool-execute Hermes route");
+assert.match(mapperSource, /explicit_command: creativeExecutionIntent \? "creative\.generate_image" : null/, "Creative prompts must mark Hermes intent as execution");
+assert.match(storeSource, /hermesCmoCreativeExecutionRequested/, "Creative execution route must trigger Hermes live runtime");
+assert.match(runtimeSource, /!creativeExecution && \(toolChatCanaryEnabled/, "Creative execution must not be routed to the read-only tool endpoint");
 assert.match(runtimeSource, /creative_trace/, "Hermes CMO trace must include Creative routing diagnostics");
 assert.match(runtimeSource, /allowSubAgentExecution: specialistExecutionAllowed/, "Creative execution must not be blocked by Echo/Surf orchestration mode");
 assert.match(mapperSource, /agentsUsedFromMetadata/, "Creative activity metadata must survive mapping");

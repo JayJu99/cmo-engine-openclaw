@@ -1,4 +1,4 @@
-export type CmoRouteIntent = "cmo_review" | "echo_execution" | "surf_x" | "surf_trend" | "surf_research" | "cmo_default";
+export type CmoRouteIntent = "cmo_review" | "echo_execution" | "creative_execution" | "surf_x" | "surf_trend" | "surf_research" | "cmo_default";
 
 function normalize(value: string): string {
   return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -25,9 +25,19 @@ export function isExplicitEchoExecutionIntent(message: string): boolean {
     && /\b(x posts?|tweets?|thread|caption|copy|facebook post|telegram announcement|announcement|content)\b/.test(lead);
 }
 
+export function isExplicitCreativeExecutionIntent(message: string): boolean {
+  const lead = leadingIntentText(message);
+  if (/^(?:\/|@)creative\b/.test(lead)) return true;
+  if (isReviewAuditIntent(message)) return false;
+
+  return /^(generate|create|make|design|draw|render|produce|turn this into|bien cai nay thanh|tao|ve|thiet ke)\b/.test(lead)
+    && /\b(image|visual|graphic|creative|banner|ad creative|thumbnail|illustration|logo|icon|png|webp|jpeg|jpg|video|motion|asset)\b/.test(lead);
+}
+
 export function routeIntentForMessage(message: string): CmoRouteIntent {
   const lead = leadingIntentText(message);
   if (isReviewAuditIntent(message)) return "cmo_review";
+  if (isExplicitCreativeExecutionIntent(message)) return "creative_execution";
   if (/^\/x\b|^\/surf\s+x\b/.test(lead)) return "surf_x";
   if (/^\/trend\b/.test(lead)) return "surf_trend";
   if (/^\/surf\b/.test(lead)) return "surf_research";

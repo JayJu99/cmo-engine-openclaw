@@ -19,6 +19,7 @@ import type {
   HermesCmoRuntimeResult,
 } from "@/lib/cmo/hermes-cmo-runtime";
 import type { HermesCmoAttachmentRef } from "@/lib/cmo/attachments";
+import { isExplicitCreativeExecutionIntent } from "./app-routing-intent";
 import type { CmoRuntimeTurnInput } from "@/lib/cmo/runtime";
 import {
   resolveSessionWorkingMemory,
@@ -479,6 +480,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const inputMaterial = {
     attachments: input.inputMaterialAttachments ?? [],
   };
+  const creativeExecutionIntent = isExplicitCreativeExecutionIntent(input.message);
 
   return {
     schema_version: "hermes.cmo.request.v1",
@@ -500,10 +502,22 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     intent: {
       mode: "cmo.default",
       user_message: input.message,
-      explicit_command: null,
+      explicit_command: creativeExecutionIntent ? "creative.generate_image" : null,
     },
     input: {
       input_material: inputMaterial,
+      ...(creativeExecutionIntent
+        ? {
+            creative_execution_intent: {
+              requested: true,
+              agent: "creative",
+              mode: "creative.generate_image",
+              return_local_paths: true,
+              include_metadata: true,
+              require_review_before_publish: true,
+            },
+          }
+        : {}),
     },
     input_material: inputMaterial,
     messages: recentConversationMessages(input.history),
@@ -574,6 +588,12 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         raw_capture_writes_allowed: false,
         openclaw_calls_allowed: false,
       },
+      ...(creativeExecutionIntent
+        ? {
+            creative_execution_requested: true,
+            creative_execution_mode: "creative.generate_image",
+          }
+        : {}),
     },
     ui: {
       activity_stream_required: true,
@@ -598,6 +618,12 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       todo_allowed: true,
       memory_read_allowed: true,
       delegation_allowed: true,
+      ...(creativeExecutionIntent
+        ? {
+            creative_execution_requested: true,
+            creative_execution_mode: "creative.generate_image",
+          }
+        : {}),
       context_grounding_rules: contextGroundingRules,
       durable_writes_require_confirmation: true,
       allowed_toolsets: [

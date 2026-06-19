@@ -32,7 +32,7 @@ export interface HermesCmoChatRouteResolution {
   toolChatEnabled: boolean;
   toolChatCanary: boolean;
   fallbackEnabled: boolean;
-  reason: "forced_fallback" | "source_or_tool_task" | "tool_chat_canary" | "v11_canary_chat" | "v11_disabled_or_non_canary";
+  reason: "forced_fallback" | "creative_execution" | "source_or_tool_task" | "tool_chat_canary" | "v11_canary_chat" | "v11_disabled_or_non_canary";
 }
 
 function appIsCanary(appId: string, canaryApps: string[]): boolean {
@@ -82,6 +82,21 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
       toolChatCanary,
       fallbackEnabled,
       reason: "forced_fallback",
+    };
+  }
+
+  if (routeIntent === "creative_execution") {
+    return {
+      endpoint: HERMES_CMO_EXECUTE_ENDPOINT,
+      endpointKind: "execute",
+      requestedEndpoint: HERMES_CMO_EXECUTE_ENDPOINT,
+      routeIntent,
+      v11Enabled,
+      v11Canary,
+      toolChatEnabled,
+      toolChatCanary,
+      fallbackEnabled,
+      reason: "creative_execution",
     };
   }
 

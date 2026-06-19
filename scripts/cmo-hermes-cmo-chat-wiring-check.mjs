@@ -83,11 +83,13 @@ const loadCompiledModules = async () => {
   const routerOut = path.join(tmpDir, "hermes-cmo-chat-router.js");
   const mapperOut = path.join(tmpDir, "hermes-cmo-chat-mapper.js");
   const chatV11Out = path.join(tmpDir, "hermes-cmo-chat-v11.js");
+  const creativeAgentOut = path.join(tmpDir, "creative-agent.js");
   const sessionWorkingMemoryOut = path.join(tmpDir, "session-working-memory.js");
   const userMetadataOut = path.join(tmpDir, "user-metadata.js");
 
   await transpile(path.join(cmoDir, "config.ts"), configOut);
   await transpile(path.join(cmoDir, "app-routing-intent.ts"), appRoutingIntentOut);
+  await transpile(path.join(cmoDir, "creative-agent.ts"), creativeAgentOut);
   await transpile(path.join(cmoDir, "session-working-memory.ts"), sessionWorkingMemoryOut);
   await transpile(path.join(cmoDir, "user-metadata.ts"), userMetadataOut);
   await transpile(path.join(cmoDir, "hermes-cmo-chat-router.ts"), routerOut, (output) =>
@@ -559,6 +561,14 @@ try {
         assert.equal(toolChatDisabledByDefault.endpoint, "/agents/cmo/chat", "tool-chat route must stay disabled until its own flag is enabled");
         assert.equal(toolChatDisabledByDefault.reason, "v11_canary_chat");
 
+        const creativeExecution = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "Generate a square PNG image for Hold Pay merchant onboarding.",
+        });
+        assert.equal(creativeExecution.endpoint, "/agents/cmo/execute", "Creative generation must route to the execution endpoint, not source-reader tool-execute");
+        assert.equal(creativeExecution.endpointKind, "execute");
+        assert.equal(creativeExecution.reason, "creative_execution");
+
         const nonCanary = router.resolveHermesCmoChatRoute({
           appId: "holdstation-mini-app",
           message: "What should CMO do next?",
@@ -617,6 +627,14 @@ try {
         assert.equal(copyToolChat.endpoint, "/agents/cmo/tool-execute");
         assert.equal(copyToolChat.endpointKind, "tool_execute");
         assert.equal(copyToolChat.reason, "tool_chat_canary");
+
+        const creativeToolCanaryBypass = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "Create an image banner asset for Hold Pay onboarding.",
+        });
+        assert.equal(creativeToolCanaryBypass.endpoint, "/agents/cmo/execute");
+        assert.equal(creativeToolCanaryBypass.endpointKind, "execute");
+        assert.equal(creativeToolCanaryBypass.reason, "creative_execution");
 
         const strategyToolChat = router.resolveHermesCmoChatRoute({
           appId: "hold-pay",
@@ -3187,7 +3205,8 @@ try {
     const source = await readFile(path.join(cmoDir, "app-chat-store.ts"), "utf8");
     assert.match(source, /resolveHermesCmoChatRoute\(\{/);
     assert.match(source, /const hermesCmoChatV11Requested = hermesCmoRoute\.endpointKind === "agent_chat"/);
-    assert.match(source, /const hermesCmoLegacyRequested = legacyHermesCmoChatRequested \|\| hermesCmoRoute\.endpointKind === "tool_execute"/);
+    assert.match(source, /const hermesCmoCreativeExecutionRequested = hermesCmoRoute\.reason === "creative_execution"/);
+    assert.match(source, /hermesCmoRoute\.endpointKind === "tool_execute" \|\|\s*hermesCmoCreativeExecutionRequested/);
     assert.match(source, /shouldUseHermesCmoChat\(request\.appId\)/);
     assert.match(source, /runHermesCmoChatV11\(\{/);
     assert.match(source, /runHermesCmoRuntime\(hermesRequest\)/);

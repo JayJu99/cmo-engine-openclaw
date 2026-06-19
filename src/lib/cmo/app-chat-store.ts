@@ -3174,7 +3174,11 @@ export async function createAppChatSession(
     hasSourceOrToolTask: sourceOrToolTask,
   });
   const hermesCmoChatV11Requested = hermesCmoRoute.endpointKind === "agent_chat";
-  const hermesCmoLegacyRequested = legacyHermesCmoChatRequested || hermesCmoRoute.endpointKind === "tool_execute";
+  const hermesCmoCreativeExecutionRequested = hermesCmoRoute.reason === "creative_execution";
+  const hermesCmoLegacyRequested =
+    legacyHermesCmoChatRequested ||
+    hermesCmoRoute.endpointKind === "tool_execute" ||
+    hermesCmoCreativeExecutionRequested;
   const hermesCmoChatRequested = hermesCmoChatV11Requested || hermesCmoLegacyRequested;
   const lensReadoutContextResult = isCmoLensDirectContextEnabled()
     ? await getLensReadoutContextForAppSafe({
