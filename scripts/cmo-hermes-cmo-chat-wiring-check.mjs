@@ -881,6 +881,97 @@ try {
     assert.equal(sessionLocalSource.nav_heavy, false);
     assert.equal(sessionLocalSource.tool_read_recommended, false);
 
+    const eggsMissingProjectContextItem = {
+      id: "eggs-vault-project-context",
+      kind: "project_context",
+      title: "Accepted Project Context",
+      source: {
+        sourceId: "eggs-vault__eggs-vault",
+        type: "vault_bundle",
+        label: "12 Knowledge/Workspace Lessons/eggs-vault",
+        path: "12 Knowledge/Workspace Lessons/eggs-vault",
+      },
+      inclusionReason: "Accepted workspace project context is included from the active workspace only.",
+      exists: false,
+      content: "",
+      contentPreview: "No accepted project context found at 12 Knowledge/Workspace Lessons/eggs-vault.",
+      contextQuality: "missing",
+      tokenEstimate: 0,
+      truncated: false,
+      itemCount: 0,
+    };
+    const eggsMissingProjectContextRef = {
+      id: "eggs-vault-project-context",
+      title: "Accepted Project Context",
+      path: "12 Knowledge/Workspace Lessons/eggs-vault",
+      type: "vault_bundle",
+      reason: "Accepted workspace project context is missing.",
+      exists: false,
+      contentPreview: "No accepted project context found at 12 Knowledge/Workspace Lessons/eggs-vault.",
+      contextQuality: "missing",
+    };
+    const eggsContextQualitySummary = {
+      selectedCount: 0,
+      existingCount: 0,
+      missingCount: 1,
+      confirmedCount: 0,
+      draftCount: 0,
+      placeholderCount: 0,
+      placeholderOrDraftCount: 0,
+    };
+    const eggsCreativeInput = JSON.parse(JSON.stringify(sampleTurnInput));
+    eggsCreativeInput.message = "Tạo 1 key visual square PNG cho Eggs Vault, tone premium black/gold, futuristic, chỉ 1 variant.";
+    eggsCreativeInput.request.workspaceId = "eggs-vault";
+    eggsCreativeInput.request.appId = "eggs-vault";
+    eggsCreativeInput.request.appName = "Eggs Vault";
+    eggsCreativeInput.contextPack.workspaceId = "eggs-vault";
+    eggsCreativeInput.contextPack.appId = "eggs-vault";
+    eggsCreativeInput.contextPack.sourceId = "eggs-vault__eggs-vault";
+    eggsCreativeInput.contextPack.items = [eggsMissingProjectContextItem];
+    eggsCreativeInput.contextPack.contextQualitySummary = eggsContextQualitySummary;
+    eggsCreativeInput.contextPackage.workspaceId = "eggs-vault";
+    eggsCreativeInput.contextPackage.sourceId = "eggs-vault__eggs-vault";
+    eggsCreativeInput.contextPackage.app.id = "eggs-vault";
+    eggsCreativeInput.contextPackage.app.name = "Eggs Vault";
+    eggsCreativeInput.contextPackage.selectedContext = [];
+    eggsCreativeInput.contextPackage.missingContext = [eggsMissingProjectContextRef];
+    eggsCreativeInput.contextPackage.contextQualitySummary = eggsContextQualitySummary;
+    eggsCreativeInput.contextUsed = [];
+    eggsCreativeInput.missingContext = [eggsMissingProjectContextRef];
+    eggsCreativeInput.contextPackage.sessionLocalSources = [];
+    eggsCreativeInput.contextPackage.activeSourceId = undefined;
+    eggsCreativeInput.contextPackage.sourceReviewContext = undefined;
+    eggsCreativeInput.contextPackage.sourceAnswerContext = undefined;
+    const eggsCreativeRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...eggsCreativeInput,
+      sessionId: "session_eggs_creative",
+      userMessageId: "msg_eggs_creative",
+      createdAt: "2026-06-20T10:00:00.000Z",
+      userIdentity: { userId: "user_eggs", userEmail: "jay@example.com" },
+    });
+    assert.equal(eggsCreativeRequest.intent.explicit_command, "creative.generate_image");
+    assert.equal(eggsCreativeRequest.input.creative_execution_intent.direct_user_prompt_is_sufficient_execution_input, true);
+    assert.equal(eggsCreativeRequest.input.creative_execution_intent.accepted_project_context_required, false);
+    assert.equal(eggsCreativeRequest.constraints.missing_accepted_context_blocks_creative_execution, false);
+    assert.equal(eggsCreativeRequest.tool_policy.missing_accepted_context_blocks_creative_execution, false);
+    assert.equal(eggsCreativeRequest.context_pack.missing_context.length, 0);
+    assert.equal(eggsCreativeRequest.context_pack.optional_context_gaps.length, 1);
+    assert.equal(eggsCreativeRequest.context_pack.context_quality_summary.creative_execution_direct_prompt_sufficient, true);
+    assert.match(JSON.stringify(eggsCreativeRequest.input.creative_execution_intent.factual_claim_guardrails), /Do not invent unsupported product mechanics/);
+    assert.doesNotMatch(JSON.stringify(eggsCreativeRequest), /No accepted project context found at 12 Knowledge\/Workspace Lessons\/eggs-vault/);
+
+    const eggsStrategyInput = JSON.parse(JSON.stringify(eggsCreativeInput));
+    eggsStrategyInput.message = "What should Eggs Vault strategy prioritize this week?";
+    const eggsStrategyRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...eggsStrategyInput,
+      sessionId: "session_eggs_strategy",
+      userMessageId: "msg_eggs_strategy",
+      createdAt: "2026-06-20T10:01:00.000Z",
+      userIdentity: { userId: "user_eggs", userEmail: "jay@example.com" },
+    });
+    assert.equal(eggsStrategyRequest.intent.explicit_command, null);
+    assert.match(JSON.stringify(eggsStrategyRequest), /No accepted project context found at 12 Knowledge\/Workspace Lessons\/eggs-vault/);
+
     const chatV11Request = chatV11.buildHermesCmoChatV11Request({
       ...sampleTurnInput,
       sessionId: "session_h6",

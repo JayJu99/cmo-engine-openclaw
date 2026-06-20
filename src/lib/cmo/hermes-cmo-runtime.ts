@@ -43,7 +43,7 @@ export type HermesCmoRuntimeMode = typeof HERMES_CMO_RUNTIME_MODE;
 export type HermesAllowedAgent = "echo" | "surf" | "vault_agent" | "creative";
 export type HermesEchoMode = "echo.default" | "echo.source_translate";
 export type HermesSurfMode = "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
-export type HermesCreativeMode = "creative" | "creative.default" | "creative.generate_image" | "creative.image_generation";
+export type HermesCreativeMode = "creative" | "creative.default" | "creative.generate_image" | "creative.generate_video" | "creative.image_generation";
 export type HermesCmoClassification =
   | "native_conversation"
   | "source_acknowledgement"
@@ -341,7 +341,7 @@ interface HermesCmoActivityValidationOptions {
 
 const allowedAgents = new Set<HermesAllowedAgent>(["echo", "surf", "vault_agent", "creative"]);
 const allowedSurfModes = new Set<HermesSurfMode>(["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
-const allowedCreativeModes = new Set<HermesCreativeMode>(["creative", "creative.default", "creative.generate_image", "creative.image_generation"]);
+const allowedCreativeModes = new Set<HermesCreativeMode>(["creative", "creative.default", "creative.generate_image", "creative.generate_video", "creative.image_generation"]);
 const MAX_M1_ORCHESTRATION_ROUNDS = 3;
 const MAX_M1_ECHO_RETRIES = 1;
 const MAX_M1_FINALIZATION_ATTEMPTS = 1;
@@ -1329,12 +1329,22 @@ const requestIsCreativeExecution = (request: HermesCmoRuntimeRequest): boolean =
 
   return (
     request.intent.explicit_command === "creative.generate_image" ||
+    request.intent.explicit_command === "creative.generate_video" ||
     request.intent.explicit_command === "creative.image_generation" ||
     request.intent.explicit_command === "creative" ||
     creativeIntent.requested === true ||
     request.constraints.creative_execution_requested === true ||
     toolPolicy.creative_execution_requested === true
   );
+};
+
+const creativeExecutionModeFromRequest = (request: HermesCmoRuntimeRequest): "creative.generate_image" | "creative.generate_video" => {
+  const input = isRecord(request.input) ? request.input : {};
+  const creativeIntent = isRecord(input.creative_execution_intent) ? input.creative_execution_intent : {};
+  const toolPolicy = isRecord(request.tool_policy) ? request.tool_policy : {};
+  const mode = request.intent.explicit_command ?? creativeIntent.mode ?? request.constraints.creative_execution_mode ?? toolPolicy.creative_execution_mode;
+
+  return mode === "creative.generate_video" ? "creative.generate_video" : "creative.generate_image";
 };
 
 const positiveTimeoutOverride = (value: unknown): number | undefined => {
@@ -2007,6 +2017,7 @@ const buildHermesCmoLiveRequest = (
   const echoExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed;
   const creativeViaCmoAllowed = isCmoHermesCreativeEnabled() && getCmoHermesCreativeCallMode() === "via_cmo";
   const creativeExecutionRequested = requestIsCreativeExecution(request) && creativeViaCmoAllowed;
+  const creativeExecutionMode = creativeExecutionModeFromRequest(request);
   const creativeAgentAllowed = creativeViaCmoAllowed && creativeExecutionRequested;
   const specialistExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed || creativeExecutionRequested;
   const allowedAgentsForRequest: HermesAllowedAgent[] = [
@@ -2057,7 +2068,10 @@ const buildHermesCmoLiveRequest = (
       allowEchoExecution: echoExecutionAllowed,
       allowCreativeExecution: creativeAgentAllowed,
       creative_execution_requested: creativeExecutionRequested,
-      creative_execution_mode: creativeExecutionRequested ? "creative.generate_image" : null,
+      creative_execution_mode: creativeExecutionRequested ? creativeExecutionMode : null,
+      creative_direct_prompt_sufficient: creativeExecutionRequested,
+      creative_accepted_context_required: creativeExecutionRequested ? false : null,
+      creative_missing_accepted_context_blocks_execution: creativeExecutionRequested ? false : null,
       creative_call_mode: creativeAgentAllowed ? getCmoHermesCreativeCallMode() : "disabled",
       creative_profile: creativeAgentAllowed ? getCmoHermesCreativeProfile() : null,
       allowVaultAgentExecution: false,
@@ -2091,7 +2105,16 @@ const buildHermesCmoLiveRequest = (
         creative_policy: {
           enabled: creativeAgentAllowed,
           execution_requested: creativeExecutionRequested,
-          execution_mode: creativeExecutionRequested ? "creative.generate_image" : null,
+          execution_mode: creativeExecutionRequested ? creativeExecutionMode : null,
+          direct_user_prompt_is_sufficient_execution_input: creativeExecutionRequested,
+          accepted_project_context_required: creativeExecutionRequested ? false : null,
+          accepted_workspace_context_required: creativeExecutionRequested ? false : null,
+          missing_accepted_context_blocks_execution: creativeExecutionRequested ? false : null,
+          factual_claim_guardrails: [
+            "Do not invent unsupported product mechanics, rewards, APY, WLD, eligibility, or roadmap claims.",
+            "Use the user-supplied visual direction as the brief when accepted workspace context is missing.",
+            "If product facts are missing, produce generic brand-safe visual direction instead of blocking execution.",
+          ],
           profile: creativeAgentAllowed ? getCmoHermesCreativeProfile() : null,
           call_mode: creativeAgentAllowed ? "via_cmo" : "disabled",
           role: "visual_execution_specialist",

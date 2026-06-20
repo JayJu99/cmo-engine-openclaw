@@ -157,10 +157,16 @@ assert.match(configSource, /getCmoHermesCreativeExecuteTimeoutMs[\s\S]*300_000/,
 assert.match(runtimeSource, /creative_call_mode.*via_cmo/s, "default Creative call mode must route through CMO");
 assert.match(routeIntentSource, /creative_execution/, "Product routing intent must classify explicit Creative execution");
 assert.match(routeSource, /reason: "creative_execution"/, "Creative execution must select a non-tool-execute Hermes route");
-assert.match(mapperSource, /explicit_command: creativeExecutionIntent \? "creative\.generate_image" : null/, "Creative prompts must mark Hermes intent as execution");
+assert.match(mapperSource, /explicit_command: creativeExecutionIntent \? creativeExecutionMode : null/, "Creative prompts must mark Hermes intent as execution");
+assert.match(mapperSource, /direct_user_prompt_is_sufficient_execution_input/, "Creative execution must treat the direct user prompt as sufficient input");
+assert.match(mapperSource, /missing_accepted_context_blocks_creative_execution:\s*false/, "Missing accepted context must not block explicit Creative execution");
+assert.match(mapperSource, /optional_context_gaps/, "Missing accepted project context must be optional diagnostic context for Creative execution");
+assert.match(mapperSource, /Do not invent unsupported product mechanics/, "Creative execution must preserve factual-claim guardrails");
 assert.match(storeSource, /hermesCmoCreativeExecutionRequested/, "Creative execution route must trigger Hermes live runtime");
 assert.match(runtimeSource, /!creativeExecution && \(toolChatCanaryEnabled/, "Creative execution must not be routed to the read-only tool endpoint");
 assert.match(runtimeSource, /creativeExecution[\s\S]*getCmoHermesCreativeExecuteTimeoutMs\(\)/, "Creative execution must use the Creative-specific timeout");
+assert.match(runtimeSource, /creative\.generate_video/, "Creative video execution mode must be accepted");
+assert.match(runtimeSource, /creative_missing_accepted_context_blocks_execution:\s*creativeExecutionRequested \? false : null/, "Runtime Creative envelope must not require accepted context");
 assert.match(runtimeSource, /timeout_source/, "Hermes CMO trace must include the timeout source");
 assert.match(runtimeSource, /route_decision/, "Hermes CMO trace must include the route decision");
 assert.match(runtimeSource, /creative_trace/, "Hermes CMO trace must include Creative routing diagnostics");

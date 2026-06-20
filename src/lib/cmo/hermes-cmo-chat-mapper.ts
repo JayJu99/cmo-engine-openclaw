@@ -11,6 +11,7 @@ import type {
   HermesCmoDelegationSummaryItem,
   HermesCmoForbiddenCounters,
   HermesCmoSafetyCounters,
+  VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
 import type {
   HermesCmoRuntimeActivityEvent,
@@ -19,7 +20,7 @@ import type {
   HermesCmoRuntimeResult,
 } from "@/lib/cmo/hermes-cmo-runtime";
 import type { HermesCmoAttachmentRef } from "@/lib/cmo/attachments";
-import { isExplicitCreativeExecutionIntent } from "./app-routing-intent";
+import { isExplicitCreativeExecutionIntent, leadingIntentText } from "./app-routing-intent";
 import type { CmoRuntimeTurnInput } from "@/lib/cmo/runtime";
 import {
   resolveSessionWorkingMemory,
@@ -257,6 +258,33 @@ function lensReadoutContextArtifact(context: Record<string, unknown> | null): Re
   };
 }
 
+function isMissingAcceptedProjectContextItem(item: ContextItem): boolean {
+  return item.kind === "project_context" && item.exists === false;
+}
+
+function isMissingAcceptedProjectContextRef(note: VaultNoteRef): boolean {
+  return note.exists === false &&
+    note.contextQuality === "missing" &&
+    /accepted project context/i.test(note.title) &&
+    /12 Knowledge\/Workspace Lessons\//i.test(note.path);
+}
+
+function creativeContextQualitySummary(input: HermesCmoChatRequestInput, omittedMissingCount: number): Record<string, unknown> {
+  const summary = input.contextPackage.contextQualitySummary;
+
+  if (omittedMissingCount <= 0) {
+    return { ...summary };
+  }
+
+  return {
+    ...summary,
+    missingCount: Math.max(0, summary.missingCount - omittedMissingCount),
+    creative_execution_context_policy: "accepted_project_context_optional",
+    creative_execution_direct_prompt_sufficient: true,
+    omitted_blocking_missing_context_count: omittedMissingCount,
+  };
+}
+
 function sessionLocalSourceNavHeavy(source: CmoSessionLocalSource): boolean {
   return source.nav_heavy === true || (Array.isArray(source.warnings) && source.warnings.includes("nav_heavy"));
 }
@@ -481,6 +509,19 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     attachments: input.inputMaterialAttachments ?? [],
   };
   const creativeExecutionIntent = isExplicitCreativeExecutionIntent(input.message);
+  const creativeExecutionMode = /\b(video|motion)\b/.test(leadingIntentText(input.message)) ? "creative.generate_video" : "creative.generate_image";
+  const omittedCreativeMissingContext = creativeExecutionIntent
+    ? input.missingContext.filter(isMissingAcceptedProjectContextRef)
+    : [];
+  const missingContextForHermes = creativeExecutionIntent
+    ? input.missingContext.filter((note) => !isMissingAcceptedProjectContextRef(note))
+    : input.missingContext;
+  const allContextItemsForHermes = creativeExecutionIntent
+    ? contextItems.filter((item) => !isMissingAcceptedProjectContextItem(item))
+    : contextItems;
+  const contextQualitySummaryForHermes = creativeExecutionIntent
+    ? creativeContextQualitySummary(input, omittedCreativeMissingContext.length)
+    : input.contextPackage.contextQualitySummary;
 
   return {
     schema_version: "hermes.cmo.request.v1",
@@ -502,7 +543,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     intent: {
       mode: "cmo.default",
       user_message: input.message,
-      explicit_command: creativeExecutionIntent ? "creative.generate_image" : null,
+      explicit_command: creativeExecutionIntent ? creativeExecutionMode : null,
     },
     input: {
       input_material: inputMaterial,
@@ -511,10 +552,18 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creative_execution_intent: {
               requested: true,
               agent: "creative",
-              mode: "creative.generate_image",
+              mode: creativeExecutionMode,
+              direct_user_prompt_is_sufficient_execution_input: true,
+              accepted_project_context_required: false,
+              accepted_workspace_context_required: false,
               return_local_paths: true,
               include_metadata: true,
               require_review_before_publish: true,
+              factual_claim_guardrails: [
+                "Do not invent unsupported product mechanics, rewards, APY, WLD, eligibility, or roadmap claims.",
+                "Use the user-supplied visual direction as the brief when accepted workspace context is missing.",
+                "If product facts are missing, produce generic brand-safe visual direction instead of blocking execution.",
+              ],
             },
           }
         : {}),
@@ -545,14 +594,23 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         : {}),
       session_working_memory: sessionWorkingMemory,
       read_only_snapshot: true,
-      context_quality_summary: input.contextPackage.contextQualitySummary,
+      context_quality_summary: contextQualitySummaryForHermes,
       context_graph: {
         graphHints: input.contextPackage.graphHints ?? [],
         graphHintCount: input.contextPackage.graphHintCount ?? input.contextPackage.graphHints?.length ?? 0,
         graphStatus: input.contextPackage.graphStatus ?? "empty",
       },
-      all_context_items: contextItems.map(contextItemSnapshot),
-      missing_context: input.missingContext,
+      all_context_items: allContextItemsForHermes.map(contextItemSnapshot),
+      missing_context: missingContextForHermes,
+      ...(creativeExecutionIntent
+        ? {
+            optional_context_gaps: omittedCreativeMissingContext.map((note) => ({
+              title: note.title,
+              path: note.path,
+              reason: "Accepted project context is optional for explicit Creative execution when the user prompt supplies the visual brief.",
+            })),
+          }
+        : {}),
       context_used: input.contextUsed,
     },
     constraints: {
@@ -591,7 +649,10 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(creativeExecutionIntent
         ? {
             creative_execution_requested: true,
-            creative_execution_mode: "creative.generate_image",
+            creative_execution_mode: creativeExecutionMode,
+            accepted_project_context_required: false,
+            accepted_workspace_context_required: false,
+            missing_accepted_context_blocks_creative_execution: false,
           }
         : {}),
     },
@@ -621,7 +682,15 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(creativeExecutionIntent
         ? {
             creative_execution_requested: true,
-            creative_execution_mode: "creative.generate_image",
+            creative_execution_mode: creativeExecutionMode,
+            direct_user_prompt_is_sufficient_execution_input: true,
+            accepted_project_context_required: false,
+            missing_accepted_context_blocks_creative_execution: false,
+            factual_claim_guardrails: [
+              "No unsupported rewards, APY, WLD, eligibility, or roadmap claims.",
+              "Generic user-specified visual style is allowed without accepted project context.",
+              "When context is missing, execute a safe generic creative instead of returning a context-blocking answer.",
+            ],
           }
         : {}),
       context_grounding_rules: contextGroundingRules,
