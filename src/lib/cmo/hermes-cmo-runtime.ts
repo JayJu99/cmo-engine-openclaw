@@ -7,6 +7,7 @@ import {
   getCmoHermesCmoToolChatCanaryApps,
   getCmoHermesCmoToolTimeoutMs,
   getCmoHermesCreativeCallMode,
+  getCmoHermesCreativeExecuteTimeoutMs,
   getCmoHermesCreativeProfile,
   isCmoHermesCmoOrchestrationEnabled,
   isCmoHermesCmoToolChatEnabled,
@@ -273,6 +274,8 @@ export interface HermesCmoRuntimeResult {
   hermesCmoAgentPath: string;
   hermesCmoEndpointKind: "execute" | "tool_execute";
   hermesCmoEndpointTimeoutMs: number;
+  hermesCmoEndpointTimeoutSource: HermesCmoTimeoutSource;
+  hermesCmoRouteDecision: HermesCmoRouteDecision;
   hermesCmoToolEndpointEnabled: boolean;
   sideEffects?: false | Record<string, false>;
   request: HermesCmoRuntimeRequest;
@@ -298,12 +301,17 @@ interface HermesCmoAgentConfig {
   endpointPath: string;
   endpointKind: "execute" | "tool_execute";
   timeoutMs: number;
+  timeoutSource: HermesCmoTimeoutSource;
+  routeDecision: HermesCmoRouteDecision;
   toolEndpointEnabled: boolean;
 }
 
 interface HermesCmoRuntimeOptions {
   toolTimeoutMs?: number;
 }
+
+type HermesCmoTimeoutSource = "default_execute" | "creative_execute" | "tool_endpoint" | "tool_timeout_override";
+type HermesCmoRouteDecision = "execute" | "creative_execution" | "tool_execute";
 
 interface HermesCmoLivePayload {
   response: HermesCmoRuntimeResponse;
@@ -1344,7 +1352,20 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: Herm
   const useToolEndpoint = !creativeExecution && (toolChatCanaryEnabled || (toolEndpointEnabled && (externalResearch || requestIsSourceBackedOrSeeking(request))));
   const configuredToolEndpoint = getCmoHermesCmoToolEndpoint();
   const endpointPath = useToolEndpoint ? endpointPathFromConfig(configuredToolEndpoint) : HERMES_CMO_AGENT_PATH;
-  const timeoutMs = useToolEndpoint ? positiveTimeoutOverride(options.toolTimeoutMs) ?? getCmoHermesCmoToolTimeoutMs() : hermesTimeoutMs();
+  const toolTimeoutOverride = positiveTimeoutOverride(options.toolTimeoutMs);
+  const timeoutMs = useToolEndpoint
+    ? toolTimeoutOverride ?? getCmoHermesCmoToolTimeoutMs()
+    : creativeExecution
+      ? getCmoHermesCreativeExecuteTimeoutMs()
+      : hermesTimeoutMs();
+  const timeoutSource: HermesCmoTimeoutSource = useToolEndpoint
+    ? toolTimeoutOverride !== undefined
+      ? "tool_timeout_override"
+      : "tool_endpoint"
+    : creativeExecution
+      ? "creative_execute"
+      : "default_execute";
+  const routeDecision: HermesCmoRouteDecision = useToolEndpoint ? "tool_execute" : creativeExecution ? "creative_execution" : "execute";
 
   if (!envEnabled(process.env.CMO_HERMES_EXECUTION_ENABLED)) {
     throw new Error("CMO_HERMES_EXECUTION_ENABLED must be true for the live-only Hermes CMO runtime.");
@@ -1364,6 +1385,8 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: Herm
     endpointKind: useToolEndpoint ? "tool_execute" : "execute",
     apiKey,
     timeoutMs,
+    timeoutSource,
+    routeDecision,
     toolEndpointEnabled: toolEndpointEnabled || toolChatCanaryEnabled,
   };
 };
@@ -1757,6 +1780,9 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
   return {
     endpoint_path: config.endpointPath,
     endpoint_kind: config.endpointKind,
+    route_decision: config.routeDecision,
+    timeout_ms: config.timeoutMs,
+    timeout_source: config.timeoutSource,
     tool_endpoint_enabled: config.toolEndpointEnabled,
     creative_agent_allowed: allowedAgents.includes("creative"),
     product_requested_execution:
@@ -2876,8 +2902,10 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       kind: "hermes_cmo_request",
       endpoint_path: config.endpointPath,
       endpoint_kind: config.endpointKind,
+      route_decision: config.routeDecision,
       tool_endpoint_enabled: config.toolEndpointEnabled,
       timeout_ms: config.timeoutMs,
+      timeout_source: config.timeoutSource,
       creative_trace: creativeRequestTraceSummary(request, config),
       request,
     });
@@ -2902,8 +2930,10 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       kind: "hermes_cmo_response",
       endpoint_path: config.endpointPath,
       endpoint_kind: config.endpointKind,
+      route_decision: config.routeDecision,
       tool_endpoint_enabled: config.toolEndpointEnabled,
       timeout_ms: config.timeoutMs,
+      timeout_source: config.timeoutSource,
       http_status: response.status,
       summary: responseTraceSummary(payload),
       response: payload,
@@ -2915,8 +2945,10 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       kind: "hermes_cmo_error",
       endpoint_path: config.endpointPath,
       endpoint_kind: config.endpointKind,
+      route_decision: config.routeDecision,
       tool_endpoint_enabled: config.toolEndpointEnabled,
       timeout_ms: config.timeoutMs,
+      timeout_source: config.timeoutSource,
       error: error instanceof Error ? error.message : String(error),
     });
     if (error instanceof Error && error.name === "AbortError") {
@@ -3135,6 +3167,8 @@ export async function runHermesCmoRuntime(request: unknown, options: HermesCmoRu
     hermesCmoAgentPath: initialConfig.endpointPath,
     hermesCmoEndpointKind: initialConfig.endpointKind,
     hermesCmoEndpointTimeoutMs: initialConfig.timeoutMs,
+    hermesCmoEndpointTimeoutSource: initialConfig.timeoutSource,
+    hermesCmoRouteDecision: initialConfig.routeDecision,
     hermesCmoToolEndpointEnabled: initialConfig.toolEndpointEnabled,
     ...(firstResult.sideEffects !== undefined ? { sideEffects: firstResult.sideEffects } : {}),
     request: outboundRequest,

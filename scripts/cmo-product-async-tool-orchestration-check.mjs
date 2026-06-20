@@ -276,7 +276,7 @@ assert.match(configSource, /CMO_HERMES_CMO_ASYNC_TOOL_RUN_TIMEOUT_MS/, "async ba
 assert.match(configSource, /300_000/, "default async background timeout must be greater than 90000ms");
 assert.match(runtimeSource, /getCmoHermesCmoToolTimeoutMs\(\)/, "tool-execute backend budget must remain configurable/longer than UI blocking request");
 assert.match(runtimeSource, /toolTimeoutMs\?:\s*number/, "runtime must accept an async tool timeout override");
-assert.match(runtimeSource, /positiveTimeoutOverride\(options\.toolTimeoutMs\) \?\? getCmoHermesCmoToolTimeoutMs\(\)/, "normal sync tool timeout must remain unchanged when no async override is provided");
+assert.match(runtimeSource, /toolTimeoutOverride \?\? getCmoHermesCmoToolTimeoutMs\(\)/, "normal sync tool timeout must remain unchanged when no async override is provided");
 assert.match(runtimeSource, /toolChatCanaryEnabled \|\| \(toolEndpointEnabled && \(externalResearch \|\| requestIsSourceBackedOrSeeking/, "tool-chat canaries and external/native research must use the CMO tool-execute path when enabled");
 assert.doesNotMatch(runtimeSource, /toolEndpointEnabled\s*&&\s*!externalResearch\s*&&/, "external/native research must not be excluded from tool-execute");
 assert.match(routerSource, /shouldUseHermesCmoToolChat/, "route gate must expose tool-chat canary eligibility");

@@ -129,6 +129,42 @@ const m44dToolEndpointRequest = (requestId) => ({
   },
 });
 
+const m13CreativeExecutionRequest = (requestId) => ({
+  ...sampleRequest,
+  request_id: requestId,
+  session_id: requestId.replace(/^req_/, "session_"),
+  turn_id: `${requestId.replace(/^req_/, "turn_")}_001`,
+  workspace: {
+    ...sampleRequest.workspace,
+    workspace_id: "hold-pay",
+    app_id: "hold-pay",
+    app_name: "Hold Pay",
+  },
+  intent: {
+    mode: "cmo.default",
+    user_message: "Generate a square PNG image for Hold Pay merchant onboarding.",
+    explicit_command: "creative.generate_image",
+  },
+  input: {
+    creative_execution_intent: {
+      requested: true,
+      agent: "creative",
+      mode: "creative.generate_image",
+      return_local_paths: true,
+      include_metadata: true,
+    },
+  },
+  constraints: {
+    ...sampleRequest.constraints,
+    creative_execution_requested: true,
+    creative_execution_mode: "creative.generate_image",
+  },
+  tool_policy: {
+    creative_execution_requested: true,
+    creative_execution_mode: "creative.generate_image",
+  },
+});
+
 const m44eExternalResearchRequest = (requestId, userMessage = "Hiện tại trên thị trường có bên nào làm giống Feeback mình không?") => ({
   ...m44dToolEndpointRequest(requestId),
   workspace: {
@@ -496,18 +532,54 @@ const startServer = async () => {
           const firstCallProposalsOnly =
             body.request_id === "req_m44e6_research_followup_table" ||
             body.request_id === "req_m44e6_research_followup_rank";
+          const firstCallCreativeExecution = body.request_id === "req_m13_creative_timeout_default";
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
           assert.equal(body.user_message, body.intent?.user_message);
           assert.equal(body.message, body.intent?.user_message);
           assert.equal(body.input?.user_message, body.intent?.user_message);
           assert.equal(body.input?.message, body.intent?.user_message);
-          assert.deepEqual(body.constraints.allowed_agents, firstCallProposalsOnly ? [] : ["echo", "surf"]);
-          assert.deepEqual(body.constraints.allowed_surf_modes, firstCallProposalsOnly ? [] : ["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
-          assert.equal(body.constraints.delegations_mode, firstCallProposalsOnly ? "proposals_only" : "echo_surf_bounded");
-          assert.equal(body.constraints.allowSubAgentExecution, !firstCallProposalsOnly);
+          assert.deepEqual(body.constraints.allowed_agents, firstCallProposalsOnly ? [] : firstCallCreativeExecution ? ["creative"] : ["echo", "surf"]);
+          assert.deepEqual(body.constraints.allowed_surf_modes, firstCallProposalsOnly || firstCallCreativeExecution ? [] : ["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
+          assert.equal(body.constraints.delegations_mode, firstCallProposalsOnly || firstCallCreativeExecution ? "proposals_only" : "echo_surf_bounded");
+          assert.equal(body.constraints.allowSubAgentExecution, firstCallCreativeExecution ? true : !firstCallProposalsOnly);
+          if (firstCallCreativeExecution) {
+            assert.equal(body.constraints.creative_execution_requested, true);
+            assert.equal(body.constraints.allowCreativeExecution, true);
+            assert.equal(body.constraints.creative_call_mode, "via_cmo");
+            assert.equal(body.constraints.execution_boundary?.creative_execution_allowed, true);
+            assert.equal(body.constraints.execution_boundary?.creative_execution_requested, true);
+          }
           assert.equal(body.constraints.execution_boundary?.vault_agent_execution_allowed, false);
           assert.equal(body.constraints.execution_boundary?.direct_supabase_mutations_allowed, false);
           assert.equal(body.constraints.execution_boundary?.openclaw_calls_allowed, false);
+
+          if (firstCallCreativeExecution) {
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                response: {
+                  answer: {
+                    format: "markdown",
+                    title: "Creative Asset Ready",
+                    summary: "Creative generated an image and returned local artifact metadata.",
+                    decision: "KEEP",
+                    body: "Creative generated the requested image and returned metadata for Product artifact transport.",
+                  },
+                  structured_output: {
+                    routed_to_creative: true,
+                    image_path: "/tmp/creative-agent-smoke/hold-pay.png",
+                    bytes: 128,
+                    sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    model: "gpt-5.5",
+                    operation: "responses image_generation",
+                  },
+                  delegations: [],
+                },
+              }),
+            );
+            return;
+          }
 
           const echoFailFixture = body.request_id === "req_m1_echo_fail";
           const latestPostFixture = body.request_id === "req_m1_native_latest_post";
@@ -2926,6 +2998,7 @@ try {
     CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED: process.env.CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED,
     CMO_HERMES_CMO_TOOL_ENDPOINT: process.env.CMO_HERMES_CMO_TOOL_ENDPOINT,
     CMO_HERMES_CMO_TOOL_TIMEOUT_MS: process.env.CMO_HERMES_CMO_TOOL_TIMEOUT_MS,
+    CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS: process.env.CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS,
   };
 
   let result;
@@ -2947,6 +3020,7 @@ try {
   let translationFollowupResult;
   let m43NativeConversationResult;
   let m43SourceTranslateResult;
+  let m13CreativeTimeoutDefaultResult;
 
   try {
     process.env.CMO_HERMES_EXECUTION_ENABLED = "true";
@@ -2959,6 +3033,7 @@ try {
     process.env.CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED = "false";
     process.env.CMO_HERMES_CMO_TOOL_ENDPOINT = "/agents/cmo/tool-execute";
     process.env.CMO_HERMES_CMO_TOOL_TIMEOUT_MS = "90000";
+    delete process.env.CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS;
 
     assert.equal(
       validateHermesCmoRuntimeResponse(
@@ -4402,6 +4477,18 @@ try {
       /Rejected field: data_unsafe:cmo\.tool_read\.completed key=data\.raw_source_text type=string reason=unsafe_key_name/,
       "M4.4A metadata events must reject unsafe raw source text",
     );
+
+    process.env.CMO_HERMES_CMO_ORCHESTRATION_ENABLED = "false";
+    m13CreativeTimeoutDefaultResult = await runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_timeout_default"));
+    assert.equal(m13CreativeTimeoutDefaultResult.hermesCmoAgentPath, "/agents/cmo/execute");
+    assert.equal(m13CreativeTimeoutDefaultResult.hermesCmoEndpointKind, "execute");
+    assert.equal(m13CreativeTimeoutDefaultResult.hermesCmoRouteDecision, "creative_execution");
+    assert.equal(m13CreativeTimeoutDefaultResult.hermesCmoEndpointTimeoutMs, 300000);
+    assert.equal(m13CreativeTimeoutDefaultResult.hermesCmoEndpointTimeoutSource, "creative_execute");
+    assert.deepEqual(
+      server.calls.cmoRequests.find((cmoRequest) => cmoRequest.requestId === "req_m13_creative_timeout_default")?.allowedAgents,
+      ["creative"],
+    );
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
       restoreEnvValue(key, value);
@@ -4447,6 +4534,12 @@ try {
         },
         surfThenEcho: surfThenEchoResult?.surfCalls === 1 && surfThenEchoResult?.echoCalls === 1,
         maxRoundsGuarded: maxRoundsResult?.response.structured_output?.completed_specialist_fallback === true,
+        creativeExecutionTimeout: {
+          endpoint: m13CreativeTimeoutDefaultResult?.hermesCmoAgentPath,
+          routeDecision: m13CreativeTimeoutDefaultResult?.hermesCmoRouteDecision,
+          timeoutMs: m13CreativeTimeoutDefaultResult?.hermesCmoEndpointTimeoutMs,
+          timeoutSource: m13CreativeTimeoutDefaultResult?.hermesCmoEndpointTimeoutSource,
+        },
         legacySurfXCalls: server.calls.legacySurfX,
         legacySurfLast30DaysCalls: server.calls.legacySurfLast30Days,
         forbiddenCounters: result.forbidden_counters,

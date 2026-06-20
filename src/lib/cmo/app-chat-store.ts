@@ -91,6 +91,7 @@ import {
   getCmoHermesApiKey,
   getCmoHermesBaseUrl,
   getCmoHermesCmoAsyncToolRunTimeoutMs,
+  getCmoHermesCreativeExecuteTimeoutMs,
   getCmoHermesTimeoutMs,
   getCmoVaultAgentHandoffMode,
 } from "@/lib/cmo/config";
@@ -2159,6 +2160,16 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(typeof value.hermesEndpointTimeoutMs === "number" && Number.isFinite(value.hermesEndpointTimeoutMs)
       ? { hermesEndpointTimeoutMs: Math.max(0, Math.floor(value.hermesEndpointTimeoutMs)) }
       : {}),
+    ...(value.hermesEndpointTimeoutSource === "default_execute" ||
+    value.hermesEndpointTimeoutSource === "creative_execute" ||
+    value.hermesEndpointTimeoutSource === "tool_endpoint" ||
+    value.hermesEndpointTimeoutSource === "tool_timeout_override"
+      ? { hermesEndpointTimeoutSource: value.hermesEndpointTimeoutSource }
+      : {}),
+    ...(value.route_decision === "execute" || value.route_decision === "creative_execution" || value.route_decision === "tool_execute"
+      ? { route_decision: value.route_decision }
+      : {}),
+    ...(value.creative_execution_requested === true ? { creative_execution_requested: true } : {}),
     ...(typeof value.hermesToolEndpointEnabled === "boolean" ? { hermesToolEndpointEnabled: value.hermesToolEndpointEnabled } : {}),
     ...(value.tool_capable_cmo === true ? { tool_capable_cmo: true } : {}),
     ...(sideEffects !== undefined ? { sideEffects, side_effects: sideEffects } : {}),
@@ -4016,20 +4027,89 @@ export async function createAppChatSession(
       usedHermesCmoChat = true;
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Hermes CMO chat runtime failed.";
+      const creativeTimeout = hermesCmoCreativeExecutionRequested && isTimedOutHermesError(reason);
 
-      console.warn("[cmo-app-chat] Hermes CMO chat failed; using existing CMO chat path.", {
+      console.warn(creativeTimeout ? "[cmo-app-chat] Hermes CMO Creative execution timed out." : "[cmo-app-chat] Hermes CMO chat failed; using existing CMO chat path.", {
         appId: request.appId,
         sessionId,
         reason,
+        creativeExecutionRequested: hermesCmoCreativeExecutionRequested,
       });
 
       calledHermesCmo = true;
-      hermesCmoStatus = reason.startsWith("forbidden_counter_non_zero:") || reason.startsWith("invalid_counters_schema:")
-        ? "guardrail_violation_then_existing_fallback"
-        : "failed_then_existing_fallback";
-      hermesCmoErrorReason = reason;
-      productFallbackReason = reason;
-      delegationsMode = HERMES_CMO_PROPOSALS_ONLY;
+      liveAttemptStartedAt = hermesStartedAt;
+      liveAttemptDurationMs = Date.now() - hermesStartedMs;
+
+      if (creativeTimeout) {
+        const creativeTimeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
+        const creativeTimeoutEvent: HermesCmoActivityEventSummary = {
+          eventId: `evt_${messageId}_creative_timeout`,
+          type: "creative.failed",
+          status: "timed_out",
+          message: `Creative execution timed out after ${creativeTimeoutMs}ms before Hermes returned image metadata.`,
+          userVisible: true,
+          sourceAgent: "creative",
+          sourceMode: "creative.generate_image",
+        };
+
+        answer = [
+          "Creative execution timed out before Hermes returned the generated asset metadata.",
+          `Product waited ${creativeTimeoutMs}ms for /agents/cmo/execute.`,
+          "No workspace-context fallback was used for this Creative generation request. Retry the generation or check the Hermes Creative trace for the matching response.",
+        ].join("\n");
+        status = "failed";
+        assumptions = [];
+        suggestedActions = [];
+        isDevelopmentFallback = false;
+        isRuntimeFallback = false;
+        runtimeStatus = "runtime_error";
+        runtimeMode = "configured_but_unreachable";
+        attemptedRuntimeMode = "live";
+        runtimeLabel = "Hermes CMO Creative execution";
+        runtimeError = "Creative execution timed out before Hermes returned asset metadata.";
+        runtimeErrorReason = "timeout";
+        runtimeProvider = "hermes";
+        runtimeAgent = "creative";
+        fallbackDurationMs = undefined;
+        timeoutMs = creativeTimeoutMs;
+        hermesCmoStatus = "interrupted";
+        hermesCmoErrorReason = reason;
+        delegationsMode = HERMES_CMO_PROPOSALS_ONLY;
+        productRenderSource = "hermes_cmo";
+        productFallbackReason = undefined;
+        hermesCmoMetadata = {
+          ...failedHermesCmoChatV11Metadata(`req_cmo_creative_${messageId}`, reason),
+          productRenderSource: "hermes_cmo",
+          selectedHermesEndpoint: "/agents/cmo/execute",
+          hermesEndpointKind: "execute",
+          endpoint_kind: "execute",
+          runtime_kind: "ai_agent",
+          requested_endpoint: "/agents/cmo/execute",
+          fallback_used: false,
+          hermesEndpointTimeoutMs: creativeTimeoutMs,
+          hermesEndpointTimeoutSource: "creative_execute",
+          route_decision: "creative_execution",
+          creative_execution_requested: true,
+          agentsUsed: ["cmo", "creative"],
+          activityEventsCount: 1,
+          activityEvents: [creativeTimeoutEvent],
+        };
+        hermesCmoCounters = hermesCmoMetadata.counters;
+        forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
+        activityEvents = hermesCmoMetadata.activityEvents;
+        delegationSummary = hermesCmoMetadata.delegationSummary;
+        agentsUsed = hermesCmoMetadata.agentsUsed;
+        surfCalls = hermesCmoMetadata.surfCalls;
+        echoCalls = hermesCmoMetadata.echoCalls;
+        usedHermesCmoChat = true;
+      } else {
+        hermesCmoStatus = reason.startsWith("forbidden_counter_non_zero:") || reason.startsWith("invalid_counters_schema:")
+          ? "guardrail_violation_then_existing_fallback"
+          : "failed_then_existing_fallback";
+        hermesCmoErrorReason = reason;
+        productFallbackReason = reason;
+        delegationsMode = HERMES_CMO_PROPOSALS_ONLY;
+      }
     }
   }
 

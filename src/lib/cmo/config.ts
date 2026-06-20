@@ -150,6 +150,10 @@ export function getCmoHermesCmoAsyncToolRunTimeoutMs(): number {
   return positiveIntEnv("CMO_HERMES_CMO_ASYNC_TOOL_RUN_TIMEOUT_MS", 300_000);
 }
 
+export function getCmoHermesCreativeExecuteTimeoutMs(): number {
+  return positiveIntEnv("CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS", 300_000);
+}
+
 export function isCmoHermesCreativeEnabled(): boolean {
   return booleanEnv("CMO_HERMES_CREATIVE_ENABLED", true);
 }

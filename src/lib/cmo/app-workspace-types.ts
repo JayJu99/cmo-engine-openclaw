@@ -862,6 +862,9 @@ export interface HermesCmoChatMetadata {
   fallback_from?: string;
   fallback_to?: string;
   hermesEndpointTimeoutMs?: number;
+  hermesEndpointTimeoutSource?: "default_execute" | "creative_execute" | "tool_endpoint" | "tool_timeout_override";
+  route_decision?: "execute" | "creative_execution" | "tool_execute";
+  creative_execution_requested?: boolean;
   hermesToolEndpointEnabled?: boolean;
   sideEffects?: false | Record<string, boolean>;
   side_effects?: false | Record<string, boolean>;
