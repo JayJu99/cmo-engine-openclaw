@@ -53,13 +53,18 @@ export interface CmoCreativeAssetArtifact {
   prompt_used?: string;
   visual_summary?: string;
   storage_path?: string;
+  storagePath?: string;
   render_url?: string;
+  renderUrl?: string;
   preview_url?: string;
+  previewUrl?: string;
   signed_url?: string;
+  signedUrl?: string;
   source_local_path_redacted?: string;
   bytes?: number;
   sha256?: string;
   mime_type?: string;
+  mimeType?: string;
   width?: number;
   height?: number;
   model?: string;
@@ -67,6 +72,7 @@ export interface CmoCreativeAssetArtifact {
   status: CmoCreativeAssetStatus;
   notes?: string;
   transport_status?: CmoCreativeAssetTransportStatus;
+  transportStatus?: CmoCreativeAssetTransportStatus;
   review_required: true;
   created_at: string;
 }
@@ -102,6 +108,16 @@ function stringValue(value: unknown, max = 1200): string | undefined {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
+}
+
+function browserPreviewUrlFrom(values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (isBrowserPreviewUrl(value)) {
+      return value;
+    }
+  }
+
+  return undefined;
 }
 
 function sha256Value(value: unknown): string | undefined {
@@ -187,7 +203,7 @@ export function hasCreativeExecutionMetadata(value: unknown): boolean {
     return true;
   }
 
-  return hasStringField(value, ["image_path", "path", "preview_url", "signed_url", "url", "storage_path", "storagePath", "sha256", "model", "operation"]) ||
+  return hasStringField(value, ["image_path", "path", "render_url", "renderUrl", "preview_url", "previewUrl", "signed_url", "signedUrl", "url", "storage_path", "storagePath", "sha256", "model", "operation"]) ||
     hasNumberField(value, ["bytes", "width", "height"]);
 }
 
@@ -260,8 +276,11 @@ export function normalizeCreativeResponse(
         value.image_path ||
         value.path ||
         value.render_url ||
+        value.renderUrl ||
         value.preview_url ||
+        value.previewUrl ||
         value.signed_url ||
+        value.signedUrl ||
         value.url ||
         value.storage_path ||
         value.storagePath ||
@@ -269,16 +288,17 @@ export function normalizeCreativeResponse(
       )
       ? [{
           path: value.image_path ?? value.path,
-          render_url: value.render_url,
-          preview_url: value.preview_url,
-          signed_url: value.signed_url,
+          render_url: value.render_url ?? value.renderUrl,
+          preview_url: value.preview_url ?? value.previewUrl,
+          signed_url: value.signed_url ?? value.signedUrl,
           url: value.url,
           storage_path: value.storage_path ?? value.storagePath,
           asset_id: value.asset_id ?? value.id,
-          asset_type: value.asset_type,
-          transport_status: value.transport_status,
+          asset_type: value.asset_type ?? value.assetType,
+          transport_status: value.transport_status ?? value.transportStatus,
           provider: value.provider,
           bytes: value.bytes,
+          mime_type: value.mime_type ?? value.mimeType,
           sha256: value.sha256,
           width: value.width,
           height: value.height,
@@ -289,22 +309,23 @@ export function normalizeCreativeResponse(
 
   return images.map((image, index) => {
     const path = stringValue(image.path, 600);
-    const previewUrl = isBrowserPreviewUrl(image.render_url)
-      ? image.render_url
-      : isBrowserPreviewUrl(image.preview_url)
-      ? image.preview_url
-      : isBrowserPreviewUrl(image.signed_url)
-        ? image.signed_url
-        : isBrowserPreviewUrl(image.url)
-          ? image.url
-          : undefined;
+    const previewUrl = browserPreviewUrlFrom([
+      image.signed_url,
+      image.signedUrl,
+      image.render_url,
+      image.renderUrl,
+      image.preview_url,
+      image.previewUrl,
+      image.url,
+    ]);
     const storagePath = stringValue(image.storage_path ?? image.storagePath, 600);
     const hasPreview = Boolean(previewUrl || storagePath);
-    const transportStatus = transportStatusValue(image.transport_status ?? value.transport_status, hasPreview);
+    const transportStatus = transportStatusValue(image.transport_status ?? image.transportStatus ?? value.transport_status ?? value.transportStatus, hasPreview);
     const sha256 = sha256Value(image.sha256);
     const explicitAssetId = stringValue(image.asset_id ?? image.id, 120);
     const assetId = explicitAssetId ?? `creative_${safeIdSegment(sha256 ?? `${context.jobId ?? "job"}_${index + 1}`)}`;
-    const assetType = image.asset_type === "video" || image.type === "video" ? "video" : "image";
+    const assetType = image.asset_type === "video" || image.assetType === "video" || image.type === "video" ? "video" : "image";
+    const mimeType = stringValue(image.mime_type ?? image.mimeType, 120);
 
     return {
       schema_version: "cmo.creative_asset.v1",
@@ -319,13 +340,16 @@ export function normalizeCreativeResponse(
       provider: stringValue(image.provider ?? value.provider, 160) ?? "codex-imagen",
       ...(promptUsed ? { prompt_used: promptUsed } : {}),
       ...(visualSummary ? { visual_summary: visualSummary } : {}),
-      ...(storagePath ? { storage_path: storagePath } : {}),
+      ...(storagePath ? { storage_path: storagePath, storagePath } : {}),
       ...(previewUrl ? { render_url: previewUrl } : {}),
+      ...(previewUrl ? { renderUrl: previewUrl } : {}),
       ...(previewUrl ? { preview_url: previewUrl } : {}),
-      ...(previewUrl && (image.signed_url === previewUrl || image.render_url === previewUrl) ? { signed_url: previewUrl } : {}),
+      ...(previewUrl ? { previewUrl } : {}),
+      ...(previewUrl ? { signed_url: previewUrl, signedUrl: previewUrl } : {}),
       ...(path ? { source_local_path_redacted: redactedLocalArtifactPath(path) } : {}),
       ...(numberValue(image.bytes) !== undefined ? { bytes: numberValue(image.bytes) } : {}),
       ...(sha256 ? { sha256 } : {}),
+      ...(mimeType ? { mime_type: mimeType, mimeType } : {}),
       ...(numberValue(image.width) !== undefined ? { width: numberValue(image.width) } : {}),
       ...(numberValue(image.height) !== undefined ? { height: numberValue(image.height) } : {}),
       ...(stringValue(image.model ?? value.model, 160) ? { model: stringValue(image.model ?? value.model, 160) } : {}),
@@ -333,6 +357,7 @@ export function normalizeCreativeResponse(
       status: statusFromCreativeStatus(status, hasPreview),
       ...(notes ? { notes } : {}),
       transport_status: transportStatus,
+      transportStatus,
       review_required: true,
       created_at: createdAt,
     };

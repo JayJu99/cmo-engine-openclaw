@@ -25,25 +25,35 @@ function isBrowserPreviewUrl(value) {
   }
 }
 
+function creativeAssetPreviewUrl(asset) {
+  for (const key of ["signed_url", "signedUrl", "render_url", "renderUrl", "preview_url", "previewUrl"]) {
+    if (isBrowserPreviewUrl(asset[key])) {
+      return String(asset[key]);
+    }
+  }
+
+  return "";
+}
+
 function normalizeCreativeResponse(value) {
   const images = Array.isArray(value.creative_assets)
     ? value.creative_assets
     : Array.isArray(value.images)
     ? value.images
-    : value.image_path || value.path || value.render_url || value.preview_url || value.signed_url || value.url || value.storage_path || value.sha256
+    : value.image_path || value.path || value.render_url || value.renderUrl || value.preview_url || value.previewUrl || value.signed_url || value.signedUrl || value.url || value.storage_path || value.storagePath || value.sha256
       ? [{
           path: value.image_path ?? value.path,
-          render_url: value.render_url,
-          preview_url: value.preview_url,
-          signed_url: value.signed_url,
+          render_url: value.render_url ?? value.renderUrl,
+          preview_url: value.preview_url ?? value.previewUrl,
+          signed_url: value.signed_url ?? value.signedUrl,
           url: value.url,
-          storage_path: value.storage_path,
+          storage_path: value.storage_path ?? value.storagePath,
           asset_id: value.asset_id,
-          asset_type: value.asset_type,
-          transport_status: value.transport_status,
+          asset_type: value.asset_type ?? value.assetType,
+          transport_status: value.transport_status ?? value.transportStatus,
           provider: value.provider,
           bytes: value.bytes,
-          mime_type: value.mime_type,
+          mime_type: value.mime_type ?? value.mimeType,
           sha256: value.sha256,
           width: value.width,
           height: value.height,
@@ -53,12 +63,12 @@ function normalizeCreativeResponse(value) {
       : [];
 
   return images.map((image, index) => {
-    const previewUrl = isBrowserPreviewUrl(image.render_url)
-      ? image.render_url
-      : isBrowserPreviewUrl(image.preview_url)
-        ? image.preview_url
-        : isBrowserPreviewUrl(image.signed_url)
-          ? image.signed_url
+    const previewUrl = isBrowserPreviewUrl(image.signed_url ?? image.signedUrl)
+      ? image.signed_url ?? image.signedUrl
+      : isBrowserPreviewUrl(image.render_url ?? image.renderUrl)
+        ? image.render_url ?? image.renderUrl
+        : isBrowserPreviewUrl(image.preview_url ?? image.previewUrl)
+          ? image.preview_url ?? image.previewUrl
           : undefined;
     const storagePath = typeof image.storage_path === "string" ? image.storage_path : undefined;
     const sha256 = typeof image.sha256 === "string" && /^[a-f0-9]{64}$/i.test(image.sha256) ? image.sha256.toLowerCase() : undefined;
@@ -75,8 +85,10 @@ function normalizeCreativeResponse(value) {
       status: previewUrl || storagePath ? "stored" : "artifact_transport_missing",
       transport_status: image.transport_status === "uploaded" ? "uploaded" : previewUrl || storagePath ? "available" : "artifact_transport_missing",
       ...(previewUrl ? { render_url: previewUrl } : {}),
+      ...(previewUrl ? { renderUrl: previewUrl } : {}),
       ...(previewUrl ? { preview_url: previewUrl } : {}),
-      ...(previewUrl && image.signed_url === previewUrl ? { signed_url: previewUrl } : {}),
+      ...(previewUrl ? { previewUrl } : {}),
+      ...(previewUrl && (image.signed_url === previewUrl || image.signedUrl === previewUrl) ? { signed_url: previewUrl, signedUrl: previewUrl } : {}),
       ...(sourceLocalPath ? { source_local_path_redacted: sourceLocalPath } : {}),
       ...(typeof image.bytes === "number" ? { bytes: image.bytes } : {}),
       ...(typeof image.mime_type === "string" ? { mime_type: image.mime_type } : {}),
@@ -235,8 +247,11 @@ assert.match(openClawClientSource, /Product recorded the asset metadata/, "Direc
 assert.match(mapperSource, /hasCreativeExecutionMetadata/, "Hermes execute response mapper must accept Creative metadata without a conventional answer");
 assert.match(uiSource, /Creative Assets/, "Chat UI must render Creative asset cards");
 assert.match(uiSource, /Artifact transport missing/, "UI must show missing transport state");
-assert.match(uiSource, /asset\.render_url/, "UI must prefer Product-owned render_url for uploaded Creative previews");
+assert.match(uiSource, /creativeAssetPreviewUrl/, "UI must resolve Creative preview URLs through a single safe helper");
+assert.match(uiSource, /\["signed_url", "signedUrl", "render_url", "renderUrl", "preview_url", "previewUrl"\]/, "UI preview resolver must prefer signed URL before render URL");
 assert.match(uiSource, /transport_status/, "UI must display Creative artifact transport status");
+assert.match(uiSource, /has_signed_url/, "Missing Creative preview diagnostics must include signed URL presence");
+assert.match(uiSource, /has_render_url/, "Missing Creative preview diagnostics must include render URL presence");
 assert.match(uiSource, /isBrowserPreviewUrl/, "UI must not render local paths as previews");
 assert.match(ingestRouteSource, /uploadCmoCreativeArtifact/, "Creative artifact ingest endpoint must exist");
 assert.match(ingestRouteSource, /x-cmo-creative-ingest-key/, "Creative ingest endpoint must require server-to-server key when configured");
@@ -309,6 +324,23 @@ assert.equal(uploadedAssets[0].transport_status, "uploaded", "uploaded Creative 
 assert.equal(uploadedAssets[0].render_url, "https://cmo.jayju.cloud/api/signed/creative_uploaded_contract", "uploaded Creative assets must preserve Product render URL");
 assert.equal(uploadedAssets[0].signed_url, "https://cmo.jayju.cloud/api/signed/creative_uploaded_contract", "uploaded Creative assets must preserve signed URL");
 assert.equal(uploadedAssets[0].mime_type, "image/png", "uploaded Creative assets must preserve mime type");
+assert.equal(creativeAssetPreviewUrl({
+  signed_url: "https://cmo.jayju.cloud/api/signed/primary",
+  render_url: "https://cmo.jayju.cloud/api/render/fallback",
+}), "https://cmo.jayju.cloud/api/signed/primary", "Creative card preview must prefer signed_url");
+assert.equal(creativeAssetPreviewUrl({
+  render_url: "https://cmo.jayju.cloud/api/render/only",
+}), "https://cmo.jayju.cloud/api/render/only", "Creative card preview must use render_url fallback");
+assert.equal(creativeAssetPreviewUrl({
+  signedUrl: "https://cmo.jayju.cloud/api/signed/camel",
+}), "https://cmo.jayju.cloud/api/signed/camel", "Creative card preview must support camelCase signedUrl");
+assert.equal(creativeAssetPreviewUrl({
+  signed_url: "/tmp/creative-agent-images/bad.png",
+  render_url: "holdstation/hold-pay/raw-storage-path.png",
+}), "", "Creative card preview must block local and storage-path-only values");
+assert.equal(creativeAssetPreviewUrl({
+  signed_url: "[hermes_local_artifact_path_redacted]/bad.png",
+}), "", "Creative card preview must block redacted Hermes local paths");
 assert.equal(hermesSingleImageAssets[0].status, "artifact_transport_missing", "Hermes local image_path must require Product artifact transport");
 assert.equal(hermesSingleImageAssets[0].bytes, 101, "Hermes execute bytes metadata must survive normalization");
 assert.equal(hermesSingleImageAssets[0].sha256, "b".repeat(64), "Hermes execute sha256 metadata must survive normalization");

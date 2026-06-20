@@ -515,6 +515,30 @@ function recordNumber(record: Record<string, unknown>, keys: string[]): number |
   return undefined;
 }
 
+function creativeAssetPreviewUrl(asset: Record<string, unknown>): string {
+  for (const key of ["signed_url", "signedUrl", "render_url", "renderUrl", "preview_url", "previewUrl"]) {
+    const value = asset[key];
+
+    if (isBrowserPreviewUrl(value)) {
+      return String(value);
+    }
+  }
+
+  return "";
+}
+
+function creativeAssetPreviewDiagnostics(asset: Record<string, unknown>) {
+  const assetId = recordString(asset, ["asset_id", "assetId", "id"]);
+  const transportStatus = recordString(asset, ["transport_status", "transportStatus"]);
+
+  return {
+    asset_id: assetId || "unknown",
+    transport_status: transportStatus || "unknown",
+    has_signed_url: Boolean(recordString(asset, ["signed_url", "signedUrl"])),
+    has_render_url: Boolean(recordString(asset, ["render_url", "renderUrl"])),
+  };
+}
+
 function creativeAssetRecords(message: CMOChatMessage): Record<string, unknown>[] {
   return (message.sessionArtifacts ?? []).filter((artifact) =>
     isRecord(artifact) &&
@@ -1606,23 +1630,19 @@ export function CMOChatPanel({
         </div>
         <div className="grid gap-3 md:grid-cols-2">
           {assets.map((asset, index) => {
-            const assetId = recordString(asset, ["asset_id", "id"]) || `creative_asset_${index}`;
+            const assetId = recordString(asset, ["asset_id", "assetId", "id"]) || `creative_asset_${index}`;
             const status = recordString(asset, ["status"]) || "artifact_transport_missing";
-            const transportStatus = recordString(asset, ["transport_status"]);
-            const assetType = recordString(asset, ["asset_type", "type"]) || "image";
-            const previewUrl = isBrowserPreviewUrl(asset.render_url)
-              ? String(asset.render_url)
-              : isBrowserPreviewUrl(asset.preview_url)
-                ? String(asset.preview_url)
-                : isBrowserPreviewUrl(asset.signed_url)
-                  ? String(asset.signed_url)
-                  : "";
-            const visualSummary = recordString(asset, ["visual_summary", "summary"]);
+            const transportStatus = recordString(asset, ["transport_status", "transportStatus"]);
+            const assetType = recordString(asset, ["asset_type", "assetType", "type"]) || "image";
+            const previewUrl = creativeAssetPreviewUrl(asset);
+            const previewDiagnostics = creativeAssetPreviewDiagnostics(asset);
+            const visualSummary = recordString(asset, ["visual_summary", "visualSummary", "summary"]);
             const model = recordString(asset, ["model"]);
             const operation = recordString(asset, ["operation"]);
             const bytes = recordNumber(asset, ["bytes"]);
             const width = recordNumber(asset, ["width"]);
             const height = recordNumber(asset, ["height"]);
+            const mimeType = recordString(asset, ["mime_type", "mimeType"]);
             const approved = approvedCreativeAssetIds.has(assetId);
             const canPreview = Boolean(previewUrl);
             const dimensions = width && height ? `${width} x ${height}` : "";
@@ -1642,6 +1662,9 @@ export function CMOChatPanel({
                       <p className="max-w-xs text-xs leading-5 text-slate-600">
                         Creative generated an asset, but Product cannot fetch the local artifact yet.
                       </p>
+                      <div className="max-w-xs rounded bg-orange-50 px-2 py-1 text-[11px] font-semibold leading-4 text-orange-800">
+                        asset={previewDiagnostics.asset_id} transport={previewDiagnostics.transport_status} signed={String(previewDiagnostics.has_signed_url)} render={String(previewDiagnostics.has_render_url)}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1656,6 +1679,7 @@ export function CMOChatPanel({
                       </Badge>
                     ) : null}
                     <Badge variant="slate">{assetType}</Badge>
+                    {mimeType ? <Badge variant="slate">{mimeType}</Badge> : null}
                     {dimensions ? <Badge variant="slate">{dimensions}</Badge> : null}
                     {bytes ? <Badge variant="slate">{formatBytes(bytes)}</Badge> : null}
                   </div>
