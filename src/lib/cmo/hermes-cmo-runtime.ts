@@ -933,6 +933,7 @@ interface HermesCmoSideEffectsValidation {
 }
 
 const creativeSafeSideEffectTypes = new Set([
+  "executed_creative",
   "image_generation",
   "video_generation",
   "media_generation",
@@ -1044,6 +1045,7 @@ const safeCreativeSideEffects = (value: unknown): HermesCmoSideEffectsValidation
   return {
     sideEffects: {
       creative_generation: false,
+      executed_creative: false,
       local_artifact_created: false,
       creative_asset_metadata: false,
       publishing: false,
@@ -1057,6 +1059,25 @@ const safeCreativeSideEffects = (value: unknown): HermesCmoSideEffectsValidation
   };
 };
 
+const hasTruthyExecutedCreativeSideEffect = (value: unknown): boolean =>
+  isRecord(value) && value.executed_creative === true;
+
+const hasCompleteExecutedCreativeMetadata = (value: unknown): boolean => {
+  const summary = creativeTraceSummary(value);
+
+  return (
+    summary.routed_to_creative === true &&
+    (summary.image_path_present === true ||
+      summary.preview_url_present === true ||
+      summary.storage_path_present === true ||
+      (typeof summary.image_count === "number" && summary.image_count > 0)) &&
+    typeof summary.bytes === "number" &&
+    summary.sha256_present === true &&
+    typeof summary.model === "string" &&
+    typeof summary.operation === "string"
+  );
+};
+
 const sideEffectsFromPayload = (
   payload: Record<string, unknown>,
   response: Record<string, unknown>,
@@ -1064,6 +1085,16 @@ const sideEffectsFromPayload = (
   creativeMetadataPresent: boolean,
 ): HermesCmoSideEffectsValidation => {
   const rawSideEffects = payload.side_effects ?? response.side_effects;
+
+  if (
+    requestIsCreativeExecution(request) &&
+    hasTruthyExecutedCreativeSideEffect(rawSideEffects) &&
+    !hasCompleteExecutedCreativeMetadata(payload) &&
+    !hasCompleteExecutedCreativeMetadata(response)
+  ) {
+    return { sideEffects: null, present: true, allowedForCreative: false, rejectedType: "executed_creative" };
+  }
+
   const generic = safeSideEffects(rawSideEffects);
 
   if (generic !== null) {

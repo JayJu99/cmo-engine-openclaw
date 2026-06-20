@@ -535,6 +535,8 @@ const startServer = async () => {
           const firstCallCreativeExecution =
             body.request_id === "req_m13_creative_timeout_default" ||
             body.request_id === "req_m13_creative_top_level_success" ||
+            body.request_id === "req_m13_creative_executed_creative_true" ||
+            body.request_id === "req_m13_creative_executed_creative_missing_metadata" ||
             body.request_id === "req_m13_creative_false_only_side_effects" ||
             body.request_id === "req_m13_creative_unsafe_side_effect" ||
             body.request_id === "req_m13_creative_executed_echo_true";
@@ -576,6 +578,7 @@ const startServer = async () => {
                   sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 },
                 creative_asset_metadata: true,
+                executed_creative: true,
                 executed_echo: false,
                 executed_surf: false,
                 executed_vault_agent: false,
@@ -584,6 +587,33 @@ const startServer = async () => {
                 vault_mutation: false,
                 database_mutation: false,
                 credential_write: false,
+              },
+            });
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_executed_creative_true") {
+            writeJson(response, 200, {
+              status: "success",
+              routed_to_creative: true,
+              image_path: "/tmp/creative-agent-smoke/hold-pay-executed-creative.png",
+              bytes: 640,
+              sha256: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              model: "gpt-5.5",
+              operation: "responses image_generation",
+              side_effects: {
+                executed_creative: true,
+              },
+            });
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_executed_creative_missing_metadata") {
+            writeJson(response, 200, {
+              status: "success",
+              routed_to_creative: true,
+              side_effects: {
+                executed_creative: true,
               },
             });
             return;
@@ -1120,6 +1150,7 @@ const startServer = async () => {
                   },
                 }),
                 side_effects: {
+                  executed_creative: true,
                   image_generation: true,
                   local_artifact_created: true,
                   creative_asset_metadata: true,
@@ -3148,6 +3179,7 @@ try {
   let m43SourceTranslateResult;
   let m13CreativeTimeoutDefaultResult;
   let m13CreativeTopLevelSuccessResult;
+  let m13CreativeExecutedCreativeResult;
   let m13CreativeFalseOnlySideEffectsResult;
 
   try {
@@ -4318,6 +4350,12 @@ try {
     );
 
     await assert.rejects(
+      () => runHermesCmoRuntime(m44dToolEndpointRequest("req_m44d_tool_endpoint_creative_side_effects")),
+      /Hermes CMO Agent response included unsafe side_effects/,
+      "non-Creative response with executed_creative=true must reject",
+    );
+
+    await assert.rejects(
       () => runHermesCmoRuntime(m44dToolEndpointRequest("req_m44d_tool_endpoint_unsafe_tool_result")),
       /Rejected field: data_unsafe:cmo\.tool_read\.completed key=data\.tool_result type=string reason=unsafe_key_name/,
       "tool endpoint activity data must reject raw tool_result",
@@ -4646,6 +4684,24 @@ try {
     assert.equal(m13CreativeTopLevelSuccessResult.response.artifacts[0].transport_status, "artifact_transport_missing");
     assert.deepEqual(m13CreativeTopLevelSuccessResult.sideEffects, {
       creative_generation: false,
+      executed_creative: false,
+      local_artifact_created: false,
+      creative_asset_metadata: false,
+      publishing: false,
+      vault_write: false,
+      supabase_mutation: false,
+      credential_write: false,
+      arbitrary_filesystem_write: false,
+    });
+    m13CreativeExecutedCreativeResult = await runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_executed_creative_true"));
+    assert.equal(m13CreativeExecutedCreativeResult.response.status, "completed");
+    assert.equal(m13CreativeExecutedCreativeResult.response.routed_to_creative, true);
+    assert.equal(m13CreativeExecutedCreativeResult.response.structured_output.product_artifact_status, "artifact_transport_missing");
+    assert.equal(m13CreativeExecutedCreativeResult.response.structured_output.side_effects_present, true);
+    assert.equal(m13CreativeExecutedCreativeResult.response.structured_output.side_effects_allowed_for_creative, true);
+    assert.deepEqual(m13CreativeExecutedCreativeResult.sideEffects, {
+      creative_generation: false,
+      executed_creative: false,
       local_artifact_created: false,
       creative_asset_metadata: false,
       publishing: false,
@@ -4679,6 +4735,11 @@ try {
       () => runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_executed_echo_true")),
       /rejected_side_effect_type=executed_echo/,
       "truthy executed_echo must be rejected for Creative execution",
+    );
+    await assert.rejects(
+      () => runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_executed_creative_missing_metadata")),
+      /Hermes CMO Agent response included unsafe side_effects/,
+      "executed_creative=true without Creative metadata must be rejected",
     );
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
@@ -4741,6 +4802,12 @@ try {
           fallbackUsed: m13CreativeTopLevelSuccessResult?.response.structured_output?.fallback_used,
           sideEffectsPresent: m13CreativeTopLevelSuccessResult?.response.structured_output?.side_effects_present,
           sideEffectsAllowedForCreative: m13CreativeTopLevelSuccessResult?.response.structured_output?.side_effects_allowed_for_creative,
+        },
+        creativeExecutedCreative: {
+          status: m13CreativeExecutedCreativeResult?.response.status,
+          productArtifactStatus: m13CreativeExecutedCreativeResult?.response.structured_output?.product_artifact_status,
+          sideEffectsAllowedForCreative: m13CreativeExecutedCreativeResult?.response.structured_output?.side_effects_allowed_for_creative,
+          executedCreative: m13CreativeExecutedCreativeResult?.sideEffects?.executed_creative,
         },
         creativeFalseOnlySideEffects: {
           status: m13CreativeFalseOnlySideEffectsResult?.response.status,
