@@ -515,6 +515,15 @@ function recordNumber(record: Record<string, unknown>, keys: string[]): number |
   return undefined;
 }
 
+interface CreativePreviewDiagnostics {
+  asset_id: string;
+  transport_status: string;
+  has_signed_url: boolean;
+  has_render_url: boolean;
+  resolved_preview_url_host: string;
+  resolved_preview_url_path_starts_with_storage_sign: boolean;
+}
+
 function creativeAssetPreviewUrl(asset: Record<string, unknown>): string {
   for (const key of ["signed_url", "signedUrl", "render_url", "renderUrl", "preview_url", "previewUrl"]) {
     const value = asset[key];
@@ -527,15 +536,36 @@ function creativeAssetPreviewUrl(asset: Record<string, unknown>): string {
   return "";
 }
 
-function creativeAssetPreviewDiagnostics(asset: Record<string, unknown>) {
+function safePreviewUrlParts(previewUrl: string): { host: string; pathStartsWithStorageSign: boolean } {
+  if (!previewUrl) {
+    return { host: "", pathStartsWithStorageSign: false };
+  }
+
+  try {
+    const baseOrigin = typeof window !== "undefined" ? window.location.origin : "https://cmo.jayju.cloud";
+    const url = new URL(previewUrl, baseOrigin);
+
+    return {
+      host: url.host,
+      pathStartsWithStorageSign: url.pathname.startsWith("/storage/v1/object/sign"),
+    };
+  } catch {
+    return { host: "", pathStartsWithStorageSign: false };
+  }
+}
+
+function creativeAssetPreviewDiagnostics(asset: Record<string, unknown>, previewUrl = ""): CreativePreviewDiagnostics {
   const assetId = recordString(asset, ["asset_id", "assetId", "id"]);
   const transportStatus = recordString(asset, ["transport_status", "transportStatus"]);
+  const previewUrlParts = safePreviewUrlParts(previewUrl);
 
   return {
     asset_id: assetId || "unknown",
     transport_status: transportStatus || "unknown",
     has_signed_url: Boolean(recordString(asset, ["signed_url", "signedUrl"])),
     has_render_url: Boolean(recordString(asset, ["render_url", "renderUrl"])),
+    resolved_preview_url_host: previewUrlParts.host,
+    resolved_preview_url_path_starts_with_storage_sign: previewUrlParts.pathStartsWithStorageSign,
   };
 }
 
@@ -714,6 +744,7 @@ export function CMOChatPanel({
   const [reviewStatusMessage, setReviewStatusMessage] = useState<string | null>(null);
   const [reviewingCandidateKey, setReviewingCandidateKey] = useState<string | null>(null);
   const [approvedCreativeAssetIds, setApprovedCreativeAssetIds] = useState<Set<string>>(() => new Set());
+  const [creativePreviewFailures, setCreativePreviewFailures] = useState<Record<string, CreativePreviewDiagnostics>>({});
   const [dryRunStatusMessage, setDryRunStatusMessage] = useState<string | null>(null);
   const [dryRunningApprovalId, setDryRunningApprovalId] = useState<string | null>(null);
   const [writeStatusMessage, setWriteStatusMessage] = useState<string | null>(null);
@@ -1635,7 +1666,7 @@ export function CMOChatPanel({
             const transportStatus = recordString(asset, ["transport_status", "transportStatus"]);
             const assetType = recordString(asset, ["asset_type", "assetType", "type"]) || "image";
             const previewUrl = creativeAssetPreviewUrl(asset);
-            const previewDiagnostics = creativeAssetPreviewDiagnostics(asset);
+            const previewDiagnostics = creativeAssetPreviewDiagnostics(asset, previewUrl);
             const visualSummary = recordString(asset, ["visual_summary", "visualSummary", "summary"]);
             const model = recordString(asset, ["model"]);
             const operation = recordString(asset, ["operation"]);
@@ -1644,26 +1675,54 @@ export function CMOChatPanel({
             const height = recordNumber(asset, ["height"]);
             const mimeType = recordString(asset, ["mime_type", "mimeType"]);
             const approved = approvedCreativeAssetIds.has(assetId);
-            const canPreview = Boolean(previewUrl);
+            const previewFailed = Boolean(creativePreviewFailures[assetId]);
+            const canPreview = Boolean(previewUrl) && !previewFailed;
             const dimensions = width && height ? `${width} x ${height}` : "";
+            const markPreviewLoaded = () => {
+              setCreativePreviewFailures((current) => {
+                if (!current[assetId]) {
+                  return current;
+                }
+
+                const next = { ...current };
+                delete next[assetId];
+
+                return next;
+              });
+            };
+            const markPreviewFailed = () => {
+              const diagnostics = creativeAssetPreviewDiagnostics(asset, previewUrl);
+
+              setCreativePreviewFailures((current) => ({ ...current, [assetId]: diagnostics }));
+              console.warn("[cmo-creative-preview] failed", diagnostics);
+            };
 
             return (
               <div key={assetId} className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
                 <div className="aspect-square bg-white">
                   {canPreview && assetType === "image" ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={previewUrl} alt={visualSummary || "Creative asset preview"} className="size-full object-cover" />
+                    <img
+                      src={previewUrl}
+                      alt={visualSummary || "Creative asset preview"}
+                      className="size-full object-cover"
+                      referrerPolicy="no-referrer"
+                      onLoad={markPreviewLoaded}
+                      onError={markPreviewFailed}
+                    />
                   ) : canPreview && assetType === "video" ? (
                     <video src={previewUrl} controls className="size-full bg-black object-contain" />
                   ) : (
                     <div className="flex size-full flex-col items-center justify-center gap-2 px-4 text-center">
                       <icons.AlertTriangle className="size-6 text-orange-600" />
-                      <div className="text-sm font-bold text-slate-900">Artifact transport missing</div>
+                      <div className="text-sm font-bold text-slate-900">{previewFailed && previewUrl ? "Preview failed to load" : "Artifact transport missing"}</div>
                       <p className="max-w-xs text-xs leading-5 text-slate-600">
-                        Creative generated an asset, but Product cannot fetch the local artifact yet.
+                        {previewFailed && previewUrl
+                          ? "Download remains available from the uploaded Product asset URL."
+                          : "Creative generated an asset, but Product cannot fetch the local artifact yet."}
                       </p>
                       <div className="max-w-xs rounded bg-orange-50 px-2 py-1 text-[11px] font-semibold leading-4 text-orange-800">
-                        asset={previewDiagnostics.asset_id} transport={previewDiagnostics.transport_status} signed={String(previewDiagnostics.has_signed_url)} render={String(previewDiagnostics.has_render_url)}
+                        asset={previewDiagnostics.asset_id} transport={previewDiagnostics.transport_status} signed={String(previewDiagnostics.has_signed_url)} render={String(previewDiagnostics.has_render_url)} host={previewDiagnostics.resolved_preview_url_host || "none"} sign_path={String(previewDiagnostics.resolved_preview_url_path_starts_with_storage_sign)}
                       </div>
                     </div>
                   )}
@@ -1713,7 +1772,7 @@ export function CMOChatPanel({
                       <icons.Play />
                       Use for video
                     </Button>
-                    {canPreview ? (
+                    {previewUrl ? (
                       <Button asChild type="button" size="sm" variant="outline">
                         <a href={previewUrl} download target="_blank" rel="noopener noreferrer">
                           <icons.Download />

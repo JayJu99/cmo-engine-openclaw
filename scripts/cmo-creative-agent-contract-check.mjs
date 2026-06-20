@@ -154,6 +154,8 @@ const [
   openClawClientSource,
   ingestRouteSource,
   migrationSource,
+  nextConfigSource,
+  proxySource,
 ] = await Promise.all([
   read("src/lib/cmo/hermes-cmo-runtime.ts"),
   read("src/lib/cmo/app-routing-intent.ts"),
@@ -169,6 +171,8 @@ const [
   read("src/lib/cmo/openclaw-client.ts"),
   read("src/app/api/cmo/apps/[appId]/creative/artifact-ingest/route.ts"),
   read("supabase/migrations/202606200002_cmo_creative_assets.sql"),
+  read("next.config.ts"),
+  read("src/proxy.ts"),
 ]);
 
 assert.match(runtimeSource, /"creative"/, "creative must be accepted by runtime agent registry");
@@ -249,10 +253,21 @@ assert.match(uiSource, /Creative Assets/, "Chat UI must render Creative asset ca
 assert.match(uiSource, /Artifact transport missing/, "UI must show missing transport state");
 assert.match(uiSource, /creativeAssetPreviewUrl/, "UI must resolve Creative preview URLs through a single safe helper");
 assert.match(uiSource, /\["signed_url", "signedUrl", "render_url", "renderUrl", "preview_url", "previewUrl"\]/, "UI preview resolver must prefer signed URL before render URL");
+assert.match(uiSource, /<img[\s\S]*src=\{previewUrl\}/, "Creative image preview img src must use the resolved signed/render URL");
+assert.match(uiSource, /referrerPolicy="no-referrer"/, "Creative preview image must not leak referrer details to signed URL hosts");
+assert.match(uiSource, /onError=\{markPreviewFailed\}/, "Creative preview image must expose a safe failed-load state");
+assert.match(uiSource, /Preview failed to load/, "Creative preview load failure must render a specific state");
+assert.match(uiSource, /Download remains available/, "Download must remain available when preview rendering fails");
 assert.match(uiSource, /transport_status/, "UI must display Creative artifact transport status");
 assert.match(uiSource, /has_signed_url/, "Missing Creative preview diagnostics must include signed URL presence");
 assert.match(uiSource, /has_render_url/, "Missing Creative preview diagnostics must include render URL presence");
+assert.match(uiSource, /resolved_preview_url_host/, "Creative preview diagnostics must include URL host without the signed token");
+assert.match(uiSource, /resolved_preview_url_path_starts_with_storage_sign/, "Creative preview diagnostics must identify Supabase signed object paths without logging tokens");
 assert.match(uiSource, /isBrowserPreviewUrl/, "UI must not render local paths as previews");
+const cspSource = `${nextConfigSource}\n${proxySource}`;
+if (/Content-Security-Policy|img-src/i.test(cspSource)) {
+  assert.match(cspSource, /img-src[^;]*(gestlbswqvibztqcidis\.supabase\.co|NEXT_PUBLIC_SUPABASE_URL|\*)/i, "CSP img-src must allow the configured Supabase Storage origin when CSP is present");
+}
 assert.match(ingestRouteSource, /uploadCmoCreativeArtifact/, "Creative artifact ingest endpoint must exist");
 assert.match(ingestRouteSource, /x-cmo-creative-ingest-key/, "Creative ingest endpoint must require server-to-server key when configured");
 assert.match(ingestRouteSource, /metadata_json/, "Creative ingest endpoint must accept Hermes metadata_json multipart field");
@@ -335,6 +350,9 @@ assert.equal(creativeAssetPreviewUrl({
   signedUrl: "https://cmo.jayju.cloud/api/signed/camel",
 }), "https://cmo.jayju.cloud/api/signed/camel", "Creative card preview must support camelCase signedUrl");
 assert.equal(creativeAssetPreviewUrl({
+  signed_url: "https://gestlbswqvibztqcidis.supabase.co/storage/v1/object/sign/cmo-creative-assets/asset.png?token=redacted",
+}), "https://gestlbswqvibztqcidis.supabase.co/storage/v1/object/sign/cmo-creative-assets/asset.png?token=redacted", "Creative card preview must accept Supabase signed object URLs");
+assert.equal(creativeAssetPreviewUrl({
   signed_url: "/tmp/creative-agent-images/bad.png",
   render_url: "holdstation/hold-pay/raw-storage-path.png",
 }), "", "Creative card preview must block local and storage-path-only values");
@@ -352,6 +370,7 @@ assert.equal(assets[0].preview_url, undefined, "local /tmp path must not be rend
 assert.ok(assets[0].source_local_path_redacted?.startsWith("[hermes_local_artifact_path_redacted]"), "local path must be redacted");
 assert.ok(!JSON.stringify(assets).includes("/tmp/creative-agent-smoke"), "full local path must not be retained");
 assert.ok(!isBrowserPreviewUrl("/tmp/creative-agent-smoke/output.png"), "local Mac path must not be a browser URL");
+assert.ok(isBrowserPreviewUrl("https://gestlbswqvibztqcidis.supabase.co/storage/v1/object/sign/cmo-creative-assets/asset.png?token=redacted"), "Supabase signed object URLs must pass browser preview safety");
 
 const redacted = redactSensitiveText("/Users/jay/.codex/auth.json token=abc123");
 assert.ok(!redacted.includes("/Users/jay/.codex/auth.json"), "auth path must be redacted");
