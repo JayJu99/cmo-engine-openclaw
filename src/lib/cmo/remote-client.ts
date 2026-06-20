@@ -11,6 +11,7 @@ import {
 } from "@/lib/cmo/types";
 import type { CMOAppChatResponse, CMOChatMessage, CmoRuntimeMode, ContextPack } from "@/lib/cmo/app-workspace-types";
 import { getCmoAppTurnRequestTimeoutMs, getRemoteAdapterApiKey, getRemoteAdapterUrl } from "@/lib/cmo/config";
+import { extractCreativeAssetsFromHermesResponse, hasCreativeExecutionMetadata } from "@/lib/cmo/creative-agent";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import { normalizeRun, validateNormalizedRun } from "@/lib/cmo/validation";
 
@@ -376,6 +377,15 @@ function isDiagnosticOnlyAnswer(answer: string): boolean {
   );
 }
 
+function creativeMetadataFallbackAnswer(assetCount: number): string {
+  return [
+    "Creative execution completed and returned generated asset metadata.",
+    assetCount > 0
+      ? "Product recorded the asset metadata. Artifact transport is required before a browser preview can be shown."
+      : "Product received Creative metadata, but no retrievable browser artifact was included.",
+  ].join("\n");
+}
+
 function normalizeAppTurnResponse(payload: unknown): CmoAppTurnResponse {
   if (isDashboardRunBriefPayload(payload)) {
     throw new CmoAdapterError(
@@ -400,7 +410,11 @@ function normalizeAppTurnResponse(payload: unknown): CmoAppTurnResponse {
     );
   }
 
-  const answer = trimString(source.answer);
+  const creativeAssets = extractCreativeAssetsFromHermesResponse(payload);
+  const creativeMetadataPresent = hasCreativeExecutionMetadata(payload) ||
+    hasCreativeExecutionMetadata(source) ||
+    creativeAssets.length > 0;
+  const answer = trimString(source.answer) || (creativeMetadataPresent ? creativeMetadataFallbackAnswer(creativeAssets.length) : "");
 
   if (!answer) {
     throw new CmoAdapterError("Remote CMO Adapter app-turn response did not include a usable answer", 502, "cmo_app_turn_empty_answer");

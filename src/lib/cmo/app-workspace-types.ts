@@ -1247,6 +1247,10 @@ export interface CMOChatMessage {
   outerTimeoutSource?: CmoOuterTimeoutSource;
   routeDecision?: CmoRouteDecision;
   creativeExecutionRequested?: boolean;
+  creativeResponseReceived?: boolean;
+  creativeMetadataPresent?: boolean;
+  creativeNormalizationError?: string;
+  creativeFallbackUsed?: boolean;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;
@@ -1412,6 +1416,10 @@ export interface CMOChatSession {
   outerTimeoutSource?: CmoOuterTimeoutSource;
   routeDecision?: CmoRouteDecision;
   creativeExecutionRequested?: boolean;
+  creativeResponseReceived?: boolean;
+  creativeMetadataPresent?: boolean;
+  creativeNormalizationError?: string;
+  creativeFallbackUsed?: boolean;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;
@@ -1530,6 +1538,10 @@ export interface CMOAppChatResponse {
   outerTimeoutSource?: CmoOuterTimeoutSource;
   routeDecision?: CmoRouteDecision;
   creativeExecutionRequested?: boolean;
+  creativeResponseReceived?: boolean;
+  creativeMetadataPresent?: boolean;
+  creativeNormalizationError?: string;
+  creativeFallbackUsed?: boolean;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;

@@ -63,6 +63,10 @@ function normalizeCreativeResponse(value) {
       transport_status: previewUrl || storagePath ? "available" : "artifact_transport_missing",
       ...(previewUrl ? { preview_url: previewUrl } : {}),
       ...(sourceLocalPath ? { source_local_path_redacted: sourceLocalPath } : {}),
+      ...(typeof image.bytes === "number" ? { bytes: image.bytes } : {}),
+      ...(sha256 ? { sha256 } : {}),
+      ...(typeof image.model === "string" ? { model: image.model } : {}),
+      ...(typeof image.operation === "string" ? { operation: image.operation } : {}),
       review_required: true,
     };
   });
@@ -118,6 +122,8 @@ const [
   uiSource,
   configSource,
   creativeAgentSource,
+  remoteClientSource,
+  openClawClientSource,
   ingestRouteSource,
   migrationSource,
 ] = await Promise.all([
@@ -131,6 +137,8 @@ const [
   read("src/components/cmo-apps/cmo-chat-panel.tsx"),
   read("src/lib/cmo/config.ts"),
   read("src/lib/cmo/creative-agent.ts"),
+  read("src/lib/cmo/remote-client.ts"),
+  read("src/lib/cmo/openclaw-client.ts"),
   read("src/app/api/cmo/apps/[appId]/creative/artifact-ingest/route.ts"),
   read("supabase/migrations/202606200002_cmo_creative_assets.sql"),
 ]);
@@ -180,6 +188,15 @@ assert.match(storeSource, /Creative execution timed out before Hermes returned t
 assert.match(storeSource, /No workspace-context fallback was used for this Creative generation request/, "Creative timeout must not silently fall back to workspace context");
 assert.match(mapperSource, /agentsUsedFromMetadata/, "Creative activity metadata must survive mapping");
 assert.match(storeSource, /extractCreativeAssetsFromHermesResponse/, "Creative responses must become session artifacts");
+assert.match(storeSource, /runtimeResult\.rawRuntimeResponse/, "App-turn Creative metadata must be extracted from the raw runtime response");
+assert.match(storeSource, /creative_response_received/, "Creative response diagnostics must be persisted");
+assert.match(storeSource, /creative_metadata_present/, "Creative metadata presence must be traced");
+assert.match(storeSource, /fallback_used: creativeFallbackUsed/, "Successful Creative metadata must not be overwritten by workspace fallback");
+assert.match(remoteClientSource, /extractCreativeAssetsFromHermesResponse/, "Remote app-turn responses must use Creative normalization");
+assert.match(remoteClientSource, /creativeMetadataFallbackAnswer/, "Remote app-turn Creative metadata must be a successful response without answer text");
+assert.match(openClawClientSource, /extractCreativeAssetsFromHermesResponse/, "Direct app-turn responses must use Creative normalization");
+assert.match(openClawClientSource, /Product recorded the asset metadata/, "Direct app-turn Creative metadata must get a safe status answer");
+assert.match(mapperSource, /hasCreativeExecutionMetadata/, "Hermes execute response mapper must accept Creative metadata without a conventional answer");
 assert.match(uiSource, /Creative Assets/, "Chat UI must render Creative asset cards");
 assert.match(uiSource, /Artifact transport missing/, "UI must show missing transport state");
 assert.match(uiSource, /isBrowserPreviewUrl/, "UI must not render local paths as previews");
@@ -222,6 +239,10 @@ const hermesSingleImageAssets = normalizeCreativeResponse({
 assert.equal(assets.length, 1, "Creative image metadata must parse");
 assert.equal(hermesSingleImageAssets.length, 1, "Hermes single-image execution metadata must parse");
 assert.equal(hermesSingleImageAssets[0].status, "artifact_transport_missing", "Hermes local image_path must require Product artifact transport");
+assert.equal(hermesSingleImageAssets[0].bytes, 101, "Hermes execute bytes metadata must survive normalization");
+assert.equal(hermesSingleImageAssets[0].sha256, "b".repeat(64), "Hermes execute sha256 metadata must survive normalization");
+assert.equal(hermesSingleImageAssets[0].model, "gpt-5.5", "Hermes execute model metadata must survive normalization");
+assert.equal(hermesSingleImageAssets[0].operation, "responses image_generation", "Hermes execute operation metadata must survive normalization");
 assert.ok(!JSON.stringify(hermesSingleImageAssets).includes("/tmp/creative-agent-smoke"), "Hermes local image_path must be redacted");
 assert.equal(assets[0].status, "artifact_transport_missing", "local-path-only assets must not be treated as previews");
 assert.equal(assets[0].preview_url, undefined, "local /tmp path must not be rendered as browser preview");

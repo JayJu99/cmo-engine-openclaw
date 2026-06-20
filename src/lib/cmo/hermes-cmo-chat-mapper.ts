@@ -94,6 +94,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function hasCreativeExecutionMetadata(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (value.routed_to_creative === true) {
+    return true;
+  }
+
+  return ["image_path", "path", "preview_url", "signed_url", "url", "storage_path", "storagePath", "sha256", "model", "operation"]
+    .some((field) => typeof value[field] === "string" && Boolean(value[field].trim())) ||
+    ["bytes", "width", "height"].some((field) => typeof value[field] === "number" && Number.isFinite(value[field]));
+}
+
 function compactText(value: string, maxChars = 1200): string {
   const compact = value.replace(/\s+/g, " ").trim();
 
@@ -963,6 +977,13 @@ function sourceTransformAnswerFromDelegations(result: HermesCmoRuntimeResult): s
 
 function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmoRuntimeResult): string {
   if (!response.answer) {
+    if (hasCreativeExecutionMetadata(response) || hasCreativeExecutionMetadata(result?.response)) {
+      return [
+        "Creative execution completed and returned generated asset metadata.",
+        "Product recorded the asset metadata. Artifact transport is required before a browser preview can be shown.",
+      ].join("\n");
+    }
+
     const question = response.clarifying_question.question ?? "Please provide the missing context before CMO continues.";
 
     return ["## Need Clarification", "", question].join("\n");
@@ -980,7 +1001,14 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
   const answer = response.answer;
   const body = answer.body.trim();
 
-  return body || answer.summary.trim();
+  return body || answer.summary.trim() || (
+    hasCreativeExecutionMetadata(response) || hasCreativeExecutionMetadata(result?.response)
+      ? [
+          "Creative execution completed and returned generated asset metadata.",
+          "Product recorded the asset metadata. Artifact transport is required before a browser preview can be shown.",
+        ].join("\n")
+      : ""
+  );
 }
 
 function labelFromUnknown(value: unknown): string | null {

@@ -105,6 +105,14 @@ function sha256Value(value: unknown): string | undefined {
   return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value.trim()) ? value.trim().toLowerCase() : undefined;
 }
 
+function hasStringField(value: Record<string, unknown>, fields: string[]): boolean {
+  return fields.some((field) => typeof value[field] === "string" && Boolean(value[field].trim()));
+}
+
+function hasNumberField(value: Record<string, unknown>, fields: string[]): boolean {
+  return fields.some((field) => typeof value[field] === "number" && Number.isFinite(value[field]));
+}
+
 function safeIdSegment(value: string): string {
   return value.replace(/[^a-z0-9._-]+/gi, "_").slice(0, 96) || "creative_asset";
 }
@@ -159,6 +167,19 @@ export function isBrowserPreviewUrl(value: unknown): value is string {
   }
 }
 
+export function hasCreativeExecutionMetadata(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (value.routed_to_creative === true) {
+    return true;
+  }
+
+  return hasStringField(value, ["image_path", "path", "preview_url", "signed_url", "url", "storage_path", "storagePath", "sha256", "model", "operation"]) ||
+    hasNumberField(value, ["bytes", "width", "height"]);
+}
+
 export function buildCreativeRequest(input: {
   goal: string;
   subject: string;
@@ -206,7 +227,8 @@ export function normalizeCreativeResponse(
   const looksCreative =
     schema === "cmo.creative_response.v1" ||
     agent === CMO_CREATIVE_AGENT_ID ||
-    Array.isArray(value.images) && value.images.some(isRecord);
+    Array.isArray(value.images) && value.images.some(isRecord) ||
+    hasCreativeExecutionMetadata(value);
 
   if (!looksCreative) {
     return [];
@@ -304,6 +326,10 @@ export function extractCreativeAssetsFromHermesResponse(
     response,
     structured.creative_response,
     structured.creative,
+    isRecord(response.answer) ? response.answer : undefined,
+    isRecord(response.response) ? response.response : undefined,
+    isRecord(response.body) ? response.body : undefined,
+    isRecord(response.data) ? response.data : undefined,
     ...(Array.isArray(response.artifacts) ? response.artifacts : []),
     ...(Array.isArray(structured.artifacts) ? structured.artifacts : []),
   ];

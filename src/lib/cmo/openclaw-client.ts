@@ -9,6 +9,7 @@ import {
   getRemoteAdapterUrl,
   isRemoteCmoAdapter,
 } from "@/lib/cmo/config";
+import { extractCreativeAssetsFromHermesResponse, hasCreativeExecutionMetadata } from "@/lib/cmo/creative-agent";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import { getRemoteChat, getRemoteStatus, postRemoteAppTurn, postRemoteChat } from "@/lib/cmo/remote-client";
 
@@ -362,6 +363,18 @@ function pickAnswer(payload: unknown): string {
   return trimString(message?.content);
 }
 
+function pickAnswerBody(payload: unknown): string {
+  if (!isRecord(payload)) {
+    return "";
+  }
+
+  const answer = isRecord(payload.answer) ? payload.answer : null;
+  const data = isRecord(payload.data) ? payload.data : null;
+  const dataAnswer = data && isRecord(data.answer) ? data.answer : null;
+
+  return trimString(answer?.body ?? dataAnswer?.body);
+}
+
 function pickStatus(payload: unknown): string {
   if (!isRecord(payload)) {
     return "";
@@ -459,7 +472,20 @@ function normalizeAppTurnRuntimeResult(payload: unknown, config: OpenClawCmoRunt
     );
   }
 
-  const answer = trimString(source.answer);
+  const creativeAssets = extractCreativeAssetsFromHermesResponse(payload);
+  const creativeMetadataPresent = hasCreativeExecutionMetadata(payload) ||
+    hasCreativeExecutionMetadata(source) ||
+    creativeAssets.length > 0;
+  const answer = trimString(source.answer) ||
+    pickAnswerBody(payload) ||
+    (creativeMetadataPresent
+      ? [
+          "Creative execution completed and returned generated asset metadata.",
+          creativeAssets.length > 0
+            ? "Product recorded the asset metadata. Artifact transport is required before a browser preview can be shown."
+            : "Product received Creative metadata, but no retrievable browser artifact was included.",
+        ].join("\n")
+      : "");
 
   if (!answer) {
     throw new CmoAdapterError("OpenClaw CMO app-turn response did not include a usable answer", 502, "openclaw_cmo_empty_answer");

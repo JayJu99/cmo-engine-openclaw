@@ -62,7 +62,7 @@ import { buildContextPack, withContextPackMessage } from "@/lib/cmo/context-pack
 import { summarizeContextQuality } from "@/lib/cmo/context-quality";
 import { buildDecisionLayer } from "@/lib/cmo/decision-layer";
 import { CmoAdapterError } from "@/lib/cmo/errors";
-import { extractCreativeAssetsFromHermesResponse } from "@/lib/cmo/creative-agent";
+import { extractCreativeAssetsFromHermesResponse, hasCreativeExecutionMetadata } from "@/lib/cmo/creative-agent";
 import { routeIntentForMessage } from "@/lib/cmo/app-routing-intent";
 import { executeMixedCmoEcho, isMixedCmoEchoRequest, mixedEchoNeedsClarification, buildMixedCmoEchoRuntimeMessage, maybeHandleEchoBridge } from "@/lib/cmo/echo-bridge";
 import { buildCmoEvidenceRuntimeMessage, executeCmoSurfEvidence } from "@/lib/cmo/cmo-surf-orchestrator";
@@ -2883,6 +2883,14 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             outerTimeoutSource: normalizeOuterTimeoutSource(message.outerTimeoutSource ?? message.outer_timeout_source),
             routeDecision: normalizeRouteDecision(message.routeDecision ?? message.route_decision),
             creativeExecutionRequested: message.creativeExecutionRequested === true || message.creative_execution_requested === true ? true : undefined,
+            creativeResponseReceived: message.creativeResponseReceived === true || message.creative_response_received === true ? true : undefined,
+            creativeMetadataPresent: typeof (message.creativeMetadataPresent ?? message.creative_metadata_present) === "boolean"
+              ? Boolean(message.creativeMetadataPresent ?? message.creative_metadata_present)
+              : undefined,
+            creativeNormalizationError: normalizeOptionalString(message.creativeNormalizationError ?? message.creative_normalization_error ?? message.normalization_error),
+            creativeFallbackUsed: typeof (message.creativeFallbackUsed ?? message.creative_fallback_used ?? message.fallback_used) === "boolean"
+              ? Boolean(message.creativeFallbackUsed ?? message.creative_fallback_used ?? message.fallback_used)
+              : undefined,
             contextSourceCount: normalizeOptionalNonNegativeNumber(message.contextSourceCount),
             contextCharLength: normalizeOptionalNonNegativeNumber(message.contextCharLength),
             indexedSupplementCharLength: normalizeOptionalNonNegativeNumber(message.indexedSupplementCharLength),
@@ -3020,6 +3028,14 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     outerTimeoutSource: normalizeOuterTimeoutSource(value.outerTimeoutSource ?? value.outer_timeout_source),
     routeDecision: normalizeRouteDecision(value.routeDecision ?? value.route_decision),
     creativeExecutionRequested: value.creativeExecutionRequested === true || value.creative_execution_requested === true ? true : undefined,
+    creativeResponseReceived: value.creativeResponseReceived === true || value.creative_response_received === true ? true : undefined,
+    creativeMetadataPresent: typeof (value.creativeMetadataPresent ?? value.creative_metadata_present) === "boolean"
+      ? Boolean(value.creativeMetadataPresent ?? value.creative_metadata_present)
+      : undefined,
+    creativeNormalizationError: normalizeOptionalString(value.creativeNormalizationError ?? value.creative_normalization_error ?? value.normalization_error),
+    creativeFallbackUsed: typeof (value.creativeFallbackUsed ?? value.creative_fallback_used ?? value.fallback_used) === "boolean"
+      ? Boolean(value.creativeFallbackUsed ?? value.creative_fallback_used ?? value.fallback_used)
+      : undefined,
     contextSourceCount: normalizeOptionalNonNegativeNumber(value.contextSourceCount),
     contextCharLength: normalizeOptionalNonNegativeNumber(value.contextCharLength),
     indexedSupplementCharLength: normalizeOptionalNonNegativeNumber(value.indexedSupplementCharLength),
@@ -3276,6 +3292,10 @@ export async function createAppChatSession(
   let outerTimeoutSource: CMOChatSession["outerTimeoutSource"] | undefined;
   let routeDecision: CMOChatSession["routeDecision"] | undefined;
   let creativeExecutionRequested: boolean | undefined;
+  let creativeResponseReceived: boolean | undefined;
+  let creativeMetadataPresent: boolean | undefined;
+  let creativeNormalizationError: string | undefined;
+  let creativeFallbackUsed: boolean | undefined;
   let calledHermesCmo = false;
   let hermesCmoStatus: HermesCmoChatStatus | undefined;
   let hermesCmoErrorReason: string | undefined;
@@ -3999,16 +4019,22 @@ export async function createAppChatSession(
       }
 
       const mappedHermesResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesResult));
+      const creativeArtifacts = creativeAssetsFromHermesPayload({
+        response: hermesResult.response,
+        tenantId: requestTenantId,
+        workspaceId: request.workspaceId,
+        appId: request.appId,
+        jobId: `creative_${messageId}`,
+        createdAt: now,
+      });
+      if (hermesCmoCreativeExecutionRequested) {
+        creativeResponseReceived = true;
+        creativeMetadataPresent = hasCreativeExecutionMetadata(hermesResult.response) || creativeArtifacts.length > 0;
+        creativeFallbackUsed = creativeMetadataPresent ? false : undefined;
+      }
       sessionArtifacts = mergeHermesCmoChatV11Artifacts(
         sessionArtifacts,
-        creativeAssetsFromHermesPayload({
-          response: hermesResult.response,
-          tenantId: requestTenantId,
-          workspaceId: request.workspaceId,
-          appId: request.appId,
-          jobId: `creative_${messageId}`,
-          createdAt: now,
-        }),
+        creativeArtifacts,
       );
       answer = mappedHermesResult.answer;
       status = "completed";
@@ -4229,6 +4255,54 @@ export async function createAppChatSession(
     outerTimeoutSource = runtimeResult.outerTimeoutSource;
     routeDecision = runtimeResult.routeDecision;
     creativeExecutionRequested = runtimeResult.creativeExecutionRequested === true ? true : undefined;
+    if (runtimeResult.creativeExecutionRequested === true || runtimeResult.routeDecision === "creative_execution") {
+      creativeResponseReceived = runtimeResult.rawRuntimeResponse !== undefined;
+      try {
+        const creativeArtifacts = runtimeResult.rawRuntimeResponse === undefined
+          ? []
+          : creativeAssetsFromHermesPayload({
+              response: runtimeResult.rawRuntimeResponse,
+              tenantId: requestTenantId,
+              workspaceId: request.workspaceId,
+              appId: request.appId,
+              jobId: `creative_${messageId}`,
+              createdAt: now,
+            });
+
+        creativeMetadataPresent = runtimeResult.rawRuntimeResponse !== undefined &&
+          (hasCreativeExecutionMetadata(runtimeResult.rawRuntimeResponse) || creativeArtifacts.length > 0);
+        if (creativeArtifacts.length) {
+          sessionArtifacts = mergeHermesCmoChatV11Artifacts(sessionArtifacts, creativeArtifacts);
+        }
+        if (creativeMetadataPresent) {
+          calledHermesCmo = true;
+          hermesRequestSent = true;
+          productRenderSource = "hermes_cmo";
+          productFallbackReason = undefined;
+          isDevelopmentFallback = false;
+          isRuntimeFallback = false;
+          runtimeStatus = "live";
+          runtimeMode = "live";
+          runtimeError = "";
+          runtimeErrorReason = undefined;
+          runtimeProvider = runtimeProvider ?? "hermes";
+          runtimeAgent = "creative";
+          creativeFallbackUsed = false;
+        }
+      } catch (error) {
+        creativeNormalizationError = error instanceof Error ? error.message : "Creative response normalization failed.";
+        creativeMetadataPresent = runtimeResult.rawRuntimeResponse === undefined ? false : hasCreativeExecutionMetadata(runtimeResult.rawRuntimeResponse);
+        creativeFallbackUsed = creativeMetadataPresent ? false : undefined;
+        console.warn("[cmo-app-chat] Creative response normalization failed.", {
+          appId: request.appId,
+          sessionId,
+          creative_response_received: creativeResponseReceived === true,
+          creative_metadata_present: creativeMetadataPresent === true,
+          normalization_error: creativeNormalizationError,
+          fallback_used: creativeFallbackUsed,
+        });
+      }
+    }
     if (cmoSurfClarification) {
       answer = [
         "## Need Clarification",
@@ -4337,6 +4411,10 @@ export async function createAppChatSession(
     ...(outerTimeoutSource ? { outerTimeoutSource, outer_timeout_source: outerTimeoutSource } : {}),
     ...(routeDecision ? { routeDecision, route_decision: routeDecision } : {}),
     ...(creativeExecutionRequested === true ? { creativeExecutionRequested: true, creative_execution_requested: true } : {}),
+    ...(creativeResponseReceived === true ? { creativeResponseReceived: true, creative_response_received: true } : {}),
+    ...(typeof creativeMetadataPresent === "boolean" ? { creativeMetadataPresent, creative_metadata_present: creativeMetadataPresent } : {}),
+    ...(creativeNormalizationError ? { creativeNormalizationError, creative_normalization_error: creativeNormalizationError, normalization_error: creativeNormalizationError } : {}),
+    ...(typeof creativeFallbackUsed === "boolean" ? { creativeFallbackUsed, creative_fallback_used: creativeFallbackUsed, fallback_used: creativeFallbackUsed } : {}),
     contextSourceCount,
     contextCharLength,
     indexedSupplementCharLength,

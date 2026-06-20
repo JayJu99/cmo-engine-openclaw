@@ -54,6 +54,7 @@ export interface CmoRuntimeTurnResult {
   runtimeErrorReason?: CmoRuntimeErrorReason;
   runtimeProvider?: string;
   runtimeAgent?: string;
+  rawRuntimeResponse?: unknown;
   isDevelopmentFallback: boolean;
   isRuntimeFallback?: boolean;
   liveAttemptStartedAt?: string;
@@ -799,6 +800,7 @@ export class LiveOpenClawRuntime implements CmoRuntime {
         runtimeLabel: result.runtimeLabel,
         runtimeProvider: result.runtimeProvider ?? "openclaw",
         runtimeAgent: result.runtimeAgent ?? "cmo",
+        rawRuntimeResponse: result.rawRuntimeResponse,
         isDevelopmentFallback: false,
         isRuntimeFallback: false,
         liveAttemptStartedAt,
