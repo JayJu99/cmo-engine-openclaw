@@ -536,6 +536,7 @@ const startServer = async () => {
             body.request_id === "req_m13_creative_timeout_default" ||
             body.request_id === "req_m13_creative_top_level_success" ||
             body.request_id === "req_m13_creative_uploaded_asset" ||
+            body.request_id === "req_m13_creative_activity_invalid_type" ||
             body.request_id === "req_m13_creative_executed_creative_true" ||
             body.request_id === "req_m13_creative_executed_creative_missing_metadata" ||
             body.request_id === "req_m13_creative_false_only_side_effects" ||
@@ -645,6 +646,87 @@ const startServer = async () => {
               ],
               side_effects: {
                 executed_creative: true,
+              },
+              activity_events: [
+                {
+                  schema_version: "hermes.activity.event.v1",
+                  event_id: "creative_uploaded_started",
+                  request_id: body.request_id,
+                  session_id: body.session_id,
+                  turn_id: body.turn_id,
+                  seq: 1,
+                  created_at: "2026-06-20T00:00:00.000Z",
+                  source: { agent: "creative", mode: "creative_execution" },
+                  type: "creative.started",
+                  status: "completed",
+                  user_visible: true,
+                  message: "Creative execution started.",
+                  data: {},
+                },
+                {
+                  schema_version: "hermes.activity.event.v1",
+                  event_id: "creative_uploaded_asset_ready",
+                  request_id: body.request_id,
+                  session_id: body.session_id,
+                  turn_id: body.turn_id,
+                  seq: 2,
+                  created_at: "2026-06-20T00:00:01.000Z",
+                  source: { agent: "cmo", mode: "creative_execution" },
+                  type: "creative.asset_ready",
+                  status: "completed",
+                  user_visible: true,
+                  message: "Creative asset uploaded.",
+                  data: {},
+                },
+              ],
+              activity_summary: {
+                events_count: 2,
+                final_state: "completed",
+              },
+            });
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_activity_invalid_type") {
+            writeJson(response, 200, {
+              status: "success",
+              routed_to_creative: true,
+              creative_assets: [
+                {
+                  asset_id: "creative_invalid_activity_fixture",
+                  asset_type: "image",
+                  transport_status: "uploaded",
+                  status: "stored",
+                  render_url: "https://cmo.jayju.cloud/api/signed/creative_invalid_activity_fixture",
+                  bytes: 1024,
+                  sha256: "3434343434343434343434343434343434343434343434343434343434343434",
+                  model: "gpt-5.5",
+                  operation: "responses image_generation",
+                },
+              ],
+              side_effects: {
+                executed_creative: true,
+              },
+              activity_events: [
+                {
+                  schema_version: "hermes.activity.event.v1",
+                  event_id: "creative_invalid_activity",
+                  request_id: body.request_id,
+                  session_id: body.session_id,
+                  turn_id: body.turn_id,
+                  seq: 1,
+                  created_at: "2026-06-20T00:00:00.000Z",
+                  source: { agent: "creative", mode: "creative_execution" },
+                  type: "cmo.run.completed",
+                  status: "completed",
+                  user_visible: true,
+                  message: "Invalid Creative execution mode event.",
+                  data: {},
+                },
+              ],
+              activity_summary: {
+                events_count: 1,
+                final_state: "completed",
               },
             });
             return;
@@ -772,6 +854,7 @@ const startServer = async () => {
           const m44d2ToolEndpointFixture = body.request_id === "req_m44d2_tool_endpoint";
           const m44dToolEndpointSideEffectsFixture = body.request_id === "req_m44d_tool_endpoint_side_effects_true";
           const m44dToolEndpointCreativeSideEffectsFixture = body.request_id === "req_m44d_tool_endpoint_creative_side_effects";
+          const m44dToolEndpointCreativeExecutionModeFixture = body.request_id === "req_m44d_tool_endpoint_creative_execution_mode";
           const m44dToolEndpointUnsafeToolResultFixture = body.request_id === "req_m44d_tool_endpoint_unsafe_tool_result";
           const m44dToolEndpointUnsafeTraceFixture = body.request_id === "req_m44d_tool_endpoint_unsafe_trace";
           const m44dToolEndpointVaultAgentSourceFixture = body.request_id === "req_m44d_tool_endpoint_vault_agent_source";
@@ -1198,6 +1281,24 @@ const startServer = async () => {
                   creative_asset_metadata: true,
                 },
               },
+            );
+            return;
+          }
+
+          if (m44dToolEndpointCreativeExecutionModeFixture) {
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
+            writeJson(
+              response,
+              200,
+              cmoResponse(body, {
+                activity_events: [
+                  {
+                    ...activity(body, 1, "creative.asset_ready", "Non-Creative response must reject Creative execution source mode."),
+                    source: { agent: "creative", mode: "creative_execution" },
+                    status: "completed",
+                  },
+                ],
+              }),
             );
             return;
           }
@@ -4399,6 +4500,12 @@ try {
     );
 
     await assert.rejects(
+      () => runHermesCmoRuntime(m44dToolEndpointRequest("req_m44d_tool_endpoint_creative_execution_mode")),
+      /Rejected field: source_invalid:mode=creative_execution/,
+      "non-Creative response with source.mode=creative_execution must reject",
+    );
+
+    await assert.rejects(
       () => runHermesCmoRuntime(m44dToolEndpointRequest("req_m44d_tool_endpoint_unsafe_tool_result")),
       /Rejected field: data_unsafe:cmo\.tool_read\.completed key=data\.tool_result type=string reason=unsafe_key_name/,
       "tool endpoint activity data must reject raw tool_result",
@@ -4746,6 +4853,8 @@ try {
     assert.equal(m13CreativeUploadedAssetResult.response.artifacts[0].signed_url, "https://cmo.jayju.cloud/api/signed/creative_uploaded_fixture");
     assert.equal(m13CreativeUploadedAssetResult.response.artifacts[0].mime_type, "image/png");
     assert.equal(JSON.stringify(m13CreativeUploadedAssetResult.response.artifacts).includes("/tmp/"), false);
+    assert.deepEqual(m13CreativeUploadedAssetResult.activity_events.map((event) => event.source.mode), ["creative_execution", "creative_execution"]);
+    assert.deepEqual(m13CreativeUploadedAssetResult.activity_events.map((event) => event.type), ["creative.started", "creative.asset_ready"]);
     m13CreativeExecutedCreativeResult = await runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_executed_creative_true"));
     assert.equal(m13CreativeExecutedCreativeResult.response.status, "completed");
     assert.equal(m13CreativeExecutedCreativeResult.response.routed_to_creative, true);
@@ -4793,6 +4902,11 @@ try {
       () => runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_executed_creative_missing_metadata")),
       /Hermes CMO Agent response included unsafe side_effects/,
       "executed_creative=true without Creative metadata must be rejected",
+    );
+    await assert.rejects(
+      () => runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_activity_invalid_type")),
+      /Rejected field: source_invalid:mode=creative_execution/,
+      "source.mode=creative_execution must be limited to canonical Creative lifecycle events",
     );
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {

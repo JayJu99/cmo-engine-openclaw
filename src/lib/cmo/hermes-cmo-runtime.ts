@@ -52,7 +52,7 @@ export type HermesCmoRuntimeMode = typeof HERMES_CMO_RUNTIME_MODE;
 export type HermesAllowedAgent = "echo" | "surf" | "vault_agent" | "creative";
 export type HermesEchoMode = "echo.default" | "echo.source_translate";
 export type HermesSurfMode = "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
-export type HermesCreativeMode = "creative" | "creative.default" | "creative.generate_image" | "creative.generate_video" | "creative.image_generation";
+export type HermesCreativeMode = "creative" | "creative.default" | "creative.generate_image" | "creative.generate_video" | "creative.image_generation" | "creative_execution";
 export type HermesCmoClassification =
   | "native_conversation"
   | "source_acknowledgement"
@@ -461,6 +461,7 @@ const activityTypes = new Set<HermesActivityType>([
   "run.completed",
   "run.failed",
 ]);
+const creativeLifecycleActivityTypes = new Set<HermesActivityType>(CMO_CREATIVE_LIFECYCLE_STATES);
 const activityStatuses = new Set<HermesActivityStatus>([
   "queued",
   "running",
@@ -1417,6 +1418,15 @@ const maybeNormalizeCreativeExecutionResponseCandidate = (
   return normalizeCreativeExecutionResponseCandidate(response, request, activityEventsCandidate);
 };
 
+const sourceModeIsCreativeExecution = (
+  sourceMode: unknown,
+  eventType: unknown,
+  request: HermesCmoRuntimeRequest,
+): boolean =>
+  sourceMode === "creative_execution" &&
+  requestIsCreativeExecution(request) &&
+  creativeLifecycleActivityTypes.has(eventType as HermesActivityType);
+
 const activityValidationFailureReason = (
   event: unknown,
   request: HermesCmoRuntimeRequest,
@@ -1439,12 +1449,19 @@ const activityValidationFailureReason = (
   if (!activityTypes.has(eventType as HermesActivityType)) return `type=${String(eventType)}`;
   if (!activityStatuses.has(status as HermesActivityStatus)) return `status=${String(status)}`;
   if (sourceAgent !== "cmo" && sourceAgent !== "echo" && sourceAgent !== "surf" && sourceAgent !== "creative") return `source_invalid:agent=${String(sourceAgent)}`;
-  if (sourceAgent === "cmo" && sourceMode !== "cmo.default" && !(options.allowToolCapableCmoSource === true && sourceMode === "cmo.tool_capable")) {
+  if (
+    sourceAgent === "cmo" &&
+    sourceMode !== "cmo.default" &&
+    !(options.allowToolCapableCmoSource === true && sourceMode === "cmo.tool_capable") &&
+    !sourceModeIsCreativeExecution(sourceMode, eventType, request)
+  ) {
     return `source_invalid:mode=${String(sourceMode)}`;
   }
   if (sourceAgent === "echo" && sourceMode !== "echo.default" && sourceMode !== "echo.source_translate") return `source_invalid:mode=${String(sourceMode)}`;
   if (sourceAgent === "surf" && !allowedSurfModes.has(sourceMode as HermesSurfMode)) return `source_invalid:mode=${String(sourceMode)}`;
-  if (sourceAgent === "creative" && !allowedCreativeModes.has(sourceMode as HermesCreativeMode)) return `source_invalid:mode=${String(sourceMode)}`;
+  if (sourceAgent === "creative" && !allowedCreativeModes.has(sourceMode as HermesCreativeMode) && !sourceModeIsCreativeExecution(sourceMode, eventType, request)) {
+    return `source_invalid:mode=${String(sourceMode)}`;
+  }
   if (!isRecord(event.data)) return "data_invalid";
   const dataRejection = m44aActivityEventDataRejection(eventType as HermesActivityType, event.data);
   if (dataRejection) return dataRejection;
@@ -2771,11 +2788,12 @@ const validateHermesCmoRuntimeActivityEvent = (
   const sourceAgent = source?.agent;
   const sourceMode = source?.mode;
   const eventType = event.type as HermesActivityType;
+  const creativeExecutionSourceMode = sourceModeIsCreativeExecution(sourceMode, eventType, request);
   const sourceMatches =
-    (sourceAgent === "cmo" && (sourceMode === "cmo.default" || options.allowToolCapableCmoSource === true && sourceMode === "cmo.tool_capable")) ||
+    (sourceAgent === "cmo" && (sourceMode === "cmo.default" || options.allowToolCapableCmoSource === true && sourceMode === "cmo.tool_capable" || creativeExecutionSourceMode)) ||
     (sourceAgent === "echo" && (sourceMode === "echo.default" || sourceMode === "echo.source_translate")) ||
     (sourceAgent === "surf" && allowedSurfModes.has(sourceMode as HermesSurfMode)) ||
-    (sourceAgent === "creative" && allowedCreativeModes.has(sourceMode as HermesCreativeMode));
+    (sourceAgent === "creative" && (allowedCreativeModes.has(sourceMode as HermesCreativeMode) || creativeExecutionSourceMode));
 
   if (forbiddenDelegationEventTypes.has(eventType) || forbiddenActivityTypePattern.test(String(eventType))) {
     return false;

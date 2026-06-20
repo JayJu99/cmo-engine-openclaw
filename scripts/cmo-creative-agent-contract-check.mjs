@@ -204,6 +204,8 @@ assert.match(runtimeSource, /safeCreativeSideEffects/, "Creative execution must 
 assert.match(runtimeSource, /requestIsCreativeExecution\(request\) && creativeMetadataPresent/, "Creative side-effect sanitizer must be scoped to explicit Creative execution with metadata");
 assert.match(runtimeSource, /value === false \|\| value === undefined \|\| value === null/, "False/null Creative side-effect flags must be treated as no-op before key rejection");
 assert.match(runtimeSource, /executed_creative/, "Explicit Creative execution marker must be allowed only through Creative side-effect normalization");
+assert.match(runtimeSource, /sourceModeIsCreativeExecution/, "Creative execution activity source mode must be explicitly scoped");
+assert.match(runtimeSource, /creativeLifecycleActivityTypes/, "source.mode=creative_execution must be limited to Creative lifecycle events");
 assert.match(runtimeSource, /side_effects_allowed_for_creative/, "Creative side-effect allowance diagnostics must be traced");
 assert.match(runtimeSource, /rejected_side_effect_type/, "Rejected Creative side-effect type must be traceable");
 assert.match(runtimeSource, /timeout_source/, "Hermes CMO trace must include the timeout source");

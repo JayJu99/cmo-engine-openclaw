@@ -633,7 +633,8 @@ export type HermesCmoExecutableMode =
   | "creative.default"
   | "creative.generate_image"
   | "creative.generate_video"
-  | "creative.image_generation";
+  | "creative.image_generation"
+  | "creative_execution";
 
 export interface HermesCmoSafetyCounters {
   surfCalls: number;
