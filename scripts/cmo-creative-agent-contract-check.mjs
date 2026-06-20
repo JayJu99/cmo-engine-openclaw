@@ -179,6 +179,10 @@ assert.match(runtimeSource, /maybeNormalizeCreativeExecutionResponseCandidate/, 
 assert.match(runtimeSource, /creativeResponseStatuses = new Set\(\["success", "completed", "partial", "blocked", "failed", "timeout"\]\)/, "Creative execution must accept Creative-specific status values");
 assert.match(runtimeSource, /creativeResponseHasExecutionMetadata/, "Creative execution validation bypass must require image metadata");
 assert.match(runtimeSource, /rejected_by_m1_validator=true/, "Creative validation rejection diagnostics must be traceable");
+assert.match(runtimeSource, /safeCreativeSideEffects/, "Creative execution must sanitize safe generation side effects before generic M1 rejection");
+assert.match(runtimeSource, /requestIsCreativeExecution\(request\) && creativeMetadataPresent/, "Creative side-effect sanitizer must be scoped to explicit Creative execution with metadata");
+assert.match(runtimeSource, /side_effects_allowed_for_creative/, "Creative side-effect allowance diagnostics must be traced");
+assert.match(runtimeSource, /rejected_side_effect_type/, "Rejected Creative side-effect type must be traceable");
 assert.match(runtimeSource, /timeout_source/, "Hermes CMO trace must include the timeout source");
 assert.match(runtimeSource, /route_decision/, "Hermes CMO trace must include the route decision");
 assert.match(runtimeSource, /creative_trace/, "Hermes CMO trace must include Creative routing diagnostics");
@@ -196,6 +200,8 @@ assert.match(storeSource, /runtimeResult\.rawRuntimeResponse/, "App-turn Creativ
 assert.match(storeSource, /creative_response_received/, "Creative response diagnostics must be persisted");
 assert.match(storeSource, /creative_metadata_present/, "Creative metadata presence must be traced");
 assert.match(storeSource, /rejected_by_m1_validator/, "Creative M1 validation rejection diagnostics must be persisted");
+assert.match(storeSource, /side_effects_allowed_for_creative/, "Creative side-effect diagnostics must be persisted");
+assert.match(storeSource, /rejected_side_effect_type/, "Rejected Creative side-effect type must be persisted");
 assert.match(storeSource, /fallback_used: creativeFallbackUsed/, "Successful Creative metadata must not be overwritten by workspace fallback");
 assert.match(remoteClientSource, /extractCreativeAssetsFromHermesResponse/, "Remote app-turn responses must use Creative normalization");
 assert.match(remoteClientSource, /creativeMetadataFallbackAnswer/, "Remote app-turn Creative metadata must be a successful response without answer text");

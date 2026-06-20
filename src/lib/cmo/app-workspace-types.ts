@@ -872,6 +872,9 @@ export interface HermesCmoChatMetadata {
   creative_metadata_present?: boolean;
   rejected_by_m1_validator?: boolean;
   rejected_field?: string;
+  side_effects_present?: boolean;
+  side_effects_allowed_for_creative?: boolean;
+  rejected_side_effect_type?: string;
   hermesToolEndpointEnabled?: boolean;
   sideEffects?: false | Record<string, boolean>;
   side_effects?: false | Record<string, boolean>;
@@ -1257,6 +1260,9 @@ export interface CMOChatMessage {
   creativeFallbackUsed?: boolean;
   creativeRejectedByM1Validator?: boolean;
   creativeRejectedField?: string;
+  creativeSideEffectsPresent?: boolean;
+  creativeSideEffectsAllowedForCreative?: boolean;
+  creativeRejectedSideEffectType?: string;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;
@@ -1428,6 +1434,9 @@ export interface CMOChatSession {
   creativeFallbackUsed?: boolean;
   creativeRejectedByM1Validator?: boolean;
   creativeRejectedField?: string;
+  creativeSideEffectsPresent?: boolean;
+  creativeSideEffectsAllowedForCreative?: boolean;
+  creativeRejectedSideEffectType?: string;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;
@@ -1552,6 +1561,9 @@ export interface CMOAppChatResponse {
   creativeFallbackUsed?: boolean;
   creativeRejectedByM1Validator?: boolean;
   creativeRejectedField?: string;
+  creativeSideEffectsPresent?: boolean;
+  creativeSideEffectsAllowedForCreative?: boolean;
+  creativeRejectedSideEffectType?: string;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;

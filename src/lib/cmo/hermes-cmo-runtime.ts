@@ -925,8 +925,153 @@ const safeSideEffects = (value: unknown): false | Record<string, false> | null =
   return null;
 };
 
-const sideEffectsFromPayload = (payload: Record<string, unknown>, response: Record<string, unknown>): false | Record<string, false> | null =>
-  safeSideEffects(payload.side_effects ?? response.side_effects);
+interface HermesCmoSideEffectsValidation {
+  sideEffects: false | Record<string, false> | null;
+  present: boolean;
+  allowedForCreative?: boolean;
+  rejectedType?: string;
+}
+
+const creativeSafeSideEffectTypes = new Set([
+  "image_generation",
+  "video_generation",
+  "media_generation",
+  "generated_media_metadata",
+  "creative_asset_metadata",
+  "asset_metadata",
+  "local_artifact_created",
+  "local_artifact_metadata",
+  "artifact_created",
+  "artifact_metadata",
+  "image_file_created",
+  "video_file_created",
+  "generation_completed",
+]);
+
+const unsafeSideEffectPattern =
+  /\b(publish|published|post|posted|schedule|scheduled|credential|secret|token|cookie|vault|gbrain|knowledge_promotion|database|db_|supabase|sql|mutation|write|insert|update|delete|filesystem|fs_|file_write|arbitrary|connector|oauth)\b/i;
+
+const localArtifactPathLike = (value: unknown): boolean =>
+  typeof value === "string" && /^(?:file:|[A-Za-z]:[\\/]|\/(?:tmp|var|private\/tmp|Users\/[^/]+\/Library\/Caches|home\/[^/]+\/tmp)\b)/i.test(value.trim());
+
+const creativeSideEffectType = (key: string, value: unknown): string => {
+  if (isRecord(value) && typeof value.type === "string" && value.type.trim()) {
+    return value.type.trim();
+  }
+
+  return key;
+};
+
+const creativeSideEffectEntryIsSafe = (key: string, value: unknown): { ok: true } | { ok: false; rejectedType: string } => {
+  const type = creativeSideEffectType(key, value);
+  const normalizedType = type.replace(/[^a-z0-9_]+/gi, "_").toLowerCase();
+
+  if (!creativeSafeSideEffectTypes.has(normalizedType) || unsafeSideEffectPattern.test(key) || unsafeSideEffectPattern.test(type)) {
+    return { ok: false, rejectedType: normalizedType || key };
+  }
+
+  if (value === true || value === false || value === undefined || value === null) {
+    return { ok: true };
+  }
+
+  if (typeof value === "string" || typeof value === "number") {
+    return { ok: true };
+  }
+
+  if (!isRecord(value)) {
+    return { ok: false, rejectedType: normalizedType };
+  }
+
+  for (const [nestedKey, nestedValue] of Object.entries(value)) {
+    if (unsafeSideEffectPattern.test(nestedKey) && nestedKey !== "local_path" && nestedKey !== "artifact_path") {
+      return { ok: false, rejectedType: `${normalizedType}.${nestedKey}` };
+    }
+
+    if ((nestedKey === "path" || nestedKey === "local_path" || nestedKey === "artifact_path") && nestedValue !== undefined && !localArtifactPathLike(nestedValue)) {
+      return { ok: false, rejectedType: `${normalizedType}.${nestedKey}` };
+    }
+
+    if (
+      nestedKey !== "type" &&
+      nestedKey !== "status" &&
+      nestedKey !== "provider" &&
+      nestedKey !== "mime_type" &&
+      nestedKey !== "asset_type" &&
+      nestedKey !== "path" &&
+      nestedKey !== "local_path" &&
+      nestedKey !== "artifact_path" &&
+      nestedKey !== "bytes" &&
+      nestedKey !== "sha256" &&
+      nestedKey !== "width" &&
+      nestedKey !== "height" &&
+      nestedKey !== "model" &&
+      nestedKey !== "operation"
+    ) {
+      return { ok: false, rejectedType: `${normalizedType}.${nestedKey}` };
+    }
+  }
+
+  return { ok: true };
+};
+
+const safeCreativeSideEffects = (value: unknown): HermesCmoSideEffectsValidation => {
+  if (value === undefined || value === false) {
+    return { sideEffects: false, present: value !== undefined, allowedForCreative: value !== undefined };
+  }
+
+  if (!isRecord(value)) {
+    return { sideEffects: null, present: true, allowedForCreative: false, rejectedType: "side_effects_not_object" };
+  }
+
+  const entries = Object.entries(value);
+
+  if (entries.length === 0 || entries.every(([, item]) => item === false)) {
+    return { sideEffects: Object.fromEntries(entries) as Record<string, false>, present: true, allowedForCreative: true };
+  }
+
+  for (const [key, item] of entries) {
+    const validation = creativeSideEffectEntryIsSafe(key, item);
+
+    if (!validation.ok) {
+      return { sideEffects: null, present: true, allowedForCreative: false, rejectedType: validation.rejectedType };
+    }
+  }
+
+  return {
+    sideEffects: {
+      creative_generation: false,
+      local_artifact_created: false,
+      creative_asset_metadata: false,
+      publishing: false,
+      vault_write: false,
+      supabase_mutation: false,
+      credential_write: false,
+      arbitrary_filesystem_write: false,
+    },
+    present: true,
+    allowedForCreative: true,
+  };
+};
+
+const sideEffectsFromPayload = (
+  payload: Record<string, unknown>,
+  response: Record<string, unknown>,
+  request: HermesCmoRuntimeRequest,
+  creativeMetadataPresent: boolean,
+): HermesCmoSideEffectsValidation => {
+  const rawSideEffects = payload.side_effects ?? response.side_effects;
+  const generic = safeSideEffects(rawSideEffects);
+
+  if (generic !== null) {
+    return { sideEffects: generic, present: rawSideEffects !== undefined };
+  }
+
+  if (requestIsCreativeExecution(request) && creativeMetadataPresent) {
+    return safeCreativeSideEffects(rawSideEffects);
+  }
+
+  return { sideEffects: null, present: rawSideEffects !== undefined };
+};
 
 const safeToolTraceSummaryDiagnostic = (value: unknown): M44aActivityDataDiagnostic => {
   if (value === undefined || value === null) {
@@ -2620,11 +2765,29 @@ const extractLiveResponsePayload = (
   }
 
   const rawResponseCandidate = isRecord(payload.response) ? payload.response : payload;
-  const sideEffects = sideEffectsFromPayload(payload, rawResponseCandidate);
   const activityEventsCandidate = Array.isArray(payload.activity_events) ? payload.activity_events : [];
   const creativeMetadataPresent = requestIsCreativeExecution(request) && creativeResponseHasExecutionMetadata(rawResponseCandidate);
+  const sideEffectsValidation = sideEffectsFromPayload(payload, rawResponseCandidate, request, creativeMetadataPresent);
+  const sideEffects = sideEffectsValidation.sideEffects;
   const rawValidationCandidate = maybeNormalizeCreativeExecutionResponseCandidate(rawResponseCandidate, request, activityEventsCandidate);
-  const responseCandidate = normalizeHermesCmoResponseCandidate(rawValidationCandidate, { activityEventsCandidate });
+  let responseCandidate = normalizeHermesCmoResponseCandidate(rawValidationCandidate, { activityEventsCandidate });
+  if (requestIsCreativeExecution(request) && (sideEffectsValidation.present || sideEffectsValidation.rejectedType)) {
+    responseCandidate = {
+      ...responseCandidate,
+      structured_output: {
+        ...(isRecord(responseCandidate.structured_output) ? responseCandidate.structured_output : {}),
+        side_effects_present: sideEffectsValidation.present,
+        side_effects_allowed_for_creative: sideEffectsValidation.allowedForCreative === true,
+        ...(sideEffectsValidation.rejectedType ? { rejected_side_effect_type: sideEffectsValidation.rejectedType } : {}),
+      },
+      activity_summary: {
+        ...(isRecord(responseCandidate.activity_summary) ? responseCandidate.activity_summary : {}),
+        side_effects_present: sideEffectsValidation.present,
+        side_effects_allowed_for_creative: sideEffectsValidation.allowedForCreative === true,
+        ...(sideEffectsValidation.rejectedType ? { rejected_side_effect_type: sideEffectsValidation.rejectedType } : {}),
+      },
+    };
+  }
   const effectiveActivityValidation: HermesCmoActivityValidationOptions = {
     ...activityValidation,
     allowToolCapableCmoSource: isToolCapableResponseCandidate(responseCandidate),
@@ -2644,7 +2807,11 @@ const extractLiveResponsePayload = (
   }
 
   if (sideEffects === null) {
-    throw new Error("Hermes CMO Agent response included unsafe side_effects.");
+    throw new Error(
+      creativeMetadataPresent
+        ? `Hermes CMO Agent response included unsafe side_effects. creative_response_received=true creative_metadata_present=true side_effects_present=${String(sideEffectsValidation.present)} side_effects_allowed_for_creative=false rejected_side_effect_type=${sideEffectsValidation.rejectedType ?? "unknown"} fallback_used=false.`
+        : "Hermes CMO Agent response included unsafe side_effects.",
+    );
   }
 
   if (responseCandidate.activity_summary.events_count !== activityEventsCandidate.length) {

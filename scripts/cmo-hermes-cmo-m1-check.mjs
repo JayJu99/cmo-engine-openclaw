@@ -534,7 +534,8 @@ const startServer = async () => {
             body.request_id === "req_m44e6_research_followup_rank";
           const firstCallCreativeExecution =
             body.request_id === "req_m13_creative_timeout_default" ||
-            body.request_id === "req_m13_creative_top_level_success";
+            body.request_id === "req_m13_creative_top_level_success" ||
+            body.request_id === "req_m13_creative_unsafe_side_effect";
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
           assert.equal(body.user_message, body.intent?.user_message);
           assert.equal(body.message, body.intent?.user_message);
@@ -564,6 +565,32 @@ const startServer = async () => {
               sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
               model: "gpt-5.5",
               operation: "responses image_generation",
+              side_effects: {
+                image_generation: true,
+                local_artifact_created: {
+                  type: "local_artifact_created",
+                  path: "/tmp/creative-agent-smoke/hold-pay-top-level.png",
+                  bytes: 256,
+                  sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                },
+                creative_asset_metadata: true,
+              },
+            });
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_unsafe_side_effect") {
+            writeJson(response, 200, {
+              status: "success",
+              routed_to_creative: true,
+              image_path: "/tmp/creative-agent-smoke/hold-pay-unsafe.png",
+              bytes: 512,
+              sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              model: "gpt-5.5",
+              operation: "responses image_generation",
+              side_effects: {
+                publish: true,
+              },
             });
             return;
           }
@@ -622,6 +649,7 @@ const startServer = async () => {
           const m44aToolReadFixture = body.request_id === "req_m44a_tool_read";
           const m44d2ToolEndpointFixture = body.request_id === "req_m44d2_tool_endpoint";
           const m44dToolEndpointSideEffectsFixture = body.request_id === "req_m44d_tool_endpoint_side_effects_true";
+          const m44dToolEndpointCreativeSideEffectsFixture = body.request_id === "req_m44d_tool_endpoint_creative_side_effects";
           const m44dToolEndpointUnsafeToolResultFixture = body.request_id === "req_m44d_tool_endpoint_unsafe_tool_result";
           const m44dToolEndpointUnsafeTraceFixture = body.request_id === "req_m44d_tool_endpoint_unsafe_trace";
           const m44dToolEndpointVaultAgentSourceFixture = body.request_id === "req_m44d_tool_endpoint_vault_agent_source";
@@ -1012,6 +1040,39 @@ const startServer = async () => {
                   raw_capture: false,
                   repo_mutation: false,
                   publishing: false,
+                },
+              },
+            );
+            return;
+          }
+
+          if (m44dToolEndpointCreativeSideEffectsFixture) {
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
+            writeJson(
+              response,
+              200,
+              {
+                ...cmoResponse(body, {
+                  response: {
+                    schema_version: "hermes.cmo.tool_response.v1",
+                    mode: "cmo.tool_capable",
+                    answer_basis: {
+                      mode: "tool_read",
+                    },
+                    structured_output: {
+                      classification: "native_conversation",
+                      response_style: "native_conversation",
+                      tool_policy: "none",
+                    },
+                    answer: {
+                      body: "This non-Creative response must reject Creative-looking side effects.",
+                    },
+                  },
+                }),
+                side_effects: {
+                  image_generation: true,
+                  local_artifact_created: true,
+                  creative_asset_metadata: true,
                 },
               },
             );
@@ -4529,7 +4590,24 @@ try {
     assert.equal(m13CreativeTopLevelSuccessResult.response.structured_output.creative_metadata_present, true);
     assert.equal(m13CreativeTopLevelSuccessResult.response.structured_output.fallback_used, false);
     assert.equal(m13CreativeTopLevelSuccessResult.response.structured_output.product_artifact_status, "artifact_transport_missing");
+    assert.equal(m13CreativeTopLevelSuccessResult.response.structured_output.side_effects_present, true);
+    assert.equal(m13CreativeTopLevelSuccessResult.response.structured_output.side_effects_allowed_for_creative, true);
     assert.equal(m13CreativeTopLevelSuccessResult.response.artifacts[0].transport_status, "artifact_transport_missing");
+    assert.deepEqual(m13CreativeTopLevelSuccessResult.sideEffects, {
+      creative_generation: false,
+      local_artifact_created: false,
+      creative_asset_metadata: false,
+      publishing: false,
+      vault_write: false,
+      supabase_mutation: false,
+      credential_write: false,
+      arbitrary_filesystem_write: false,
+    });
+    await assert.rejects(
+      () => runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_unsafe_side_effect")),
+      /rejected_side_effect_type=publish/,
+      "unsafe Creative side_effect types must be rejected",
+    );
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
       restoreEnvValue(key, value);
@@ -4589,6 +4667,8 @@ try {
           sha256Present: typeof m13CreativeTopLevelSuccessResult?.response.sha256 === "string",
           productArtifactStatus: m13CreativeTopLevelSuccessResult?.response.structured_output?.product_artifact_status,
           fallbackUsed: m13CreativeTopLevelSuccessResult?.response.structured_output?.fallback_used,
+          sideEffectsPresent: m13CreativeTopLevelSuccessResult?.response.structured_output?.side_effects_present,
+          sideEffectsAllowedForCreative: m13CreativeTopLevelSuccessResult?.response.structured_output?.side_effects_allowed_for_creative,
         },
         legacySurfXCalls: server.calls.legacySurfX,
         legacySurfLast30DaysCalls: server.calls.legacySurfLast30Days,
