@@ -181,6 +181,7 @@ assert.match(runtimeSource, /creativeResponseHasExecutionMetadata/, "Creative ex
 assert.match(runtimeSource, /rejected_by_m1_validator=true/, "Creative validation rejection diagnostics must be traceable");
 assert.match(runtimeSource, /safeCreativeSideEffects/, "Creative execution must sanitize safe generation side effects before generic M1 rejection");
 assert.match(runtimeSource, /requestIsCreativeExecution\(request\) && creativeMetadataPresent/, "Creative side-effect sanitizer must be scoped to explicit Creative execution with metadata");
+assert.match(runtimeSource, /value === false \|\| value === undefined \|\| value === null/, "False/null Creative side-effect flags must be treated as no-op before key rejection");
 assert.match(runtimeSource, /side_effects_allowed_for_creative/, "Creative side-effect allowance diagnostics must be traced");
 assert.match(runtimeSource, /rejected_side_effect_type/, "Rejected Creative side-effect type must be traceable");
 assert.match(runtimeSource, /timeout_source/, "Hermes CMO trace must include the timeout source");

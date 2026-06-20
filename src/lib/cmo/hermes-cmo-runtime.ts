@@ -963,6 +963,10 @@ const creativeSideEffectType = (key: string, value: unknown): string => {
 };
 
 const creativeSideEffectEntryIsSafe = (key: string, value: unknown): { ok: true } | { ok: false; rejectedType: string } => {
+  if (value === false || value === undefined || value === null) {
+    return { ok: true };
+  }
+
   const type = creativeSideEffectType(key, value);
   const normalizedType = type.replace(/[^a-z0-9_]+/gi, "_").toLowerCase();
 
@@ -970,7 +974,7 @@ const creativeSideEffectEntryIsSafe = (key: string, value: unknown): { ok: true 
     return { ok: false, rejectedType: normalizedType || key };
   }
 
-  if (value === true || value === false || value === undefined || value === null) {
+  if (value === true) {
     return { ok: true };
   }
 
@@ -1025,8 +1029,8 @@ const safeCreativeSideEffects = (value: unknown): HermesCmoSideEffectsValidation
 
   const entries = Object.entries(value);
 
-  if (entries.length === 0 || entries.every(([, item]) => item === false)) {
-    return { sideEffects: Object.fromEntries(entries) as Record<string, false>, present: true, allowedForCreative: true };
+  if (entries.length === 0 || entries.every(([, item]) => item === false || item === null || item === undefined)) {
+    return { sideEffects: Object.fromEntries(entries.map(([key]) => [key, false])) as Record<string, false>, present: true, allowedForCreative: true };
   }
 
   for (const [key, item] of entries) {
@@ -1063,7 +1067,11 @@ const sideEffectsFromPayload = (
   const generic = safeSideEffects(rawSideEffects);
 
   if (generic !== null) {
-    return { sideEffects: generic, present: rawSideEffects !== undefined };
+    return {
+      sideEffects: generic,
+      present: rawSideEffects !== undefined,
+      ...(requestIsCreativeExecution(request) && creativeMetadataPresent && rawSideEffects !== undefined ? { allowedForCreative: true } : {}),
+    };
   }
 
   if (requestIsCreativeExecution(request) && creativeMetadataPresent) {

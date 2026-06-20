@@ -535,7 +535,9 @@ const startServer = async () => {
           const firstCallCreativeExecution =
             body.request_id === "req_m13_creative_timeout_default" ||
             body.request_id === "req_m13_creative_top_level_success" ||
-            body.request_id === "req_m13_creative_unsafe_side_effect";
+            body.request_id === "req_m13_creative_false_only_side_effects" ||
+            body.request_id === "req_m13_creative_unsafe_side_effect" ||
+            body.request_id === "req_m13_creative_executed_echo_true";
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
           assert.equal(body.user_message, body.intent?.user_message);
           assert.equal(body.message, body.intent?.user_message);
@@ -574,6 +576,38 @@ const startServer = async () => {
                   sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 },
                 creative_asset_metadata: true,
+                executed_echo: false,
+                executed_surf: false,
+                executed_vault_agent: false,
+                published: false,
+                scheduled: false,
+                vault_mutation: false,
+                database_mutation: false,
+                credential_write: false,
+              },
+            });
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_false_only_side_effects") {
+            writeJson(response, 200, {
+              status: "success",
+              routed_to_creative: true,
+              image_path: "/tmp/creative-agent-smoke/hold-pay-false-only.png",
+              bytes: 384,
+              sha256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              model: "gpt-5.5",
+              operation: "responses image_generation",
+              side_effects: {
+                executed_echo: false,
+                executed_surf: false,
+                executed_vault_agent: false,
+                published: false,
+                scheduled: false,
+                vault_mutation: false,
+                database_mutation: false,
+                credential_write: false,
+                arbitrary_filesystem_write: false,
               },
             });
             return;
@@ -590,6 +624,22 @@ const startServer = async () => {
               operation: "responses image_generation",
               side_effects: {
                 publish: true,
+              },
+            });
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_executed_echo_true") {
+            writeJson(response, 200, {
+              status: "success",
+              routed_to_creative: true,
+              image_path: "/tmp/creative-agent-smoke/hold-pay-echo-true.png",
+              bytes: 768,
+              sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              model: "gpt-5.5",
+              operation: "responses image_generation",
+              side_effects: {
+                executed_echo: true,
               },
             });
             return;
@@ -3098,6 +3148,7 @@ try {
   let m43SourceTranslateResult;
   let m13CreativeTimeoutDefaultResult;
   let m13CreativeTopLevelSuccessResult;
+  let m13CreativeFalseOnlySideEffectsResult;
 
   try {
     process.env.CMO_HERMES_EXECUTION_ENABLED = "true";
@@ -4603,10 +4654,31 @@ try {
       credential_write: false,
       arbitrary_filesystem_write: false,
     });
+    m13CreativeFalseOnlySideEffectsResult = await runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_false_only_side_effects"));
+    assert.equal(m13CreativeFalseOnlySideEffectsResult.response.status, "completed");
+    assert.equal(m13CreativeFalseOnlySideEffectsResult.response.structured_output.product_artifact_status, "artifact_transport_missing");
+    assert.equal(m13CreativeFalseOnlySideEffectsResult.response.structured_output.side_effects_present, true);
+    assert.equal(m13CreativeFalseOnlySideEffectsResult.response.structured_output.side_effects_allowed_for_creative, true);
+    assert.deepEqual(m13CreativeFalseOnlySideEffectsResult.sideEffects, {
+      executed_echo: false,
+      executed_surf: false,
+      executed_vault_agent: false,
+      published: false,
+      scheduled: false,
+      vault_mutation: false,
+      database_mutation: false,
+      credential_write: false,
+      arbitrary_filesystem_write: false,
+    });
     await assert.rejects(
       () => runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_unsafe_side_effect")),
       /rejected_side_effect_type=publish/,
       "unsafe Creative side_effect types must be rejected",
+    );
+    await assert.rejects(
+      () => runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_executed_echo_true")),
+      /rejected_side_effect_type=executed_echo/,
+      "truthy executed_echo must be rejected for Creative execution",
     );
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
@@ -4669,6 +4741,12 @@ try {
           fallbackUsed: m13CreativeTopLevelSuccessResult?.response.structured_output?.fallback_used,
           sideEffectsPresent: m13CreativeTopLevelSuccessResult?.response.structured_output?.side_effects_present,
           sideEffectsAllowedForCreative: m13CreativeTopLevelSuccessResult?.response.structured_output?.side_effects_allowed_for_creative,
+        },
+        creativeFalseOnlySideEffects: {
+          status: m13CreativeFalseOnlySideEffectsResult?.response.status,
+          productArtifactStatus: m13CreativeFalseOnlySideEffectsResult?.response.structured_output?.product_artifact_status,
+          sideEffectsAllowedForCreative: m13CreativeFalseOnlySideEffectsResult?.response.structured_output?.side_effects_allowed_for_creative,
+          executedEcho: m13CreativeFalseOnlySideEffectsResult?.sideEffects?.executed_echo,
         },
         legacySurfXCalls: server.calls.legacySurfX,
         legacySurfLast30DaysCalls: server.calls.legacySurfLast30Days,
