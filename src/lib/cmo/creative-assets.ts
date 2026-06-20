@@ -3,6 +3,7 @@ import "server-only";
 import { createHash, randomUUID } from "crypto";
 
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { CmoAdapterError } from "@/lib/cmo/errors";
 import {
   CMO_CREATIVE_AGENT_ID,
   isBrowserPreviewUrl,
@@ -32,6 +33,18 @@ export interface UploadCmoCreativeArtifactInput {
   workspaceId: string;
   appId: string;
   jobId?: string;
+}
+
+export interface CmoCreativeStoredAsset {
+  assetId: string;
+  tenantId: string;
+  workspaceId: string;
+  appId: string;
+  type: "image" | "video";
+  storagePath: string;
+  mimeType: string;
+  bytes?: number;
+  sha256?: string;
 }
 
 const ALLOWED_MIME_TYPES = new Set<string>(CMO_CREATIVE_ALLOWED_MIME_TYPES);
@@ -73,6 +86,10 @@ function fileExtension(filename: string): string {
   const lastDot = normalized.lastIndexOf(".");
 
   return lastDot >= 0 ? normalized.slice(lastDot + 1) : "";
+}
+
+function mimeTypeFromStoragePath(storagePath: string): CmoCreativeMimeType | undefined {
+  return MIME_BY_EXTENSION[fileExtension(storagePath)];
 }
 
 function normalizeMimeType(file: File): CmoCreativeMimeType | null {
@@ -184,6 +201,127 @@ function redactedMetadata(metadata: Record<string, unknown>): Record<string, unk
   const value = redactedMetadataValue(metadata);
 
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function metadataStringValue(metadata: unknown, keys: string[]): string | undefined {
+  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
+    return undefined;
+  }
+
+  const record = metadata as Record<string, unknown>;
+
+  for (const key of keys) {
+    const value = record[key];
+
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeStoredAssetMimeType(input: {
+  metadataJson: unknown;
+  storagePath: string;
+  type: unknown;
+}): CmoCreativeMimeType {
+  const metadataMime = metadataStringValue(input.metadataJson, ["mime_type", "mimeType"])?.toLowerCase();
+
+  if (metadataMime && ALLOWED_MIME_TYPES.has(metadataMime)) {
+    return metadataMime as CmoCreativeMimeType;
+  }
+
+  const extensionMime = mimeTypeFromStoragePath(input.storagePath);
+
+  if (extensionMime) {
+    return extensionMime;
+  }
+
+  return input.type === "video" ? "video/mp4" : "image/png";
+}
+
+function safeDownloadFilename(input: {
+  assetId: string;
+  storagePath: string;
+  mimeType: string;
+}): string {
+  const rawName = input.storagePath.split("/").pop() || input.assetId || "creative-asset";
+  const safeName = safePathSegment(rawName, "creative-asset");
+
+  if (/\.[A-Za-z0-9]{2,5}$/.test(safeName)) {
+    return safeName;
+  }
+
+  const extension =
+    input.mimeType === "image/jpeg" ? "jpg" :
+      input.mimeType === "image/webp" ? "webp" :
+        input.mimeType === "video/mp4" ? "mp4" :
+          input.mimeType === "video/webm" ? "webm" :
+            "png";
+
+  return `${safeName}.${extension}`;
+}
+
+export async function getCmoCreativeStoredAsset(input: {
+  tenantId: string;
+  workspaceId: string;
+  appId: string;
+  assetId: string;
+}): Promise<CmoCreativeStoredAsset | null> {
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase
+    .from("cmo_creative_assets")
+    .select("id,tenant_id,workspace_id,app_id,type,storage_path,bytes,sha256,metadata_json")
+    .eq("id", input.assetId)
+    .eq("tenant_id", input.tenantId)
+    .eq("workspace_id", input.workspaceId)
+    .eq("app_id", input.appId)
+    .maybeSingle();
+
+  if (error) {
+    throw new CmoAdapterError("Creative asset lookup failed.", 500, "creative_asset_lookup_failed");
+  }
+
+  if (!data || typeof data.storage_path !== "string" || !data.storage_path.trim()) {
+    return null;
+  }
+
+  const mimeType = normalizeStoredAssetMimeType({
+    metadataJson: data.metadata_json,
+    storagePath: data.storage_path,
+    type: data.type,
+  });
+
+  return {
+    assetId: data.id,
+    tenantId: data.tenant_id,
+    workspaceId: data.workspace_id,
+    appId: data.app_id,
+    type: data.type === "video" ? "video" : "image",
+    storagePath: data.storage_path,
+    mimeType,
+    ...(typeof data.bytes === "number" && Number.isFinite(data.bytes) ? { bytes: Math.floor(data.bytes) } : {}),
+    ...(typeof data.sha256 === "string" && /^[a-f0-9]{64}$/i.test(data.sha256) ? { sha256: data.sha256.toLowerCase() } : {}),
+  };
+}
+
+export async function downloadCmoCreativeStoredAsset(asset: CmoCreativeStoredAsset): Promise<Blob> {
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase
+    .storage
+    .from(CMO_CREATIVE_ASSETS_BUCKET)
+    .download(asset.storagePath);
+
+  if (error || !data) {
+    throw new CmoAdapterError("Creative asset file was not found.", 404, "creative_asset_object_not_found");
+  }
+
+  return data;
+}
+
+export function cmoCreativeAssetDownloadFilename(asset: Pick<CmoCreativeStoredAsset, "assetId" | "storagePath" | "mimeType">): string {
+  return safeDownloadFilename(asset);
 }
 
 export async function uploadCmoCreativeArtifact(input: UploadCmoCreativeArtifactInput): Promise<CmoCreativeAssetArtifact> {
@@ -309,7 +447,10 @@ export async function uploadCmoCreativeArtifact(input: UploadCmoCreativeArtifact
     model: asset.model ?? null,
     operation: asset.operation ?? null,
     status: asset.status,
-    metadata_json: redactedMetadata(input.metadata),
+    metadata_json: {
+      ...redactedMetadata(input.metadata),
+      mime_type: mimeType,
+    },
     created_at: createdAt,
   });
 

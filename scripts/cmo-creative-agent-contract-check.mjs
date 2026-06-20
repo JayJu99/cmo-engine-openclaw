@@ -25,7 +25,24 @@ function isBrowserPreviewUrl(value) {
   }
 }
 
-function creativeAssetPreviewUrl(asset) {
+function creativeAssetProxyUrl({ appId, assetId, mode }) {
+  return `/api/cmo/apps/${encodeURIComponent(appId)}/creative/assets/${encodeURIComponent(assetId)}/${mode}`;
+}
+
+function shouldUseCreativeAssetProxy(asset) {
+  const assetId = asset.asset_id || asset.assetId || asset.id;
+  const transportStatus = asset.transport_status || asset.transportStatus;
+
+  return Boolean(typeof assetId === "string" && assetId.trim() && transportStatus === "uploaded");
+}
+
+function creativeAssetPreviewUrl(asset, appId = "hold-pay") {
+  const assetId = asset.asset_id || asset.assetId || asset.id;
+
+  if (typeof assetId === "string" && assetId.trim() && shouldUseCreativeAssetProxy(asset)) {
+    return creativeAssetProxyUrl({ appId, assetId, mode: "preview" });
+  }
+
   for (const key of ["signed_url", "signedUrl", "render_url", "renderUrl", "preview_url", "previewUrl"]) {
     if (isBrowserPreviewUrl(asset[key])) {
       return String(asset[key]);
@@ -33,6 +50,16 @@ function creativeAssetPreviewUrl(asset) {
   }
 
   return "";
+}
+
+function creativeAssetDownloadUrl(asset, appId = "hold-pay") {
+  const assetId = asset.asset_id || asset.assetId || asset.id;
+
+  if (typeof assetId === "string" && assetId.trim() && shouldUseCreativeAssetProxy(asset)) {
+    return creativeAssetProxyUrl({ appId, assetId, mode: "download" });
+  }
+
+  return creativeAssetPreviewUrl(asset, appId);
 }
 
 function normalizeCreativeResponse(value) {
@@ -156,6 +183,10 @@ const [
   migrationSource,
   nextConfigSource,
   proxySource,
+  creativeAssetsSource,
+  creativeAssetResponseSource,
+  creativeAssetPreviewRouteSource,
+  creativeAssetDownloadRouteSource,
 ] = await Promise.all([
   read("src/lib/cmo/hermes-cmo-runtime.ts"),
   read("src/lib/cmo/app-routing-intent.ts"),
@@ -173,6 +204,10 @@ const [
   read("supabase/migrations/202606200002_cmo_creative_assets.sql"),
   read("next.config.ts"),
   read("src/proxy.ts"),
+  read("src/lib/cmo/creative-assets.ts"),
+  read("src/lib/cmo/creative-asset-response.ts"),
+  read("src/app/api/cmo/apps/[appId]/creative/assets/[assetId]/preview/route.ts"),
+  read("src/app/api/cmo/apps/[appId]/creative/assets/[assetId]/download/route.ts"),
 ]);
 
 assert.match(runtimeSource, /"creative"/, "creative must be accepted by runtime agent registry");
@@ -254,6 +289,10 @@ assert.match(uiSource, /Artifact transport missing/, "UI must show missing trans
 assert.match(uiSource, /creativeAssetPreviewUrl/, "UI must resolve Creative preview URLs through a single safe helper");
 assert.match(uiSource, /\["signed_url", "signedUrl", "render_url", "renderUrl", "preview_url", "previewUrl"\]/, "UI preview resolver must prefer signed URL before render URL");
 assert.match(uiSource, /<img[\s\S]*src=\{previewUrl\}/, "Creative image preview img src must use the resolved signed/render URL");
+assert.match(uiSource, /creativeAssetProxyUrl/, "Uploaded Creative assets must use Product-owned same-origin asset proxy URLs");
+assert.match(uiSource, /\/api\/cmo\/apps\/\$\{encodeURIComponent\(input\.appId\)\}\/creative\/assets\/\$\{encodeURIComponent\(input\.assetId\)\}\/\$\{input\.mode\}/, "Creative proxy URL must be same-origin and app/asset scoped");
+assert.match(uiSource, /transportStatus === "uploaded"/, "Creative proxy preview must be scoped to uploaded assets");
+assert.match(uiSource, /const downloadUrl = creativeAssetDownloadUrl\(asset, app\.id\)/, "Creative download button must use the Product download route when available");
 assert.match(uiSource, /referrerPolicy="no-referrer"/, "Creative preview image must not leak referrer details to signed URL hosts");
 assert.match(uiSource, /onError=\{markPreviewFailed\}/, "Creative preview image must expose a safe failed-load state");
 assert.match(uiSource, /Preview failed to load/, "Creative preview load failure must render a specific state");
@@ -263,6 +302,8 @@ assert.match(uiSource, /has_signed_url/, "Missing Creative preview diagnostics m
 assert.match(uiSource, /has_render_url/, "Missing Creative preview diagnostics must include render URL presence");
 assert.match(uiSource, /resolved_preview_url_host/, "Creative preview diagnostics must include URL host without the signed token");
 assert.match(uiSource, /resolved_preview_url_path_starts_with_storage_sign/, "Creative preview diagnostics must identify Supabase signed object paths without logging tokens");
+assert.match(uiSource, /has_storage_path/, "Creative preview diagnostics must include storage path presence without exposing the path");
+assert.match(uiSource, /http_status/, "Creative preview diagnostics must include safe HTTP status context");
 assert.match(uiSource, /isBrowserPreviewUrl/, "UI must not render local paths as previews");
 const cspSource = `${nextConfigSource}\n${proxySource}`;
 if (/Content-Security-Policy|img-src/i.test(cspSource)) {
@@ -274,6 +315,22 @@ assert.match(ingestRouteSource, /metadata_json/, "Creative ingest endpoint must 
 assert.match(ingestRouteSource, /workspace_id/, "Creative ingest endpoint must accept Hermes workspace_id multipart field");
 assert.match(ingestRouteSource, /asset_id/, "Creative ingest endpoint must accept Hermes asset_id multipart field");
 assert.match(ingestRouteSource, /render_url/, "Creative ingest response must include Product render_url receipt field");
+assert.match(creativeAssetsSource, /getCmoCreativeStoredAsset/, "Product must look up Creative assets before proxying private storage bytes");
+assert.match(creativeAssetsSource, /\.from\("cmo_creative_assets"\)[\s\S]*\.eq\("id", input\.assetId\)[\s\S]*\.eq\("tenant_id", input\.tenantId\)[\s\S]*\.eq\("workspace_id", input\.workspaceId\)[\s\S]*\.eq\("app_id", input\.appId\)/, "Creative asset lookup must be scoped by asset/app/workspace/tenant");
+assert.match(creativeAssetsSource, /downloadCmoCreativeStoredAsset/, "Product must download Creative assets server-side from private Supabase Storage");
+assert.match(creativeAssetsSource, /\.storage[\s\S]*\.from\(CMO_CREATIVE_ASSETS_BUCKET\)[\s\S]*\.download\(asset\.storagePath\)/, "Creative proxy must read bytes from the private cmo-creative-assets bucket");
+assert.match(creativeAssetsSource, /mime_type: mimeType/, "Creative ingest metadata must preserve mime_type for proxy response headers");
+assert.match(creativeAssetResponseSource, /requireRequestUserIfAuthRequired/, "Creative asset proxy must validate Product user/session access when auth is required");
+assert.match(creativeAssetResponseSource, /Authentication required[\s\S]*401[\s\S]*authentication_required/, "Creative asset proxy must return 401 for missing required auth");
+assert.match(creativeAssetResponseSource, /requireWorkspaceRegistryEntry/, "Creative asset proxy must use workspace registry scope");
+assert.match(creativeAssetResponseSource, /Content-Type/, "Creative preview route must set Content-Type");
+assert.match(creativeAssetResponseSource, /Content-Length/, "Creative preview route should set Content-Length when available");
+assert.match(creativeAssetResponseSource, /Cache-Control"[\s\S]*private, max-age=300/, "Creative preview route must set private short cache headers");
+assert.match(creativeAssetResponseSource, /ETag/, "Creative preview route should emit sha256 ETag when available");
+assert.match(creativeAssetResponseSource, /Content-Disposition/, "Creative download route must set attachment disposition");
+assert.match(creativeAssetResponseSource, /new Response\(blob/, "Creative asset proxy must stream/return stored object bytes");
+assert.match(creativeAssetPreviewRouteSource, /mode: "preview"/, "Preview route must call shared proxy in preview mode");
+assert.match(creativeAssetDownloadRouteSource, /mode: "download"/, "Download route must call shared proxy in download mode");
 assert.match(creativeAgentSource, /value\.image_path/, "Product must parse Hermes Creative image_path execution responses");
 assert.match(creativeAgentSource, /creative_assets/, "Product must parse Hermes uploaded creative_assets responses");
 assert.match(creativeAgentSource, /render_url/, "Product Creative normalizer must preserve uploaded render_url");
@@ -339,6 +396,16 @@ assert.equal(uploadedAssets[0].transport_status, "uploaded", "uploaded Creative 
 assert.equal(uploadedAssets[0].render_url, "https://cmo.jayju.cloud/api/signed/creative_uploaded_contract", "uploaded Creative assets must preserve Product render URL");
 assert.equal(uploadedAssets[0].signed_url, "https://cmo.jayju.cloud/api/signed/creative_uploaded_contract", "uploaded Creative assets must preserve signed URL");
 assert.equal(uploadedAssets[0].mime_type, "image/png", "uploaded Creative assets must preserve mime type");
+assert.equal(creativeAssetPreviewUrl({
+  asset_id: "creative_uploaded_primary",
+  transport_status: "uploaded",
+  signed_url: "https://gestlbswqvibztqcidis.supabase.co/storage/v1/object/sign/cmo-creative-assets/asset.png?token=redacted",
+}, "eggs-vault"), "/api/cmo/apps/eggs-vault/creative/assets/creative_uploaded_primary/preview", "Uploaded Creative card preview must use Product same-origin proxy when asset_id exists");
+assert.equal(creativeAssetDownloadUrl({
+  asset_id: "creative_uploaded_primary",
+  transport_status: "uploaded",
+  signed_url: "https://gestlbswqvibztqcidis.supabase.co/storage/v1/object/sign/cmo-creative-assets/asset.png?token=redacted",
+}, "eggs-vault"), "/api/cmo/apps/eggs-vault/creative/assets/creative_uploaded_primary/download", "Uploaded Creative download must use Product same-origin proxy when asset_id exists");
 assert.equal(creativeAssetPreviewUrl({
   signed_url: "https://cmo.jayju.cloud/api/signed/primary",
   render_url: "https://cmo.jayju.cloud/api/render/fallback",

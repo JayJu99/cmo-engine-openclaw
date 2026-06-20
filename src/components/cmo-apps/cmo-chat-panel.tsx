@@ -517,14 +517,39 @@ function recordNumber(record: Record<string, unknown>, keys: string[]): number |
 
 interface CreativePreviewDiagnostics {
   asset_id: string;
+  app_id: string;
   transport_status: string;
+  has_storage_path: boolean;
   has_signed_url: boolean;
   has_render_url: boolean;
+  mime_type: string;
+  http_status: string;
   resolved_preview_url_host: string;
   resolved_preview_url_path_starts_with_storage_sign: boolean;
 }
 
-function creativeAssetPreviewUrl(asset: Record<string, unknown>): string {
+function creativeAssetProxyUrl(input: {
+  appId: string;
+  assetId: string;
+  mode: "preview" | "download";
+}): string {
+  return `/api/cmo/apps/${encodeURIComponent(input.appId)}/creative/assets/${encodeURIComponent(input.assetId)}/${input.mode}`;
+}
+
+function shouldUseCreativeAssetProxy(asset: Record<string, unknown>): boolean {
+  const assetId = recordString(asset, ["asset_id", "assetId", "id"]);
+  const transportStatus = recordString(asset, ["transport_status", "transportStatus"]);
+
+  return Boolean(assetId && transportStatus === "uploaded");
+}
+
+function creativeAssetPreviewUrl(asset: Record<string, unknown>, appId: string): string {
+  const assetId = recordString(asset, ["asset_id", "assetId", "id"]);
+
+  if (assetId && shouldUseCreativeAssetProxy(asset)) {
+    return creativeAssetProxyUrl({ appId, assetId, mode: "preview" });
+  }
+
   for (const key of ["signed_url", "signedUrl", "render_url", "renderUrl", "preview_url", "previewUrl"]) {
     const value = asset[key];
 
@@ -534,6 +559,16 @@ function creativeAssetPreviewUrl(asset: Record<string, unknown>): string {
   }
 
   return "";
+}
+
+function creativeAssetDownloadUrl(asset: Record<string, unknown>, appId: string): string {
+  const assetId = recordString(asset, ["asset_id", "assetId", "id"]);
+
+  if (assetId && shouldUseCreativeAssetProxy(asset)) {
+    return creativeAssetProxyUrl({ appId, assetId, mode: "download" });
+  }
+
+  return creativeAssetPreviewUrl(asset, appId);
 }
 
 function safePreviewUrlParts(previewUrl: string): { host: string; pathStartsWithStorageSign: boolean } {
@@ -554,16 +589,22 @@ function safePreviewUrlParts(previewUrl: string): { host: string; pathStartsWith
   }
 }
 
-function creativeAssetPreviewDiagnostics(asset: Record<string, unknown>, previewUrl = ""): CreativePreviewDiagnostics {
+function creativeAssetPreviewDiagnostics(asset: Record<string, unknown>, appId: string, previewUrl = "", httpStatus = ""): CreativePreviewDiagnostics {
   const assetId = recordString(asset, ["asset_id", "assetId", "id"]);
   const transportStatus = recordString(asset, ["transport_status", "transportStatus"]);
+  const storagePath = recordString(asset, ["storage_path", "storagePath"]);
+  const mimeType = recordString(asset, ["mime_type", "mimeType"]);
   const previewUrlParts = safePreviewUrlParts(previewUrl);
 
   return {
     asset_id: assetId || "unknown",
+    app_id: appId,
     transport_status: transportStatus || "unknown",
+    has_storage_path: Boolean(storagePath),
     has_signed_url: Boolean(recordString(asset, ["signed_url", "signedUrl"])),
     has_render_url: Boolean(recordString(asset, ["render_url", "renderUrl"])),
+    mime_type: mimeType || "unknown",
+    http_status: httpStatus || "unavailable_from_img_error",
     resolved_preview_url_host: previewUrlParts.host,
     resolved_preview_url_path_starts_with_storage_sign: previewUrlParts.pathStartsWithStorageSign,
   };
@@ -1665,8 +1706,9 @@ export function CMOChatPanel({
             const status = recordString(asset, ["status"]) || "artifact_transport_missing";
             const transportStatus = recordString(asset, ["transport_status", "transportStatus"]);
             const assetType = recordString(asset, ["asset_type", "assetType", "type"]) || "image";
-            const previewUrl = creativeAssetPreviewUrl(asset);
-            const previewDiagnostics = creativeAssetPreviewDiagnostics(asset, previewUrl);
+            const previewUrl = creativeAssetPreviewUrl(asset, app.id);
+            const downloadUrl = creativeAssetDownloadUrl(asset, app.id);
+            const previewDiagnostics = creativeAssetPreviewDiagnostics(asset, app.id, previewUrl);
             const visualSummary = recordString(asset, ["visual_summary", "visualSummary", "summary"]);
             const model = recordString(asset, ["model"]);
             const operation = recordString(asset, ["operation"]);
@@ -1691,7 +1733,7 @@ export function CMOChatPanel({
               });
             };
             const markPreviewFailed = () => {
-              const diagnostics = creativeAssetPreviewDiagnostics(asset, previewUrl);
+              const diagnostics = creativeAssetPreviewDiagnostics(asset, app.id, previewUrl);
 
               setCreativePreviewFailures((current) => ({ ...current, [assetId]: diagnostics }));
               console.warn("[cmo-creative-preview] failed", diagnostics);
@@ -1722,7 +1764,7 @@ export function CMOChatPanel({
                           : "Creative generated an asset, but Product cannot fetch the local artifact yet."}
                       </p>
                       <div className="max-w-xs rounded bg-orange-50 px-2 py-1 text-[11px] font-semibold leading-4 text-orange-800">
-                        asset={previewDiagnostics.asset_id} transport={previewDiagnostics.transport_status} signed={String(previewDiagnostics.has_signed_url)} render={String(previewDiagnostics.has_render_url)} host={previewDiagnostics.resolved_preview_url_host || "none"} sign_path={String(previewDiagnostics.resolved_preview_url_path_starts_with_storage_sign)}
+                        asset={previewDiagnostics.asset_id} app={previewDiagnostics.app_id} transport={previewDiagnostics.transport_status} storage={String(previewDiagnostics.has_storage_path)} mime={previewDiagnostics.mime_type} status={previewDiagnostics.http_status} signed={String(previewDiagnostics.has_signed_url)} render={String(previewDiagnostics.has_render_url)} host={previewDiagnostics.resolved_preview_url_host || "same-origin"} sign_path={String(previewDiagnostics.resolved_preview_url_path_starts_with_storage_sign)}
                       </div>
                     </div>
                   )}
@@ -1772,9 +1814,9 @@ export function CMOChatPanel({
                       <icons.Play />
                       Use for video
                     </Button>
-                    {previewUrl ? (
+                    {downloadUrl ? (
                       <Button asChild type="button" size="sm" variant="outline">
-                        <a href={previewUrl} download target="_blank" rel="noopener noreferrer">
+                        <a href={downloadUrl} download target="_blank" rel="noopener noreferrer">
                           <icons.Download />
                           Download
                         </a>
