@@ -14,6 +14,7 @@ export const CMO_CREATIVE_LIFECYCLE_STATES = [
 export type CmoCreativeLifecycleState = (typeof CMO_CREATIVE_LIFECYCLE_STATES)[number];
 export type CmoCreativeResponseStatus = "success" | "partial" | "blocked" | "failed";
 export type CmoCreativeAssetStatus = "stored" | "artifact_transport_missing" | "partial" | "blocked" | "failed";
+export type CmoCreativeAssetTransportStatus = "uploaded" | "available" | "artifact_transport_missing" | "artifact_transport_failed";
 export type CmoCreativeAssetType = "image" | "video";
 
 export interface CmoCreativeRequest {
@@ -52,18 +53,20 @@ export interface CmoCreativeAssetArtifact {
   prompt_used?: string;
   visual_summary?: string;
   storage_path?: string;
+  render_url?: string;
   preview_url?: string;
   signed_url?: string;
   source_local_path_redacted?: string;
   bytes?: number;
   sha256?: string;
+  mime_type?: string;
   width?: number;
   height?: number;
   model?: string;
   operation?: string;
   status: CmoCreativeAssetStatus;
   notes?: string;
-  transport_status?: "available" | "artifact_transport_missing";
+  transport_status?: CmoCreativeAssetTransportStatus;
   review_required: true;
   created_at: string;
 }
@@ -167,6 +170,14 @@ export function isBrowserPreviewUrl(value: unknown): value is string {
   }
 }
 
+function transportStatusValue(value: unknown, hasPreview: boolean): CmoCreativeAssetTransportStatus {
+  if (value === "uploaded") return "uploaded";
+  if (value === "artifact_transport_failed") return "artifact_transport_failed";
+  if (value === "artifact_transport_missing") return "artifact_transport_missing";
+  if (value === "available") return "available";
+  return hasPreview ? "available" : "artifact_transport_missing";
+}
+
 export function hasCreativeExecutionMetadata(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
@@ -226,8 +237,10 @@ export function normalizeCreativeResponse(
   const agent = value.agent;
   const looksCreative =
     schema === "cmo.creative_response.v1" ||
+    schema === "cmo.creative_asset.v1" ||
     agent === CMO_CREATIVE_AGENT_ID ||
     Array.isArray(value.images) && value.images.some(isRecord) ||
+    Array.isArray(value.creative_assets) && value.creative_assets.some(isRecord) ||
     hasCreativeExecutionMetadata(value);
 
   if (!looksCreative) {
@@ -239,11 +252,14 @@ export function normalizeCreativeResponse(
   const promptUsed = stringValue(value.prompt_used, 3000);
   const visualSummary = stringValue(value.visual_summary, 2000);
   const notes = stringValue(value.notes, 1200);
-  const images = Array.isArray(value.images)
+  const images = Array.isArray(value.creative_assets) && value.creative_assets.some(isRecord)
+    ? value.creative_assets.filter(isRecord)
+    : Array.isArray(value.images)
     ? value.images.filter(isRecord)
     : (
         value.image_path ||
         value.path ||
+        value.render_url ||
         value.preview_url ||
         value.signed_url ||
         value.url ||
@@ -253,10 +269,14 @@ export function normalizeCreativeResponse(
       )
       ? [{
           path: value.image_path ?? value.path,
+          render_url: value.render_url,
           preview_url: value.preview_url,
           signed_url: value.signed_url,
           url: value.url,
           storage_path: value.storage_path ?? value.storagePath,
+          asset_id: value.asset_id ?? value.id,
+          asset_type: value.asset_type,
+          transport_status: value.transport_status,
           provider: value.provider,
           bytes: value.bytes,
           sha256: value.sha256,
@@ -269,7 +289,9 @@ export function normalizeCreativeResponse(
 
   return images.map((image, index) => {
     const path = stringValue(image.path, 600);
-    const previewUrl = isBrowserPreviewUrl(image.preview_url)
+    const previewUrl = isBrowserPreviewUrl(image.render_url)
+      ? image.render_url
+      : isBrowserPreviewUrl(image.preview_url)
       ? image.preview_url
       : isBrowserPreviewUrl(image.signed_url)
         ? image.signed_url
@@ -278,8 +300,11 @@ export function normalizeCreativeResponse(
           : undefined;
     const storagePath = stringValue(image.storage_path ?? image.storagePath, 600);
     const hasPreview = Boolean(previewUrl || storagePath);
+    const transportStatus = transportStatusValue(image.transport_status ?? value.transport_status, hasPreview);
     const sha256 = sha256Value(image.sha256);
-    const assetId = `creative_${safeIdSegment(sha256 ?? `${context.jobId ?? "job"}_${index + 1}`)}`;
+    const explicitAssetId = stringValue(image.asset_id ?? image.id, 120);
+    const assetId = explicitAssetId ?? `creative_${safeIdSegment(sha256 ?? `${context.jobId ?? "job"}_${index + 1}`)}`;
+    const assetType = image.asset_type === "video" || image.type === "video" ? "video" : "image";
 
     return {
       schema_version: "cmo.creative_asset.v1",
@@ -290,13 +315,14 @@ export function normalizeCreativeResponse(
       ...(context.workspaceId ? { workspace_id: context.workspaceId } : {}),
       ...(context.appId ? { app_id: context.appId } : {}),
       agent: CMO_CREATIVE_AGENT_ID,
-      asset_type: "image",
+      asset_type: assetType,
       provider: stringValue(image.provider ?? value.provider, 160) ?? "codex-imagen",
       ...(promptUsed ? { prompt_used: promptUsed } : {}),
       ...(visualSummary ? { visual_summary: visualSummary } : {}),
       ...(storagePath ? { storage_path: storagePath } : {}),
+      ...(previewUrl ? { render_url: previewUrl } : {}),
       ...(previewUrl ? { preview_url: previewUrl } : {}),
-      ...(previewUrl && image.signed_url === previewUrl ? { signed_url: previewUrl } : {}),
+      ...(previewUrl && (image.signed_url === previewUrl || image.render_url === previewUrl) ? { signed_url: previewUrl } : {}),
       ...(path ? { source_local_path_redacted: redactedLocalArtifactPath(path) } : {}),
       ...(numberValue(image.bytes) !== undefined ? { bytes: numberValue(image.bytes) } : {}),
       ...(sha256 ? { sha256 } : {}),
@@ -306,7 +332,7 @@ export function normalizeCreativeResponse(
       ...(stringValue(image.operation ?? value.operation, 220) ? { operation: stringValue(image.operation ?? value.operation, 220) } : {}),
       status: statusFromCreativeStatus(status, hasPreview),
       ...(notes ? { notes } : {}),
-      transport_status: hasPreview ? "available" : "artifact_transport_missing",
+      transport_status: transportStatus,
       review_required: true,
       created_at: createdAt,
     };
@@ -326,6 +352,8 @@ export function extractCreativeAssetsFromHermesResponse(
     response,
     structured.creative_response,
     structured.creative,
+    ...(Array.isArray(response.creative_assets) ? response.creative_assets : []),
+    ...(Array.isArray(structured.creative_assets) ? structured.creative_assets : []),
     isRecord(response.answer) ? response.answer : undefined,
     isRecord(response.response) ? response.response : undefined,
     isRecord(response.body) ? response.body : undefined,

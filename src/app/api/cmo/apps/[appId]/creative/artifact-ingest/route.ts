@@ -46,6 +46,73 @@ function stringValue(value: unknown): string {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
+function metadataFromForm(form: FormData): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {};
+  const metadataRaw = form.get("metadata");
+  const metadataJsonRaw = form.get("metadata_json");
+
+  for (const raw of [metadataRaw, metadataJsonRaw]) {
+    if (typeof raw !== "string" || !raw.trim()) {
+      continue;
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+
+    if (!isRecord(parsed)) {
+      throw new Error("metadata must be a JSON object.");
+    }
+
+    Object.assign(metadata, parsed);
+  }
+
+  for (const key of [
+    "workspace_id",
+    "workspaceId",
+    "app_id",
+    "appId",
+    "request_id",
+    "requestId",
+    "asset_id",
+    "assetId",
+    "sha256",
+    "bytes",
+    "mime_type",
+    "mimeType",
+    "type",
+    "provider",
+    "model",
+    "operation",
+    "prompt_used",
+    "promptUsed",
+    "visual_summary",
+    "visualSummary",
+    "width",
+    "height",
+    "job_id",
+    "jobId",
+    "path",
+    "source_local_path",
+  ]) {
+    const value = form.get(key);
+
+    if (typeof value === "string" && value.trim()) {
+      metadata[key] = value.trim();
+    }
+  }
+
+  for (const key of ["bytes", "width", "height"]) {
+    if (typeof metadata[key] === "string") {
+      const parsed = Number.parseInt(metadata[key], 10);
+
+      if (Number.isFinite(parsed)) {
+        metadata[key] = parsed;
+      }
+    }
+  }
+
+  return metadata;
+}
+
 function fileFromBase64(input: {
   base64: string;
   filename: string;
@@ -63,24 +130,17 @@ async function readIngestPayload(request: Request): Promise<{ file: File; metada
   if (contentType.includes("multipart/form-data")) {
     const form = await request.formData();
     const file = form.get("file");
-    const metadataRaw = form.get("metadata");
 
     if (!(file instanceof File)) {
       throw new Error("file is required.");
     }
 
-    const metadata = typeof metadataRaw === "string" && metadataRaw.trim()
-      ? JSON.parse(metadataRaw) as unknown
-      : {};
-
-    if (!isRecord(metadata)) {
-      throw new Error("metadata must be a JSON object.");
-    }
+    const metadata = metadataFromForm(form);
 
     return {
       file,
       metadata,
-      workspaceId: stringValue(form.get("workspaceId")),
+      workspaceId: stringValue(form.get("workspace_id") || form.get("workspaceId") || metadata.workspace_id || metadata.workspaceId),
       jobId: stringValue(form.get("jobId") || metadata.job_id || metadata.jobId),
     };
   }
@@ -91,7 +151,10 @@ async function readIngestPayload(request: Request): Promise<{ file: File; metada
     throw new Error("Creative artifact ingest body must be an object.");
   }
 
-  const metadata = isRecord(json.metadata) ? json.metadata : {};
+  const metadata = {
+    ...(isRecord(json.metadata) ? json.metadata : {}),
+    ...(isRecord(json.metadata_json) ? json.metadata_json : {}),
+  };
   const base64 = stringValue(json.bytesBase64 ?? json.bytes_base64);
 
   if (!base64) {
@@ -133,6 +196,18 @@ export async function POST(request: Request, context: { params: Promise<{ appId:
 
     const registryEntry = requireWorkspaceRegistryEntry(app.id);
     const payload = await readIngestPayload(request);
+    const payloadAppId = stringValue(payload.metadata.app_id ?? payload.metadata.appId);
+
+    if (payloadAppId && payloadAppId !== app.id) {
+      return Response.json(
+        {
+          error: `Unsupported appId: ${payloadAppId}`,
+          code: "creative_ingest_unsupported_app",
+        },
+        { status: 400 },
+      );
+    }
+
     const legacyHoldstationMiniAppScope =
       app.id === "holdstation-mini-app" && payload.workspaceId === registryEntry.tenantId;
     const workspaceId = legacyHoldstationMiniAppScope
@@ -158,7 +233,18 @@ export async function POST(request: Request, context: { params: Promise<{ appId:
       ...(payload.jobId ? { jobId: payload.jobId } : {}),
     });
 
-    return Response.json({ data: asset }, { status: 201 });
+    return Response.json({
+      status: "stored",
+      asset_id: asset.asset_id,
+      storage_path: asset.storage_path,
+      render_url: asset.render_url ?? asset.preview_url ?? asset.signed_url,
+      signed_url: asset.signed_url ?? asset.preview_url ?? asset.render_url,
+      bytes: asset.bytes,
+      sha256: asset.sha256,
+      mime_type: asset.mime_type,
+      transport_status: asset.transport_status,
+      data: asset,
+    }, { status: 201 });
   } catch (error) {
     if (error instanceof SyntaxError) {
       return Response.json(

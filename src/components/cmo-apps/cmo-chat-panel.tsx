@@ -1608,12 +1608,15 @@ export function CMOChatPanel({
           {assets.map((asset, index) => {
             const assetId = recordString(asset, ["asset_id", "id"]) || `creative_asset_${index}`;
             const status = recordString(asset, ["status"]) || "artifact_transport_missing";
+            const transportStatus = recordString(asset, ["transport_status"]);
             const assetType = recordString(asset, ["asset_type", "type"]) || "image";
-            const previewUrl = isBrowserPreviewUrl(asset.preview_url)
-              ? String(asset.preview_url)
-              : isBrowserPreviewUrl(asset.signed_url)
-                ? String(asset.signed_url)
-                : "";
+            const previewUrl = isBrowserPreviewUrl(asset.render_url)
+              ? String(asset.render_url)
+              : isBrowserPreviewUrl(asset.preview_url)
+                ? String(asset.preview_url)
+                : isBrowserPreviewUrl(asset.signed_url)
+                  ? String(asset.signed_url)
+                  : "";
             const visualSummary = recordString(asset, ["visual_summary", "summary"]);
             const model = recordString(asset, ["model"]);
             const operation = recordString(asset, ["operation"]);
@@ -1647,6 +1650,11 @@ export function CMOChatPanel({
                     <Badge variant={status === "stored" ? "green" : status === "failed" || status === "blocked" ? "red" : "orange"}>
                       {status}
                     </Badge>
+                    {transportStatus ? (
+                      <Badge variant={transportStatus === "uploaded" || transportStatus === "available" ? "green" : transportStatus === "artifact_transport_failed" ? "red" : "orange"}>
+                        {transportStatus}
+                      </Badge>
+                    ) : null}
                     <Badge variant="slate">{assetType}</Badge>
                     {dimensions ? <Badge variant="slate">{dimensions}</Badge> : null}
                     {bytes ? <Badge variant="slate">{formatBytes(bytes)}</Badge> : null}

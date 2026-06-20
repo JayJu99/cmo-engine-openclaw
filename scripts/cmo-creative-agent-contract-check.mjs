@@ -26,17 +26,24 @@ function isBrowserPreviewUrl(value) {
 }
 
 function normalizeCreativeResponse(value) {
-  const images = Array.isArray(value.images)
+  const images = Array.isArray(value.creative_assets)
+    ? value.creative_assets
+    : Array.isArray(value.images)
     ? value.images
-    : value.image_path || value.path || value.preview_url || value.signed_url || value.url || value.storage_path || value.sha256
+    : value.image_path || value.path || value.render_url || value.preview_url || value.signed_url || value.url || value.storage_path || value.sha256
       ? [{
           path: value.image_path ?? value.path,
+          render_url: value.render_url,
           preview_url: value.preview_url,
           signed_url: value.signed_url,
           url: value.url,
           storage_path: value.storage_path,
+          asset_id: value.asset_id,
+          asset_type: value.asset_type,
+          transport_status: value.transport_status,
           provider: value.provider,
           bytes: value.bytes,
+          mime_type: value.mime_type,
           sha256: value.sha256,
           width: value.width,
           height: value.height,
@@ -46,7 +53,13 @@ function normalizeCreativeResponse(value) {
       : [];
 
   return images.map((image, index) => {
-    const previewUrl = isBrowserPreviewUrl(image.preview_url) ? image.preview_url : undefined;
+    const previewUrl = isBrowserPreviewUrl(image.render_url)
+      ? image.render_url
+      : isBrowserPreviewUrl(image.preview_url)
+        ? image.preview_url
+        : isBrowserPreviewUrl(image.signed_url)
+          ? image.signed_url
+          : undefined;
     const storagePath = typeof image.storage_path === "string" ? image.storage_path : undefined;
     const sha256 = typeof image.sha256 === "string" && /^[a-f0-9]{64}$/i.test(image.sha256) ? image.sha256.toLowerCase() : undefined;
     const sourceLocalPath = typeof image.path === "string"
@@ -56,14 +69,17 @@ function normalizeCreativeResponse(value) {
     return {
       schema_version: "cmo.creative_asset.v1",
       type: "creative_asset",
-      asset_id: `creative_${sha256 ?? index + 1}`,
+      asset_id: typeof image.asset_id === "string" ? image.asset_id : `creative_${sha256 ?? index + 1}`,
       agent: "creative",
-      asset_type: "image",
+      asset_type: image.asset_type === "video" ? "video" : "image",
       status: previewUrl || storagePath ? "stored" : "artifact_transport_missing",
-      transport_status: previewUrl || storagePath ? "available" : "artifact_transport_missing",
+      transport_status: image.transport_status === "uploaded" ? "uploaded" : previewUrl || storagePath ? "available" : "artifact_transport_missing",
+      ...(previewUrl ? { render_url: previewUrl } : {}),
       ...(previewUrl ? { preview_url: previewUrl } : {}),
+      ...(previewUrl && image.signed_url === previewUrl ? { signed_url: previewUrl } : {}),
       ...(sourceLocalPath ? { source_local_path_redacted: sourceLocalPath } : {}),
       ...(typeof image.bytes === "number" ? { bytes: image.bytes } : {}),
+      ...(typeof image.mime_type === "string" ? { mime_type: image.mime_type } : {}),
       ...(sha256 ? { sha256 } : {}),
       ...(typeof image.model === "string" ? { model: image.model } : {}),
       ...(typeof image.operation === "string" ? { operation: image.operation } : {}),
@@ -175,6 +191,11 @@ assert.match(runtimeSource, /!creativeExecution && \(toolChatCanaryEnabled/, "Cr
 assert.match(runtimeSource, /creativeExecution[\s\S]*getCmoHermesCreativeExecuteTimeoutMs\(\)/, "Creative execution must use the Creative-specific timeout");
 assert.match(runtimeSource, /creative\.generate_video/, "Creative video execution mode must be accepted");
 assert.match(runtimeSource, /creative_missing_accepted_context_blocks_execution:\s*creativeExecutionRequested \? false : null/, "Runtime Creative envelope must not require accepted context");
+assert.match(runtimeSource, /artifact_transport/, "Creative execution payload must include Product-owned artifact transport");
+assert.match(runtimeSource, /mode: "product_upload"/, "Creative artifact transport must request Product upload mode");
+assert.match(runtimeSource, /upload_endpoint: `\$\{productPublicOrigin\(\)\}\/api\/cmo\/apps\/\$\{encodeURIComponent\(appId\)\}\/creative\/artifact-ingest`/, "Creative artifact transport must target Product ingest route");
+assert.match(runtimeSource, /accepted_mime_types: \[\.\.\.CMO_CREATIVE_ARTIFACT_MIME_TYPES\]/, "Creative artifact transport must declare accepted media types");
+assert.match(runtimeSource, /max_bytes: CMO_CREATIVE_ARTIFACT_MAX_BYTES/, "Creative artifact transport must declare Product max bytes");
 assert.match(runtimeSource, /maybeNormalizeCreativeExecutionResponseCandidate/, "Creative execution responses must normalize before standard M1 response validation");
 assert.match(runtimeSource, /creativeResponseStatuses = new Set\(\["success", "completed", "partial", "blocked", "failed", "timeout"\]\)/, "Creative execution must accept Creative-specific status values");
 assert.match(runtimeSource, /creativeResponseHasExecutionMetadata/, "Creative execution validation bypass must require image metadata");
@@ -212,10 +233,18 @@ assert.match(openClawClientSource, /Product recorded the asset metadata/, "Direc
 assert.match(mapperSource, /hasCreativeExecutionMetadata/, "Hermes execute response mapper must accept Creative metadata without a conventional answer");
 assert.match(uiSource, /Creative Assets/, "Chat UI must render Creative asset cards");
 assert.match(uiSource, /Artifact transport missing/, "UI must show missing transport state");
+assert.match(uiSource, /asset\.render_url/, "UI must prefer Product-owned render_url for uploaded Creative previews");
+assert.match(uiSource, /transport_status/, "UI must display Creative artifact transport status");
 assert.match(uiSource, /isBrowserPreviewUrl/, "UI must not render local paths as previews");
 assert.match(ingestRouteSource, /uploadCmoCreativeArtifact/, "Creative artifact ingest endpoint must exist");
 assert.match(ingestRouteSource, /x-cmo-creative-ingest-key/, "Creative ingest endpoint must require server-to-server key when configured");
+assert.match(ingestRouteSource, /metadata_json/, "Creative ingest endpoint must accept Hermes metadata_json multipart field");
+assert.match(ingestRouteSource, /workspace_id/, "Creative ingest endpoint must accept Hermes workspace_id multipart field");
+assert.match(ingestRouteSource, /asset_id/, "Creative ingest endpoint must accept Hermes asset_id multipart field");
+assert.match(ingestRouteSource, /render_url/, "Creative ingest response must include Product render_url receipt field");
 assert.match(creativeAgentSource, /value\.image_path/, "Product must parse Hermes Creative image_path execution responses");
+assert.match(creativeAgentSource, /creative_assets/, "Product must parse Hermes uploaded creative_assets responses");
+assert.match(creativeAgentSource, /render_url/, "Product Creative normalizer must preserve uploaded render_url");
 assert.match(migrationSource, /cmo_creative_jobs/, "Creative jobs table migration is required");
 assert.match(migrationSource, /cmo_creative_assets/, "Creative assets table migration is required");
 assert.match(migrationSource, /cmo-creative-assets/, "Creative Supabase Storage bucket is required");
@@ -248,9 +277,36 @@ const hermesSingleImageAssets = normalizeCreativeResponse({
   model: "gpt-5.5",
   operation: "responses image_generation",
 });
+const uploadedAssets = normalizeCreativeResponse({
+  status: "success",
+  routed_to_creative: true,
+  creative_assets: [
+    {
+      schema_version: "cmo.creative_asset.v1",
+      asset_id: "creative_uploaded_contract",
+      asset_type: "image",
+      status: "stored",
+      transport_status: "uploaded",
+      render_url: "https://cmo.jayju.cloud/api/signed/creative_uploaded_contract",
+      signed_url: "https://cmo.jayju.cloud/api/signed/creative_uploaded_contract",
+      storage_path: "holdstation/hold-pay/hold-pay/job/asset/uploaded.png",
+      bytes: 2024,
+      sha256: "c".repeat(64),
+      mime_type: "image/png",
+      model: "gpt-5.5",
+      operation: "responses image_generation",
+    },
+  ],
+});
 
 assert.equal(assets.length, 1, "Creative image metadata must parse");
 assert.equal(hermesSingleImageAssets.length, 1, "Hermes single-image execution metadata must parse");
+assert.equal(uploadedAssets.length, 1, "Hermes uploaded creative_assets metadata must parse");
+assert.equal(uploadedAssets[0].status, "stored", "uploaded Creative assets must be stored");
+assert.equal(uploadedAssets[0].transport_status, "uploaded", "uploaded Creative assets must preserve uploaded transport status");
+assert.equal(uploadedAssets[0].render_url, "https://cmo.jayju.cloud/api/signed/creative_uploaded_contract", "uploaded Creative assets must preserve Product render URL");
+assert.equal(uploadedAssets[0].signed_url, "https://cmo.jayju.cloud/api/signed/creative_uploaded_contract", "uploaded Creative assets must preserve signed URL");
+assert.equal(uploadedAssets[0].mime_type, "image/png", "uploaded Creative assets must preserve mime type");
 assert.equal(hermesSingleImageAssets[0].status, "artifact_transport_missing", "Hermes local image_path must require Product artifact transport");
 assert.equal(hermesSingleImageAssets[0].bytes, 101, "Hermes execute bytes metadata must survive normalization");
 assert.equal(hermesSingleImageAssets[0].sha256, "b".repeat(64), "Hermes execute sha256 metadata must survive normalization");

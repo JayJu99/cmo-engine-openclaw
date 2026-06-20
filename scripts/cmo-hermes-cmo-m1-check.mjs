@@ -535,6 +535,7 @@ const startServer = async () => {
           const firstCallCreativeExecution =
             body.request_id === "req_m13_creative_timeout_default" ||
             body.request_id === "req_m13_creative_top_level_success" ||
+            body.request_id === "req_m13_creative_uploaded_asset" ||
             body.request_id === "req_m13_creative_executed_creative_true" ||
             body.request_id === "req_m13_creative_executed_creative_missing_metadata" ||
             body.request_id === "req_m13_creative_false_only_side_effects" ||
@@ -555,6 +556,17 @@ const startServer = async () => {
             assert.equal(body.constraints.creative_call_mode, "via_cmo");
             assert.equal(body.constraints.execution_boundary?.creative_execution_allowed, true);
             assert.equal(body.constraints.execution_boundary?.creative_execution_requested, true);
+            assert.deepEqual(body.artifact_transport, {
+              mode: "product_upload",
+              upload_endpoint: "https://cmo.jayju.cloud/api/cmo/apps/hold-pay/creative/artifact-ingest",
+              workspace_id: "hold-pay",
+              app_id: "hold-pay",
+              request_id: body.request_id,
+              accepted_mime_types: ["image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm"],
+              max_bytes: 52428800,
+            });
+          } else {
+            assert.equal(body.artifact_transport, undefined);
           }
           assert.equal(body.constraints.execution_boundary?.vault_agent_execution_allowed, false);
           assert.equal(body.constraints.execution_boundary?.direct_supabase_mutations_allowed, false);
@@ -601,6 +613,36 @@ const startServer = async () => {
               sha256: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
               model: "gpt-5.5",
               operation: "responses image_generation",
+              side_effects: {
+                executed_creative: true,
+              },
+            });
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_uploaded_asset") {
+            writeJson(response, 200, {
+              status: "success",
+              routed_to_creative: true,
+              visual_summary: "Uploaded Product-owned Creative asset.",
+              creative_assets: [
+                {
+                  schema_version: "cmo.creative_asset.v1",
+                  type: "creative_asset",
+                  asset_id: "creative_uploaded_fixture",
+                  asset_type: "image",
+                  transport_status: "uploaded",
+                  status: "stored",
+                  storage_path: "holdstation/hold-pay/hold-pay/job/asset/uploaded.png",
+                  render_url: "https://cmo.jayju.cloud/api/signed/creative_uploaded_fixture",
+                  signed_url: "https://cmo.jayju.cloud/api/signed/creative_uploaded_fixture",
+                  bytes: 1024,
+                  sha256: "1212121212121212121212121212121212121212121212121212121212121212",
+                  mime_type: "image/png",
+                  model: "gpt-5.5",
+                  operation: "responses image_generation",
+                },
+              ],
               side_effects: {
                 executed_creative: true,
               },
@@ -3179,6 +3221,7 @@ try {
   let m43SourceTranslateResult;
   let m13CreativeTimeoutDefaultResult;
   let m13CreativeTopLevelSuccessResult;
+  let m13CreativeUploadedAssetResult;
   let m13CreativeExecutedCreativeResult;
   let m13CreativeFalseOnlySideEffectsResult;
 
@@ -4693,6 +4736,16 @@ try {
       credential_write: false,
       arbitrary_filesystem_write: false,
     });
+    m13CreativeUploadedAssetResult = await runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_uploaded_asset"));
+    assert.equal(m13CreativeUploadedAssetResult.response.status, "completed");
+    assert.equal(m13CreativeUploadedAssetResult.response.answer?.body, "Uploaded Product-owned Creative asset.");
+    assert.equal(m13CreativeUploadedAssetResult.response.structured_output.product_artifact_status, "uploaded");
+    assert.equal(m13CreativeUploadedAssetResult.response.artifacts[0].transport_status, "uploaded");
+    assert.equal(m13CreativeUploadedAssetResult.response.artifacts[0].status, "stored");
+    assert.equal(m13CreativeUploadedAssetResult.response.artifacts[0].render_url, "https://cmo.jayju.cloud/api/signed/creative_uploaded_fixture");
+    assert.equal(m13CreativeUploadedAssetResult.response.artifacts[0].signed_url, "https://cmo.jayju.cloud/api/signed/creative_uploaded_fixture");
+    assert.equal(m13CreativeUploadedAssetResult.response.artifacts[0].mime_type, "image/png");
+    assert.equal(JSON.stringify(m13CreativeUploadedAssetResult.response.artifacts).includes("/tmp/"), false);
     m13CreativeExecutedCreativeResult = await runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_executed_creative_true"));
     assert.equal(m13CreativeExecutedCreativeResult.response.status, "completed");
     assert.equal(m13CreativeExecutedCreativeResult.response.routed_to_creative, true);
@@ -4802,6 +4855,12 @@ try {
           fallbackUsed: m13CreativeTopLevelSuccessResult?.response.structured_output?.fallback_used,
           sideEffectsPresent: m13CreativeTopLevelSuccessResult?.response.structured_output?.side_effects_present,
           sideEffectsAllowedForCreative: m13CreativeTopLevelSuccessResult?.response.structured_output?.side_effects_allowed_for_creative,
+        },
+        creativeUploadedAsset: {
+          status: m13CreativeUploadedAssetResult?.response.status,
+          productArtifactStatus: m13CreativeUploadedAssetResult?.response.structured_output?.product_artifact_status,
+          transportStatus: m13CreativeUploadedAssetResult?.response.artifacts?.[0]?.transport_status,
+          renderUrlPresent: typeof m13CreativeUploadedAssetResult?.response.artifacts?.[0]?.render_url === "string",
         },
         creativeExecutedCreative: {
           status: m13CreativeExecutedCreativeResult?.response.status,

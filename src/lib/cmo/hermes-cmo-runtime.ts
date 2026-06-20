@@ -38,6 +38,15 @@ export const H5_LIVE_ADAPTER_BOUNDARY =
 
 const HERMES_CMO_AGENT_PATH = "/agents/cmo/execute" as const;
 const HERMES_CMO_TOOL_AGENT_DEFAULT_PATH = "/agents/cmo/tool-execute" as const;
+const CMO_DEFAULT_PUBLIC_APP_URL = "https://cmo.jayju.cloud" as const;
+const CMO_CREATIVE_ARTIFACT_MAX_BYTES = 50 * 1024 * 1024;
+const CMO_CREATIVE_ARTIFACT_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "video/mp4",
+  "video/webm",
+] as const;
 
 export type HermesCmoRuntimeMode = typeof HERMES_CMO_RUNTIME_MODE;
 export type HermesAllowedAgent = "echo" | "surf" | "vault_agent" | "creative";
@@ -154,6 +163,15 @@ export interface HermesCmoRuntimeRequest {
     activity_stream_required: boolean;
     heartbeat_required: boolean;
     [key: string]: unknown;
+  };
+  artifact_transport?: {
+    mode: "product_upload";
+    upload_endpoint: string;
+    workspace_id: string;
+    app_id: string;
+    request_id: string;
+    accepted_mime_types: string[];
+    max_bytes: number;
   };
   [key: string]: unknown;
 }
@@ -1302,6 +1320,25 @@ const normalizeCreativeExecutionResponseCandidate = (
     routed_to_creative: summary.routed_to_creative === true ? true : response.routed_to_creative,
     transport_status: summary.product_artifact_status,
   };
+  const answerCandidate = isRecord(response.answer) ? response.answer : {};
+  const preservedAnswerBody =
+    typeof answerCandidate.body === "string"
+      ? answerCandidate.body
+      : typeof response.body === "string"
+        ? response.body
+        : typeof response.visual_summary === "string"
+          ? response.visual_summary
+          : typeof response.notes === "string"
+            ? response.notes
+            : "";
+  const preservedAnswerSummary =
+    typeof answerCandidate.summary === "string"
+      ? answerCandidate.summary
+      : typeof response.visual_summary === "string"
+        ? response.visual_summary
+        : typeof response.notes === "string"
+          ? response.notes
+          : "";
 
   return {
     ...response,
@@ -1325,15 +1362,10 @@ const normalizeCreativeExecutionResponseCandidate = (
     },
     answer: {
       format: "markdown",
-      title: "Creative Asset Generated",
-      summary: "Creative execution returned generated asset metadata.",
-      decision: "Generated asset metadata is available in Product.",
-      body: [
-        "Creative execution completed and returned generated asset metadata.",
-        summary.product_artifact_status === "artifact_transport_missing"
-          ? "Product recorded the asset metadata. Artifact transport is required before a browser preview can be shown."
-          : "Product recorded the asset metadata.",
-      ].join("\n"),
+      title: typeof answerCandidate.title === "string" && answerCandidate.title.trim() ? answerCandidate.title : "Creative Asset",
+      summary: preservedAnswerSummary,
+      decision: typeof answerCandidate.decision === "string" ? answerCandidate.decision : "",
+      body: preservedAnswerBody,
     },
     structured_output: {
       ...(isRecord(response.structured_output) ? response.structured_output : {}),
@@ -1345,7 +1377,9 @@ const normalizeCreativeExecutionResponseCandidate = (
       product_artifact_status: summary.product_artifact_status,
     },
     delegations: Array.isArray(response.delegations) ? response.delegations : [],
-    artifacts: Array.isArray(response.artifacts)
+    artifacts: Array.isArray(response.creative_assets)
+      ? response.creative_assets
+      : Array.isArray(response.artifacts)
       ? response.artifacts
       : [{
           schema_version: "cmo.creative_response.v1",
@@ -1650,6 +1684,23 @@ const creativeExecutionModeFromRequest = (request: HermesCmoRuntimeRequest): "cr
   const mode = request.intent.explicit_command ?? creativeIntent.mode ?? request.constraints.creative_execution_mode ?? toolPolicy.creative_execution_mode;
 
   return mode === "creative.generate_video" ? "creative.generate_video" : "creative.generate_image";
+};
+
+const productPublicOrigin = (): string =>
+  (process.env.CMO_PUBLIC_APP_URL?.trim() || CMO_DEFAULT_PUBLIC_APP_URL).replace(/\/+$/g, "");
+
+const creativeArtifactTransportForRequest = (request: HermesCmoRuntimeRequest): HermesCmoRuntimeRequest["artifact_transport"] => {
+  const appId = request.workspace.app_id;
+
+  return {
+    mode: "product_upload",
+    upload_endpoint: `${productPublicOrigin()}/api/cmo/apps/${encodeURIComponent(appId)}/creative/artifact-ingest`,
+    workspace_id: request.workspace.workspace_id,
+    app_id: appId,
+    request_id: request.request_id,
+    accepted_mime_types: [...CMO_CREATIVE_ARTIFACT_MIME_TYPES],
+    max_bytes: CMO_CREATIVE_ARTIFACT_MAX_BYTES,
+  };
 };
 
 const positiveTimeoutOverride = (value: unknown): number | undefined => {
@@ -2018,8 +2069,14 @@ const creativeTraceSummary = (payload: unknown): Record<string, unknown> => {
     : Array.isArray(root.artifacts)
       ? root.artifacts
       : [];
+  const creativeAssets = Array.isArray(response.creative_assets)
+    ? response.creative_assets
+    : Array.isArray(root.creative_assets)
+      ? root.creative_assets
+      : [];
   const firstArtifact = artifacts.find(isRecord) as Record<string, unknown> | undefined;
-  const candidates = [response, structuredOutput, structuredCreativeResponse, structuredCreative, answer, firstArtifact].filter(isRecord);
+  const firstCreativeAsset = creativeAssets.find(isRecord) as Record<string, unknown> | undefined;
+  const candidates = [response, structuredOutput, structuredCreativeResponse, structuredCreative, answer, firstArtifact, firstCreativeAsset].filter(isRecord);
   const firstCandidateValue = (keys: string[]) => {
     for (const candidate of candidates) {
       for (const key of keys) {
@@ -2032,7 +2089,10 @@ const creativeTraceSummary = (payload: unknown): Record<string, unknown> => {
     return undefined;
   };
   const images = candidates
-    .flatMap((candidate) => Array.isArray(candidate.images) ? candidate.images.filter(isRecord) : [])
+    .flatMap((candidate) => [
+      ...(Array.isArray(candidate.images) ? candidate.images.filter(isRecord) : []),
+      ...(Array.isArray(candidate.creative_assets) ? candidate.creative_assets.filter(isRecord) : []),
+    ])
     .filter(isRecord);
   const firstImage = images[0];
   const imagePath = firstDefined([
@@ -2041,7 +2101,8 @@ const creativeTraceSummary = (payload: unknown): Record<string, unknown> => {
     firstImage?.path,
   ]);
   const previewValue = firstDefined([
-    firstCandidateValue(["preview_url", "signed_url", "url"]),
+    firstCandidateValue(["render_url", "preview_url", "signed_url", "url"]),
+    firstImage?.render_url,
     firstImage?.preview_url,
     firstImage?.signed_url,
     firstImage?.url,
@@ -2058,6 +2119,7 @@ const creativeTraceSummary = (payload: unknown): Record<string, unknown> => {
   const model = firstDefined([firstCandidateValue(["model"]), firstImage?.model]);
   const operation = firstDefined([firstCandidateValue(["operation"]), firstImage?.operation]);
   const routedToCreative = firstCandidateValue(["routed_to_creative", "routedToCreative"]);
+  const transportStatus = firstCandidateValue(["transport_status", "transportStatus"]) ?? firstImage?.transport_status;
   const imagePathKind = pathKind(imagePath);
   const previewKind = pathKind(previewValue);
 
@@ -2077,7 +2139,11 @@ const creativeTraceSummary = (payload: unknown): Record<string, unknown> => {
     model: typeof model === "string" && model.trim() ? traceString(model, 160) : undefined,
     operation: typeof operation === "string" && operation.trim() ? traceString(operation, 220) : undefined,
     product_artifact_status:
-      imagePathKind === "local_artifact_path" && !previewValue && !storagePath
+      transportStatus === "uploaded"
+        ? "uploaded"
+        : transportStatus === "artifact_transport_failed"
+          ? "artifact_transport_failed"
+          : imagePathKind === "local_artifact_path" && !previewValue && !storagePath
         ? "artifact_transport_missing"
         : imagePath || previewValue || storagePath || sha256
           ? "available_or_metadata_only"
@@ -2091,6 +2157,7 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
   const h5LiveAdapter = nestedRecord(constraints, "h5_live_adapter");
   const creativePolicy = nestedRecord(nestedRecord(constraints, "m1_clean_cmo_skill_kernel"), "creative_policy");
   const allowedAgents = Array.isArray(constraints.allowed_agents) ? constraints.allowed_agents : [];
+  const artifactTransport: Record<string, unknown> = isRecord(request.artifact_transport) ? request.artifact_transport : {};
 
   return {
     endpoint_path: config.endpointPath,
@@ -2115,6 +2182,8 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
     creative_profile: constraints.creative_profile ?? h5LiveAdapter.creative_profile ?? creativePolicy.profile,
     delegations_mode: constraints.delegations_mode,
     product_artifact_ingest_required: executionBoundary.creative_artifact_ingest_required_for_preview === true,
+    artifact_transport_mode: artifactTransport["mode"],
+    artifact_transport_upload_endpoint_present: typeof artifactTransport["upload_endpoint"] === "string" && artifactTransport["upload_endpoint"].startsWith("https://"),
   };
 };
 
@@ -2347,6 +2416,7 @@ const buildHermesCmoLiveRequest = (
 
   return {
     ...request,
+    ...(creativeAgentAllowed ? { artifact_transport: creativeArtifactTransportForRequest(request) } : {}),
     user_message: userMessage,
     message: userMessage,
     input: {
