@@ -12,8 +12,9 @@ import type {
   ContextItem,
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
+import { isExplicitCreativeExecutionIntent } from "@/lib/cmo/app-routing-intent";
 import { summarizeContextQuality } from "@/lib/cmo/context-quality";
-import { getCmoFallbackFastAfterMs, getCmoLiveAppTurnTimeoutMs } from "@/lib/cmo/config";
+import { getCmoFallbackFastAfterMs, getCmoHermesCreativeExecuteTimeoutMs, getCmoLiveAppTurnTimeoutMs } from "@/lib/cmo/config";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import {
   callOpenClawAppTurnRuntime,
@@ -59,6 +60,10 @@ export interface CmoRuntimeTurnResult {
   liveAttemptDurationMs?: number;
   fallbackDurationMs?: number;
   timeoutMs?: number;
+  outerTimeoutMs?: number;
+  outerTimeoutSource?: "default_app_turn" | "creative_execute";
+  routeDecision?: "app_turn" | "creative_execution";
+  creativeExecutionRequested?: boolean;
 }
 
 export interface CmoRuntime {
@@ -583,11 +588,27 @@ function classifyAppTurnErrorReason(error: unknown): CmoRuntimeErrorReason {
   return "execution_error";
 }
 
-function logAppTurnFailure(reason: CmoRuntimeErrorReason, message: string, error: unknown) {
+function logAppTurnFailure(
+  reason: CmoRuntimeErrorReason,
+  message: string,
+  error: unknown,
+  timeoutConfig?: ReturnType<typeof appTurnTimeoutConfig>,
+) {
+  const timeoutMetadata = timeoutConfig
+    ? {
+        timeoutMs: timeoutConfig.timeoutMs,
+        outer_timeout_ms: timeoutConfig.timeoutMs,
+        outer_timeout_source: timeoutConfig.timeoutSource,
+        route_decision: timeoutConfig.routeDecision,
+        creative_execution_requested: timeoutConfig.creativeExecutionRequested,
+      }
+    : {};
+
   if (reason === "unsupported_chat_turn") {
     console.warn("[cmo-runtime] Adapter health passed, but /cmo/app-turn is unavailable; using app-chat fallback.", {
       reason,
       message,
+      ...timeoutMetadata,
     });
     return;
   }
@@ -596,14 +617,25 @@ function logAppTurnFailure(reason: CmoRuntimeErrorReason, message: string, error
     console.warn("[cmo-runtime] Adapter returned dashboard run-brief JSON for app chat; using app-chat fallback.", {
       reason,
       message,
+      ...timeoutMetadata,
     });
     return;
   }
 
   if (reason === "timeout") {
+    if (timeoutConfig?.creativeExecutionRequested) {
+      console.warn("[cmo-runtime] Creative app-chat turn timed out; no workspace fallback used.", {
+        reason,
+        message,
+        ...timeoutMetadata,
+      });
+      return;
+    }
+
     console.warn("[cmo-runtime] Live app-chat turn timed out; using fallback.", {
       reason,
       message,
+      ...timeoutMetadata,
     });
     return;
   }
@@ -612,6 +644,7 @@ function logAppTurnFailure(reason: CmoRuntimeErrorReason, message: string, error
     console.warn("[cmo-runtime] Live app-chat turn returned an invalid response; using fallback.", {
       reason,
       message,
+      ...timeoutMetadata,
     });
     return;
   }
@@ -620,6 +653,7 @@ function logAppTurnFailure(reason: CmoRuntimeErrorReason, message: string, error
     console.warn("[cmo-runtime] Live app-chat turn returned an empty answer; using fallback.", {
       reason,
       message,
+      ...timeoutMetadata,
     });
     return;
   }
@@ -627,7 +661,37 @@ function logAppTurnFailure(reason: CmoRuntimeErrorReason, message: string, error
   console.warn("[cmo-runtime] Live app-chat turn failed; using fallback.", {
     reason,
     message,
+    ...timeoutMetadata,
   });
+}
+
+function creativeExecutionRequested(input: CmoRuntimeTurnInput): boolean {
+  return isExplicitCreativeExecutionIntent(input.message) || isExplicitCreativeExecutionIntent(input.request.message);
+}
+
+function appTurnTimeoutConfig(input: CmoRuntimeTurnInput): {
+  timeoutMs: number;
+  timeoutSource: "default_app_turn" | "creative_execute";
+  routeDecision: "app_turn" | "creative_execution";
+  creativeExecutionRequested: boolean;
+} {
+  const creativeRequested = creativeExecutionRequested(input);
+
+  if (creativeRequested) {
+    return {
+      timeoutMs: getCmoHermesCreativeExecuteTimeoutMs(),
+      timeoutSource: "creative_execute",
+      routeDecision: "creative_execution",
+      creativeExecutionRequested: true,
+    };
+  }
+
+  return {
+    timeoutMs: Math.min(getCmoLiveAppTurnTimeoutMs(), getCmoFallbackFastAfterMs()),
+    timeoutSource: "default_app_turn",
+    routeDecision: "app_turn",
+    creativeExecutionRequested: false,
+  };
 }
 
 export class FallbackRuntime implements CmoRuntime {
@@ -704,7 +768,8 @@ export class LiveOpenClawRuntime implements CmoRuntime {
       }).runTurn(input);
     }
 
-    const timeoutMs = Math.min(getCmoLiveAppTurnTimeoutMs(), getCmoFallbackFastAfterMs());
+    const timeoutConfig = appTurnTimeoutConfig(input);
+    const timeoutMs = timeoutConfig.timeoutMs;
     const liveAttemptStartedAt = new Date().toISOString();
     const liveAttemptStartedMs = Date.now();
 
@@ -715,6 +780,12 @@ export class LiveOpenClawRuntime implements CmoRuntime {
         input.history,
         input.request.sessionId,
         timeoutMs,
+        {
+          outer_timeout_ms: timeoutMs,
+          outer_timeout_source: timeoutConfig.timeoutSource,
+          route_decision: timeoutConfig.routeDecision,
+          creative_execution_requested: timeoutConfig.creativeExecutionRequested,
+        },
       );
       const liveAttemptDurationMs = Date.now() - liveAttemptStartedMs;
 
@@ -733,18 +804,54 @@ export class LiveOpenClawRuntime implements CmoRuntime {
         liveAttemptStartedAt,
         liveAttemptDurationMs,
         timeoutMs,
+        outerTimeoutMs: timeoutMs,
+        outerTimeoutSource: timeoutConfig.timeoutSource,
+        routeDecision: timeoutConfig.routeDecision,
+        creativeExecutionRequested: timeoutConfig.creativeExecutionRequested,
       };
     } catch (error) {
       const liveAttemptDurationMs = Date.now() - liveAttemptStartedMs;
       const runtimeError = error instanceof Error ? error.message : "OpenClaw CMO runtime failed";
       const runtimeErrorReason = classifyAppTurnErrorReason(error);
-      logAppTurnFailure(runtimeErrorReason, runtimeError, error);
+      logAppTurnFailure(runtimeErrorReason, runtimeError, error, timeoutConfig);
       console.warn("[cmo-runtime] Live app-turn diagnostic.", {
         reason: runtimeErrorReason,
         runtimeLabel: availability.label,
         liveAttemptDurationMs,
         timeoutMs,
+        outer_timeout_ms: timeoutMs,
+        outer_timeout_source: timeoutConfig.timeoutSource,
+        route_decision: timeoutConfig.routeDecision,
+        creative_execution_requested: timeoutConfig.creativeExecutionRequested,
       });
+      if (timeoutConfig.creativeExecutionRequested && runtimeErrorReason === "timeout") {
+        return {
+          answer: [
+            "Creative execution timed out before the remote CMO adapter returned generated asset metadata.",
+            `Product waited ${timeoutMs}ms for the Creative app-chat turn.`,
+            "No workspace-context fallback was used for this image or video generation request.",
+          ].join("\n"),
+          assumptions: [],
+          suggestedActions: [],
+          runtimeStatus: "runtime_error",
+          runtimeMode: "configured_but_unreachable",
+          attemptedRuntimeMode: "live",
+          runtimeLabel: "Remote CMO Creative execution",
+          runtimeError: "Creative execution timed out before the remote CMO adapter returned asset metadata.",
+          runtimeErrorReason: "timeout",
+          runtimeProvider: "openclaw",
+          runtimeAgent: "creative",
+          isDevelopmentFallback: false,
+          isRuntimeFallback: false,
+          liveAttemptStartedAt,
+          liveAttemptDurationMs,
+          timeoutMs,
+          outerTimeoutMs: timeoutMs,
+          outerTimeoutSource: timeoutConfig.timeoutSource,
+          routeDecision: timeoutConfig.routeDecision,
+          creativeExecutionRequested: true,
+        };
+      }
       const fallbackStartedMs = Date.now();
       const fallback = await new FallbackRuntime({
         status: "live_failed_then_fallback",
@@ -770,6 +877,10 @@ export class LiveOpenClawRuntime implements CmoRuntime {
         liveAttemptDurationMs,
         fallbackDurationMs,
         timeoutMs,
+        outerTimeoutMs: timeoutMs,
+        outerTimeoutSource: timeoutConfig.timeoutSource,
+        routeDecision: timeoutConfig.routeDecision,
+        creativeExecutionRequested: timeoutConfig.creativeExecutionRequested,
       };
     }
   }

@@ -483,7 +483,12 @@ function normalizeAppTurnRuntimeResult(payload: unknown, config: OpenClawCmoRunt
   };
 }
 
-function appTurnBody(contextPackage: CMOContextPackage, history: CMOChatMessage[], sessionId?: string) {
+function appTurnBody(
+  contextPackage: CMOContextPackage,
+  history: CMOChatMessage[],
+  sessionId?: string,
+  runtimeMetadata: Record<string, unknown> = {},
+) {
   return {
     schema_version: "cmo.app_turn.request.v1" as const,
     ...(sessionId ? { sessionId } : {}),
@@ -505,6 +510,7 @@ function appTurnBody(contextPackage: CMOContextPackage, history: CMOChatMessage[
       requestedBy: "app-cmo-workspace",
       appName: contextPackage.app.name,
       runtimeContext: contextPackage.runtimeContext,
+      ...runtimeMetadata,
     },
   };
 }
@@ -735,9 +741,10 @@ export async function callOpenClawAppTurnRuntime(
   history: CMOChatMessage[],
   sessionId?: string,
   timeoutMs = getCmoAppTurnRequestTimeoutMs(),
+  runtimeMetadata: Record<string, unknown> = {},
 ): Promise<OpenClawCmoResult> {
   if (config.kind === "vps-cmo-adapter") {
-    const response = await postRemoteAppTurn(appTurnBody(contextPackage, history, sessionId), { timeoutMs });
+    const response = await postRemoteAppTurn(appTurnBody(contextPackage, history, sessionId, runtimeMetadata), { timeoutMs });
 
     return {
       answer: response.data.answer,
@@ -754,7 +761,7 @@ export async function callOpenClawAppTurnRuntime(
 
   const response = await requestRuntimeJson<unknown>(config, config.endpoint, {
     method: "POST",
-    body: appTurnBody(contextPackage, history, sessionId),
+    body: appTurnBody(contextPackage, history, sessionId, runtimeMetadata),
     timeoutMs,
   });
 

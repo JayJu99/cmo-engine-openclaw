@@ -617,6 +617,8 @@ export type CmoProductRenderSource =
   | "legacy_cmo_engine"
   | "direct_bridge"
   | "local_session_command";
+export type CmoOuterTimeoutSource = "default_app_turn" | "creative_execute";
+export type CmoRouteDecision = "app_turn" | "creative_execution" | "execute" | "tool_execute";
 export type CmoStrategyMode = "DIAGNOSE" | "FOCUS" | "PRIORITIZE" | "REVIEW" | "RESET";
 export type CmoDecisionLabel = "KEEP" | "CUT" | "TEST" | "SCALE" | "WAIT";
 export type HermesCmoAgentUsed = "cmo" | "echo" | "surf" | "creative";
@@ -1240,6 +1242,10 @@ export interface CMOChatMessage {
   fallbackDurationMs?: number;
   totalDurationMs?: number;
   timeoutMs?: number;
+  outerTimeoutMs?: number;
+  outerTimeoutSource?: CmoOuterTimeoutSource;
+  routeDecision?: CmoRouteDecision;
+  creativeExecutionRequested?: boolean;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;
@@ -1401,6 +1407,10 @@ export interface CMOChatSession {
   fallbackDurationMs?: number;
   totalDurationMs?: number;
   timeoutMs?: number;
+  outerTimeoutMs?: number;
+  outerTimeoutSource?: CmoOuterTimeoutSource;
+  routeDecision?: CmoRouteDecision;
+  creativeExecutionRequested?: boolean;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;
@@ -1515,6 +1525,10 @@ export interface CMOAppChatResponse {
   fallbackDurationMs?: number;
   totalDurationMs?: number;
   timeoutMs?: number;
+  outerTimeoutMs?: number;
+  outerTimeoutSource?: CmoOuterTimeoutSource;
+  routeDecision?: CmoRouteDecision;
+  creativeExecutionRequested?: boolean;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;

@@ -1505,6 +1505,14 @@ function normalizeProductRenderSource(value: unknown): CmoProductRenderSource | 
     : undefined;
 }
 
+function normalizeOuterTimeoutSource(value: unknown): CMOChatSession["outerTimeoutSource"] | undefined {
+  return value === "default_app_turn" || value === "creative_execute" ? value : undefined;
+}
+
+function normalizeRouteDecision(value: unknown): CMOChatSession["routeDecision"] | undefined {
+  return value === "app_turn" || value === "creative_execution" || value === "execute" || value === "tool_execute" ? value : undefined;
+}
+
 function normalizeContextDiagnostics(value: unknown): CMOContextDiagnostics | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -2871,6 +2879,10 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             fallbackDurationMs: normalizeOptionalNonNegativeNumber(message.fallbackDurationMs),
             totalDurationMs: normalizeOptionalNonNegativeNumber(message.totalDurationMs),
             timeoutMs: normalizeOptionalNonNegativeNumber(message.timeoutMs),
+            outerTimeoutMs: normalizeOptionalNonNegativeNumber(message.outerTimeoutMs ?? message.outer_timeout_ms),
+            outerTimeoutSource: normalizeOuterTimeoutSource(message.outerTimeoutSource ?? message.outer_timeout_source),
+            routeDecision: normalizeRouteDecision(message.routeDecision ?? message.route_decision),
+            creativeExecutionRequested: message.creativeExecutionRequested === true || message.creative_execution_requested === true ? true : undefined,
             contextSourceCount: normalizeOptionalNonNegativeNumber(message.contextSourceCount),
             contextCharLength: normalizeOptionalNonNegativeNumber(message.contextCharLength),
             indexedSupplementCharLength: normalizeOptionalNonNegativeNumber(message.indexedSupplementCharLength),
@@ -3004,6 +3016,10 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     fallbackDurationMs: normalizeOptionalNonNegativeNumber(value.fallbackDurationMs),
     totalDurationMs: normalizeOptionalNonNegativeNumber(value.totalDurationMs),
     timeoutMs: normalizeOptionalNonNegativeNumber(value.timeoutMs),
+    outerTimeoutMs: normalizeOptionalNonNegativeNumber(value.outerTimeoutMs ?? value.outer_timeout_ms),
+    outerTimeoutSource: normalizeOuterTimeoutSource(value.outerTimeoutSource ?? value.outer_timeout_source),
+    routeDecision: normalizeRouteDecision(value.routeDecision ?? value.route_decision),
+    creativeExecutionRequested: value.creativeExecutionRequested === true || value.creative_execution_requested === true ? true : undefined,
     contextSourceCount: normalizeOptionalNonNegativeNumber(value.contextSourceCount),
     contextCharLength: normalizeOptionalNonNegativeNumber(value.contextCharLength),
     indexedSupplementCharLength: normalizeOptionalNonNegativeNumber(value.indexedSupplementCharLength),
@@ -3256,6 +3272,10 @@ export async function createAppChatSession(
   let liveAttemptDurationMs: number | undefined;
   let fallbackDurationMs: number | undefined;
   let timeoutMs: number | undefined;
+  let outerTimeoutMs: number | undefined;
+  let outerTimeoutSource: CMOChatSession["outerTimeoutSource"] | undefined;
+  let routeDecision: CMOChatSession["routeDecision"] | undefined;
+  let creativeExecutionRequested: boolean | undefined;
   let calledHermesCmo = false;
   let hermesCmoStatus: HermesCmoChatStatus | undefined;
   let hermesCmoErrorReason: string | undefined;
@@ -4072,6 +4092,10 @@ export async function createAppChatSession(
         runtimeAgent = "creative";
         fallbackDurationMs = undefined;
         timeoutMs = creativeTimeoutMs;
+        outerTimeoutMs = creativeTimeoutMs;
+        outerTimeoutSource = "creative_execute";
+        routeDecision = "creative_execution";
+        creativeExecutionRequested = true;
         hermesCmoStatus = "interrupted";
         hermesCmoErrorReason = reason;
         delegationsMode = HERMES_CMO_PROPOSALS_ONLY;
@@ -4201,6 +4225,10 @@ export async function createAppChatSession(
     liveAttemptDurationMs = runtimeResult.liveAttemptDurationMs;
     fallbackDurationMs = runtimeResult.fallbackDurationMs;
     timeoutMs = runtimeResult.timeoutMs;
+    outerTimeoutMs = runtimeResult.outerTimeoutMs;
+    outerTimeoutSource = runtimeResult.outerTimeoutSource;
+    routeDecision = runtimeResult.routeDecision;
+    creativeExecutionRequested = runtimeResult.creativeExecutionRequested === true ? true : undefined;
     if (cmoSurfClarification) {
       answer = [
         "## Need Clarification",
@@ -4305,6 +4333,10 @@ export async function createAppChatSession(
     ...(typeof fallbackDurationMs === "number" ? { fallbackDurationMs } : {}),
     totalDurationMs,
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
+    ...(typeof outerTimeoutMs === "number" ? { outerTimeoutMs, outer_timeout_ms: outerTimeoutMs } : {}),
+    ...(outerTimeoutSource ? { outerTimeoutSource, outer_timeout_source: outerTimeoutSource } : {}),
+    ...(routeDecision ? { routeDecision, route_decision: routeDecision } : {}),
+    ...(creativeExecutionRequested === true ? { creativeExecutionRequested: true, creative_execution_requested: true } : {}),
     contextSourceCount,
     contextCharLength,
     indexedSupplementCharLength,

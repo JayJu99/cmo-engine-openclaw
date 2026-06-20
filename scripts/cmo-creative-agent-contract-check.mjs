@@ -111,6 +111,7 @@ const [
   runtimeSource,
   routeIntentSource,
   routeSource,
+  outerRuntimeSource,
   typesSource,
   mapperSource,
   storeSource,
@@ -123,6 +124,7 @@ const [
   read("src/lib/cmo/hermes-cmo-runtime.ts"),
   read("src/lib/cmo/app-routing-intent.ts"),
   read("src/lib/cmo/hermes-cmo-chat-router.ts"),
+  read("src/lib/cmo/runtime.ts"),
   read("src/lib/cmo/app-workspace-types.ts"),
   read("src/lib/cmo/hermes-cmo-chat-mapper.ts"),
   read("src/lib/cmo/app-chat-store.ts"),
@@ -163,6 +165,11 @@ assert.match(runtimeSource, /timeout_source/, "Hermes CMO trace must include the
 assert.match(runtimeSource, /route_decision/, "Hermes CMO trace must include the route decision");
 assert.match(runtimeSource, /creative_trace/, "Hermes CMO trace must include Creative routing diagnostics");
 assert.match(runtimeSource, /allowSubAgentExecution: specialistExecutionAllowed/, "Creative execution must not be blocked by Echo/Surf orchestration mode");
+assert.match(outerRuntimeSource, /appTurnTimeoutConfig/, "Outer app-chat runtime must have explicit timeout selection");
+assert.match(outerRuntimeSource, /getCmoHermesCreativeExecuteTimeoutMs\(\)/, "Outer app-chat Creative execution must use the Creative-specific timeout");
+assert.match(outerRuntimeSource, /Creative app-chat turn timed out; no workspace fallback used\./, "Outer app-chat Creative timeout must not log workspace fallback");
+assert.match(outerRuntimeSource, /outer_timeout_ms/, "Outer app-chat timeout metadata must include timeout ms");
+assert.match(outerRuntimeSource, /outer_timeout_source/, "Outer app-chat timeout metadata must include timeout source");
 assert.match(storeSource, /Creative execution timed out before Hermes returned the generated asset metadata/, "Creative timeout must render a Creative-specific timeout message");
 assert.match(storeSource, /No workspace-context fallback was used for this Creative generation request/, "Creative timeout must not silently fall back to workspace context");
 assert.match(mapperSource, /agentsUsedFromMetadata/, "Creative activity metadata must survive mapping");

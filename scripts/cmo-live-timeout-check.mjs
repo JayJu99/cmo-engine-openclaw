@@ -19,6 +19,10 @@ function fastFallbackMs() {
   return positiveIntEnv("CMO_FALLBACK_FAST_AFTER_MS", liveTimeoutMs());
 }
 
+function creativeExecuteTimeoutMs() {
+  return positiveIntEnv("CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS", 300_000);
+}
+
 function hermesTimeoutMs() {
   return positiveIntEnv("CMO_HERMES_TIMEOUT_MS", 240_000);
 }
@@ -57,11 +61,13 @@ async function main() {
 
   const configuredLiveTimeoutMs = liveTimeoutMs();
   const configuredFastFallbackMs = fastFallbackMs();
+  const configuredCreativeExecuteTimeoutMs = creativeExecuteTimeoutMs();
   const configuredHermesTimeoutMs = hermesTimeoutMs();
   const effectiveTimeoutMs = Math.min(configuredLiveTimeoutMs, configuredFastFallbackMs);
 
   assert.ok(configuredLiveTimeoutMs > 0, "live timeout must be positive");
   assert.ok(configuredFastFallbackMs > 0, "fast fallback threshold must be positive");
+  assert.ok(configuredCreativeExecuteTimeoutMs > 0, "Creative execute timeout must be positive");
   assert.ok(configuredHermesTimeoutMs > 0, "Hermes timeout must be positive");
   assert.ok(effectiveTimeoutMs > 0, "effective timeout must be positive");
   await withEnv(
@@ -69,11 +75,13 @@ async function main() {
       CMO_HERMES_TIMEOUT_MS: 240_000,
       CMO_LIVE_APP_TURN_TIMEOUT_MS: 240_000,
       CMO_FALLBACK_FAST_AFTER_MS: 240_000,
+      CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS: 300_000,
     },
     async () => {
       assert.equal(hermesTimeoutMs(), 240_000, "CMO_HERMES_TIMEOUT_MS must support 240000");
       assert.equal(liveTimeoutMs(), 240_000, "CMO_LIVE_APP_TURN_TIMEOUT_MS must support 240000");
       assert.equal(fastFallbackMs(), 240_000, "CMO_FALLBACK_FAST_AFTER_MS must support 240000");
+      assert.equal(creativeExecuteTimeoutMs(), 300_000, "CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS must support 300000");
     },
   );
 
@@ -88,19 +96,33 @@ async function main() {
 
   requireSource(configSource, "CMO_LIVE_APP_TURN_TIMEOUT_MS", "config");
   requireSource(configSource, "CMO_FALLBACK_FAST_AFTER_MS", "config");
+  requireSource(configSource, "CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS", "config");
   requireSource(configSource, "CMO_HERMES_TIMEOUT_MS", "config");
   requireSource(configSource, "240_000", "config");
+  requireSource(configSource, "300_000", "config");
   requireSource(runtimeSource, "liveAttemptStartedAt", "runtime");
   requireSource(runtimeSource, "fallbackDurationMs", "runtime");
   requireSource(runtimeSource, "timeoutMs", "runtime");
+  requireSource(runtimeSource, "appTurnTimeoutConfig", "runtime");
+  requireSource(runtimeSource, "getCmoHermesCreativeExecuteTimeoutMs", "runtime");
+  requireSource(runtimeSource, "Creative app-chat turn timed out; no workspace fallback used.", "runtime");
+  requireSource(runtimeSource, "outer_timeout_ms", "runtime");
+  requireSource(runtimeSource, "outer_timeout_source", "runtime");
+  requireSource(runtimeSource, "route_decision", "runtime");
+  requireSource(runtimeSource, "creative_execution_requested", "runtime");
   requireSource(runtimeSource, "callOpenClawAppTurnRuntime", "runtime");
   requireSource(typeSource, "totalDurationMs", "app workspace types");
+  requireSource(typeSource, "outerTimeoutMs", "app workspace types");
+  requireSource(typeSource, "outerTimeoutSource", "app workspace types");
+  requireSource(typeSource, "routeDecision", "app workspace types");
+  requireSource(typeSource, "creativeExecutionRequested", "app workspace types");
   requireSource(typeSource, "contextSourceCount", "app workspace types");
   requireSource(typeSource, "indexedSupplementCharLength", "app workspace types");
   requireSource(chatStoreSource, "CONTEXT_SIZE_WARNING_CHARS", "app chat store");
   requireSource(chatStoreSource, "contextPackBuildDurationMs", "app chat store");
   requireSource(chatStoreSource, "indexedContextBuildDurationMs", "app chat store");
   requireSource(openClawSource, "timeoutMs = getCmoAppTurnRequestTimeoutMs()", "openclaw client");
+  requireSource(openClawSource, "runtimeMetadata", "openclaw client");
   requireSource(remoteSource, "options.timeoutMs ?? getCmoAppTurnRequestTimeoutMs()", "remote client");
 
   const fallbackDryRunStarted = Date.now();
@@ -120,8 +142,10 @@ async function main() {
         ok: true,
         configuredLiveTimeoutMs,
         configuredFastFallbackMs,
+        configuredCreativeExecuteTimeoutMs,
         configuredHermesTimeoutMs,
         effectiveTimeoutMs,
+        creativeExecutionOuterTimeoutMs: 300_000,
         supportedLongRunningExternalResearchTimeoutMs: 240_000,
         fallbackDryRunDurationMs,
         checks: {
