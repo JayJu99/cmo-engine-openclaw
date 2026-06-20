@@ -532,7 +532,9 @@ const startServer = async () => {
           const firstCallProposalsOnly =
             body.request_id === "req_m44e6_research_followup_table" ||
             body.request_id === "req_m44e6_research_followup_rank";
-          const firstCallCreativeExecution = body.request_id === "req_m13_creative_timeout_default";
+          const firstCallCreativeExecution =
+            body.request_id === "req_m13_creative_timeout_default" ||
+            body.request_id === "req_m13_creative_top_level_success";
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
           assert.equal(body.user_message, body.intent?.user_message);
           assert.equal(body.message, body.intent?.user_message);
@@ -552,6 +554,19 @@ const startServer = async () => {
           assert.equal(body.constraints.execution_boundary?.vault_agent_execution_allowed, false);
           assert.equal(body.constraints.execution_boundary?.direct_supabase_mutations_allowed, false);
           assert.equal(body.constraints.execution_boundary?.openclaw_calls_allowed, false);
+
+          if (body.request_id === "req_m13_creative_top_level_success") {
+            writeJson(response, 200, {
+              status: "success",
+              routed_to_creative: true,
+              image_path: "/tmp/creative-agent-smoke/hold-pay-top-level.png",
+              bytes: 256,
+              sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              model: "gpt-5.5",
+              operation: "responses image_generation",
+            });
+            return;
+          }
 
           if (firstCallCreativeExecution) {
             writeJson(
@@ -3021,6 +3036,7 @@ try {
   let m43NativeConversationResult;
   let m43SourceTranslateResult;
   let m13CreativeTimeoutDefaultResult;
+  let m13CreativeTopLevelSuccessResult;
 
   try {
     process.env.CMO_HERMES_EXECUTION_ENABLED = "true";
@@ -3070,6 +3086,18 @@ try {
       ),
       false,
       "knowledge promotion must remain rejected",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...cmoResponse(sampleRequest).response,
+          status: "success",
+        },
+        sampleRequest,
+        { allowExecutableDelegations: true, maxDelegations: 1 },
+      ),
+      false,
+      "normal non-Creative CMO responses must still reject status=success",
     );
     assert.equal(
       validateHermesCmoRuntimeResponse(
@@ -4489,6 +4517,19 @@ try {
       server.calls.cmoRequests.find((cmoRequest) => cmoRequest.requestId === "req_m13_creative_timeout_default")?.allowedAgents,
       ["creative"],
     );
+    m13CreativeTopLevelSuccessResult = await runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_top_level_success"));
+    assert.equal(m13CreativeTopLevelSuccessResult.response.status, "completed");
+    assert.equal(m13CreativeTopLevelSuccessResult.response.routed_to_creative, true);
+    assert.equal(m13CreativeTopLevelSuccessResult.response.image_path, "/tmp/creative-agent-smoke/hold-pay-top-level.png");
+    assert.equal(m13CreativeTopLevelSuccessResult.response.bytes, 256);
+    assert.equal(m13CreativeTopLevelSuccessResult.response.sha256, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    assert.equal(m13CreativeTopLevelSuccessResult.response.model, "gpt-5.5");
+    assert.equal(m13CreativeTopLevelSuccessResult.response.operation, "responses image_generation");
+    assert.equal(m13CreativeTopLevelSuccessResult.response.structured_output.creative_response_received, true);
+    assert.equal(m13CreativeTopLevelSuccessResult.response.structured_output.creative_metadata_present, true);
+    assert.equal(m13CreativeTopLevelSuccessResult.response.structured_output.fallback_used, false);
+    assert.equal(m13CreativeTopLevelSuccessResult.response.structured_output.product_artifact_status, "artifact_transport_missing");
+    assert.equal(m13CreativeTopLevelSuccessResult.response.artifacts[0].transport_status, "artifact_transport_missing");
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
       restoreEnvValue(key, value);
@@ -4539,6 +4580,15 @@ try {
           routeDecision: m13CreativeTimeoutDefaultResult?.hermesCmoRouteDecision,
           timeoutMs: m13CreativeTimeoutDefaultResult?.hermesCmoEndpointTimeoutMs,
           timeoutSource: m13CreativeTimeoutDefaultResult?.hermesCmoEndpointTimeoutSource,
+        },
+        creativeTopLevelSuccess: {
+          status: m13CreativeTopLevelSuccessResult?.response.status,
+          routedToCreative: m13CreativeTopLevelSuccessResult?.response.routed_to_creative,
+          imagePathPresent: Boolean(m13CreativeTopLevelSuccessResult?.response.image_path),
+          bytesPresent: typeof m13CreativeTopLevelSuccessResult?.response.bytes === "number",
+          sha256Present: typeof m13CreativeTopLevelSuccessResult?.response.sha256 === "string",
+          productArtifactStatus: m13CreativeTopLevelSuccessResult?.response.structured_output?.product_artifact_status,
+          fallbackUsed: m13CreativeTopLevelSuccessResult?.response.structured_output?.fallback_used,
         },
         legacySurfXCalls: server.calls.legacySurfX,
         legacySurfLast30DaysCalls: server.calls.legacySurfLast30Days,

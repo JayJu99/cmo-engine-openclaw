@@ -868,6 +868,10 @@ export interface HermesCmoChatMetadata {
   hermesEndpointTimeoutSource?: "default_execute" | "creative_execute" | "tool_endpoint" | "tool_timeout_override";
   route_decision?: "execute" | "creative_execution" | "tool_execute";
   creative_execution_requested?: boolean;
+  creative_response_received?: boolean;
+  creative_metadata_present?: boolean;
+  rejected_by_m1_validator?: boolean;
+  rejected_field?: string;
   hermesToolEndpointEnabled?: boolean;
   sideEffects?: false | Record<string, boolean>;
   side_effects?: false | Record<string, boolean>;
@@ -1251,6 +1255,8 @@ export interface CMOChatMessage {
   creativeMetadataPresent?: boolean;
   creativeNormalizationError?: string;
   creativeFallbackUsed?: boolean;
+  creativeRejectedByM1Validator?: boolean;
+  creativeRejectedField?: string;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;
@@ -1420,6 +1426,8 @@ export interface CMOChatSession {
   creativeMetadataPresent?: boolean;
   creativeNormalizationError?: string;
   creativeFallbackUsed?: boolean;
+  creativeRejectedByM1Validator?: boolean;
+  creativeRejectedField?: string;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;
@@ -1542,6 +1550,8 @@ export interface CMOAppChatResponse {
   creativeMetadataPresent?: boolean;
   creativeNormalizationError?: string;
   creativeFallbackUsed?: boolean;
+  creativeRejectedByM1Validator?: boolean;
+  creativeRejectedField?: string;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;

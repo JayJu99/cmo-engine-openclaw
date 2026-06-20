@@ -2178,6 +2178,10 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
       ? { route_decision: value.route_decision }
       : {}),
     ...(value.creative_execution_requested === true ? { creative_execution_requested: true } : {}),
+    ...(value.creative_response_received === true ? { creative_response_received: true } : {}),
+    ...(typeof value.creative_metadata_present === "boolean" ? { creative_metadata_present: value.creative_metadata_present } : {}),
+    ...(value.rejected_by_m1_validator === true ? { rejected_by_m1_validator: true } : {}),
+    ...(stringValue(value.rejected_field) ? { rejected_field: stringValue(value.rejected_field) } : {}),
     ...(typeof value.hermesToolEndpointEnabled === "boolean" ? { hermesToolEndpointEnabled: value.hermesToolEndpointEnabled } : {}),
     ...(value.tool_capable_cmo === true ? { tool_capable_cmo: true } : {}),
     ...(sideEffects !== undefined ? { sideEffects, side_effects: sideEffects } : {}),
@@ -2714,6 +2718,17 @@ function isTimedOutHermesError(reason: string): boolean {
   return /timed out|timeout|AbortError/i.test(reason);
 }
 
+function creativeM1RejectedField(reason: string): string | undefined {
+  if (!/creative_metadata_present=true/i.test(reason) || !/rejected_by_m1_validator=true/i.test(reason)) {
+    return undefined;
+  }
+
+  const explicit = reason.match(/\brejected_field=([^.\s]+)/i)?.[1];
+  const rejected = explicit ?? reason.match(/Rejected field:\s*([^.\n]+)/i)?.[1];
+
+  return rejected?.trim();
+}
+
 function safeCmoRunToolsUsed(agentsUsed: HermesCmoAgentUsed[] | undefined): HermesCmoAgentUsed[] | undefined {
   return agentsUsed?.filter((agent) => agent === "cmo" || agent === "surf" || agent === "echo" || agent === "creative");
 }
@@ -2891,6 +2906,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             creativeFallbackUsed: typeof (message.creativeFallbackUsed ?? message.creative_fallback_used ?? message.fallback_used) === "boolean"
               ? Boolean(message.creativeFallbackUsed ?? message.creative_fallback_used ?? message.fallback_used)
               : undefined,
+            creativeRejectedByM1Validator: message.creativeRejectedByM1Validator === true || message.rejected_by_m1_validator === true ? true : undefined,
+            creativeRejectedField: normalizeOptionalString(message.creativeRejectedField ?? message.rejected_field),
             contextSourceCount: normalizeOptionalNonNegativeNumber(message.contextSourceCount),
             contextCharLength: normalizeOptionalNonNegativeNumber(message.contextCharLength),
             indexedSupplementCharLength: normalizeOptionalNonNegativeNumber(message.indexedSupplementCharLength),
@@ -3036,6 +3053,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     creativeFallbackUsed: typeof (value.creativeFallbackUsed ?? value.creative_fallback_used ?? value.fallback_used) === "boolean"
       ? Boolean(value.creativeFallbackUsed ?? value.creative_fallback_used ?? value.fallback_used)
       : undefined,
+    creativeRejectedByM1Validator: value.creativeRejectedByM1Validator === true || value.rejected_by_m1_validator === true ? true : undefined,
+    creativeRejectedField: normalizeOptionalString(value.creativeRejectedField ?? value.rejected_field),
     contextSourceCount: normalizeOptionalNonNegativeNumber(value.contextSourceCount),
     contextCharLength: normalizeOptionalNonNegativeNumber(value.contextCharLength),
     indexedSupplementCharLength: normalizeOptionalNonNegativeNumber(value.indexedSupplementCharLength),
@@ -3296,6 +3315,8 @@ export async function createAppChatSession(
   let creativeMetadataPresent: boolean | undefined;
   let creativeNormalizationError: string | undefined;
   let creativeFallbackUsed: boolean | undefined;
+  let creativeRejectedByM1Validator: boolean | undefined;
+  let creativeRejectedField: string | undefined;
   let calledHermesCmo = false;
   let hermesCmoStatus: HermesCmoChatStatus | undefined;
   let hermesCmoErrorReason: string | undefined;
@@ -4074,12 +4095,21 @@ export async function createAppChatSession(
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Hermes CMO chat runtime failed.";
       const creativeTimeout = hermesCmoCreativeExecutionRequested && isTimedOutHermesError(reason);
+      const m1RejectedField = hermesCmoCreativeExecutionRequested ? creativeM1RejectedField(reason) : undefined;
+      const creativeValidationRejected = Boolean(m1RejectedField);
 
-      console.warn(creativeTimeout ? "[cmo-app-chat] Hermes CMO Creative execution timed out." : "[cmo-app-chat] Hermes CMO chat failed; using existing CMO chat path.", {
+      console.warn(
+        creativeTimeout
+          ? "[cmo-app-chat] Hermes CMO Creative execution timed out."
+          : creativeValidationRejected
+            ? "[cmo-app-chat] Hermes CMO Creative metadata was rejected by M1 validation; no workspace fallback used."
+            : "[cmo-app-chat] Hermes CMO chat failed; using existing CMO chat path.",
+        {
         appId: request.appId,
         sessionId,
         reason,
         creativeExecutionRequested: hermesCmoCreativeExecutionRequested,
+        ...(m1RejectedField ? { rejected_field: m1RejectedField } : {}),
       });
 
       calledHermesCmo = true;
@@ -4143,6 +4173,66 @@ export async function createAppChatSession(
           agentsUsed: ["cmo", "creative"],
           activityEventsCount: 1,
           activityEvents: [creativeTimeoutEvent],
+        };
+        hermesCmoCounters = hermesCmoMetadata.counters;
+        forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
+        activityEvents = hermesCmoMetadata.activityEvents;
+        delegationSummary = hermesCmoMetadata.delegationSummary;
+        agentsUsed = hermesCmoMetadata.agentsUsed;
+        surfCalls = hermesCmoMetadata.surfCalls;
+        echoCalls = hermesCmoMetadata.echoCalls;
+        usedHermesCmoChat = true;
+      } else if (creativeValidationRejected) {
+        answer = [
+          "Creative execution returned generated asset metadata, but Product rejected the response during M1 validation.",
+          `Rejected field: ${m1RejectedField}.`,
+          "No workspace-context fallback was used for this Creative generation request.",
+        ].join("\n");
+        status = "failed";
+        assumptions = [];
+        suggestedActions = [];
+        isDevelopmentFallback = false;
+        isRuntimeFallback = false;
+        runtimeStatus = "runtime_error";
+        runtimeMode = "configured_but_unreachable";
+        attemptedRuntimeMode = "live";
+        runtimeLabel = "Hermes CMO Creative execution";
+        runtimeError = "Creative metadata was rejected by Product M1 validation.";
+        runtimeErrorReason = "invalid_response";
+        runtimeProvider = "hermes";
+        runtimeAgent = "creative";
+        fallbackDurationMs = undefined;
+        timeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
+        outerTimeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
+        outerTimeoutSource = "creative_execute";
+        routeDecision = "creative_execution";
+        creativeExecutionRequested = true;
+        creativeResponseReceived = true;
+        creativeMetadataPresent = true;
+        creativeRejectedByM1Validator = true;
+        creativeRejectedField = m1RejectedField;
+        creativeFallbackUsed = false;
+        hermesCmoStatus = "interrupted";
+        hermesCmoErrorReason = reason;
+        delegationsMode = HERMES_CMO_PROPOSALS_ONLY;
+        productRenderSource = "hermes_cmo";
+        productFallbackReason = undefined;
+        hermesCmoMetadata = {
+          ...failedHermesCmoChatV11Metadata(`req_cmo_creative_${messageId}`, reason),
+          productRenderSource: "hermes_cmo",
+          selectedHermesEndpoint: "/agents/cmo/execute",
+          hermesEndpointKind: "execute",
+          endpoint_kind: "execute",
+          runtime_kind: "ai_agent",
+          requested_endpoint: "/agents/cmo/execute",
+          fallback_used: false,
+          route_decision: "creative_execution",
+          creative_execution_requested: true,
+          creative_response_received: true,
+          creative_metadata_present: true,
+          rejected_by_m1_validator: true,
+          rejected_field: m1RejectedField,
+          agentsUsed: ["cmo", "creative"],
         };
         hermesCmoCounters = hermesCmoMetadata.counters;
         forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
@@ -4415,6 +4505,8 @@ export async function createAppChatSession(
     ...(typeof creativeMetadataPresent === "boolean" ? { creativeMetadataPresent, creative_metadata_present: creativeMetadataPresent } : {}),
     ...(creativeNormalizationError ? { creativeNormalizationError, creative_normalization_error: creativeNormalizationError, normalization_error: creativeNormalizationError } : {}),
     ...(typeof creativeFallbackUsed === "boolean" ? { creativeFallbackUsed, creative_fallback_used: creativeFallbackUsed, fallback_used: creativeFallbackUsed } : {}),
+    ...(creativeRejectedByM1Validator === true ? { creativeRejectedByM1Validator: true, rejected_by_m1_validator: true } : {}),
+    ...(creativeRejectedField ? { creativeRejectedField, rejected_field: creativeRejectedField } : {}),
     contextSourceCount,
     contextCharLength,
     indexedSupplementCharLength,

@@ -175,6 +175,10 @@ assert.match(runtimeSource, /!creativeExecution && \(toolChatCanaryEnabled/, "Cr
 assert.match(runtimeSource, /creativeExecution[\s\S]*getCmoHermesCreativeExecuteTimeoutMs\(\)/, "Creative execution must use the Creative-specific timeout");
 assert.match(runtimeSource, /creative\.generate_video/, "Creative video execution mode must be accepted");
 assert.match(runtimeSource, /creative_missing_accepted_context_blocks_execution:\s*creativeExecutionRequested \? false : null/, "Runtime Creative envelope must not require accepted context");
+assert.match(runtimeSource, /maybeNormalizeCreativeExecutionResponseCandidate/, "Creative execution responses must normalize before standard M1 response validation");
+assert.match(runtimeSource, /creativeResponseStatuses = new Set\(\["success", "completed", "partial", "blocked", "failed", "timeout"\]\)/, "Creative execution must accept Creative-specific status values");
+assert.match(runtimeSource, /creativeResponseHasExecutionMetadata/, "Creative execution validation bypass must require image metadata");
+assert.match(runtimeSource, /rejected_by_m1_validator=true/, "Creative validation rejection diagnostics must be traceable");
 assert.match(runtimeSource, /timeout_source/, "Hermes CMO trace must include the timeout source");
 assert.match(runtimeSource, /route_decision/, "Hermes CMO trace must include the route decision");
 assert.match(runtimeSource, /creative_trace/, "Hermes CMO trace must include Creative routing diagnostics");
@@ -191,6 +195,7 @@ assert.match(storeSource, /extractCreativeAssetsFromHermesResponse/, "Creative r
 assert.match(storeSource, /runtimeResult\.rawRuntimeResponse/, "App-turn Creative metadata must be extracted from the raw runtime response");
 assert.match(storeSource, /creative_response_received/, "Creative response diagnostics must be persisted");
 assert.match(storeSource, /creative_metadata_present/, "Creative metadata presence must be traced");
+assert.match(storeSource, /rejected_by_m1_validator/, "Creative M1 validation rejection diagnostics must be persisted");
 assert.match(storeSource, /fallback_used: creativeFallbackUsed/, "Successful Creative metadata must not be overwritten by workspace fallback");
 assert.match(remoteClientSource, /extractCreativeAssetsFromHermesResponse/, "Remote app-turn responses must use Creative normalization");
 assert.match(remoteClientSource, /creativeMetadataFallbackAnswer/, "Remote app-turn Creative metadata must be a successful response without answer text");

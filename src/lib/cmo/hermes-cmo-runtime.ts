@@ -14,7 +14,7 @@ import {
   isCmoHermesCmoToolExecuteEnabled,
   isCmoHermesCreativeEnabled,
 } from "./config";
-import { CMO_CREATIVE_LIFECYCLE_STATES, redactSensitiveText, redactedLocalArtifactPath } from "./creative-agent";
+import { CMO_CREATIVE_LIFECYCLE_STATES, hasCreativeExecutionMetadata, redactSensitiveText, redactedLocalArtifactPath } from "./creative-agent";
 import {
   executeHermesCmoDelegations,
   executableDelegations,
@@ -1076,6 +1076,127 @@ const responseValidationFailureReason = (
   }
 
   return "unknown_response_validation_failure";
+};
+
+const creativeResponseStatuses = new Set(["success", "completed", "partial", "blocked", "failed", "timeout"]);
+
+const creativeStatusToHermesStatus = (value: unknown): HermesCmoRuntimeResponse["status"] => {
+  switch (value) {
+    case "partial":
+      return "partial";
+    case "blocked":
+    case "failed":
+    case "timeout":
+      return "failed";
+    case "success":
+    case "completed":
+    default:
+      return "completed";
+  }
+};
+
+const creativeResponseHasExecutionMetadata = (value: unknown): boolean => {
+  if (hasCreativeExecutionMetadata(value)) {
+    return true;
+  }
+
+  const summary = creativeTraceSummary(value);
+
+  return summary.routed_to_creative === true || summary.image_metadata_present === true;
+};
+
+const normalizeCreativeExecutionResponseCandidate = (
+  response: Record<string, unknown>,
+  request: HermesCmoRuntimeRequest,
+  activityEventsCandidate: unknown[],
+): Record<string, unknown> => {
+  const status = typeof response.status === "string" ? response.status : "completed";
+  const summary = creativeTraceSummary(response);
+  const responseWithStatus = {
+    ...response,
+    status,
+    routed_to_creative: summary.routed_to_creative === true ? true : response.routed_to_creative,
+    transport_status: summary.product_artifact_status,
+  };
+
+  return {
+    ...response,
+    schema_version: "hermes.cmo.response.v1",
+    request_id: request.request_id,
+    session_id: request.session_id,
+    turn_id: request.turn_id,
+    status: creativeStatusToHermesStatus(status),
+    answer_basis: {
+      mode: "fully_grounded",
+      missing_inputs: [],
+      assumptions_used: [],
+      user_can_override: true,
+      suggested_user_inputs: [],
+    },
+    clarifying_question: {
+      required: false,
+      question: null,
+      reason: null,
+      missing_inputs: [],
+    },
+    answer: {
+      format: "markdown",
+      title: "Creative Asset Generated",
+      summary: "Creative execution returned generated asset metadata.",
+      decision: "Generated asset metadata is available in Product.",
+      body: [
+        "Creative execution completed and returned generated asset metadata.",
+        summary.product_artifact_status === "artifact_transport_missing"
+          ? "Product recorded the asset metadata. Artifact transport is required before a browser preview can be shown."
+          : "Product recorded the asset metadata.",
+      ].join("\n"),
+    },
+    structured_output: {
+      ...(isRecord(response.structured_output) ? response.structured_output : {}),
+      creative_response: responseWithStatus,
+      creative_response_received: true,
+      creative_metadata_present: true,
+      rejected_by_m1_validator: false,
+      fallback_used: false,
+      product_artifact_status: summary.product_artifact_status,
+    },
+    delegations: Array.isArray(response.delegations) ? response.delegations : [],
+    artifacts: Array.isArray(response.artifacts)
+      ? response.artifacts
+      : [{
+          schema_version: "cmo.creative_response.v1",
+          type: "creative_response",
+          ...responseWithStatus,
+        }],
+    memory_suggestions: Array.isArray(response.memory_suggestions) ? response.memory_suggestions : [],
+    activity_summary: {
+      ...(isRecord(response.activity_summary) ? response.activity_summary : {}),
+      events_count: activityEventsCandidate.length,
+      final_state: creativeStatusToHermesStatus(status),
+      creative_response_received: true,
+      creative_metadata_present: true,
+      rejected_by_m1_validator: false,
+      fallback_used: false,
+    },
+  };
+};
+
+const maybeNormalizeCreativeExecutionResponseCandidate = (
+  response: Record<string, unknown>,
+  request: HermesCmoRuntimeRequest,
+  activityEventsCandidate: unknown[],
+): Record<string, unknown> => {
+  if (!requestIsCreativeExecution(request)) {
+    return response;
+  }
+
+  const status = typeof response.status === "string" ? response.status : "completed";
+
+  if (!creativeResponseStatuses.has(status) || !creativeResponseHasExecutionMetadata(response)) {
+    return response;
+  }
+
+  return normalizeCreativeExecutionResponseCandidate(response, request, activityEventsCandidate);
 };
 
 const activityValidationFailureReason = (
@@ -2501,7 +2622,9 @@ const extractLiveResponsePayload = (
   const rawResponseCandidate = isRecord(payload.response) ? payload.response : payload;
   const sideEffects = sideEffectsFromPayload(payload, rawResponseCandidate);
   const activityEventsCandidate = Array.isArray(payload.activity_events) ? payload.activity_events : [];
-  const responseCandidate = normalizeHermesCmoResponseCandidate(rawResponseCandidate, { activityEventsCandidate });
+  const creativeMetadataPresent = requestIsCreativeExecution(request) && creativeResponseHasExecutionMetadata(rawResponseCandidate);
+  const rawValidationCandidate = maybeNormalizeCreativeExecutionResponseCandidate(rawResponseCandidate, request, activityEventsCandidate);
+  const responseCandidate = normalizeHermesCmoResponseCandidate(rawValidationCandidate, { activityEventsCandidate });
   const effectiveActivityValidation: HermesCmoActivityValidationOptions = {
     ...activityValidation,
     allowToolCapableCmoSource: isToolCapableResponseCandidate(responseCandidate),
@@ -2511,7 +2634,13 @@ const extractLiveResponsePayload = (
     .filter((event): event is HermesCmoRuntimeActivityEvent => Boolean(event));
 
   if (!validateHermesCmoRuntimeResponse(responseCandidate, request, responseValidation)) {
-    throw new Error(`Hermes CMO Agent response did not match hermes.cmo.response.v1 or violated M1 execution boundaries. Rejected field: ${responseValidationFailureReason(responseCandidate, request, responseValidation)}.`);
+    const rejectedField = responseValidationFailureReason(responseCandidate, request, responseValidation);
+
+    throw new Error(
+      creativeMetadataPresent
+        ? `Hermes CMO Agent response did not match hermes.cmo.response.v1 or violated M1 execution boundaries. Rejected field: ${rejectedField}. creative_response_received=true creative_metadata_present=true rejected_by_m1_validator=true rejected_field=${rejectedField} fallback_used=false.`
+        : `Hermes CMO Agent response did not match hermes.cmo.response.v1 or violated M1 execution boundaries. Rejected field: ${rejectedField}.`,
+    );
   }
 
   if (sideEffects === null) {
