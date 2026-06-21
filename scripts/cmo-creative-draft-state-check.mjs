@@ -50,6 +50,7 @@ requireSource(typesSource, /export interface CmoCreativeWorkingState[\s\S]*activ
 requireSource(typesSource, /export interface CmoCreativeDecision[\s\S]*action: CmoCreativeDecisionAction;/, "types");
 requireSource(typesSource, /"present_draft"/, "types must include present_draft decision action");
 requireSource(typesSource, /"show_draft"/, "types must include show_draft decision action");
+requireSource(typesSource, /"blocked"/, "types must include blocked decision action");
 requireSource(typesSource, /creativeWorkingState\?: CmoCreativeWorkingState;/, "session/message/response types");
 requireSource(typesSource, /creativeDecision\?: CmoCreativeDecision;/, "session/message/response types");
 requireSource(typesSource, /CmoRouteDecision = "app_turn" \| "creative_execution" \| "creative_ideation" \| "creative_session" \| "execute" \| "tool_execute"/, "route decision types");
@@ -62,6 +63,8 @@ requireSource(helperSource, /extractSuggestedCreativeStateUpdate/, "draft helper
 requireSource(helperSource, /extractCreativeDecision/, "draft helper");
 requireSource(helperSource, /value === "present_draft"/, "draft helper must normalize present_draft decision");
 requireSource(helperSource, /value === "show_draft"/, "draft helper must normalize show_draft decision");
+requireSource(helperSource, /value === "blocked"/, "draft helper must normalize blocked decision");
+requireSource(helperSource, /reason: stringValue\(value\.reason\)/, "draft helper must preserve blocked reason");
 
 requireSource(intentSource, /isCreativeDraftSessionIntent/, "routing intent");
 requireSource(intentSource, /"hinh"/, "routing intent must recognize Vietnamese image requests");
@@ -249,6 +252,11 @@ requireSource(mapperSource, /creative_working_state: creativeWorkingStateForHerm
 requireSource(mapperSource, /creative_ideation_intent/, "Hermes mapper must send creative ideation intent");
 requireSource(mapperSource, /creative_session_followup_intent/, "Hermes mapper must send creative session follow-up intent");
 requireSource(mapperSource, /classifyCreativeSessionFollowupIntent\(input\.message, creativeWorkingStateForHermes\)/, "Hermes mapper must classify follow-up with creative state");
+requireSource(mapperSource, /creativeSessionExecuteDraftCandidate[\s\S]*creativeSessionFollowupIntent === "execute_draft"/, "Hermes mapper must derive execute candidate from semantic classifier");
+requireSource(mapperSource, /allow_creative_execution: true/, "Hermes mapper must send Creative execution capability for execute_draft candidates");
+requireSource(mapperSource, /creative_execution_allowed: true/, "Hermes mapper must send execution boundary capability for execute_draft candidates");
+requireSource(mapperSource, /execution_intent_is_hint_only: true/, "Hermes mapper must mark execution intent as a hint only");
+forbidSource(mapperSource, /creativeSessionExecuteDraftCandidate\s*\?\s*\{\s*creative_execution_requested: true/, "Hermes mapper must not turn execute_draft hint into Product-forced execution");
 requireSource(mapperSource, /may_present_active_draft: true/, "Hermes mapper must allow CMO to present active draft");
 requireSource(mapperSource, /may_show_prompt_without_execution: true/, "Hermes mapper must allow prompt-only draft display");
 requireSource(mapperSource, /product_must_not_choose_creative_execution: true/, "Hermes mapper must keep CMO as execution decision owner");
@@ -257,6 +265,10 @@ requireSource(mapperSource, /creative_decision_owner_when_live: "hermes_cmo"/, "
 requireSource(runtimeSource, /requestHasCreativeWorkingState/, "runtime");
 requireSource(runtimeSource, /requestIsCreativeIdeation/, "runtime");
 requireSource(runtimeSource, /requestMayLeadToCreativeExecution/, "runtime");
+requireSource(runtimeSource, /requestIsCreativeSessionExecuteCandidate/, "runtime must detect CMO-native session execute candidates");
+requireSource(runtimeSource, /requestAllowsCreativeExecution/, "runtime must require Creative execution capability");
+requireSource(runtimeSource, /creativeSessionExecutionAllowed = creativeSessionExecuteCandidate && requestAllowsCreativeExecution\(request\)/, "runtime must gate session execution on Product capability");
+requireSource(runtimeSource, /"blocked"/, "runtime must accept blocked creative session decisions");
 requireSource(runtimeSource, /requestAllowsCreativeIdeationAnswerBasis/, "runtime validation");
 requireSource(runtimeSource, /routeDecision === "creative_ideation"[\s\S]*routeDecision === "creative_session"/, "runtime validation must require creative route decision");
 requireSource(runtimeSource, /requestCreativeFlagIsTrue\(request, "creative_ideation_detected"\)/, "runtime validation must require creative ideation flag");
@@ -275,6 +287,9 @@ requireSource(runtimeSource, /creative_session_response_received/, "runtime diag
 requireSource(runtimeSource, /rejected_by_m1_validator: false/, "runtime diagnostics must mark accepted ideation responses");
 requireSource(runtimeSource, /artifact_transport: creativeArtifactTransportForRequest\(request\)/, "runtime must include M13B artifact transport");
 requireSource(runtimeSource, /creative_execution_may_be_requested_by_cmo: creativeTurnMayExecute/, "runtime must allow CMO-owned draft execution");
+requireSource(runtimeSource, /allow_creative_execution: creativeAgentAllowed/, "runtime must forward snake-case Creative execution capability");
+requireSource(runtimeSource, /creative_session_execute_candidate: creativeSessionExecuteCandidate/, "runtime must trace session execute candidates");
+requireSource(runtimeSource, /creative_session_execution_allowed: creativeSessionExecutionAllowed/, "runtime must trace session execution allowance");
 requireSource(runtimeSource, /cmo_owns_creative_decision: constraints\.cmo_owns_creative_decision === true/, "runtime trace must include CMO decision ownership");
 forbidSource(runtimeSource, /const answerBasisModes = new Set[\s\S]*"creative_ideation"[\s\S]*\]\);[\s\S]*const answerFormats/s, "runtime must not globally allow creative_ideation answer basis");
 forbidSource(runtimeSource, /const activityTypes = new Set[\s\S]*"creative\.ideation\.draft_proposed"[\s\S]*\]\);[\s\S]*const creativeLifecycleActivityTypes/s, "runtime must not globally allow creative ideation activity events");

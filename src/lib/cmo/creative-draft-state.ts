@@ -153,6 +153,7 @@ function normalizeCreativeDecisionAction(value: unknown): CmoCreativeDecisionAct
     value === "refine_draft" ||
     value === "execute" ||
     value === "ask_clarification" ||
+    value === "blocked" ||
     value === "cancel" ||
     value === "none"
     ? value
@@ -175,6 +176,7 @@ export function normalizeCreativeDecision(value: unknown): CmoCreativeDecision |
     ...(stringValue(value.draft_id ?? value.draftId) ? { draft_id: stringValue(value.draft_id ?? value.draftId) } : {}),
     ...(stringValue(value.operation) ? { operation: stringValue(value.operation) } : {}),
     ...(stringValue(value.question) ? { question: stringValue(value.question) } : {}),
+    ...(stringValue(value.reason) ? { reason: stringValue(value.reason) } : {}),
   };
 }
 

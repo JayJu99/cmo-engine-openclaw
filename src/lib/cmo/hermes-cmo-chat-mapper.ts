@@ -538,6 +538,10 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const creativeSessionFollowupIntent = creativeSessionFollowupDetected
     ? classifyCreativeSessionFollowupIntent(input.message, creativeWorkingStateForHermes)
     : "none";
+  const creativeSessionExecuteDraftCandidate =
+    creativeSessionFollowupDetected &&
+    creativeSessionFollowupIntent === "execute_draft" &&
+    Boolean(creativeWorkingStateForHermes?.active_draft_id);
   const creativeExecutionMode = /\b(video|motion)\b/.test(leadingIntentText(input.message)) ? "creative.generate_video" : "creative.generate_image";
   const omittedCreativeMissingContext = creativeExecutionIntent
     ? input.missingContext.filter(isMissingAcceptedProjectContextRef)
@@ -603,6 +607,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
               intent: creativeSessionFollowupIntent,
               active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
               drafts_count: creativeWorkingStateForHermes.drafts.length,
+              ...(creativeSessionExecuteDraftCandidate ? { execute_decision_candidate: true } : {}),
+              ...(creativeSessionExecuteDraftCandidate ? { allow_creative_execution: true } : {}),
               cmo_owns_creative_decision: true,
               product_must_not_choose_creative_execution: true,
               execute_decision_owner: "hermes_cmo",
@@ -616,6 +622,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
               may_show_prompt_without_execution: true,
               may_refine_active_draft: true,
               may_execute_active_draft_only_if_cmo_decides: true,
+              ...(creativeSessionExecuteDraftCandidate ? { allow_creative_execution: true } : {}),
+              ...(creativeSessionExecuteDraftCandidate ? { creative_execution_allowed: true } : {}),
             },
           }
         : {}),
@@ -723,6 +731,12 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         session_writes_allowed: false,
         raw_capture_writes_allowed: false,
         openclaw_calls_allowed: false,
+        ...(creativeSessionExecuteDraftCandidate
+          ? {
+              creative_execution_allowed: true,
+              allow_creative_execution: true,
+            }
+          : {}),
       },
       ...(creativeExecutionIntent
         ? {
@@ -740,9 +754,11 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creative_drafts_count: creativeWorkingStateForHermes.drafts.length,
             creative_session_followup_detected: creativeSessionFollowupDetected,
             creative_session_followup_intent: creativeSessionFollowupIntent,
+            ...(creativeSessionExecuteDraftCandidate ? { creative_session_execute_candidate: true } : {}),
             creative_session_can_present_draft: true,
             creative_session_can_refine_draft: true,
             creative_session_can_execute_if_cmo_decides: true,
+            ...(creativeSessionExecuteDraftCandidate ? { allow_creative_execution: true } : {}),
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,
           }
@@ -799,8 +815,10 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creative_drafts_count: creativeWorkingStateForHermes.drafts.length,
             creative_session_followup_detected: creativeSessionFollowupDetected,
             creative_session_followup_intent: creativeSessionFollowupIntent,
+            ...(creativeSessionExecuteDraftCandidate ? { creative_session_execute_candidate: true } : {}),
             creative_session_can_present_draft: true,
             creative_session_can_refine_draft: true,
+            ...(creativeSessionExecuteDraftCandidate ? { allow_creative_execution: true } : {}),
             creative_execution_may_be_requested_by_cmo: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,

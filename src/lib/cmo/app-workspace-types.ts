@@ -643,6 +643,7 @@ export type CmoCreativeDecisionAction =
   | "refine_draft"
   | "execute"
   | "ask_clarification"
+  | "blocked"
   | "cancel"
   | "none";
 
@@ -669,6 +670,7 @@ export interface CmoCreativeDecision {
   draft_id?: string;
   operation?: string;
   question?: string;
+  reason?: string;
 }
 
 export interface HermesCmoSafetyCounters {
