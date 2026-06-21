@@ -11,6 +11,8 @@ import type {
   CMOChatMessage,
   CMOChatSession,
   CMORuntimeStatus,
+  CmoCreativeDecision,
+  CmoCreativeWorkingState,
   CmoAsyncToolRunStatus,
   CmoAuthMode,
   CmoDecisionLabel,
@@ -63,6 +65,14 @@ import { summarizeContextQuality } from "@/lib/cmo/context-quality";
 import { buildDecisionLayer } from "@/lib/cmo/decision-layer";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import { extractCreativeAssetsFromHermesResponse, hasCreativeExecutionMetadata } from "@/lib/cmo/creative-agent";
+import {
+  applySuggestedCreativeStateUpdate,
+  extractCreativeDecision,
+  extractSuggestedCreativeStateUpdate,
+  hasCreativeWorkingStateDrafts,
+  normalizeCreativeDecision,
+  normalizeCreativeWorkingState,
+} from "@/lib/cmo/creative-draft-state";
 import { routeIntentForMessage } from "@/lib/cmo/app-routing-intent";
 import { executeMixedCmoEcho, isMixedCmoEchoRequest, mixedEchoNeedsClarification, buildMixedCmoEchoRuntimeMessage, maybeHandleEchoBridge } from "@/lib/cmo/echo-bridge";
 import { buildCmoEvidenceRuntimeMessage, executeCmoSurfEvidence } from "@/lib/cmo/cmo-surf-orchestrator";
@@ -2133,6 +2143,7 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
   const platformPersistenceSummary = normalizeHermesCmoPlatformPersistenceSummary(value.platformPersistenceSummary);
   const contractWarnings = normalizeContractWarnings(value.contract_warnings);
   const stateContract = normalizeStateContractMetadata(value.state_contract);
+  const creativeDecision = normalizeCreativeDecision(value.creative_decision);
   const sideEffects = value.sideEffects === false
     ? false
     : isRecord(value.sideEffects) && Object.values(value.sideEffects).every((item) => item === false)
@@ -2180,6 +2191,12 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(value.creative_execution_requested === true ? { creative_execution_requested: true } : {}),
     ...(value.creative_response_received === true ? { creative_response_received: true } : {}),
     ...(typeof value.creative_metadata_present === "boolean" ? { creative_metadata_present: value.creative_metadata_present } : {}),
+    ...(typeof value.creative_draft_active === "boolean" ? { creative_draft_active: value.creative_draft_active } : {}),
+    ...(stringValue(value.creative_active_draft_id) ? { creative_active_draft_id: stringValue(value.creative_active_draft_id) } : {}),
+    ...(typeof value.creative_drafts_count === "number" && Number.isFinite(value.creative_drafts_count)
+      ? { creative_drafts_count: Math.max(0, Math.floor(value.creative_drafts_count)) }
+      : {}),
+    ...(creativeDecision ? { creative_decision: creativeDecision } : {}),
     ...(value.rejected_by_m1_validator === true ? { rejected_by_m1_validator: true } : {}),
     ...(stringValue(value.rejected_field) ? { rejected_field: stringValue(value.rejected_field) } : {}),
     ...(typeof value.side_effects_present === "boolean" ? { side_effects_present: value.side_effects_present } : {}),
@@ -2518,6 +2535,18 @@ function asyncRawActivityLogRequest(input: {
       },
       ...attachments,
     ],
+  };
+}
+
+function creativeStateMetadata(
+  creativeWorkingState: CmoCreativeWorkingState | undefined,
+  creativeDecision: CmoCreativeDecision | undefined,
+): Partial<HermesCmoChatMetadata> {
+  return {
+    ...(hasCreativeWorkingStateDrafts(creativeWorkingState) ? { creative_draft_active: true } : {}),
+    ...(creativeWorkingState?.active_draft_id ? { creative_active_draft_id: creativeWorkingState.active_draft_id } : {}),
+    ...(creativeWorkingState ? { creative_drafts_count: creativeWorkingState.drafts.length } : {}),
+    ...(creativeDecision ? { creative_decision: creativeDecision } : {}),
   };
 }
 
@@ -2928,6 +2957,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
               ? Boolean(message.creativeSideEffectsAllowedForCreative ?? message.side_effects_allowed_for_creative)
               : undefined,
             creativeRejectedSideEffectType: normalizeOptionalString(message.creativeRejectedSideEffectType ?? message.rejected_side_effect_type),
+            creativeWorkingState: normalizeCreativeWorkingState(message.creativeWorkingState ?? message.creative_working_state),
+            creativeDecision: normalizeCreativeDecision(message.creativeDecision ?? message.creative_decision),
             contextSourceCount: normalizeOptionalNonNegativeNumber(message.contextSourceCount),
             contextCharLength: normalizeOptionalNonNegativeNumber(message.contextCharLength),
             indexedSupplementCharLength: normalizeOptionalNonNegativeNumber(message.indexedSupplementCharLength),
@@ -2976,6 +3007,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
   const activeSourceId = normalizeOptionalString(value.activeSourceId);
   const sessionSummary = normalizeOptionalString(value.sessionSummary);
   const sessionArtifacts = sanitizeHermesCmoChatV11Records(value.sessionArtifacts, undefined, { allowTopLevelContent: true });
+  const creativeWorkingState = normalizeCreativeWorkingState(value.creativeWorkingState ?? value.creative_working_state);
+  const creativeDecision = normalizeCreativeDecision(value.creativeDecision ?? value.creative_decision);
   const suggestedVaultUpdates = mergeSuggestedVaultUpdates(undefined, sanitizeHermesCmoChatV11Records(value.suggestedVaultUpdates));
   const vaultUpdateApprovalEvents = normalizeVaultUpdateApprovalEvents(value.vaultUpdateApprovalEvents);
   const vaultUpdateDryRunResults = normalizeVaultApprovedWriteDryRunResults(value.vaultUpdateDryRunResults);
@@ -3082,6 +3115,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
       ? Boolean(value.creativeSideEffectsAllowedForCreative ?? value.side_effects_allowed_for_creative)
       : undefined,
     creativeRejectedSideEffectType: normalizeOptionalString(value.creativeRejectedSideEffectType ?? value.rejected_side_effect_type),
+    creativeWorkingState,
+    creativeDecision,
     contextSourceCount: normalizeOptionalNonNegativeNumber(value.contextSourceCount),
     contextCharLength: normalizeOptionalNonNegativeNumber(value.contextCharLength),
     indexedSupplementCharLength: normalizeOptionalNonNegativeNumber(value.indexedSupplementCharLength),
@@ -3128,6 +3163,9 @@ export async function createAppChatSession(
   const sessionResolutionStartedMs = Date.now();
   const existingSession = request.sessionId ? await readAppChatSession(request.sessionId) : null;
   const continuedSession = existingSession?.appId === request.appId ? existingSession : null;
+  let creativeWorkingState: CmoCreativeWorkingState | undefined = continuedSession?.creativeWorkingState;
+  let creativeDecision: CmoCreativeDecision | undefined = continuedSession?.creativeDecision;
+  const creativeWorkingStatePresent = hasCreativeWorkingStateDrafts(creativeWorkingState);
   const sessionResolutionDurationMs = Date.now() - sessionResolutionStartedMs;
   const messageId = `msg_${randomUUID().slice(0, 12)}`;
   const assistantId = `msg_${randomUUID().slice(0, 12)}`;
@@ -3244,6 +3282,7 @@ export async function createAppChatSession(
     appId: request.appId,
     message: request.message,
     forceFallback: request.forceFallback,
+    hasCreativeWorkingState: creativeWorkingStatePresent,
   });
   const legacyHermesCmoChatRequested = !request.forceFallback && shouldUseHermesCmoChat(request.appId);
   const preliminaryHermesCmoChatRequested = legacyHermesCmoChatRequested || preliminaryHermesCmoRoute.endpointKind === "agent_chat";
@@ -3261,6 +3300,7 @@ export async function createAppChatSession(
     message: request.message,
     forceFallback: request.forceFallback,
     hasSourceOrToolTask: sourceOrToolTask,
+    hasCreativeWorkingState: creativeWorkingStatePresent,
   });
   const hermesCmoChatV11Requested = hermesCmoRoute.endpointKind === "agent_chat";
   const hermesCmoCreativeExecutionRequested = hermesCmoRoute.reason === "creative_execution";
@@ -3438,6 +3478,8 @@ export async function createAppChatSession(
       cmoRunStartedAt: now,
       cmoRunTimeoutMs: asyncToolRunTimeoutMs,
       runtimeContext,
+      ...(creativeWorkingState ? { creativeWorkingState } : {}),
+      ...(creativeDecision ? { creativeDecision } : {}),
       ...(sourceReviewContext ? { sourceReviewContext } : {}),
       ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
       sessionLocalSources,
@@ -3470,6 +3512,8 @@ export async function createAppChatSession(
           createdAt: now,
           ...messageUserMetadata(userIdentity),
           runtimeContext,
+          ...(creativeWorkingState ? { creativeWorkingState } : {}),
+          ...(creativeDecision ? { creativeDecision } : {}),
           ...(sourceReviewContext ? { sourceReviewContext } : {}),
           ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
           sessionLocalResearchResults,
@@ -3496,6 +3540,8 @@ export async function createAppChatSession(
           cmoRunStartedAt: now,
           cmoRunTimeoutMs: asyncToolRunTimeoutMs,
           runtimeContext,
+          ...(creativeWorkingState ? { creativeWorkingState } : {}),
+          ...(creativeDecision ? { creativeDecision } : {}),
           ...(sourceReviewContext ? { sourceReviewContext } : {}),
           ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
           sessionLocalSources,
@@ -3549,6 +3595,7 @@ export async function createAppChatSession(
           createdAt: now,
           userIdentity,
           inputMaterialAttachments: hermesAttachmentRefs,
+          creativeWorkingState,
         });
         const hermesResult = await runHermesCmoRuntime(hermesRequest, { toolTimeoutMs: asyncToolRunTimeoutMs });
         const counterValidation = validateHermesCmoChatCounters(hermesResult);
@@ -3558,8 +3605,14 @@ export async function createAppChatSession(
         }
 
         const mappedHermesResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesResult));
+        const completedCreativeWorkingState = applySuggestedCreativeStateUpdate(
+          pendingSession.creativeWorkingState,
+          extractSuggestedCreativeStateUpdate(hermesResult.response),
+        );
+        const completedCreativeDecision = extractCreativeDecision(hermesResult.response) ?? pendingSession.creativeDecision;
         mappedHermesResult.hermesCmoMetadata = {
           ...mappedHermesResult.hermesCmoMetadata,
+          ...creativeStateMetadata(completedCreativeWorkingState, completedCreativeDecision),
           ...lensReadoutMetadata({
             context: lensReadoutContext as unknown as Record<string, unknown> | null,
             warning: lensReadoutContextWarning,
@@ -3644,6 +3697,8 @@ export async function createAppChatSession(
           echoCalls: mappedHermesResult.hermesCmoMetadata.echoCalls,
           forbiddenCounters: mappedHermesResult.hermesCmoMetadata.forbiddenCounters,
           delegationsMode: mappedHermesResult.delegationsMode,
+          creativeWorkingState: completedCreativeWorkingState,
+          creativeDecision: completedCreativeDecision,
           ...(completedSessionArtifacts.length ? { sessionArtifacts: completedSessionArtifacts } : {}),
           sessionLocalResearchResults: completedResearchResults,
           decisionLayer: completedDecisionLayer,
@@ -3670,6 +3725,8 @@ export async function createAppChatSession(
             echoCalls: mappedHermesResult.hermesCmoMetadata.echoCalls,
             forbiddenCounters: mappedHermesResult.hermesCmoMetadata.forbiddenCounters,
             delegationsMode: mappedHermesResult.delegationsMode,
+            creativeWorkingState: completedCreativeWorkingState,
+            creativeDecision: completedCreativeDecision,
             ...(completedSessionArtifacts.length ? { sessionArtifacts: completedSessionArtifacts } : {}),
             sessionLocalResearchResults: completedResearchResults,
             ...completionMetadata,
@@ -3838,6 +3895,11 @@ export async function createAppChatSession(
 
     if (chatResult.ok) {
       const mappedChat = mapHermesCmoChatV11ToChatResult(chatResult.request, chatResult.response);
+      creativeWorkingState = applySuggestedCreativeStateUpdate(
+        creativeWorkingState,
+        extractSuggestedCreativeStateUpdate(chatResult.response),
+      );
+      creativeDecision = extractCreativeDecision(chatResult.response) ?? creativeDecision;
 
       answer = mappedChat.answer;
       status = chatResult.response.status === "completed" ? "completed" : "failed";
@@ -3857,7 +3919,10 @@ export async function createAppChatSession(
       timeoutMs = undefined;
       hermesCmoStatus = "live";
       hermesCmoCounters = mappedChat.metadata.counters;
-      hermesCmoMetadata = mappedChat.metadata;
+      hermesCmoMetadata = {
+        ...mappedChat.metadata,
+        ...creativeStateMetadata(creativeWorkingState, creativeDecision),
+      };
       activityEvents = hermesCmoMetadata.activityEvents;
       delegationSummary = hermesCmoMetadata.delegationSummary;
       agentsUsed = hermesCmoMetadata.agentsUsed;
@@ -3912,6 +3977,7 @@ export async function createAppChatSession(
           createdAt: now,
           userIdentity,
           inputMaterialAttachments: hermesAttachmentRefs,
+          creativeWorkingState,
         });
         const hermesFallbackResult = await runHermesCmoRuntime(hermesFallbackRequest);
         sessionLocalResearchResults = mergeSessionLocalResearchResults(
@@ -3935,6 +4001,11 @@ export async function createAppChatSession(
         }
 
         const mappedHermesFallbackResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesFallbackResult));
+        creativeWorkingState = applySuggestedCreativeStateUpdate(
+          creativeWorkingState,
+          extractSuggestedCreativeStateUpdate(hermesFallbackResult.response),
+        );
+        creativeDecision = extractCreativeDecision(hermesFallbackResult.response) ?? creativeDecision;
         sessionArtifacts = mergeHermesCmoChatV11Artifacts(
           sessionArtifacts,
           creativeAssetsFromHermesPayload({
@@ -3967,6 +4038,7 @@ export async function createAppChatSession(
         hermesCmoCounters = mappedHermesFallbackResult.hermesCmoCounters;
         hermesCmoMetadata = {
           ...mappedHermesFallbackResult.hermesCmoMetadata,
+          ...creativeStateMetadata(creativeWorkingState, creativeDecision),
           endpoint_kind: fallbackTrace.endpoint_kind,
           runtime_kind: fallbackTrace.runtime_kind,
           requested_endpoint: fallbackTrace.requested_endpoint,
@@ -4046,6 +4118,7 @@ export async function createAppChatSession(
         createdAt: now,
         userIdentity,
         inputMaterialAttachments: hermesAttachmentRefs,
+        creativeWorkingState,
       });
       hermesRequestSent = true;
       const hermesResult = await runHermesCmoRuntime(hermesRequest);
@@ -4070,6 +4143,11 @@ export async function createAppChatSession(
       }
 
       const mappedHermesResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesResult));
+      creativeWorkingState = applySuggestedCreativeStateUpdate(
+        creativeWorkingState,
+        extractSuggestedCreativeStateUpdate(hermesResult.response),
+      );
+      creativeDecision = extractCreativeDecision(hermesResult.response) ?? creativeDecision;
       const creativeArtifacts = creativeAssetsFromHermesPayload({
         response: hermesResult.response,
         tenantId: requestTenantId,
@@ -4113,6 +4191,10 @@ export async function createAppChatSession(
       hermesCmoStatus = mappedHermesResult.hermesCmoStatus;
       hermesCmoCounters = mappedHermesResult.hermesCmoCounters;
       hermesCmoMetadata = mappedHermesResult.hermesCmoMetadata;
+      hermesCmoMetadata = {
+        ...hermesCmoMetadata,
+        ...creativeStateMetadata(creativeWorkingState, creativeDecision),
+      };
       strategyMode = hermesCmoMetadata.strategyMode;
       mainBottleneck = hermesCmoMetadata.mainBottleneck;
       decisionLabel = hermesCmoMetadata.decisionLabel;
@@ -4699,6 +4781,8 @@ export async function createAppChatSession(
     ...(delegationsMode ? { delegationsMode } : {}),
     ...(vaultAgentContextPackMetadata ? { vaultAgentContextPack: vaultAgentContextPackMetadata } : {}),
     runtimeContext,
+    ...(creativeWorkingState ? { creativeWorkingState } : {}),
+    ...(creativeDecision ? { creativeDecision } : {}),
     ...(sourceReviewContext ? { sourceReviewContext } : {}),
     ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
     sessionLocalSources,
@@ -4729,6 +4813,8 @@ export async function createAppChatSession(
         createdAt: now,
         ...messageUserMetadata(userIdentity),
         runtimeContext,
+        ...(creativeWorkingState ? { creativeWorkingState } : {}),
+        ...(creativeDecision ? { creativeDecision } : {}),
         ...(sourceReviewContext ? { sourceReviewContext } : {}),
         ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
         sessionLocalResearchResults,
@@ -4772,6 +4858,8 @@ export async function createAppChatSession(
         ...(delegationsMode ? { delegationsMode } : {}),
         ...(vaultAgentContextPackMetadata ? { vaultAgentContextPack: vaultAgentContextPackMetadata } : {}),
         runtimeContext,
+        ...(creativeWorkingState ? { creativeWorkingState } : {}),
+        ...(creativeDecision ? { creativeDecision } : {}),
         ...(sourceReviewContext ? { sourceReviewContext } : {}),
         ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
         sessionLocalSources,
@@ -4929,6 +5017,8 @@ export async function createAppChatSession(
     ...(platformPersistenceSummary ? { platformPersistenceSummary } : {}),
     ...(delegationsMode ? { delegationsMode } : {}),
     runtimeContext,
+    ...(creativeWorkingState ? { creativeWorkingState } : {}),
+    ...(creativeDecision ? { creativeDecision } : {}),
     ...(sourceReviewContext ? { sourceReviewContext } : {}),
     ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
     sessionLocalSources,

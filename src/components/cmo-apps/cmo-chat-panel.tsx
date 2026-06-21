@@ -1683,6 +1683,25 @@ export function CMOChatPanel({
     setReviewStatusMessage("Creative asset approved for review. Vault save and publish remain manual.");
   }
 
+  function renderCreativeDraftBadge(message: CMOChatMessage) {
+    const state = message.creativeWorkingState;
+    const activeDraft = state?.active_draft_id
+      ? state.drafts.find((draft) => draft.draft_id === state.active_draft_id)
+      : undefined;
+
+    if (!state?.drafts.length) {
+      return null;
+    }
+
+    return (
+      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-4 text-xs">
+        <Badge variant="orange">Creative draft active</Badge>
+        {activeDraft?.title ? <span className="font-bold text-slate-700">{activeDraft.title}</span> : null}
+        {state.active_draft_id ? <Badge variant="slate">{state.active_draft_id}</Badge> : <Badge variant="slate">{state.drafts.length} drafts</Badge>}
+      </div>
+    );
+  }
+
   function renderCreativeAssets(message: CMOChatMessage) {
     const assets = creativeAssetRecords(message);
 
@@ -1945,6 +1964,7 @@ export function CMOChatPanel({
                     />
                   ) : null}
                   {message.role === "assistant" ? renderCreativeAssets(message) : null}
+                  {message.role === "assistant" ? renderCreativeDraftBadge(message) : null}
                   {message.role === "assistant" ? renderAssistantEvidence(message) : null}
                   {renderAssistantRunControls(message)}
                   {renderSuggestedVaultUpdates(message)}

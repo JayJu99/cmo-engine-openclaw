@@ -34,6 +34,15 @@ export function isExplicitCreativeExecutionIntent(message: string): boolean {
     && /\b(image|visual|graphic|creative|banner|ad creative|thumbnail|illustration|logo|icon|png|webp|jpeg|jpg|video|motion|asset)\b/.test(lead);
 }
 
+export function isCreativeDraftSessionIntent(message: string): boolean {
+  const lead = leadingIntentText(message);
+  if (/^(?:\/|@)creative\b/.test(lead)) return true;
+  if (isReviewAuditIntent(message)) return false;
+
+  return /\b(generate|create|make|design|draw|render|produce|tao|ve|thiet ke|muon tao|can tao)\b/.test(lead)
+    && /\b(image|visual|graphic|creative|banner|thumbnail|illustration|logo|icon|video|motion|asset|hinh|anh|hinh anh)\b/.test(lead);
+}
+
 export function routeIntentForMessage(message: string): CmoRouteIntent {
   const lead = leadingIntentText(message);
   if (isReviewAuditIntent(message)) return "cmo_review";

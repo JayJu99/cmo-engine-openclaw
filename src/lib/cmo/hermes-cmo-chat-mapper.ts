@@ -3,6 +3,7 @@ import type {
   CMOChatMessage,
   CMOContextNote,
   ContextItem,
+  CmoCreativeWorkingState,
   CmoSessionLocalResearchResult,
   CmoSessionLocalSource,
   HermesCmoAgentUsed,
@@ -47,6 +48,7 @@ export interface HermesCmoChatRequestInput extends CmoRuntimeTurnInput {
   userMessageId: string;
   createdAt: string;
   inputMaterialAttachments?: HermesCmoAttachmentRef[];
+  creativeWorkingState?: CmoCreativeWorkingState;
   userIdentity?: {
     userId?: string;
     userEmail?: string;
@@ -522,6 +524,11 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const inputMaterial = {
     attachments: input.inputMaterialAttachments ?? [],
   };
+  const creativeWorkingStateForHermes = input.creativeWorkingState &&
+    (input.creativeWorkingState.drafts.length > 0 || input.creativeWorkingState.active_draft_id)
+    ? input.creativeWorkingState
+    : undefined;
+  const creativeWorkingStatePresent = Boolean(creativeWorkingStateForHermes);
   const creativeExecutionIntent = isExplicitCreativeExecutionIntent(input.message);
   const creativeExecutionMode = /\b(video|motion)\b/.test(leadingIntentText(input.message)) ? "creative.generate_video" : "creative.generate_image";
   const omittedCreativeMissingContext = creativeExecutionIntent
@@ -558,9 +565,20 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       mode: "cmo.default",
       user_message: input.message,
       explicit_command: creativeExecutionIntent ? creativeExecutionMode : null,
+      ...(creativeWorkingStatePresent ? { creative_session: true } : {}),
     },
     input: {
       input_material: inputMaterial,
+      ...(creativeWorkingStateForHermes ? { creative_working_state: creativeWorkingStateForHermes } : {}),
+      ...(creativeWorkingStateForHermes
+        ? {
+            creative_draft_context: {
+              active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
+              drafts_count: creativeWorkingStateForHermes.drafts.length,
+              cmo_owns_creative_decision: true,
+            },
+          }
+        : {}),
       ...(creativeExecutionIntent
         ? {
             creative_execution_intent: {
@@ -582,6 +600,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
           }
         : {}),
     },
+    ...(creativeWorkingStateForHermes ? { creative_working_state: creativeWorkingStateForHermes } : {}),
     input_material: inputMaterial,
     messages: recentConversationMessages(input.history),
     context_pack: {
@@ -594,6 +613,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(sourceReviewContext ? { source_review_context: sourceReviewContext } : {}),
       ...(sourceAnswerContext ? { source_answer_context: sourceAnswerContext } : {}),
       ...(lensReadoutContext ? { lens_readout_context: lensReadoutContext } : {}),
+      ...(creativeWorkingStateForHermes ? { creative_working_state: creativeWorkingStateForHermes } : {}),
       ...(sessionLocalResearchResults.length > 0
         ? {
             research_context: {
@@ -669,6 +689,15 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             missing_accepted_context_blocks_creative_execution: false,
           }
         : {}),
+      ...(creativeWorkingStateForHermes
+        ? {
+            creative_working_state_present: true,
+            creative_active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
+            creative_drafts_count: creativeWorkingStateForHermes.drafts.length,
+            cmo_owns_creative_decision: true,
+            product_must_not_choose_creative_execution: true,
+          }
+        : {}),
     },
     ui: {
       activity_stream_required: true,
@@ -705,6 +734,16 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
               "Generic user-specified visual style is allowed without accepted project context.",
               "When context is missing, execute a safe generic creative instead of returning a context-blocking answer.",
             ],
+          }
+        : {}),
+      ...(creativeWorkingStateForHermes
+        ? {
+            creative_working_state_present: true,
+            creative_active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
+            creative_drafts_count: creativeWorkingStateForHermes.drafts.length,
+            creative_execution_may_be_requested_by_cmo: true,
+            cmo_owns_creative_decision: true,
+            product_must_not_choose_creative_execution: true,
           }
         : {}),
       context_grounding_rules: contextGroundingRules,
@@ -755,6 +794,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       cmo_engine_may_cache_source_artifacts: true,
       cmo_engine_must_not_synthesize_source_review_when_live: true,
       cmo_engine_must_not_synthesize_source_answer_when_live: true,
+      cmo_engine_must_not_synthesize_creative_answer_when_live: true,
+      creative_decision_owner_when_live: "hermes_cmo",
       fallback_requires_disabled_unavailable_or_invalid_hermes: true,
     },
     source_acquisition: {

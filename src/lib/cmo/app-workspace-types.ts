@@ -635,6 +635,39 @@ export type HermesCmoExecutableMode =
   | "creative.generate_video"
   | "creative.image_generation"
   | "creative_execution";
+export type CmoCreativeDraftKind = "image" | "video";
+export type CmoCreativeDecisionAction =
+  | "propose_draft"
+  | "refine_draft"
+  | "execute"
+  | "ask_clarification"
+  | "cancel"
+  | "none";
+
+export interface CmoCreativeDraft {
+  draft_id: string;
+  kind: CmoCreativeDraftKind;
+  title?: string;
+  brief?: string;
+  prompt?: string;
+  negative_prompt?: string;
+  format?: string;
+  status?: string;
+  created_turn_id?: string;
+  updated_turn_id?: string;
+}
+
+export interface CmoCreativeWorkingState {
+  active_draft_id?: string | null;
+  drafts: CmoCreativeDraft[];
+}
+
+export interface CmoCreativeDecision {
+  action: CmoCreativeDecisionAction;
+  draft_id?: string;
+  operation?: string;
+  question?: string;
+}
 
 export interface HermesCmoSafetyCounters {
   surfCalls: number;
@@ -871,6 +904,10 @@ export interface HermesCmoChatMetadata {
   creative_execution_requested?: boolean;
   creative_response_received?: boolean;
   creative_metadata_present?: boolean;
+  creative_draft_active?: boolean;
+  creative_active_draft_id?: string;
+  creative_drafts_count?: number;
+  creative_decision?: CmoCreativeDecision;
   rejected_by_m1_validator?: boolean;
   rejected_field?: string;
   side_effects_present?: boolean;
@@ -1264,6 +1301,8 @@ export interface CMOChatMessage {
   creativeSideEffectsPresent?: boolean;
   creativeSideEffectsAllowedForCreative?: boolean;
   creativeRejectedSideEffectType?: string;
+  creativeWorkingState?: CmoCreativeWorkingState;
+  creativeDecision?: CmoCreativeDecision;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;
@@ -1438,6 +1477,8 @@ export interface CMOChatSession {
   creativeSideEffectsPresent?: boolean;
   creativeSideEffectsAllowedForCreative?: boolean;
   creativeRejectedSideEffectType?: string;
+  creativeWorkingState?: CmoCreativeWorkingState;
+  creativeDecision?: CmoCreativeDecision;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;
@@ -1565,6 +1606,8 @@ export interface CMOAppChatResponse {
   creativeSideEffectsPresent?: boolean;
   creativeSideEffectsAllowedForCreative?: boolean;
   creativeRejectedSideEffectType?: string;
+  creativeWorkingState?: CmoCreativeWorkingState;
+  creativeDecision?: CmoCreativeDecision;
   contextSourceCount?: number;
   contextCharLength?: number;
   indexedSupplementCharLength?: number;

@@ -173,6 +173,7 @@ export interface HermesCmoRuntimeRequest {
     accepted_mime_types: string[];
     max_bytes: number;
   };
+  creative_working_state?: unknown;
   [key: string]: unknown;
 }
 
@@ -1104,9 +1105,11 @@ const sideEffectsFromPayload = (
   creativeMetadataPresent: boolean,
 ): HermesCmoSideEffectsValidation => {
   const rawSideEffects = payload.side_effects ?? response.side_effects;
+  const explicitCreativeExecutionWithMetadata = requestIsCreativeExecution(request) && creativeMetadataPresent;
+  const creativeExecutionScopeWithMetadata = requestMayLeadToCreativeExecution(request) && creativeMetadataPresent;
 
   if (
-    requestIsCreativeExecution(request) &&
+    requestMayLeadToCreativeExecution(request) &&
     hasTruthyExecutedCreativeSideEffect(rawSideEffects) &&
     !hasCompleteExecutedCreativeMetadata(payload) &&
     !hasCompleteExecutedCreativeMetadata(response)
@@ -1120,11 +1123,11 @@ const sideEffectsFromPayload = (
     return {
       sideEffects: generic,
       present: rawSideEffects !== undefined,
-      ...(requestIsCreativeExecution(request) && creativeMetadataPresent && rawSideEffects !== undefined ? { allowedForCreative: true } : {}),
+      ...(creativeExecutionScopeWithMetadata && rawSideEffects !== undefined ? { allowedForCreative: true } : {}),
     };
   }
 
-  if (requestIsCreativeExecution(request) && creativeMetadataPresent) {
+  if (explicitCreativeExecutionWithMetadata || creativeExecutionScopeWithMetadata) {
     return safeCreativeSideEffects(rawSideEffects);
   }
 
@@ -1405,7 +1408,7 @@ const maybeNormalizeCreativeExecutionResponseCandidate = (
   request: HermesCmoRuntimeRequest,
   activityEventsCandidate: unknown[],
 ): Record<string, unknown> => {
-  if (!requestIsCreativeExecution(request)) {
+  if (!requestMayLeadToCreativeExecution(request)) {
     return response;
   }
 
@@ -1424,7 +1427,7 @@ const sourceModeIsCreativeExecution = (
   request: HermesCmoRuntimeRequest,
 ): boolean =>
   sourceMode === "creative_execution" &&
-  requestIsCreativeExecution(request) &&
+    requestMayLeadToCreativeExecution(request) &&
   creativeLifecycleActivityTypes.has(eventType as HermesActivityType);
 
 const activityValidationFailureReason = (
@@ -1694,6 +1697,25 @@ const requestIsCreativeExecution = (request: HermesCmoRuntimeRequest): boolean =
   );
 };
 
+const requestHasCreativeWorkingState = (request: HermesCmoRuntimeRequest): boolean => {
+  const state = isRecord(request.creative_working_state)
+    ? request.creative_working_state
+    : isRecord(request.input) && isRecord(request.input.creative_working_state)
+      ? request.input.creative_working_state
+      : isRecord(request.context_pack.creative_working_state)
+        ? request.context_pack.creative_working_state
+        : null;
+
+  if (!state) {
+    return false;
+  }
+
+  return Array.isArray(state.drafts) && state.drafts.length > 0 || typeof state.active_draft_id === "string";
+};
+
+const requestMayLeadToCreativeExecution = (request: HermesCmoRuntimeRequest): boolean =>
+  requestIsCreativeExecution(request) || requestHasCreativeWorkingState(request);
+
 const creativeExecutionModeFromRequest = (request: HermesCmoRuntimeRequest): "creative.generate_image" | "creative.generate_video" => {
   const input = isRecord(request.input) ? request.input : {};
   const creativeIntent = isRecord(input.creative_execution_intent) ? input.creative_execution_intent : {};
@@ -1731,7 +1753,7 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: Herm
   const toolChatCanaryEnabled = isCmoHermesCmoToolChatEnabled() &&
     appIsConfiguredCanary(request.workspace.app_id, getCmoHermesCmoToolChatCanaryApps());
   const externalResearch = requestIsExternalResearch(request);
-  const creativeExecution = requestIsCreativeExecution(request);
+  const creativeExecution = requestMayLeadToCreativeExecution(request);
   const useToolEndpoint = !creativeExecution && (toolChatCanaryEnabled || (toolEndpointEnabled && (externalResearch || requestIsSourceBackedOrSeeking(request))));
   const configuredToolEndpoint = getCmoHermesCmoToolEndpoint();
   const endpointPath = useToolEndpoint ? endpointPathFromConfig(configuredToolEndpoint) : HERMES_CMO_AGENT_PATH;
@@ -2408,9 +2430,11 @@ const buildHermesCmoLiveRequest = (
   const echoExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed;
   const creativeViaCmoAllowed = isCmoHermesCreativeEnabled() && getCmoHermesCreativeCallMode() === "via_cmo";
   const creativeExecutionRequested = requestIsCreativeExecution(request) && creativeViaCmoAllowed;
+  const creativeWorkingStatePresent = requestHasCreativeWorkingState(request);
+  const creativeTurnMayExecute = (creativeExecutionRequested || creativeWorkingStatePresent) && creativeViaCmoAllowed;
   const creativeExecutionMode = creativeExecutionModeFromRequest(request);
-  const creativeAgentAllowed = creativeViaCmoAllowed && creativeExecutionRequested;
-  const specialistExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed || creativeExecutionRequested;
+  const creativeAgentAllowed = creativeViaCmoAllowed && creativeTurnMayExecute;
+  const specialistExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed || creativeTurnMayExecute;
   const allowedAgentsForRequest: HermesAllowedAgent[] = [
     ...(boundedDelegationAllowed ? ["echo", "surf"] as const : echoRetryAllowed ? ["echo"] as const : []),
     ...(creativeAgentAllowed ? ["creative"] as const : []),
@@ -2460,6 +2484,8 @@ const buildHermesCmoLiveRequest = (
       allowEchoExecution: echoExecutionAllowed,
       allowCreativeExecution: creativeAgentAllowed,
       creative_execution_requested: creativeExecutionRequested,
+      creative_working_state_present: creativeWorkingStatePresent,
+      creative_execution_may_be_requested_by_cmo: creativeTurnMayExecute,
       creative_execution_mode: creativeExecutionRequested ? creativeExecutionMode : null,
       creative_direct_prompt_sufficient: creativeExecutionRequested,
       creative_accepted_context_required: creativeExecutionRequested ? false : null,
@@ -2497,6 +2523,9 @@ const buildHermesCmoLiveRequest = (
         creative_policy: {
           enabled: creativeAgentAllowed,
           execution_requested: creativeExecutionRequested,
+          working_state_present: creativeWorkingStatePresent,
+          execution_may_be_requested_by_cmo: creativeTurnMayExecute,
+          cmo_owns_decision: true,
           execution_mode: creativeExecutionRequested ? creativeExecutionMode : null,
           direct_user_prompt_is_sufficient_execution_input: creativeExecutionRequested,
           accepted_project_context_required: creativeExecutionRequested ? false : null,
@@ -2534,6 +2563,8 @@ const buildHermesCmoLiveRequest = (
         creative_profile: creativeAgentAllowed ? getCmoHermesCreativeProfile() : null,
         creative_call_mode: creativeAgentAllowed ? "via_cmo" : "disabled",
         creative_execution_requested: creativeExecutionRequested,
+        creative_working_state_present: creativeWorkingStatePresent,
+        creative_execution_may_be_requested_by_cmo: creativeTurnMayExecute,
         vault_writes_allowed: false,
         direct_supabase_mutations_allowed: false,
         openclaw_calls_allowed: false,
@@ -2545,6 +2576,8 @@ const buildHermesCmoLiveRequest = (
         echo_execution_allowed: echoExecutionAllowed,
         creative_execution_allowed: creativeAgentAllowed,
         creative_execution_requested: creativeExecutionRequested,
+        creative_working_state_present: creativeWorkingStatePresent,
+        creative_execution_may_be_requested_by_cmo: creativeTurnMayExecute,
         creative_artifact_ingest_required_for_preview: creativeAgentAllowed,
         vault_agent_execution_allowed: false,
         vault_writes_allowed: false,
@@ -2893,12 +2926,12 @@ const extractLiveResponsePayload = (
 
   const rawResponseCandidate = isRecord(payload.response) ? payload.response : payload;
   const activityEventsCandidate = Array.isArray(payload.activity_events) ? payload.activity_events : [];
-  const creativeMetadataPresent = requestIsCreativeExecution(request) && creativeResponseHasExecutionMetadata(rawResponseCandidate);
+  const creativeMetadataPresent = requestMayLeadToCreativeExecution(request) && creativeResponseHasExecutionMetadata(rawResponseCandidate);
   const sideEffectsValidation = sideEffectsFromPayload(payload, rawResponseCandidate, request, creativeMetadataPresent);
   const sideEffects = sideEffectsValidation.sideEffects;
   const rawValidationCandidate = maybeNormalizeCreativeExecutionResponseCandidate(rawResponseCandidate, request, activityEventsCandidate);
   let responseCandidate = normalizeHermesCmoResponseCandidate(rawValidationCandidate, { activityEventsCandidate });
-  if (requestIsCreativeExecution(request) && (sideEffectsValidation.present || sideEffectsValidation.rejectedType)) {
+  if (requestMayLeadToCreativeExecution(request) && (sideEffectsValidation.present || sideEffectsValidation.rejectedType)) {
     responseCandidate = {
       ...responseCandidate,
       structured_output: {
