@@ -21,7 +21,7 @@ import type {
   HermesCmoRuntimeResult,
 } from "@/lib/cmo/hermes-cmo-runtime";
 import type { HermesCmoAttachmentRef } from "@/lib/cmo/attachments";
-import { isExplicitCreativeExecutionIntent, leadingIntentText } from "./app-routing-intent";
+import { classifyCreativeSessionFollowupIntent, isExplicitCreativeExecutionIntent, leadingIntentText } from "./app-routing-intent";
 import type { CmoRuntimeTurnInput } from "@/lib/cmo/runtime";
 import {
   resolveSessionWorkingMemory,
@@ -535,6 +535,9 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const creativeIdeationDetected = input.creativeIdeationDetected === true;
   const creativeSessionFollowupDetected = input.creativeSessionFollowupDetected === true;
   const creativeNativeSession = creativeWorkingStatePresent || creativeIdeationDetected || creativeSessionFollowupDetected;
+  const creativeSessionFollowupIntent = creativeSessionFollowupDetected
+    ? classifyCreativeSessionFollowupIntent(input.message)
+    : "none";
   const creativeExecutionMode = /\b(video|motion)\b/.test(leadingIntentText(input.message)) ? "creative.generate_video" : "creative.generate_image";
   const omittedCreativeMissingContext = creativeExecutionIntent
     ? input.missingContext.filter(isMissingAcceptedProjectContextRef)
@@ -573,6 +576,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(creativeNativeSession ? { creative_session: true } : {}),
       ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
       ...(creativeSessionFollowupDetected ? { creative_session_followup_detected: true } : {}),
+      ...(creativeSessionFollowupDetected ? { creative_session_followup_intent: creativeSessionFollowupIntent } : {}),
     },
     input: {
       input_material: inputMaterial,
@@ -594,6 +598,16 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(creativeWorkingStateForHermes ? { creative_working_state: creativeWorkingStateForHermes } : {}),
       ...(creativeWorkingStateForHermes
         ? {
+            creative_session_followup_intent: {
+              detected: creativeSessionFollowupDetected,
+              intent: creativeSessionFollowupIntent,
+              active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
+              drafts_count: creativeWorkingStateForHermes.drafts.length,
+              cmo_owns_creative_decision: true,
+              product_must_not_choose_creative_execution: true,
+              execute_decision_owner: "hermes_cmo",
+              execution_intent_is_hint_only: true,
+            },
             creative_draft_context: {
               active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
               drafts_count: creativeWorkingStateForHermes.drafts.length,
@@ -725,6 +739,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creative_active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
             creative_drafts_count: creativeWorkingStateForHermes.drafts.length,
             creative_session_followup_detected: creativeSessionFollowupDetected,
+            creative_session_followup_intent: creativeSessionFollowupIntent,
             creative_session_can_present_draft: true,
             creative_session_can_refine_draft: true,
             creative_session_can_execute_if_cmo_decides: true,
@@ -783,6 +798,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creative_active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
             creative_drafts_count: creativeWorkingStateForHermes.drafts.length,
             creative_session_followup_detected: creativeSessionFollowupDetected,
+            creative_session_followup_intent: creativeSessionFollowupIntent,
             creative_session_can_present_draft: true,
             creative_session_can_refine_draft: true,
             creative_execution_may_be_requested_by_cmo: true,
@@ -1254,7 +1270,19 @@ function metadataFromHermes(
     structuredOutput.suggested_creative_state_update !== undefined ||
     result.response.drafts_upsert !== undefined ||
     structuredOutput.drafts_upsert !== undefined;
-  const creativeDecisionPresent = result.response.creative_decision !== undefined || structuredOutput.creative_decision !== undefined;
+  const creativeDecisionRecord = isRecord(result.response.creative_decision)
+    ? result.response.creative_decision
+    : isRecord(structuredOutput.creative_decision)
+      ? structuredOutput.creative_decision
+      : undefined;
+  const creativeDecisionPresent = Boolean(creativeDecisionRecord);
+  const creativeDecisionAction = typeof creativeDecisionRecord?.action === "string" ? creativeDecisionRecord.action : undefined;
+  const creativeDecisionDraftId = typeof creativeDecisionRecord?.draft_id === "string"
+    ? creativeDecisionRecord.draft_id
+    : typeof creativeDecisionRecord?.draftId === "string"
+      ? creativeDecisionRecord.draftId
+      : undefined;
+  const creativeDecisionOperation = typeof creativeDecisionRecord?.operation === "string" ? creativeDecisionRecord.operation : undefined;
   const activityEventTypes = activityEvents.map((event) => event.type);
   const rawActivityEventTypes = Array.isArray(structuredOutput.raw_activity_event_types)
     ? structuredOutput.raw_activity_event_types.filter((item): item is string => typeof item === "string")
@@ -1275,6 +1303,19 @@ function metadataFromHermes(
     typeof structuredOutput.rejected_activity_event_type === "string" && structuredOutput.rejected_activity_event_type.trim()
       ? structuredOutput.rejected_activity_event_type.trim()
       : undefined;
+  const requestInput = isRecord(result.request.input) ? result.request.input : {};
+  const requestCreativeSessionIntent = isRecord(requestInput.creative_session_followup_intent) ? requestInput.creative_session_followup_intent : {};
+  const requestCreativeState = isRecord(result.request.creative_working_state)
+    ? result.request.creative_working_state
+    : isRecord(requestInput.creative_working_state)
+      ? requestInput.creative_working_state
+      : {};
+  const requestActiveDraftId =
+    typeof requestCreativeState.active_draft_id === "string" && requestCreativeState.active_draft_id.trim()
+      ? requestCreativeState.active_draft_id.trim()
+      : undefined;
+  const creativeSubprocessExecuted = hasCreativeExecutionMetadata(result.response);
+  const artifactTransportAttempted = isRecord(result.request.artifact_transport);
   const attachmentTraceSummary = isRecord(result.response.attachment_trace_summary) ? result.response.attachment_trace_summary : undefined;
   const cmoCallSurfUsed = toolsUsed.includes("cmo_call_surf") || executedCounts.surfCalls > 0;
   const cmoCallEchoUsed = toolsUsed.includes("cmo_call_echo") || executedCounts.echoCalls > 0;
@@ -1301,6 +1342,20 @@ function metadataFromHermes(
           ...(creativeSessionResponseReceived ? { creative_session_response_received: true } : {}),
           creative_state_update_present: creativeStateUpdatePresent,
           creative_decision_present: creativeDecisionPresent,
+          ...(creativeDecisionAction ? { creative_session_decision_action: creativeDecisionAction } : {}),
+          ...(creativeDecisionDraftId || requestActiveDraftId
+            ? { creative_session_active_draft_id: creativeDecisionDraftId ?? requestActiveDraftId }
+            : {}),
+          ...(result.request.constraints.creative_session_followup_detected === true || requestCreativeSessionIntent.detected === true
+            ? { creative_session_followup_detected: true }
+            : {}),
+          ...(result.request.constraints.creative_working_state_present === true ? { creative_working_state_present: true } : {}),
+          ...(creativeDecisionAction === "execute"
+            ? { execute_decision_source: "hermes_cmo_creative_decision" }
+            : {}),
+          creative_subprocess_executed: creativeSubprocessExecuted,
+          artifact_transport_attempted: artifactTransportAttempted,
+          ...(creativeDecisionOperation ? { creative_decision_operation: creativeDecisionOperation } : {}),
           activity_event_types: activityEventTypes,
           ...(rawActivityEventTypes.length > 0 ? { raw_activity_event_types: rawActivityEventTypes } : {}),
           ...(typeof activityEventsAllowedForCreativeIdeation === "boolean"

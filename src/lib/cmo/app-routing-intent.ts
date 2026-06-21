@@ -1,7 +1,7 @@
 export type CmoRouteIntent = "cmo_review" | "echo_execution" | "creative_execution" | "creative_ideation" | "creative_session" | "surf_x" | "surf_trend" | "surf_research" | "cmo_default";
 
 function normalize(value: string): string {
-  return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d");
 }
 
 export function leadingIntentText(message: string): string {
@@ -58,7 +58,7 @@ export function isCreativeSessionFollowupIntent(message: string): boolean {
     /\b(hinh|anh|hinh anh|mau|ban nhap|ban thao|y tuong|phong cach|ti le|ty le)\b/.test(lead) ||
     /\b(1:1|16:9|9:16|4:5|square|portrait|landscape)\b/.test(lead);
   const presentOrRequest =
-    /\b(show|view|present|send|give|write|list|preview|xem|cho|minh xem|viet|dua|gui|draft truoc|prompt truoc)\b/.test(lead);
+    /\b(show|view|present|propose|suggest|send|give|write|list|preview|xem|cho|minh xem|viet|dua|gui|de xuat|goi y|draft truoc|prompt truoc)\b/.test(lead);
   const refineOrChange =
     /\b(refine|revise|edit|change|adjust|modify|update|make it|switch|chinh|sua|doi|thay|lam version|lam ban|version)\b/.test(lead);
   const holdExecution =
@@ -68,6 +68,26 @@ export function isCreativeSessionFollowupIntent(message: string): boolean {
     /\b(prompt|draft|do|di|now|image|visual|hinh|anh|hinh anh|tu prompt|from prompt)\b/.test(lead);
 
   return draftOrPromptReference && (presentOrRequest || refineOrChange || holdExecution) || holdExecution || executeFromDraft;
+}
+
+export type CreativeSessionFollowupIntent = "present_draft" | "refine_draft" | "execute" | "hold_execution" | "none";
+
+export function classifyCreativeSessionFollowupIntent(message: string): CreativeSessionFollowupIntent {
+  const lead = leadingIntentText(message);
+  if (!isCreativeSessionFollowupIntent(message)) return "none";
+
+  const holdExecution =
+    /\b(prompt only|dont generate|do not generate|dont create|do not create|not yet|wait|chi viet prompt|chi prompt|dung tao|dung generate|dung voi|chua tao|tao voi)\b/.test(lead);
+  const refine =
+    /\b(refine|revise|edit|change|adjust|modify|update|make it|switch|chinh|sua|doi|thay|lam version|lam ban|version)\b/.test(lead);
+  const execute =
+    /\b(ok|okay|yes|confirm|approve|generate|render|create|produce|tao|lam|chay|chot|dung draft)\b/.test(lead) &&
+    /\b(prompt|draft|do|di|luon|now|image|visual|hinh|anh|hinh anh|tu prompt|from prompt|theo prompt)\b/.test(lead);
+
+  if (holdExecution) return "hold_execution";
+  if (refine) return "refine_draft";
+  if (execute) return "execute";
+  return "present_draft";
 }
 
 export function routeIntentForMessage(message: string): CmoRouteIntent {

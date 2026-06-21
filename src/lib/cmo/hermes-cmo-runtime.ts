@@ -2323,6 +2323,8 @@ const creativeTraceSummary = (payload: unknown): Record<string, unknown> => {
 
 const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: HermesCmoAgentConfig): Record<string, unknown> => {
   const constraints: Record<string, unknown> = request.constraints;
+  const input = isRecord(request.input) ? request.input : {};
+  const creativeSessionFollowupIntent = nestedRecord(input, "creative_session_followup_intent");
   const executionBoundary = nestedRecord(constraints, "execution_boundary");
   const h5LiveAdapter = nestedRecord(constraints, "h5_live_adapter");
   const creativePolicy = nestedRecord(nestedRecord(constraints, "m1_clean_cmo_skill_kernel"), "creative_policy");
@@ -2350,6 +2352,13 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
     creative_execution_requested: constraints.creative_execution_requested === true,
     creative_ideation_detected: constraints.creative_ideation_detected === true,
     creative_working_state_present: constraints.creative_working_state_present === true,
+    creative_session_followup_detected: constraints.creative_session_followup_detected === true,
+    creative_session_followup_intent: constraints.creative_session_followup_intent ?? creativeSessionFollowupIntent.intent,
+    creative_session_active_draft_id: constraints.creative_active_draft_id ?? creativeSessionFollowupIntent.active_draft_id,
+    creative_session_drafts_count: constraints.creative_drafts_count ?? creativeSessionFollowupIntent.drafts_count,
+    may_present_active_draft: constraints.creative_session_can_present_draft === true,
+    may_refine_active_draft: constraints.creative_session_can_refine_draft === true,
+    may_execute_active_draft_only_if_cmo_decides: constraints.creative_session_can_execute_if_cmo_decides === true,
     creative_execution_may_be_requested_by_cmo: constraints.creative_execution_may_be_requested_by_cmo === true,
     cmo_owns_creative_decision: constraints.cmo_owns_creative_decision === true,
     creative_call_mode: constraints.creative_call_mode ?? h5LiveAdapter.creative_call_mode ?? creativePolicy.call_mode,

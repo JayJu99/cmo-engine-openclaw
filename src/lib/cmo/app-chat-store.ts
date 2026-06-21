@@ -2206,6 +2206,14 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(value.creative_session_response_received === true ? { creative_session_response_received: true } : {}),
     ...(typeof value.creative_state_update_present === "boolean" ? { creative_state_update_present: value.creative_state_update_present } : {}),
     ...(typeof value.creative_decision_present === "boolean" ? { creative_decision_present: value.creative_decision_present } : {}),
+    ...(stringValue(value.creative_session_decision_action) ? { creative_session_decision_action: stringValue(value.creative_session_decision_action) } : {}),
+    ...(stringValue(value.creative_session_active_draft_id) ? { creative_session_active_draft_id: stringValue(value.creative_session_active_draft_id) } : {}),
+    ...(typeof value.creative_session_followup_detected === "boolean" ? { creative_session_followup_detected: value.creative_session_followup_detected } : {}),
+    ...(typeof value.creative_working_state_present === "boolean" ? { creative_working_state_present: value.creative_working_state_present } : {}),
+    ...(stringValue(value.execute_decision_source) ? { execute_decision_source: stringValue(value.execute_decision_source) } : {}),
+    ...(typeof value.creative_subprocess_executed === "boolean" ? { creative_subprocess_executed: value.creative_subprocess_executed } : {}),
+    ...(typeof value.artifact_transport_attempted === "boolean" ? { artifact_transport_attempted: value.artifact_transport_attempted } : {}),
+    ...(stringValue(value.creative_decision_operation) ? { creative_decision_operation: stringValue(value.creative_decision_operation) } : {}),
     ...(Array.isArray(value.activity_event_types) ? { activity_event_types: value.activity_event_types.map((item) => stringValue(item)).filter((item): item is string => Boolean(item)) } : {}),
     ...(Array.isArray(value.raw_activity_event_types) ? { raw_activity_event_types: value.raw_activity_event_types.map((item) => stringValue(item)).filter((item): item is string => Boolean(item)) } : {}),
     ...(typeof value.activity_events_allowed_for_creative_ideation === "boolean"
@@ -2577,8 +2585,12 @@ function creativeStateMetadata(
   return {
     ...(hasCreativeWorkingStateDrafts(creativeWorkingState) ? { creative_draft_active: true } : {}),
     ...(creativeWorkingState?.active_draft_id ? { creative_active_draft_id: creativeWorkingState.active_draft_id } : {}),
+    ...(creativeWorkingState?.active_draft_id ? { creative_session_active_draft_id: creativeWorkingState.active_draft_id } : {}),
     ...(creativeWorkingState ? { creative_drafts_count: creativeWorkingState.drafts.length } : {}),
     ...(creativeDecision ? { creative_decision: creativeDecision } : {}),
+    ...(creativeDecision ? { creative_session_decision_action: creativeDecision.action } : {}),
+    ...(creativeDecision?.operation ? { creative_decision_operation: creativeDecision.operation } : {}),
+    ...(creativeDecision?.action === "execute" ? { execute_decision_source: "hermes_cmo_creative_decision" } : {}),
     creative_state_persisted: creativeStatePersisted,
   };
 }

@@ -910,6 +910,14 @@ export interface HermesCmoChatMetadata {
   creative_session_response_received?: boolean;
   creative_state_update_present?: boolean;
   creative_decision_present?: boolean;
+  creative_session_decision_action?: string;
+  creative_session_active_draft_id?: string;
+  creative_session_followup_detected?: boolean;
+  creative_working_state_present?: boolean;
+  execute_decision_source?: string;
+  creative_subprocess_executed?: boolean;
+  artifact_transport_attempted?: boolean;
+  creative_decision_operation?: string;
   activity_event_types?: string[];
   raw_activity_event_types?: string[];
   activity_events_allowed_for_creative_ideation?: boolean;

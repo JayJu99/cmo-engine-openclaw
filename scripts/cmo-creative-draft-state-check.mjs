@@ -82,6 +82,7 @@ assert.ok(
 );
 
 const intent = loadTsModule("src/lib/cmo/app-routing-intent.ts");
+const draftState = loadTsModule("src/lib/cmo/creative-draft-state.ts");
 for (const message of [
   "Mình muốn tạo hình ảnh trứng chủ đề world cup",
   "Brainstorm cho mình concept ảnh trứng World Cup",
@@ -97,15 +98,22 @@ assert.equal(intent.routeIntentForMessage("Đọc link này và tóm tắt giúp
 
 for (const message of [
   "Ban draft truoc cho minh nhe",
+  "Bạn đề xuất draft đi",
   "Cho minh xem draft",
+  "Cho mình xem prompt",
   "Viet prompt truoc",
   "Cho minh prompt",
   "Dung tao voi",
+  "Đừng tạo với",
   "Chi prompt thoi dung tao",
+  "Chỉ viết prompt thôi, đừng tạo",
   "Chinh prompt do lai",
+  "Chỉnh prompt đó lại",
   "Doi style sang cinematic",
+  "Đổi style sang cinematic",
   "Lam version 1:1",
   "Ok tao di",
+  "Ok bạn tạo hình theo prompt gợi ý đi",
   "Generate di",
   "Tao anh tu prompt do",
 ]) {
@@ -115,6 +123,101 @@ for (const message of [
 assert.equal(intent.routeIntentForMessage("Traffic tuan nay the nao?"), "cmo_default", "analytics requests must not be classified as creative session follow-up");
 assert.equal(intent.routeIntentForMessage("Dune volume hom qua bao nhieu?"), "cmo_default", "Dune metric requests must not be classified as creative session follow-up");
 assert.equal(intent.routeIntentForMessage("Task nao dang pending?"), "cmo_default", "task status requests must not be classified as creative session follow-up");
+
+const turn1Message = "Minh muon tao hinh anh trung chu de world cup";
+assert.equal(intent.routeIntentForMessage(turn1Message), "creative_ideation", "turn 1 must route as Creative ideation");
+const turn1HermesResponse = {
+  answer_basis: { mode: "creative_ideation" },
+  creative_decision: {
+    action: "propose_draft",
+    draft_id: "creative_draft_001",
+  },
+  suggested_creative_state_update: {
+    active_draft_id: "creative_draft_001",
+    drafts_upsert: [
+      {
+        draft_id: "creative_draft_001",
+        kind: "image",
+        title: "World Cup egg visual",
+        brief: "A playful egg image concept for a World Cup campaign.",
+        prompt: "A heroic egg character on a football pitch, World Cup energy, stadium lights, cinematic ad poster",
+        negative_prompt: "blurry, low quality",
+        format: "16:9",
+        status: "draft",
+        created_turn_id: "turn_1",
+        updated_turn_id: "turn_1",
+      },
+    ],
+  },
+};
+let threeTurnCreativeState = draftState.applySuggestedCreativeStateUpdate(
+  undefined,
+  draftState.extractSuggestedCreativeStateUpdate(turn1HermesResponse),
+);
+let threeTurnDecision = draftState.extractCreativeDecision(turn1HermesResponse);
+assert.equal(threeTurnDecision.action, "propose_draft", "turn 1 must persist CMO propose_draft decision");
+assert.equal(threeTurnCreativeState.active_draft_id, "creative_draft_001", "turn 1 must persist active draft id");
+assert.equal(threeTurnCreativeState.drafts.length, 1, "turn 1 must persist draft without duplication");
+
+const turn2Message = "Ban de xuat draft di";
+assert.equal(intent.isCreativeSessionFollowupIntent(turn2Message), true, "turn 2 must be detected as active Creative session follow-up");
+assert.equal(intent.classifyCreativeSessionFollowupIntent(turn2Message), "present_draft", "turn 2 should present draft rather than execute");
+assert.equal(intent.isCreativeSessionFollowupIntent("Bạn đề xuất draft đi"), true, "accented turn 2 must be detected as active Creative session follow-up");
+assert.equal(intent.classifyCreativeSessionFollowupIntent("Bạn đề xuất draft đi"), "present_draft", "accented turn 2 should present draft rather than execute");
+const turn2HermesResponse = {
+  answer_basis: { mode: "creative_session" },
+  answer: {
+    body: `Draft: ${threeTurnCreativeState.drafts[0].title}\nPrompt: ${threeTurnCreativeState.drafts[0].prompt}`,
+  },
+  creative_decision: {
+    action: "present_draft",
+    draft_id: "creative_draft_001",
+  },
+};
+threeTurnDecision = draftState.extractCreativeDecision(turn2HermesResponse);
+assert.equal(threeTurnDecision.action, "present_draft", "turn 2 must persist present_draft decision");
+assert.match(turn2HermesResponse.answer.body, /World Cup egg visual/, "turn 2 answer should contain active draft details");
+assert.match(turn2HermesResponse.answer.body, /heroic egg character/, "turn 2 answer should contain prompt details");
+
+const turn3Message = "Ok ban tao hinh theo prompt goi y di";
+assert.equal(intent.isCreativeSessionFollowupIntent(turn3Message), true, "turn 3 must be detected as active Creative session follow-up");
+assert.equal(intent.classifyCreativeSessionFollowupIntent(turn3Message), "execute", "turn 3 should be passed to CMO as execute-intent hint");
+assert.equal(intent.isCreativeSessionFollowupIntent("Ok bạn tạo hình theo prompt gợi ý đi"), true, "accented turn 3 must be detected as active Creative session follow-up");
+assert.equal(intent.classifyCreativeSessionFollowupIntent("Ok bạn tạo hình theo prompt gợi ý đi"), "execute", "accented turn 3 should be passed to CMO as execute-intent hint");
+const turn3HermesResponse = {
+  answer_basis: { mode: "creative_session" },
+  creative_decision: {
+    action: "execute",
+    draft_id: "creative_draft_001",
+    operation: "creative.generate_image",
+  },
+  creative_assets: [
+    {
+      asset_id: "asset_001",
+      kind: "image",
+      mime_type: "image/png",
+      render_url: "https://product.example/assets/asset_001.png",
+    },
+  ],
+};
+threeTurnDecision = draftState.extractCreativeDecision(turn3HermesResponse);
+assert.equal(threeTurnDecision.action, "execute", "turn 3 execute decision must come from Hermes CMO response");
+assert.equal(threeTurnDecision.operation, "creative.generate_image", "turn 3 must preserve Creative generation operation");
+assert.equal(threeTurnCreativeState.active_draft_id, "creative_draft_001", "turn 3 must keep sending active creative state");
+
+for (const nonExecuteMessage of [
+  "Ban draft truoc cho minh nhe",
+  "Cho minh xem prompt",
+  "Chi viet prompt thoi, dung tao",
+  "Chinh prompt do lai",
+  "Doi style sang cinematic",
+]) {
+  assert.notEqual(
+    intent.classifyCreativeSessionFollowupIntent(nonExecuteMessage),
+    "execute",
+    `${nonExecuteMessage} must not be classified as an execute hint`,
+  );
+}
 
 requireSource(mapperSource, /creativeWorkingState\?: CmoCreativeWorkingState;/, "Hermes mapper input");
 requireSource(mapperSource, /creativeIdeationDetected\?: boolean;/, "Hermes mapper ideation input");
