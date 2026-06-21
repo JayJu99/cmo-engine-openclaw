@@ -21,7 +21,7 @@ import type {
   HermesCmoRuntimeResult,
 } from "@/lib/cmo/hermes-cmo-runtime";
 import type { HermesCmoAttachmentRef } from "@/lib/cmo/attachments";
-import { classifyCreativeSessionFollowupIntent, isExplicitCreativeExecutionIntent, leadingIntentText } from "./app-routing-intent";
+import { isExplicitCreativeExecutionIntent, leadingIntentText } from "./app-routing-intent";
 import type { CmoRuntimeTurnInput } from "@/lib/cmo/runtime";
 import {
   resolveSessionWorkingMemory,
@@ -221,6 +221,24 @@ function recentConversationMessages(history: CMOChatMessage[]): HermesCmoReplayM
       message_id: message.id,
       created_at: message.createdAt,
     }));
+}
+
+function creativeWorkingStateForHermesCamelCase(state: CmoCreativeWorkingState): Record<string, unknown> {
+  return {
+    activeDraftId: state.active_draft_id ?? null,
+    drafts: state.drafts.map((draft) => ({
+      draftId: draft.draft_id,
+      kind: draft.kind,
+      ...(draft.title ? { title: draft.title } : {}),
+      ...(draft.brief ? { brief: draft.brief } : {}),
+      ...(draft.prompt ? { prompt: draft.prompt } : {}),
+      ...(draft.negative_prompt ? { negativePrompt: draft.negative_prompt } : {}),
+      ...(draft.format ? { format: draft.format } : {}),
+      ...(draft.status ? { status: draft.status } : {}),
+      ...(draft.created_turn_id ? { createdTurnId: draft.created_turn_id } : {}),
+      ...(draft.updated_turn_id ? { updatedTurnId: draft.updated_turn_id } : {}),
+    })),
+  };
 }
 
 function vaultAgentContextPackArtifact(input: HermesCmoChatRequestInput): Record<string, unknown> | null {
@@ -531,17 +549,26 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     ? input.creativeWorkingState
     : undefined;
   const creativeWorkingStatePresent = Boolean(creativeWorkingStateForHermes);
-  const creativeExecutionIntent = isExplicitCreativeExecutionIntent(input.message);
   const creativeIdeationDetected = input.creativeIdeationDetected === true;
   const creativeSessionFollowupDetected = input.creativeSessionFollowupDetected === true;
   const creativeNativeSession = creativeWorkingStatePresent || creativeIdeationDetected || creativeSessionFollowupDetected;
-  const creativeSessionFollowupIntent = creativeSessionFollowupDetected
-    ? classifyCreativeSessionFollowupIntent(input.message, creativeWorkingStateForHermes)
-    : "none";
-  const creativeSessionExecuteDraftCandidate =
-    creativeSessionFollowupDetected &&
-    creativeSessionFollowupIntent === "execute_draft" &&
-    Boolean(creativeWorkingStateForHermes?.active_draft_id);
+  const creativeExecutionIntent = isExplicitCreativeExecutionIntent(input.message) && !creativeNativeSession;
+  const creativeWorkingStateCamelCase = creativeWorkingStateForHermes
+    ? creativeWorkingStateForHermesCamelCase(creativeWorkingStateForHermes)
+    : undefined;
+  const creativeCapabilities = creativeNativeSession
+    ? {
+        creative: {
+          canProposeDraft: true,
+          canUpdateDraftState: true,
+          canExecuteImageGeneration: true,
+          requiresUserConfirmationBeforeExecute: true,
+        },
+      }
+    : undefined;
+  const creativeAllowedAgents: Array<"echo" | "surf" | "vault_agent" | "creative"> = creativeNativeSession
+    ? ["echo", "surf", "vault_agent", "creative"]
+    : ["echo", "surf"];
   const creativeExecutionMode = /\b(video|motion)\b/.test(leadingIntentText(input.message)) ? "creative.generate_video" : "creative.generate_image";
   const omittedCreativeMissingContext = creativeExecutionIntent
     ? input.missingContext.filter(isMissingAcceptedProjectContextRef)
@@ -580,7 +607,6 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(creativeNativeSession ? { creative_session: true } : {}),
       ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
       ...(creativeSessionFollowupDetected ? { creative_session_followup_detected: true } : {}),
-      ...(creativeSessionFollowupDetected ? { creative_session_followup_intent: creativeSessionFollowupIntent } : {}),
     },
     input: {
       input_material: inputMaterial,
@@ -591,42 +617,18 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
               agent: "creative",
               cmo_owns_creative_decision: true,
               product_must_not_choose_creative_execution: true,
-              may_propose_draft: true,
-              may_present_draft: true,
-              may_show_draft: true,
-              may_refine_draft: true,
-              may_execute_only_if_cmo_decides: true,
             },
+          }
+        : {}),
+      ...(creativeNativeSession
+        ? {
+            creativeSession: true,
+            cmoOwnsCreativeDecision: true,
+            creativeDecisionOwnerWhenLive: "hermes_cmo",
           }
         : {}),
       ...(creativeWorkingStateForHermes ? { creative_working_state: creativeWorkingStateForHermes } : {}),
-      ...(creativeWorkingStateForHermes
-        ? {
-            creative_session_followup_intent: {
-              detected: creativeSessionFollowupDetected,
-              intent: creativeSessionFollowupIntent,
-              active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
-              drafts_count: creativeWorkingStateForHermes.drafts.length,
-              ...(creativeSessionExecuteDraftCandidate ? { execute_decision_candidate: true } : {}),
-              ...(creativeSessionExecuteDraftCandidate ? { allow_creative_execution: true } : {}),
-              cmo_owns_creative_decision: true,
-              product_must_not_choose_creative_execution: true,
-              execute_decision_owner: "hermes_cmo",
-              execution_intent_is_hint_only: true,
-            },
-            creative_draft_context: {
-              active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
-              drafts_count: creativeWorkingStateForHermes.drafts.length,
-              cmo_owns_creative_decision: true,
-              may_present_active_draft: true,
-              may_show_prompt_without_execution: true,
-              may_refine_active_draft: true,
-              may_execute_active_draft_only_if_cmo_decides: true,
-              ...(creativeSessionExecuteDraftCandidate ? { allow_creative_execution: true } : {}),
-              ...(creativeSessionExecuteDraftCandidate ? { creative_execution_allowed: true } : {}),
-            },
-          }
-        : {}),
+      ...(creativeWorkingStateCamelCase ? { creativeWorkingState: creativeWorkingStateCamelCase } : {}),
       ...(creativeExecutionIntent
         ? {
             creative_execution_intent: {
@@ -649,6 +651,18 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         : {}),
     },
     ...(creativeWorkingStateForHermes ? { creative_working_state: creativeWorkingStateForHermes } : {}),
+    ...(creativeWorkingStateCamelCase ? { creativeWorkingState: creativeWorkingStateCamelCase } : {}),
+    ...(creativeNativeSession
+      ? {
+          creativeSession: true,
+          creative_session: true,
+          cmoOwnsCreativeDecision: true,
+          cmo_owns_creative_decision: true,
+          creativeDecisionOwnerWhenLive: "hermes_cmo",
+          creative_decision_owner_when_live: "hermes_cmo",
+        }
+      : {}),
+    ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
     ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
     ...(creativeSessionFollowupDetected ? { creative_session_followup_detected: true } : {}),
     input_material: inputMaterial,
@@ -664,6 +678,15 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(sourceAnswerContext ? { source_answer_context: sourceAnswerContext } : {}),
       ...(lensReadoutContext ? { lens_readout_context: lensReadoutContext } : {}),
       ...(creativeWorkingStateForHermes ? { creative_working_state: creativeWorkingStateForHermes } : {}),
+      ...(creativeWorkingStateCamelCase ? { creativeWorkingState: creativeWorkingStateCamelCase } : {}),
+      ...(creativeNativeSession
+        ? {
+            creativeSession: true,
+            cmoOwnsCreativeDecision: true,
+            creativeDecisionOwnerWhenLive: "hermes_cmo",
+            ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
+          }
+        : {}),
       ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
       ...(creativeSessionFollowupDetected ? { creative_session_followup_detected: true } : {}),
       ...(sessionLocalResearchResults.length > 0
@@ -706,9 +729,10 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       vault_agent_requires_save_intent: true,
       kanban_enabled: false,
       demo_mode: true,
-      allowed_agents: ["echo", "surf"],
+      allowed_agents: creativeAllowedAgents,
       allowed_surf_modes: ["surf.default", "surf.x", "surf.trend", "surf.pulse"],
       delegations_mode: HERMES_CMO_PROPOSALS_ONLY,
+      ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
       allowSubAgentExecution: false,
       allowSurfExecution: false,
       allowEchoExecution: false,
@@ -731,12 +755,6 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         session_writes_allowed: false,
         raw_capture_writes_allowed: false,
         openclaw_calls_allowed: false,
-        ...(creativeSessionExecuteDraftCandidate
-          ? {
-              creative_execution_allowed: true,
-              allow_creative_execution: true,
-            }
-          : {}),
       },
       ...(creativeExecutionIntent
         ? {
@@ -753,12 +771,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creative_active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
             creative_drafts_count: creativeWorkingStateForHermes.drafts.length,
             creative_session_followup_detected: creativeSessionFollowupDetected,
-            creative_session_followup_intent: creativeSessionFollowupIntent,
-            ...(creativeSessionExecuteDraftCandidate ? { creative_session_execute_candidate: true } : {}),
-            creative_session_can_present_draft: true,
-            creative_session_can_refine_draft: true,
-            creative_session_can_execute_if_cmo_decides: true,
-            ...(creativeSessionExecuteDraftCandidate ? { allow_creative_execution: true } : {}),
+            creative_side_effects_allowed: true,
+            requires_user_confirmation_before_creative_execute: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,
           }
@@ -766,6 +780,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(creativeIdeationDetected
         ? {
             creative_ideation_detected: true,
+            creative_side_effects_allowed: true,
+            requires_user_confirmation_before_creative_execute: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,
           }
@@ -779,7 +795,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     tool_policy: {
       schema_version: "cmo.hermes.tool_policy.v1",
       role: "product_shell_context_provider",
-      allowed_agents: ["echo", "surf"],
+      allowed_agents: creativeAllowedAgents,
       allowed_surf_modes: ["surf.default", "surf.x", "surf.trend", "surf.pulse"],
       delegations_mode: HERMES_CMO_PROPOSALS_ONLY,
       read_web_allowed: true,
@@ -794,6 +810,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       todo_allowed: true,
       memory_read_allowed: true,
       delegation_allowed: true,
+      ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
       ...(creativeExecutionIntent
         ? {
             creative_execution_requested: true,
@@ -814,12 +831,9 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creative_active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
             creative_drafts_count: creativeWorkingStateForHermes.drafts.length,
             creative_session_followup_detected: creativeSessionFollowupDetected,
-            creative_session_followup_intent: creativeSessionFollowupIntent,
-            ...(creativeSessionExecuteDraftCandidate ? { creative_session_execute_candidate: true } : {}),
-            creative_session_can_present_draft: true,
-            creative_session_can_refine_draft: true,
-            ...(creativeSessionExecuteDraftCandidate ? { allow_creative_execution: true } : {}),
             creative_execution_may_be_requested_by_cmo: true,
+            creative_side_effects_allowed: true,
+            requires_user_confirmation_before_creative_execute: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,
           }
@@ -828,6 +842,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         ? {
             creative_ideation_detected: true,
             creative_execution_may_be_requested_by_cmo: true,
+            creative_side_effects_allowed: true,
+            requires_user_confirmation_before_creative_execute: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,
           }
@@ -1358,7 +1374,6 @@ function metadataFromHermes(
       ? structuredOutput.rejected_activity_event_type.trim()
       : undefined;
   const requestInput = isRecord(result.request.input) ? result.request.input : {};
-  const requestCreativeSessionIntent = isRecord(requestInput.creative_session_followup_intent) ? requestInput.creative_session_followup_intent : {};
   const requestCreativeState = isRecord(result.request.creative_working_state)
     ? result.request.creative_working_state
     : isRecord(requestInput.creative_working_state)
@@ -1400,7 +1415,7 @@ function metadataFromHermes(
           ...(creativeDecisionDraftId || requestActiveDraftId
             ? { creative_session_active_draft_id: creativeDecisionDraftId ?? requestActiveDraftId }
             : {}),
-          ...(result.request.constraints.creative_session_followup_detected === true || requestCreativeSessionIntent.detected === true
+          ...(result.request.constraints.creative_session_followup_detected === true
             ? { creative_session_followup_detected: true }
             : {}),
           ...(result.request.constraints.creative_working_state_present === true ? { creative_working_state_present: true } : {}),

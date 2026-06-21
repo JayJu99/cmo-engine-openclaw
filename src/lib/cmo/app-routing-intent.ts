@@ -1,25 +1,8 @@
 export type CmoRouteIntent = "cmo_review" | "echo_execution" | "creative_execution" | "creative_ideation" | "creative_session" | "surf_x" | "surf_trend" | "surf_research" | "cmo_default";
 
-export type CreativeSessionFollowupIntent =
-  | "present_draft"
-  | "refine_draft"
-  | "execute_draft"
-  | "ask_clarification"
-  | "cancel_or_hold"
-  | "none";
-
 export interface CreativeWorkingStateIntentContext {
   active_draft_id?: string | null;
   drafts?: unknown[];
-}
-
-export interface CreativeSessionIntentClassification {
-  intent: CreativeSessionFollowupIntent;
-  detected: boolean;
-  activeDraftId?: string;
-  draftsCount: number;
-  hasActiveDraft: boolean;
-  requiresCmoDecision: boolean;
 }
 
 function normalize(value: string): string {
@@ -38,27 +21,13 @@ function hasAny(tokens: Set<string>, vocabulary: readonly string[]): boolean {
   return vocabulary.some((term) => tokens.has(term));
 }
 
-function countAny(tokens: Set<string>, vocabulary: readonly string[]): number {
-  return vocabulary.reduce((count, term) => count + (tokens.has(term) ? 1 : 0), 0);
-}
-
-function creativeStateSummary(state: CreativeWorkingStateIntentContext | undefined): {
-  activeDraftId?: string;
-  draftsCount: number;
-  hasActiveDraft: boolean;
-  hasAnyDraft: boolean;
-} {
+function creativeStateHasDraft(state: CreativeWorkingStateIntentContext | undefined): boolean {
   const activeDraftId = typeof state?.active_draft_id === "string" && state.active_draft_id.trim()
     ? state.active_draft_id.trim()
     : undefined;
   const draftsCount = Array.isArray(state?.drafts) ? state.drafts.length : 0;
 
-  return {
-    activeDraftId,
-    draftsCount,
-    hasActiveDraft: Boolean(activeDraftId),
-    hasAnyDraft: Boolean(activeDraftId || draftsCount > 0),
-  };
+  return Boolean(activeDraftId || draftsCount > 0);
 }
 
 export function leadingIntentText(message: string): string {
@@ -152,32 +121,47 @@ export function isCreativeDraftSessionIntent(message: string): boolean {
   return creativeAction && creativeObject;
 }
 
-export function classifyCreativeSessionFollowup(
+export function isCreativeSessionTransportContinuation(
   message: string,
   creativeWorkingState?: CreativeWorkingStateIntentContext,
-): CreativeSessionIntentClassification {
-  const state = creativeStateSummary(creativeWorkingState);
-  const none = (intent: CreativeSessionFollowupIntent = "none"): CreativeSessionIntentClassification => ({
-    intent,
-    detected: intent !== "none",
-    activeDraftId: state.activeDraftId,
-    draftsCount: state.draftsCount,
-    hasActiveDraft: state.hasActiveDraft,
-    requiresCmoDecision: intent !== "none",
-  });
-
-  if (!state.hasAnyDraft || isReviewAuditIntent(message)) {
-    return none();
+): boolean {
+  if (!creativeStateHasDraft(creativeWorkingState) || isReviewAuditIntent(message)) {
+    return false;
   }
 
   const lead = leadingIntentText(message);
   const tokens = tokensFor(lead);
 
   if (/^(?:\/|@)creative\b/.test(lead)) {
-    return state.hasActiveDraft ? none("present_draft") : none("ask_clarification");
+    return true;
   }
 
-  const draftReferenceScore = countAny(tokens, [
+  const toolOrAnalyticsTerms = [
+    "traffic",
+    "conversion",
+    "chart",
+    "metric",
+    "metrics",
+    "analytics",
+    "dune",
+    "sql",
+    "query",
+    "volume",
+    "revenue",
+    "retention",
+    "cohort",
+    "funnel",
+    "task",
+    "pending",
+    "vault",
+    "source",
+    "link",
+    "read",
+    "doc",
+    "tom",
+    "tat",
+  ];
+  const creativeSessionTerms = [
     "draft",
     "prompt",
     "brief",
@@ -207,8 +191,6 @@ export function classifyCreativeSessionFollowup(
     "16:9",
     "9:16",
     "4:5",
-  ]);
-  const presentScore = countAny(tokens, [
     "show",
     "view",
     "present",
@@ -230,8 +212,6 @@ export function classifyCreativeSessionFollowup(
     "xuat",
     "goi",
     "y",
-  ]);
-  const refineScore = countAny(tokens, [
     "refine",
     "revise",
     "edit",
@@ -240,14 +220,10 @@ export function classifyCreativeSessionFollowup(
     "modify",
     "update",
     "switch",
-    "version",
-    "variant",
     "chinh",
     "sua",
     "doi",
     "thay",
-  ]);
-  const generationScore = countAny(tokens, [
     "generate",
     "generating",
     "generated",
@@ -264,8 +240,6 @@ export function classifyCreativeSessionFollowup(
     "tao",
     "lam",
     "chay",
-  ]);
-  const confirmationScore = countAny(tokens, [
     "ok",
     "okay",
     "yes",
@@ -277,12 +251,8 @@ export function classifyCreativeSessionFollowup(
     "chot",
     "duyet",
     "dong",
-    "y",
     "dung",
-  ]);
-  const holdScore = countAny(tokens, [
     "dont",
-    "do",
     "not",
     "no",
     "stop",
@@ -294,77 +264,20 @@ export function classifyCreativeSessionFollowup(
     "yet",
     "chi",
     "thoi",
-    "dung",
     "chua",
     "khoan",
-  ]);
-  const assetTargetScore = countAny(tokens, [
     "image",
     "asset",
-    "visual",
-    "creative",
     "banner",
     "poster",
     "video",
-    "hinh",
-    "anh",
-  ]);
-  const immediateScore = countAny(tokens, ["now", "go", "proceed", "luon", "di"]);
-  const promptOnlyIntent = hasAny(tokens, ["only", "chi"]) && hasAny(tokens, ["prompt"]);
-  const negativeGenerationIntent = (hasAny(tokens, ["dont", "not", "no", "stop", "dung", "chua", "khoan"]) && (generationScore > 0 || assetTargetScore > 0)) ||
-    promptOnlyIntent ||
-    (holdScore >= 2 && generationScore > 0);
+  ];
 
-  if (negativeGenerationIntent) {
-    return none("cancel_or_hold");
+  if (hasAny(tokens, toolOrAnalyticsTerms) && !hasAny(tokens, creativeSessionTerms)) {
+    return false;
   }
 
-  const creativeTargeted = draftReferenceScore > 0 || assetTargetScore > 0 || generationScore > 0;
-
-  if (!creativeTargeted) {
-    return none();
-  }
-
-  if (!state.hasActiveDraft && state.draftsCount > 1) {
-    return none("ask_clarification");
-  }
-
-  if (refineScore > 0 && (draftReferenceScore > 0 || assetTargetScore > 0)) {
-    return state.hasActiveDraft ? none("refine_draft") : none("ask_clarification");
-  }
-
-  const executeScore = generationScore + confirmationScore + immediateScore;
-  const userIsConfirmingGeneration = state.hasActiveDraft &&
-    generationScore > 0 &&
-    (confirmationScore > 0 || immediateScore > 0 || assetTargetScore > 0);
-
-  if (userIsConfirmingGeneration && executeScore >= 1) {
-    return none("execute_draft");
-  }
-
-  if (presentScore > 0 && draftReferenceScore > 0) {
-    return state.hasActiveDraft ? none("present_draft") : none("ask_clarification");
-  }
-
-  if (draftReferenceScore > 0 && generationScore === 0) {
-    return state.hasActiveDraft ? none("present_draft") : none("ask_clarification");
-  }
-
-  return none();
-}
-
-export function isCreativeSessionFollowupIntent(
-  message: string,
-  creativeWorkingState?: CreativeWorkingStateIntentContext,
-): boolean {
-  return classifyCreativeSessionFollowup(message, creativeWorkingState).detected;
-}
-
-export function classifyCreativeSessionFollowupIntent(
-  message: string,
-  creativeWorkingState?: CreativeWorkingStateIntentContext,
-): CreativeSessionFollowupIntent {
-  return classifyCreativeSessionFollowup(message, creativeWorkingState).intent;
+  return hasAny(tokens, creativeSessionTerms);
 }
 
 export function routeIntentForMessage(
@@ -372,11 +285,11 @@ export function routeIntentForMessage(
   options: { creativeWorkingState?: CreativeWorkingStateIntentContext } = {},
 ): CmoRouteIntent {
   const lead = leadingIntentText(message);
-  const creativeSessionClassification = classifyCreativeSessionFollowup(message, options.creativeWorkingState);
+  const creativeSessionContinuation = isCreativeSessionTransportContinuation(message, options.creativeWorkingState);
 
   if (isReviewAuditIntent(message)) return "cmo_review";
+  if (creativeSessionContinuation) return "creative_session";
   if (isExplicitCreativeExecutionIntent(message)) return "creative_execution";
-  if (creativeSessionClassification.detected) return "creative_session";
   if (isCreativeDraftSessionIntent(message)) return "creative_ideation";
   if (/^\/x\b|^\/surf\s+x\b/.test(lead)) return "surf_x";
   if (/^\/trend\b/.test(lead)) return "surf_trend";

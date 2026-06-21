@@ -1,4 +1,4 @@
-import { classifyCreativeSessionFollowup, isCreativeDraftSessionIntent, routeIntentForMessage, type CmoRouteIntent } from "@/lib/cmo/app-routing-intent";
+import { isCreativeDraftSessionIntent, isCreativeSessionTransportContinuation, routeIntentForMessage, type CmoRouteIntent } from "@/lib/cmo/app-routing-intent";
 import type { CmoCreativeWorkingState } from "@/lib/cmo/app-workspace-types";
 import {
   getCmoHermesCmoCanaryApps,
@@ -68,7 +68,7 @@ export function shouldUseHermesCmoToolChat(appId: string): boolean {
 export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): HermesCmoChatRouteResolution {
   const creativeWorkingState = input.creativeWorkingState ?? (input.hasCreativeWorkingState === true ? { drafts: [] } : undefined);
   const routeIntent = routeIntentForMessage(input.message, { creativeWorkingState });
-  const creativeSessionClassification = classifyCreativeSessionFollowup(input.message, creativeWorkingState);
+  const creativeSessionContinuation = isCreativeSessionTransportContinuation(input.message, creativeWorkingState);
   const v11Enabled = isCmoHermesCmoChatV11Enabled();
   const v11Canary = appIsCanary(input.appId, getCmoHermesCmoChatV11CanaryApps());
   const toolChatEnabled = isCmoHermesCmoToolChatEnabled();
@@ -105,9 +105,7 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
     };
   }
 
-  const creativeSessionFollowup = creativeSessionClassification.detected;
-
-  if (creativeSessionFollowup || routeIntent === "creative_ideation" || isCreativeDraftSessionIntent(input.message)) {
+  if (creativeSessionContinuation || routeIntent === "creative_ideation" || isCreativeDraftSessionIntent(input.message)) {
     return {
       endpoint: HERMES_CMO_EXECUTE_ENDPOINT,
       endpointKind: "execute",
@@ -118,7 +116,7 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
       toolChatEnabled,
       toolChatCanary,
       fallbackEnabled,
-      reason: creativeSessionFollowup ? "creative_session" : "creative_ideation",
+      reason: creativeSessionContinuation ? "creative_session" : "creative_ideation",
     };
   }
 

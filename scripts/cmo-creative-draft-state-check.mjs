@@ -48,9 +48,9 @@ function forbidSource(source, pattern, label) {
 
 requireSource(typesSource, /export interface CmoCreativeWorkingState[\s\S]*active_draft_id\?: string \| null;[\s\S]*drafts: CmoCreativeDraft\[];/, "types");
 requireSource(typesSource, /export interface CmoCreativeDecision[\s\S]*action: CmoCreativeDecisionAction;/, "types");
-requireSource(typesSource, /"present_draft"/, "types must include present_draft decision action");
-requireSource(typesSource, /"show_draft"/, "types must include show_draft decision action");
-requireSource(typesSource, /"blocked"/, "types must include blocked decision action");
+requireSource(typesSource, /"present_draft"/, "types must accept Hermes CMO present_draft decisions");
+requireSource(typesSource, /"show_draft"/, "types must accept Hermes CMO show_draft decisions");
+requireSource(typesSource, /"blocked"/, "types must accept Hermes CMO blocked decisions");
 requireSource(typesSource, /creativeWorkingState\?: CmoCreativeWorkingState;/, "session/message/response types");
 requireSource(typesSource, /creativeDecision\?: CmoCreativeDecision;/, "session/message/response types");
 requireSource(typesSource, /CmoRouteDecision = "app_turn" \| "creative_execution" \| "creative_ideation" \| "creative_session" \| "execute" \| "tool_execute"/, "route decision types");
@@ -61,33 +61,30 @@ requireSource(helperSource, /new Map<string, CmoCreativeDraft>/, "draft helper m
 requireSource(helperSource, /draftsById\.set\(draft\.draft_id,[\s\S]*\.\.\.\(draftsById\.get\(draft\.draft_id\)/, "draft helper must upsert without dropping existing fields");
 requireSource(helperSource, /extractSuggestedCreativeStateUpdate/, "draft helper");
 requireSource(helperSource, /extractCreativeDecision/, "draft helper");
-requireSource(helperSource, /value === "present_draft"/, "draft helper must normalize present_draft decision");
-requireSource(helperSource, /value === "show_draft"/, "draft helper must normalize show_draft decision");
+requireSource(helperSource, /value === "present_draft"/, "draft helper must normalize Hermes present_draft decision");
+requireSource(helperSource, /value === "show_draft"/, "draft helper must normalize Hermes show_draft decision");
 requireSource(helperSource, /value === "blocked"/, "draft helper must normalize blocked decision");
 requireSource(helperSource, /reason: stringValue\(value\.reason\)/, "draft helper must preserve blocked reason");
 
 requireSource(intentSource, /isCreativeDraftSessionIntent/, "routing intent");
+requireSource(intentSource, /isCreativeSessionTransportContinuation/, "routing intent must expose transport-level Creative continuation detection");
 requireSource(intentSource, /"hinh"/, "routing intent must recognize Vietnamese image requests");
 requireSource(intentSource, /"brainstorm"/, "routing intent must recognize brainstorming creative concepts");
 requireSource(intentSource, /"key"/, "routing intent must recognize key visual requests");
 requireSource(intentSource, /"poster"/, "routing intent must recognize poster requests");
 requireSource(intentSource, /"sticker"/, "routing intent must recognize sticker requests");
+requireSource(intentSource, /if \(creativeSessionContinuation\) return "creative_session"/, "routing intent must route active Creative session transport to execute");
 requireSource(intentSource, /if \(isCreativeDraftSessionIntent\(message\)\) return "creative_ideation"/, "routing intent must expose creative_ideation");
-requireSource(intentSource, /classifyCreativeSessionFollowup/, "routing intent must expose creative session classifier");
-requireSource(intentSource, /CreativeSessionFollowupIntent[\s\S]*"execute_draft"[\s\S]*"cancel_or_hold"/, "routing intent must expose semantic creative session intents");
-requireSource(intentSource, /creativeWorkingState\?: CreativeWorkingStateIntentContext/, "routing intent must classify with creative state context");
-requireSource(intentSource, /const creativeSessionClassification = classifyCreativeSessionFollowup\(message, options\.creativeWorkingState\)/, "routing intent must classify with state before routing");
-requireSource(intentSource, /if \(creativeSessionClassification\.detected\) return "creative_session"/, "routing intent must expose creative_session from state-machine detection");
+forbidSource(intentSource, /CreativeSessionFollowupIntent/, "routing intent must not expose Product Creative action classification");
+forbidSource(intentSource, /classifyCreativeSessionFollowup/, "routing intent must not classify Creative follow-up actions");
 forbidSource(intentSource, /message\s*={2,3}\s*["'`]/, "routing intent must not use exact message equality");
 forbidSource(intentSource, /\.includes\(["'`](?:ok|render|draft|tao|ban)/i, "routing intent must not branch on literal example phrases");
 
 requireSource(routerSource, /hasCreativeWorkingState\?: boolean/, "router input");
 requireSource(routerSource, /creativeWorkingState\?: CmoCreativeWorkingState;/, "router input must accept creative state");
-requireSource(routerSource, /"creative_session"/, "router creative session reason");
-requireSource(routerSource, /"creative_ideation"/, "router creative ideation reason");
-requireSource(routerSource, /classifyCreativeSessionFollowup\(input\.message, creativeWorkingState\)/, "router must use state-machine classifier");
-requireSource(routerSource, /const creativeSessionFollowup = creativeSessionClassification\.detected/, "router must route only classified creative session follow-ups");
-requireSource(routerSource, /reason: creativeSessionFollowup \? "creative_session" : "creative_ideation"/, "router must distinguish creative session from first ideation");
+requireSource(routerSource, /isCreativeSessionTransportContinuation\(input\.message, creativeWorkingState\)/, "router must use transport-level continuation detection");
+requireSource(routerSource, /reason: creativeSessionContinuation \? "creative_session" : "creative_ideation"/, "router must distinguish active session transport from first ideation");
+forbidSource(routerSource, /classifyCreativeSessionFollowup/, "router must not classify Product Creative actions");
 
 const intent = loadTsModule("src/lib/cmo/app-routing-intent.ts");
 const draftState = loadTsModule("src/lib/cmo/creative-draft-state.ts");
@@ -100,12 +97,6 @@ const activeCreativeState = {
       title: "World Cup egg visual",
       prompt: "A heroic egg character on a football pitch",
     },
-  ],
-};
-const ambiguousCreativeState = {
-  drafts: [
-    { draft_id: "creative_draft_001", kind: "image" },
-    { draft_id: "creative_draft_002", kind: "image" },
   ],
 };
 
@@ -121,41 +112,26 @@ for (const message of [
   assert.equal(intent.routeIntentForMessage(message), "creative_ideation", `${message} must route as creative_ideation`);
 }
 
-assert.equal(intent.routeIntentForMessage("Doc link nay va tom tat giup minh https://example.com"), "cmo_default", "source/tool read requests must not be classified as creative");
-
 for (const message of [
   "Ban draft truoc cho minh nhe",
   "Ban de xuat draft di",
-  "Cho minh xem draft",
   "Cho minh xem prompt",
-  "Viet prompt truoc",
-  "Cho minh prompt",
-  "Dung tao voi",
   "Chi prompt thoi dung tao",
-  "Chinh prompt do lai",
   "Doi style sang cinematic",
   "Lam version 1:1",
-  "Ok tao di",
-  "Ok ban tao hinh theo prompt goi y di",
-  "Generate di",
-  "Tao anh tu prompt do",
+  "Let's proceed with generating the visual now",
+  "Create the image from that prompt",
 ]) {
-  assert.equal(intent.isCreativeSessionFollowupIntent(message, activeCreativeState), true, `${message} must be detected as Creative session follow-up intent with active state`);
-  assert.equal(intent.routeIntentForMessage(message, { creativeWorkingState: activeCreativeState }), "creative_session", `${message} must route as a Creative-native session intent with active state`);
+  assert.equal(intent.isCreativeSessionTransportContinuation(message, activeCreativeState), true, `${message} must route as Creative session transport with active state`);
+  assert.equal(intent.routeIntentForMessage(message, { creativeWorkingState: activeCreativeState }), "creative_session", `${message} must route as a CMO-native Creative session`);
   assert.notEqual(intent.routeIntentForMessage(message), "creative_session", `${message} must not route as Creative session without creative state`);
 }
 
-assert.equal(intent.routeIntentForMessage("Traffic tuan nay the nao?", { creativeWorkingState: activeCreativeState }), "cmo_default", "analytics requests must not be classified as creative session follow-up");
-assert.equal(intent.routeIntentForMessage("Dune volume hom qua bao nhieu?", { creativeWorkingState: activeCreativeState }), "cmo_default", "Dune metric requests must not be classified as creative session follow-up");
-assert.equal(intent.routeIntentForMessage("Task nao dang pending?", { creativeWorkingState: activeCreativeState }), "cmo_default", "task status requests must not be classified as creative session follow-up");
-assert.equal(intent.classifyCreativeSessionFollowupIntent("Can you pull last week's conversion chart?", activeCreativeState), "none", "tool/analytics questions must stay unrelated even with an active draft");
-assert.equal(intent.classifyCreativeSessionFollowupIntent("Let's proceed with generating the visual now", activeCreativeState), "execute_draft", "paraphrased confirmation must execute active draft intent");
-assert.equal(intent.classifyCreativeSessionFollowupIntent("Walk me through the concept before making anything", activeCreativeState), "present_draft", "paraphrased show-draft-first request must present draft only");
-assert.equal(intent.classifyCreativeSessionFollowupIntent("Do not generate yet, just keep the prompt", activeCreativeState), "cancel_or_hold", "hold request must not execute");
-assert.equal(intent.classifyCreativeSessionFollowupIntent("Generate the image", ambiguousCreativeState), "ask_clarification", "ambiguous multiple drafts must ask clarification");
+assert.equal(intent.routeIntentForMessage("Traffic tuan nay the nao?", { creativeWorkingState: activeCreativeState }), "cmo_default", "analytics requests must not be forced into Creative");
+assert.equal(intent.routeIntentForMessage("Dune volume hom qua bao nhieu?", { creativeWorkingState: activeCreativeState }), "cmo_default", "Dune metric requests must not be forced into Creative");
+assert.equal(intent.routeIntentForMessage("Task nao dang pending?", { creativeWorkingState: activeCreativeState }), "cmo_default", "task status requests must not be forced into Creative");
+assert.equal(intent.routeIntentForMessage("Doc link nay va tom tat giup minh https://example.com"), "cmo_default", "source/tool read requests must not be classified as creative");
 
-const turn1Message = "Minh muon tao hinh anh trung chu de world cup";
-assert.equal(intent.routeIntentForMessage(turn1Message), "creative_ideation", "turn 1 must route as Creative ideation");
 const turn1HermesResponse = {
   answer_basis: { mode: "creative_ideation" },
   creative_decision: {
@@ -180,7 +156,7 @@ const turn1HermesResponse = {
     ],
   },
 };
-let threeTurnCreativeState = draftState.applySuggestedCreativeStateUpdate(
+const threeTurnCreativeState = draftState.applySuggestedCreativeStateUpdate(
   undefined,
   draftState.extractSuggestedCreativeStateUpdate(turn1HermesResponse),
 );
@@ -189,9 +165,8 @@ assert.equal(threeTurnDecision.action, "propose_draft", "turn 1 must persist CMO
 assert.equal(threeTurnCreativeState.active_draft_id, "creative_draft_001", "turn 1 must persist active draft id");
 assert.equal(threeTurnCreativeState.drafts.length, 1, "turn 1 must persist draft without duplication");
 
-const turn2Message = "Ban de xuat draft di";
-assert.equal(intent.isCreativeSessionFollowupIntent(turn2Message, threeTurnCreativeState), true, "turn 2 must be detected as active Creative session follow-up");
-assert.equal(intent.classifyCreativeSessionFollowupIntent(turn2Message, threeTurnCreativeState), "present_draft", "turn 2 should present draft rather than execute");
+const turn2Message = "Walk me through the concept before making anything";
+assert.equal(intent.routeIntentForMessage(turn2Message, { creativeWorkingState: threeTurnCreativeState }), "creative_session", "turn 2 must send history and state back to CMO");
 const turn2HermesResponse = {
   answer_basis: { mode: "creative_session" },
   answer: {
@@ -203,13 +178,11 @@ const turn2HermesResponse = {
   },
 };
 threeTurnDecision = draftState.extractCreativeDecision(turn2HermesResponse);
-assert.equal(threeTurnDecision.action, "present_draft", "turn 2 must persist present_draft decision");
-assert.match(turn2HermesResponse.answer.body, /World Cup egg visual/, "turn 2 answer should contain active draft details");
-assert.match(turn2HermesResponse.answer.body, /heroic egg character/, "turn 2 answer should contain prompt details");
+assert.equal(threeTurnDecision.action, "present_draft", "turn 2 decision must come from Hermes CMO response");
+assert.match(turn2HermesResponse.answer.body, /World Cup egg visual/, "turn 2 answer should be Hermes-provided draft content");
 
-const turn3Message = "Ok ban tao hinh theo prompt goi y di";
-assert.equal(intent.isCreativeSessionFollowupIntent(turn3Message, threeTurnCreativeState), true, "turn 3 must be detected as active Creative session follow-up");
-assert.equal(intent.classifyCreativeSessionFollowupIntent(turn3Message, threeTurnCreativeState), "execute_draft", "turn 3 should be passed to CMO as execute-intent hint");
+const turn3Message = "Create the image from that prompt";
+assert.equal(intent.routeIntentForMessage(turn3Message, { creativeWorkingState: threeTurnCreativeState }), "creative_session", "turn 3 must still send state/capabilities, not Product execution intent");
 const turn3HermesResponse = {
   answer_basis: { mode: "creative_session" },
   creative_decision: {
@@ -229,77 +202,67 @@ const turn3HermesResponse = {
 threeTurnDecision = draftState.extractCreativeDecision(turn3HermesResponse);
 assert.equal(threeTurnDecision.action, "execute", "turn 3 execute decision must come from Hermes CMO response");
 assert.equal(threeTurnDecision.operation, "creative.generate_image", "turn 3 must preserve Creative generation operation");
-assert.equal(threeTurnCreativeState.active_draft_id, "creative_draft_001", "turn 3 must keep sending active creative state");
-
-for (const nonExecuteMessage of [
-  "Ban draft truoc cho minh nhe",
-  "Cho minh xem prompt",
-  "Chi viet prompt thoi, dung tao",
-  "Chinh prompt do lai",
-  "Doi style sang cinematic",
-]) {
-  assert.notEqual(
-    intent.classifyCreativeSessionFollowupIntent(nonExecuteMessage, threeTurnCreativeState),
-    "execute_draft",
-    `${nonExecuteMessage} must not be classified as an execute hint`,
-  );
-}
 
 requireSource(mapperSource, /creativeWorkingState\?: CmoCreativeWorkingState;/, "Hermes mapper input");
 requireSource(mapperSource, /creativeIdeationDetected\?: boolean;/, "Hermes mapper ideation input");
-requireSource(mapperSource, /creativeSessionFollowupDetected\?: boolean;/, "Hermes mapper session follow-up input");
-requireSource(mapperSource, /creative_working_state: creativeWorkingStateForHermes/, "Hermes mapper must send creative_working_state");
-requireSource(mapperSource, /creative_ideation_intent/, "Hermes mapper must send creative ideation intent");
-requireSource(mapperSource, /creative_session_followup_intent/, "Hermes mapper must send creative session follow-up intent");
-requireSource(mapperSource, /classifyCreativeSessionFollowupIntent\(input\.message, creativeWorkingStateForHermes\)/, "Hermes mapper must classify follow-up with creative state");
-requireSource(mapperSource, /creativeSessionExecuteDraftCandidate[\s\S]*creativeSessionFollowupIntent === "execute_draft"/, "Hermes mapper must derive execute candidate from semantic classifier");
-requireSource(mapperSource, /allow_creative_execution: true/, "Hermes mapper must send Creative execution capability for execute_draft candidates");
-requireSource(mapperSource, /creative_execution_allowed: true/, "Hermes mapper must send execution boundary capability for execute_draft candidates");
-requireSource(mapperSource, /execution_intent_is_hint_only: true/, "Hermes mapper must mark execution intent as a hint only");
-forbidSource(mapperSource, /creativeSessionExecuteDraftCandidate\s*\?\s*\{\s*creative_execution_requested: true/, "Hermes mapper must not turn execute_draft hint into Product-forced execution");
-requireSource(mapperSource, /may_present_active_draft: true/, "Hermes mapper must allow CMO to present active draft");
-requireSource(mapperSource, /may_show_prompt_without_execution: true/, "Hermes mapper must allow prompt-only draft display");
+requireSource(mapperSource, /creativeSessionFollowupDetected\?: boolean;/, "Hermes mapper session input");
+requireSource(mapperSource, /messages: recentConversationMessages\(input\.history\)/, "Hermes mapper must send recent messages");
+requireSource(mapperSource, /creativeWorkingStateForHermesCamelCase/, "Hermes mapper must build camelCase creativeWorkingState");
+requireSource(mapperSource, /creativeWorkingState: creativeWorkingStateCamelCase/, "Hermes mapper must send camelCase creativeWorkingState");
+requireSource(mapperSource, /creative_working_state: creativeWorkingStateForHermes/, "Hermes mapper must send snake_case creative_working_state");
+requireSource(mapperSource, /creativeSession: true/, "Hermes mapper must mark Creative session ownership");
+requireSource(mapperSource, /cmoOwnsCreativeDecision: true/, "Hermes mapper must mark CMO decision ownership");
+requireSource(mapperSource, /creativeDecisionOwnerWhenLive: "hermes_cmo"/, "Hermes mapper must mark Creative decision owner");
+requireSource(mapperSource, /canProposeDraft: true/, "Hermes mapper capabilities");
+requireSource(mapperSource, /canUpdateDraftState: true/, "Hermes mapper capabilities");
+requireSource(mapperSource, /canExecuteImageGeneration: true/, "Hermes mapper capabilities");
+requireSource(mapperSource, /requiresUserConfirmationBeforeExecute: true/, "Hermes mapper capabilities");
+requireSource(mapperSource, /creative_side_effects_allowed: true/, "Hermes mapper must mirror capability as a boundary");
+requireSource(mapperSource, /requires_user_confirmation_before_creative_execute: true/, "Hermes mapper must mirror confirmation boundary");
 requireSource(mapperSource, /product_must_not_choose_creative_execution: true/, "Hermes mapper must keep CMO as execution decision owner");
 requireSource(mapperSource, /creative_decision_owner_when_live: "hermes_cmo"/, "Hermes mapper product boundary");
+forbidSource(mapperSource, /creative_session_followup_intent/, "Hermes mapper must not expose Product Creative action intent");
+forbidSource(mapperSource, /creativeSessionExecuteDraftCandidate/, "Hermes mapper must not derive Product execute candidates");
+forbidSource(mapperSource, /execute_decision_candidate/, "Hermes mapper must not send Product execute candidate");
+forbidSource(mapperSource, /allow_creative_execution/, "Hermes mapper must not send legacy snake allow execution flag for CMO-native sessions");
+forbidSource(mapperSource, /creative_execution_allowed/, "Hermes mapper must not send execution-boundary command for CMO-native sessions");
+forbidSource(mapperSource, /intent: "execute_draft"/, "Hermes mapper must not send execute_draft intent");
 
 requireSource(runtimeSource, /requestHasCreativeWorkingState/, "runtime");
 requireSource(runtimeSource, /requestIsCreativeIdeation/, "runtime");
 requireSource(runtimeSource, /requestMayLeadToCreativeExecution/, "runtime");
-requireSource(runtimeSource, /requestIsCreativeSessionExecuteCandidate/, "runtime must detect CMO-native session execute candidates");
-requireSource(runtimeSource, /requestAllowsCreativeExecution/, "runtime must require Creative execution capability");
-requireSource(runtimeSource, /creativeSessionExecutionAllowed = creativeSessionExecuteCandidate && requestAllowsCreativeExecution\(request\)/, "runtime must gate session execution on Product capability");
+requireSource(runtimeSource, /const creativeNativeSession = creativeIdeationDetected \|\| creativeWorkingStatePresent;/, "runtime must treat Creative state as CMO-native session");
+requireSource(runtimeSource, /const creativeSideEffectsAllowed = creativeNativeSession \|\| creativeExecutionRequested;/, "runtime must expose capability without forcing execution");
+requireSource(runtimeSource, /artifact_transport: creativeArtifactTransportForRequest\(request\)/, "runtime must include M13B artifact transport");
+requireSource(runtimeSource, /creative_side_effects_allowed: creativeSideEffectsAllowed/, "runtime must trace Creative side-effect capability");
+requireSource(runtimeSource, /requires_user_confirmation_before_creative_execute: creativeNativeSession/, "runtime must trace confirmation boundary");
+requireSource(runtimeSource, /creative_execution_requested: creativeExecutionRequested/, "runtime must preserve explicit Creative execution path");
+requireSource(runtimeSource, /\.\.\.\(creativeExecutionRequested \? \{ allowCreativeExecution: true \} : \{\}\)/, "runtime may expose legacy allow only for explicit Creative execution");
 requireSource(runtimeSource, /"blocked"/, "runtime must accept blocked creative session decisions");
 requireSource(runtimeSource, /requestAllowsCreativeIdeationAnswerBasis/, "runtime validation");
 requireSource(runtimeSource, /routeDecision === "creative_ideation"[\s\S]*routeDecision === "creative_session"/, "runtime validation must require creative route decision");
-requireSource(runtimeSource, /requestCreativeFlagIsTrue\(request, "creative_ideation_detected"\)/, "runtime validation must require creative ideation flag");
-requireSource(runtimeSource, /requestCreativeFlagIsTrue\(request, "creative_working_state_present"\)/, "runtime validation must allow active creative session state");
 requireSource(runtimeSource, /requestCreativeFlagIsTrue\(request, "cmo_owns_creative_decision"\)/, "runtime validation must require CMO decision ownership");
-requireSource(runtimeSource, /allowCreativeIdeation: allowCreativeIdeationAnswerBasis/, "runtime validation must conditionally allow creative_ideation answer basis");
-requireSource(runtimeSource, /mode === "creative_session" \|\| mode === "creative_refinement"/, "runtime must conditionally allow creative session answer basis");
 requireSource(runtimeSource, /normalizeHermesCreativeIdeationResponse/, "runtime must canonicalize Creative ideation before M1 validation");
 requireSource(runtimeSource, /safeCreativeIdeationRawActivityTypes/, "runtime creative ideation canonicalizer");
 requireSource(runtimeSource, /"creative\.ideation\.draft_proposed"/, "runtime activity validation must accept draft proposed event");
-requireSource(runtimeSource, /"creative\.session\.presented"/, "runtime activity validation must accept session presented event");
 requireSource(runtimeSource, /creativeIdeationEventToProductEvent/, "runtime must map raw creative ideation events to Product-safe activity events");
-requireSource(runtimeSource, /type: "cmo\.durable_action\.proposed"/, "runtime canonicalizer must not pass raw creative ideation event types into M1 activity validation");
 requireSource(runtimeSource, /creativeNativeAnswerBasisModes/, "runtime canonicalizer must support native creative session modes");
 requireSource(runtimeSource, /creative_session_response_received/, "runtime diagnostics must trace creative session responses");
 requireSource(runtimeSource, /rejected_by_m1_validator: false/, "runtime diagnostics must mark accepted ideation responses");
-requireSource(runtimeSource, /artifact_transport: creativeArtifactTransportForRequest\(request\)/, "runtime must include M13B artifact transport");
-requireSource(runtimeSource, /creative_execution_may_be_requested_by_cmo: creativeTurnMayExecute/, "runtime must allow CMO-owned draft execution");
-requireSource(runtimeSource, /allow_creative_execution: creativeAgentAllowed/, "runtime must forward snake-case Creative execution capability");
-requireSource(runtimeSource, /creative_session_execute_candidate: creativeSessionExecuteCandidate/, "runtime must trace session execute candidates");
-requireSource(runtimeSource, /creative_session_execution_allowed: creativeSessionExecutionAllowed/, "runtime must trace session execution allowance");
-requireSource(runtimeSource, /cmo_owns_creative_decision: constraints\.cmo_owns_creative_decision === true/, "runtime trace must include CMO decision ownership");
+forbidSource(runtimeSource, /requestIsCreativeSessionExecuteCandidate/, "runtime must not derive Product execute candidates");
+forbidSource(runtimeSource, /creative_session_followup_intent/, "runtime must not consume Product Creative action intent");
+forbidSource(runtimeSource, /creative_session_execute_candidate/, "runtime must not trace Product execute candidates");
+forbidSource(runtimeSource, /creative_session_execution_allowed/, "runtime must not trace Product execution allowance");
+forbidSource(runtimeSource, /allow_creative_execution/, "runtime must not emit legacy snake allow flag for CMO-native sessions");
 forbidSource(runtimeSource, /const answerBasisModes = new Set[\s\S]*"creative_ideation"[\s\S]*\]\);[\s\S]*const answerFormats/s, "runtime must not globally allow creative_ideation answer basis");
 forbidSource(runtimeSource, /const activityTypes = new Set[\s\S]*"creative\.ideation\.draft_proposed"[\s\S]*\]\);[\s\S]*const creativeLifecycleActivityTypes/s, "runtime must not globally allow creative ideation activity events");
 
 requireSource(storeSource, /let creativeWorkingState: CmoCreativeWorkingState \| undefined = continuedSession\?\.creativeWorkingState;/, "store session state");
 requireSource(storeSource, /creativeWorkingState,/, "store must pass creative state to router and Hermes");
 requireSource(storeSource, /hermesCmoRoute\.reason === "creative_ideation"/, "store must treat creative ideation as CMO-native creative");
-requireSource(storeSource, /hermesCmoRoute\.reason === "creative_session"/, "store must treat creative session follow-up as CMO-native creative");
+requireSource(storeSource, /hermesCmoRoute\.reason === "creative_session"/, "store must treat creative session as CMO-native creative");
 requireSource(storeSource, /creativeWorkingStateForHermes = hermesCmoNativeCreativeRequested \? creativeWorkingState : undefined/, "store must only send creative state on native creative turns");
-requireSource(storeSource, /creativeSessionFollowupDetected,/, "store must pass creative session follow-up flag to Hermes");
+requireSource(storeSource, /creativeSessionFollowupDetected,/, "store must pass Creative session transport flag to Hermes");
 requireSource(storeSource, /creativeWorkingState: creativeWorkingStateForHermes/, "store must pass creativeWorkingState to Hermes mapper only on creative turns");
 requireSource(storeSource, /applySuggestedCreativeStateUpdate\([\s\S]*extractSuggestedCreativeStateUpdate\(hermesResult\.response\)/, "store must apply Hermes suggested state update");
 requireSource(storeSource, /extractCreativeDecision\(hermesResult\.response\)/, "store must persist creative decision");

@@ -1759,20 +1759,6 @@ const requestHasCreativeWorkingState = (request: HermesCmoRuntimeRequest): boole
   return Array.isArray(state.drafts) && state.drafts.length > 0 || typeof state.active_draft_id === "string";
 };
 
-const requestActiveCreativeDraftId = (request: HermesCmoRuntimeRequest): string | undefined => {
-  const input = isRecord(request.input) ? request.input : {};
-  const state = isRecord(request.creative_working_state)
-    ? request.creative_working_state
-    : isRecord(input.creative_working_state)
-      ? input.creative_working_state
-      : isRecord(request.context_pack.creative_working_state)
-        ? request.context_pack.creative_working_state
-        : null;
-  const activeDraftId = state && typeof state.active_draft_id === "string" ? state.active_draft_id.trim() : "";
-
-  return activeDraftId || undefined;
-};
-
 const requestIsCreativeIdeation = (request: HermesCmoRuntimeRequest): boolean => {
   const input = isRecord(request.input) ? request.input : {};
   const creativeIdeationIntent = isRecord(input.creative_ideation_intent) ? input.creative_ideation_intent : {};
@@ -1817,30 +1803,6 @@ const requestCreativeFlagIsTrue = (request: HermesCmoRuntimeRequest, key: string
     key === "cmo_owns_creative_decision" && creativePolicy.cmo_owns_decision === true
   );
 };
-
-const requestCreativeSessionFollowupIntent = (request: HermesCmoRuntimeRequest): string | undefined => {
-  const input = isRecord(request.input) ? request.input : {};
-  const sessionIntent = nestedRecord(input, "creative_session_followup_intent");
-  const toolPolicy = isRecord(request.tool_policy) ? request.tool_policy : {};
-
-  return recordString(sessionIntent, "intent") ??
-    recordString(request.constraints, "creative_session_followup_intent") ??
-    recordString(request.intent, "creative_session_followup_intent") ??
-    recordString(toolPolicy, "creative_session_followup_intent") ??
-    undefined;
-};
-
-const requestAllowsCreativeExecution = (request: HermesCmoRuntimeRequest): boolean =>
-  requestCreativeFlagIsTrue(request, "allow_creative_execution") ||
-  requestCreativeFlagIsTrue(request, "allowCreativeExecution") ||
-  requestCreativeFlagIsTrue(request, "creative_execution_allowed");
-
-const requestIsCreativeSessionExecuteCandidate = (request: HermesCmoRuntimeRequest): boolean =>
-  requestRouteDecision(request) === "creative_session" &&
-  requestCreativeSessionFollowupIntent(request) === "execute_draft" &&
-  Boolean(requestActiveCreativeDraftId(request)) &&
-  requestHasCreativeWorkingState(request) &&
-  requestCreativeFlagIsTrue(request, "cmo_owns_creative_decision");
 
 const requestAllowsCreativeIdeationAnswerBasis = (request: HermesCmoRuntimeRequest): boolean => {
   const routeDecision = requestRouteDecision(request);
@@ -2361,8 +2323,6 @@ const creativeTraceSummary = (payload: unknown): Record<string, unknown> => {
 
 const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: HermesCmoAgentConfig): Record<string, unknown> => {
   const constraints: Record<string, unknown> = request.constraints;
-  const input = isRecord(request.input) ? request.input : {};
-  const creativeSessionFollowupIntent = nestedRecord(input, "creative_session_followup_intent");
   const executionBoundary = nestedRecord(constraints, "execution_boundary");
   const h5LiveAdapter = nestedRecord(constraints, "h5_live_adapter");
   const creativePolicy = nestedRecord(nestedRecord(constraints, "m1_clean_cmo_skill_kernel"), "creative_policy");
@@ -2386,19 +2346,14 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
       executionBoundary.creative_execution_requested !== true &&
       creativePolicy.execution_requested !== true,
     allow_sub_agent_execution: constraints.allowSubAgentExecution === true,
-    allow_creative_execution: constraints.allowCreativeExecution === true || constraints.allow_creative_execution === true || executionBoundary.creative_execution_allowed === true,
     creative_execution_requested: constraints.creative_execution_requested === true,
     creative_ideation_detected: constraints.creative_ideation_detected === true,
     creative_working_state_present: constraints.creative_working_state_present === true,
     creative_session_followup_detected: constraints.creative_session_followup_detected === true,
-    creative_session_followup_intent: constraints.creative_session_followup_intent ?? creativeSessionFollowupIntent.intent,
-    creative_session_active_draft_id: constraints.creative_active_draft_id ?? creativeSessionFollowupIntent.active_draft_id,
-    creative_session_drafts_count: constraints.creative_drafts_count ?? creativeSessionFollowupIntent.drafts_count,
-    creative_session_execute_candidate: constraints.creative_session_execute_candidate === true,
-    creative_session_execution_allowed: constraints.creative_session_execution_allowed === true,
-    may_present_active_draft: constraints.creative_session_can_present_draft === true,
-    may_refine_active_draft: constraints.creative_session_can_refine_draft === true,
-    may_execute_active_draft_only_if_cmo_decides: constraints.creative_session_can_execute_if_cmo_decides === true,
+    creative_session_active_draft_id: constraints.creative_active_draft_id,
+    creative_session_drafts_count: constraints.creative_drafts_count,
+    creative_side_effects_allowed: constraints.creative_side_effects_allowed === true || creativePolicy.side_effects_allowed === true,
+    requires_user_confirmation_before_creative_execute: constraints.requires_user_confirmation_before_creative_execute === true,
     creative_execution_may_be_requested_by_cmo: constraints.creative_execution_may_be_requested_by_cmo === true,
     cmo_owns_creative_decision: constraints.cmo_owns_creative_decision === true,
     creative_call_mode: constraints.creative_call_mode ?? h5LiveAdapter.creative_call_mode ?? creativePolicy.call_mode,
@@ -2798,9 +2753,9 @@ const buildHermesCmoLiveRequest = (
   const creativeExecutionRequested = requestIsCreativeExecution(request) && creativeViaCmoAllowed;
   const creativeIdeationDetected = requestIsCreativeIdeation(request);
   const creativeWorkingStatePresent = requestHasCreativeWorkingState(request);
-  const creativeSessionExecuteCandidate = requestIsCreativeSessionExecuteCandidate(request);
-  const creativeSessionExecutionAllowed = creativeSessionExecuteCandidate && requestAllowsCreativeExecution(request);
-  const creativeTurnMayExecute = (creativeExecutionRequested || creativeIdeationDetected || creativeSessionExecutionAllowed) && creativeViaCmoAllowed;
+  const creativeNativeSession = creativeIdeationDetected || creativeWorkingStatePresent;
+  const creativeSideEffectsAllowed = creativeNativeSession || creativeExecutionRequested;
+  const creativeTurnMayExecute = creativeSideEffectsAllowed && creativeViaCmoAllowed;
   const creativeExecutionMode = creativeExecutionModeFromRequest(request);
   const creativeAgentAllowed = creativeViaCmoAllowed && creativeTurnMayExecute;
   const specialistExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed || creativeTurnMayExecute;
@@ -2851,14 +2806,13 @@ const buildHermesCmoLiveRequest = (
       allowSubAgentExecution: specialistExecutionAllowed,
       allowSurfExecution: boundedDelegationAllowed,
       allowEchoExecution: echoExecutionAllowed,
-      allowCreativeExecution: creativeAgentAllowed,
-      allow_creative_execution: creativeAgentAllowed,
+      ...(creativeExecutionRequested ? { allowCreativeExecution: true } : {}),
       creative_execution_requested: creativeExecutionRequested,
       creative_ideation_detected: creativeIdeationDetected,
       creative_working_state_present: creativeWorkingStatePresent,
-      creative_session_execute_candidate: creativeSessionExecuteCandidate,
-      creative_session_execution_allowed: creativeSessionExecutionAllowed,
       creative_execution_may_be_requested_by_cmo: creativeTurnMayExecute,
+      creative_side_effects_allowed: creativeSideEffectsAllowed,
+      requires_user_confirmation_before_creative_execute: creativeNativeSession,
       cmo_owns_creative_decision: creativeIdeationDetected || creativeWorkingStatePresent || creativeExecutionRequested,
       creative_execution_mode: creativeExecutionRequested ? creativeExecutionMode : null,
       creative_direct_prompt_sufficient: creativeExecutionRequested,
@@ -2899,9 +2853,9 @@ const buildHermesCmoLiveRequest = (
           execution_requested: creativeExecutionRequested,
           ideation_detected: creativeIdeationDetected,
           working_state_present: creativeWorkingStatePresent,
-          session_execute_candidate: creativeSessionExecuteCandidate,
-          session_execution_allowed: creativeSessionExecutionAllowed,
           execution_may_be_requested_by_cmo: creativeTurnMayExecute,
+          side_effects_allowed: creativeSideEffectsAllowed,
+          requires_user_confirmation_before_execute: creativeNativeSession,
           cmo_owns_decision: true,
           execution_mode: creativeExecutionRequested ? creativeExecutionMode : null,
           direct_user_prompt_is_sufficient_execution_input: creativeExecutionRequested,
@@ -2942,9 +2896,9 @@ const buildHermesCmoLiveRequest = (
         creative_execution_requested: creativeExecutionRequested,
         creative_ideation_detected: creativeIdeationDetected,
         creative_working_state_present: creativeWorkingStatePresent,
-        creative_session_execute_candidate: creativeSessionExecuteCandidate,
-        creative_session_execution_allowed: creativeSessionExecutionAllowed,
         creative_execution_may_be_requested_by_cmo: creativeTurnMayExecute,
+        creative_side_effects_allowed: creativeSideEffectsAllowed,
+        requires_user_confirmation_before_creative_execute: creativeNativeSession,
         cmo_owns_creative_decision: creativeIdeationDetected || creativeWorkingStatePresent || creativeExecutionRequested,
         vault_writes_allowed: false,
         direct_supabase_mutations_allowed: false,
@@ -2955,13 +2909,13 @@ const buildHermesCmoLiveRequest = (
         sub_agent_execution_allowed: specialistExecutionAllowed,
         surf_execution_allowed: boundedDelegationAllowed,
         echo_execution_allowed: echoExecutionAllowed,
-        creative_execution_allowed: creativeAgentAllowed,
+        ...(creativeExecutionRequested ? { creative_execution_allowed: true } : {}),
         creative_execution_requested: creativeExecutionRequested,
         creative_ideation_detected: creativeIdeationDetected,
         creative_working_state_present: creativeWorkingStatePresent,
-        creative_session_execute_candidate: creativeSessionExecuteCandidate,
-        creative_session_execution_allowed: creativeSessionExecutionAllowed,
         creative_execution_may_be_requested_by_cmo: creativeTurnMayExecute,
+        creative_side_effects_allowed: creativeSideEffectsAllowed,
+        requires_user_confirmation_before_creative_execute: creativeNativeSession,
         cmo_owns_creative_decision: creativeIdeationDetected || creativeWorkingStatePresent || creativeExecutionRequested,
         creative_artifact_ingest_required_for_preview: creativeAgentAllowed,
         vault_agent_execution_allowed: false,
