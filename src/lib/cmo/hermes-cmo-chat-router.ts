@@ -1,4 +1,4 @@
-import { isCreativeDraftSessionIntent, routeIntentForMessage, type CmoRouteIntent } from "@/lib/cmo/app-routing-intent";
+import { isCreativeDraftSessionIntent, isCreativeSessionFollowupIntent, routeIntentForMessage, type CmoRouteIntent } from "@/lib/cmo/app-routing-intent";
 import {
   getCmoHermesCmoCanaryApps,
   getCmoHermesCmoChatV11CanaryApps,
@@ -101,7 +101,10 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
     };
   }
 
-  if (input.hasCreativeWorkingState === true || routeIntent === "creative_ideation" || isCreativeDraftSessionIntent(input.message)) {
+  const creativeSessionFollowup = input.hasCreativeWorkingState === true &&
+    (routeIntent === "creative_session" || routeIntent === "creative_ideation" || isCreativeSessionFollowupIntent(input.message));
+
+  if (creativeSessionFollowup || routeIntent === "creative_ideation" || isCreativeDraftSessionIntent(input.message)) {
     return {
       endpoint: HERMES_CMO_EXECUTE_ENDPOINT,
       endpointKind: "execute",
@@ -112,7 +115,7 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
       toolChatEnabled,
       toolChatCanary,
       fallbackEnabled,
-      reason: input.hasCreativeWorkingState === true ? "creative_session" : "creative_ideation",
+      reason: creativeSessionFollowup ? "creative_session" : "creative_ideation",
     };
   }
 

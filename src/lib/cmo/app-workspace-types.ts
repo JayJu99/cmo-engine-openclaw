@@ -638,6 +638,8 @@ export type HermesCmoExecutableMode =
 export type CmoCreativeDraftKind = "image" | "video";
 export type CmoCreativeDecisionAction =
   | "propose_draft"
+  | "present_draft"
+  | "show_draft"
   | "refine_draft"
   | "execute"
   | "ask_clarification"
@@ -905,12 +907,14 @@ export interface HermesCmoChatMetadata {
   cmo_owns_creative_decision?: boolean;
   creative_execution_requested?: boolean;
   creative_ideation_response_received?: boolean;
+  creative_session_response_received?: boolean;
   creative_state_update_present?: boolean;
   creative_decision_present?: boolean;
   activity_event_types?: string[];
   raw_activity_event_types?: string[];
   activity_events_allowed_for_creative_ideation?: boolean;
   creative_ideation_canonicalized?: boolean;
+  creative_session_canonicalized?: boolean;
   rejected_activity_event_type?: string;
   creative_state_persisted?: boolean;
   answer_basis_mode?: string;

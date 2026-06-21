@@ -2203,6 +2203,7 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(value.cmo_owns_creative_decision === true ? { cmo_owns_creative_decision: true } : {}),
     ...(value.creative_execution_requested === true ? { creative_execution_requested: true } : {}),
     ...(value.creative_ideation_response_received === true ? { creative_ideation_response_received: true } : {}),
+    ...(value.creative_session_response_received === true ? { creative_session_response_received: true } : {}),
     ...(typeof value.creative_state_update_present === "boolean" ? { creative_state_update_present: value.creative_state_update_present } : {}),
     ...(typeof value.creative_decision_present === "boolean" ? { creative_decision_present: value.creative_decision_present } : {}),
     ...(Array.isArray(value.activity_event_types) ? { activity_event_types: value.activity_event_types.map((item) => stringValue(item)).filter((item): item is string => Boolean(item)) } : {}),
@@ -2211,6 +2212,7 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
       ? { activity_events_allowed_for_creative_ideation: value.activity_events_allowed_for_creative_ideation }
       : {}),
     ...(typeof value.creative_ideation_canonicalized === "boolean" ? { creative_ideation_canonicalized: value.creative_ideation_canonicalized } : {}),
+    ...(typeof value.creative_session_canonicalized === "boolean" ? { creative_session_canonicalized: value.creative_session_canonicalized } : {}),
     ...(stringValue(value.rejected_activity_event_type) ? { rejected_activity_event_type: stringValue(value.rejected_activity_event_type) } : {}),
     ...(typeof value.creative_state_persisted === "boolean" ? { creative_state_persisted: value.creative_state_persisted } : {}),
     ...(stringValue(value.answer_basis_mode) ? { answer_basis_mode: stringValue(value.answer_basis_mode) } : {}),
@@ -2784,7 +2786,7 @@ function isTimedOutHermesError(reason: string): boolean {
 function creativeM1RejectedField(reason: string): string | undefined {
   if (
     !/rejected_by_m1_validator=true/i.test(reason) ||
-    !(/creative_metadata_present=true/i.test(reason) || /creative_ideation_response_received=true/i.test(reason))
+    !(/creative_metadata_present=true/i.test(reason) || /creative_ideation_response_received=true/i.test(reason) || /creative_session_response_received=true/i.test(reason) || /answer_basis_mode=creative_(?:ideation|session|refinement)/i.test(reason))
   ) {
     return undefined;
   }
@@ -2796,7 +2798,10 @@ function creativeM1RejectedField(reason: string): string | undefined {
 }
 
 function isCreativeIdeationM1Rejection(reason: string): boolean {
-  return /creative_ideation_response_received=true/i.test(reason) && /rejected_by_m1_validator=true/i.test(reason);
+  return (
+    /rejected_by_m1_validator=true/i.test(reason) &&
+    (/creative_ideation_response_received=true/i.test(reason) || /creative_session_response_received=true/i.test(reason) || /answer_basis_mode=creative_(?:ideation|session|refinement)/i.test(reason))
+  );
 }
 
 function parseCreativeRejectedSideEffectType(reason: string): string | undefined {
@@ -3347,6 +3352,8 @@ export async function createAppChatSession(
     hermesCmoRoute.reason === "creative_ideation" ||
     hermesCmoRoute.reason === "creative_session";
   const creativeIdeationDetected = hermesCmoRoute.reason === "creative_ideation";
+  const creativeSessionFollowupDetected = hermesCmoRoute.reason === "creative_session";
+  const creativeWorkingStateForHermes = hermesCmoNativeCreativeRequested ? creativeWorkingState : undefined;
   const hermesCmoLegacyRequested =
     legacyHermesCmoChatRequested ||
     hermesCmoRoute.endpointKind === "tool_execute" ||
@@ -3638,8 +3645,9 @@ export async function createAppChatSession(
           createdAt: now,
           userIdentity,
           inputMaterialAttachments: hermesAttachmentRefs,
-          creativeWorkingState,
+          creativeWorkingState: creativeWorkingStateForHermes,
           creativeIdeationDetected,
+          creativeSessionFollowupDetected,
         });
         const hermesResult = await runHermesCmoRuntime(hermesRequest, { toolTimeoutMs: asyncToolRunTimeoutMs });
         const counterValidation = validateHermesCmoChatCounters(hermesResult);
@@ -4022,8 +4030,9 @@ export async function createAppChatSession(
           createdAt: now,
           userIdentity,
           inputMaterialAttachments: hermesAttachmentRefs,
-          creativeWorkingState,
+          creativeWorkingState: creativeWorkingStateForHermes,
           creativeIdeationDetected,
+          creativeSessionFollowupDetected,
         });
         const hermesFallbackResult = await runHermesCmoRuntime(hermesFallbackRequest);
         sessionLocalResearchResults = mergeSessionLocalResearchResults(
@@ -4165,8 +4174,9 @@ export async function createAppChatSession(
         createdAt: now,
         userIdentity,
         inputMaterialAttachments: hermesAttachmentRefs,
-        creativeWorkingState,
+        creativeWorkingState: creativeWorkingStateForHermes,
         creativeIdeationDetected,
+        creativeSessionFollowupDetected,
       });
       hermesRequestSent = true;
       const hermesResult = await runHermesCmoRuntime(hermesRequest);
@@ -4418,13 +4428,18 @@ export async function createAppChatSession(
         echoCalls = hermesCmoMetadata.echoCalls;
         usedHermesCmoChat = true;
       } else if (creativeValidationRejected) {
-        const validationLabel = creativeIdeationValidationRejected ? "Creative ideation" : "Creative execution";
-        const validationRouteDecision = creativeIdeationValidationRejected ? "creative_ideation" : "creative_execution";
+        const creativeSessionValidationRejected = /creative_session_response_received=true|answer_basis_mode=creative_(?:session|refinement)/i.test(reason);
+        const validationLabel = creativeSessionValidationRejected ? "Creative session" : creativeIdeationValidationRejected ? "Creative ideation" : "Creative execution";
+        const validationRouteDecision = /creative_session_response_received=true|answer_basis_mode=creative_(?:session|refinement)/i.test(reason)
+          ? "creative_session"
+          : creativeIdeationValidationRejected ? "creative_ideation" : "creative_execution";
 
         answer = [
-          creativeIdeationValidationRejected
-            ? "Creative ideation returned a draft response, but Product rejected it during M1 validation."
-            : "Creative execution returned generated asset metadata, but Product rejected the response during M1 validation.",
+          creativeSessionValidationRejected
+            ? "Creative session returned a draft response, but Product rejected it during M1 validation."
+            : creativeIdeationValidationRejected
+              ? "Creative ideation returned a draft response, but Product rejected it during M1 validation."
+              : "Creative execution returned generated asset metadata, but Product rejected the response during M1 validation.",
           `Rejected field: ${m1RejectedField}.`,
           "No workspace-context fallback was used for this Creative request.",
         ].join("\n");
@@ -4446,9 +4461,9 @@ export async function createAppChatSession(
         outerTimeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
         outerTimeoutSource = "creative_execute";
         routeDecision = validationRouteDecision;
-        creativeExecutionRequested = !creativeIdeationValidationRejected;
-        creativeResponseReceived = !creativeIdeationValidationRejected;
-        creativeMetadataPresent = !creativeIdeationValidationRejected;
+        creativeExecutionRequested = !creativeIdeationValidationRejected && !creativeSessionValidationRejected;
+        creativeResponseReceived = !creativeIdeationValidationRejected && !creativeSessionValidationRejected;
+        creativeMetadataPresent = !creativeIdeationValidationRejected && !creativeSessionValidationRejected;
         creativeRejectedByM1Validator = true;
         creativeRejectedField = m1RejectedField;
         creativeFallbackUsed = false;
@@ -4469,6 +4484,8 @@ export async function createAppChatSession(
           route_decision: validationRouteDecision,
           ...(creativeIdeationValidationRejected
             ? { creative_ideation_response_received: true }
+            : creativeSessionValidationRejected
+              ? { creative_session_response_received: true }
             : {
                 creative_execution_requested: true,
                 creative_response_received: true,

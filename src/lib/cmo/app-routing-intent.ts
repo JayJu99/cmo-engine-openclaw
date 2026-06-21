@@ -1,4 +1,4 @@
-export type CmoRouteIntent = "cmo_review" | "echo_execution" | "creative_execution" | "creative_ideation" | "surf_x" | "surf_trend" | "surf_research" | "cmo_default";
+export type CmoRouteIntent = "cmo_review" | "echo_execution" | "creative_execution" | "creative_ideation" | "creative_session" | "surf_x" | "surf_trend" | "surf_research" | "cmo_default";
 
 function normalize(value: string): string {
   return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -48,11 +48,34 @@ export function isCreativeDraftSessionIntent(message: string): boolean {
   return creativeAction && creativeObject;
 }
 
+export function isCreativeSessionFollowupIntent(message: string): boolean {
+  const lead = leadingIntentText(message);
+  if (/^(?:\/|@)creative\b/.test(lead)) return true;
+  if (isReviewAuditIntent(message)) return false;
+
+  const draftOrPromptReference =
+    /\b(draft|prompt|negative prompt|brief|concept|visual|style|format|ratio|aspect|version|variant|key visual)\b/.test(lead) ||
+    /\b(hinh|anh|hinh anh|mau|ban nhap|ban thao|y tuong|phong cach|ti le|ty le)\b/.test(lead) ||
+    /\b(1:1|16:9|9:16|4:5|square|portrait|landscape)\b/.test(lead);
+  const presentOrRequest =
+    /\b(show|view|present|send|give|write|list|preview|xem|cho|minh xem|viet|dua|gui|draft truoc|prompt truoc)\b/.test(lead);
+  const refineOrChange =
+    /\b(refine|revise|edit|change|adjust|modify|update|make it|switch|chinh|sua|doi|thay|lam version|lam ban|version)\b/.test(lead);
+  const holdExecution =
+    /\b(prompt only|dont generate|do not generate|dont create|do not create|not yet|wait|chi viet prompt|chi prompt|dung tao|dung generate|dung voi|chua tao|tao voi)\b/.test(lead);
+  const executeFromDraft =
+    /\b(ok|okay|yes|confirm|approve|generate|render|create|produce|tao|lam|chay)\b/.test(lead) &&
+    /\b(prompt|draft|do|di|now|image|visual|hinh|anh|hinh anh|tu prompt|from prompt)\b/.test(lead);
+
+  return draftOrPromptReference && (presentOrRequest || refineOrChange || holdExecution) || holdExecution || executeFromDraft;
+}
+
 export function routeIntentForMessage(message: string): CmoRouteIntent {
   const lead = leadingIntentText(message);
   if (isReviewAuditIntent(message)) return "cmo_review";
   if (isExplicitCreativeExecutionIntent(message)) return "creative_execution";
   if (isCreativeDraftSessionIntent(message)) return "creative_ideation";
+  if (isCreativeSessionFollowupIntent(message)) return "creative_session";
   if (/^\/x\b|^\/surf\s+x\b/.test(lead)) return "surf_x";
   if (/^\/trend\b/.test(lead)) return "surf_trend";
   if (/^\/surf\b/.test(lead)) return "surf_research";

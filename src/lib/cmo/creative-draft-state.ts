@@ -148,6 +148,8 @@ export function extractSuggestedCreativeStateUpdate(response: unknown): unknown 
 
 function normalizeCreativeDecisionAction(value: unknown): CmoCreativeDecisionAction | undefined {
   return value === "propose_draft" ||
+    value === "present_draft" ||
+    value === "show_draft" ||
     value === "refine_draft" ||
     value === "execute" ||
     value === "ask_clarification" ||
