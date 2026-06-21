@@ -49,6 +49,7 @@ export interface HermesCmoChatRequestInput extends CmoRuntimeTurnInput {
   createdAt: string;
   inputMaterialAttachments?: HermesCmoAttachmentRef[];
   creativeWorkingState?: CmoCreativeWorkingState;
+  creativeIdeationDetected?: boolean;
   userIdentity?: {
     userId?: string;
     userEmail?: string;
@@ -530,6 +531,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     : undefined;
   const creativeWorkingStatePresent = Boolean(creativeWorkingStateForHermes);
   const creativeExecutionIntent = isExplicitCreativeExecutionIntent(input.message);
+  const creativeIdeationDetected = input.creativeIdeationDetected === true;
   const creativeExecutionMode = /\b(video|motion)\b/.test(leadingIntentText(input.message)) ? "creative.generate_video" : "creative.generate_image";
   const omittedCreativeMissingContext = creativeExecutionIntent
     ? input.missingContext.filter(isMissingAcceptedProjectContextRef)
@@ -565,10 +567,24 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       mode: "cmo.default",
       user_message: input.message,
       explicit_command: creativeExecutionIntent ? creativeExecutionMode : null,
-      ...(creativeWorkingStatePresent ? { creative_session: true } : {}),
+      ...(creativeWorkingStatePresent || creativeIdeationDetected ? { creative_session: true } : {}),
+      ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
     },
     input: {
       input_material: inputMaterial,
+      ...(creativeIdeationDetected
+        ? {
+            creative_ideation_intent: {
+              requested: true,
+              agent: "creative",
+              cmo_owns_creative_decision: true,
+              product_must_not_choose_creative_execution: true,
+              may_propose_draft: true,
+              may_refine_draft: true,
+              may_execute_only_if_cmo_decides: true,
+            },
+          }
+        : {}),
       ...(creativeWorkingStateForHermes ? { creative_working_state: creativeWorkingStateForHermes } : {}),
       ...(creativeWorkingStateForHermes
         ? {
@@ -601,6 +617,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         : {}),
     },
     ...(creativeWorkingStateForHermes ? { creative_working_state: creativeWorkingStateForHermes } : {}),
+    ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
     input_material: inputMaterial,
     messages: recentConversationMessages(input.history),
     context_pack: {
@@ -614,6 +631,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(sourceAnswerContext ? { source_answer_context: sourceAnswerContext } : {}),
       ...(lensReadoutContext ? { lens_readout_context: lensReadoutContext } : {}),
       ...(creativeWorkingStateForHermes ? { creative_working_state: creativeWorkingStateForHermes } : {}),
+      ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
       ...(sessionLocalResearchResults.length > 0
         ? {
             research_context: {
@@ -698,6 +716,13 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             product_must_not_choose_creative_execution: true,
           }
         : {}),
+      ...(creativeIdeationDetected
+        ? {
+            creative_ideation_detected: true,
+            cmo_owns_creative_decision: true,
+            product_must_not_choose_creative_execution: true,
+          }
+        : {}),
     },
     ui: {
       activity_stream_required: true,
@@ -741,6 +766,14 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creative_working_state_present: true,
             creative_active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
             creative_drafts_count: creativeWorkingStateForHermes.drafts.length,
+            creative_execution_may_be_requested_by_cmo: true,
+            cmo_owns_creative_decision: true,
+            product_must_not_choose_creative_execution: true,
+          }
+        : {}),
+      ...(creativeIdeationDetected
+        ? {
+            creative_ideation_detected: true,
             creative_execution_may_be_requested_by_cmo: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,

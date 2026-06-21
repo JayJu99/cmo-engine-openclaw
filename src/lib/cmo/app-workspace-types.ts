@@ -618,7 +618,7 @@ export type CmoProductRenderSource =
   | "direct_bridge"
   | "local_session_command";
 export type CmoOuterTimeoutSource = "default_app_turn" | "creative_execute";
-export type CmoRouteDecision = "app_turn" | "creative_execution" | "execute" | "tool_execute";
+export type CmoRouteDecision = "app_turn" | "creative_execution" | "creative_ideation" | "creative_session" | "execute" | "tool_execute";
 export type CmoStrategyMode = "DIAGNOSE" | "FOCUS" | "PRIORITIZE" | "REVIEW" | "RESET";
 export type CmoDecisionLabel = "KEEP" | "CUT" | "TEST" | "SCALE" | "WAIT";
 export type HermesCmoAgentUsed = "cmo" | "echo" | "surf" | "creative";
@@ -900,7 +900,9 @@ export interface HermesCmoChatMetadata {
   fallback_to?: string;
   hermesEndpointTimeoutMs?: number;
   hermesEndpointTimeoutSource?: "default_execute" | "creative_execute" | "tool_endpoint" | "tool_timeout_override";
-  route_decision?: "execute" | "creative_execution" | "tool_execute";
+  route_decision?: "execute" | "creative_execution" | "creative_ideation" | "creative_session" | "tool_execute";
+  creative_ideation_detected?: boolean;
+  cmo_owns_creative_decision?: boolean;
   creative_execution_requested?: boolean;
   creative_response_received?: boolean;
   creative_metadata_present?: boolean;

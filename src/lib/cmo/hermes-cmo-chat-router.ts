@@ -33,7 +33,7 @@ export interface HermesCmoChatRouteResolution {
   toolChatEnabled: boolean;
   toolChatCanary: boolean;
   fallbackEnabled: boolean;
-  reason: "forced_fallback" | "creative_execution" | "creative_session" | "source_or_tool_task" | "tool_chat_canary" | "v11_canary_chat" | "v11_disabled_or_non_canary";
+  reason: "forced_fallback" | "creative_execution" | "creative_ideation" | "creative_session" | "source_or_tool_task" | "tool_chat_canary" | "v11_canary_chat" | "v11_disabled_or_non_canary";
 }
 
 function appIsCanary(appId: string, canaryApps: string[]): boolean {
@@ -101,7 +101,7 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
     };
   }
 
-  if (input.hasCreativeWorkingState === true || isCreativeDraftSessionIntent(input.message)) {
+  if (input.hasCreativeWorkingState === true || routeIntent === "creative_ideation" || isCreativeDraftSessionIntent(input.message)) {
     return {
       endpoint: HERMES_CMO_EXECUTE_ENDPOINT,
       endpointKind: "execute",
@@ -112,7 +112,7 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
       toolChatEnabled,
       toolChatCanary,
       fallbackEnabled,
-      reason: "creative_session",
+      reason: input.hasCreativeWorkingState === true ? "creative_session" : "creative_ideation",
     };
   }
 

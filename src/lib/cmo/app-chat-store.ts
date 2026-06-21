@@ -1520,7 +1520,14 @@ function normalizeOuterTimeoutSource(value: unknown): CMOChatSession["outerTimeo
 }
 
 function normalizeRouteDecision(value: unknown): CMOChatSession["routeDecision"] | undefined {
-  return value === "app_turn" || value === "creative_execution" || value === "execute" || value === "tool_execute" ? value : undefined;
+  return value === "app_turn" ||
+    value === "creative_execution" ||
+    value === "creative_ideation" ||
+    value === "creative_session" ||
+    value === "execute" ||
+    value === "tool_execute"
+    ? value
+    : undefined;
 }
 
 function normalizeContextDiagnostics(value: unknown): CMOContextDiagnostics | undefined {
@@ -2185,9 +2192,15 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     value.hermesEndpointTimeoutSource === "tool_timeout_override"
       ? { hermesEndpointTimeoutSource: value.hermesEndpointTimeoutSource }
       : {}),
-    ...(value.route_decision === "execute" || value.route_decision === "creative_execution" || value.route_decision === "tool_execute"
+    ...(value.route_decision === "execute" ||
+    value.route_decision === "creative_execution" ||
+    value.route_decision === "creative_ideation" ||
+    value.route_decision === "creative_session" ||
+    value.route_decision === "tool_execute"
       ? { route_decision: value.route_decision }
       : {}),
+    ...(value.creative_ideation_detected === true ? { creative_ideation_detected: true } : {}),
+    ...(value.cmo_owns_creative_decision === true ? { cmo_owns_creative_decision: true } : {}),
     ...(value.creative_execution_requested === true ? { creative_execution_requested: true } : {}),
     ...(value.creative_response_received === true ? { creative_response_received: true } : {}),
     ...(typeof value.creative_metadata_present === "boolean" ? { creative_metadata_present: value.creative_metadata_present } : {}),
@@ -3304,10 +3317,15 @@ export async function createAppChatSession(
   });
   const hermesCmoChatV11Requested = hermesCmoRoute.endpointKind === "agent_chat";
   const hermesCmoCreativeExecutionRequested = hermesCmoRoute.reason === "creative_execution";
+  const hermesCmoNativeCreativeRequested =
+    hermesCmoRoute.reason === "creative_execution" ||
+    hermesCmoRoute.reason === "creative_ideation" ||
+    hermesCmoRoute.reason === "creative_session";
+  const creativeIdeationDetected = hermesCmoRoute.reason === "creative_ideation";
   const hermesCmoLegacyRequested =
     legacyHermesCmoChatRequested ||
     hermesCmoRoute.endpointKind === "tool_execute" ||
-    hermesCmoCreativeExecutionRequested;
+    hermesCmoNativeCreativeRequested;
   const hermesCmoChatRequested = hermesCmoChatV11Requested || hermesCmoLegacyRequested;
   const lensReadoutContextResult = isCmoLensDirectContextEnabled()
     ? await getLensReadoutContextForAppSafe({
@@ -3596,6 +3614,7 @@ export async function createAppChatSession(
           userIdentity,
           inputMaterialAttachments: hermesAttachmentRefs,
           creativeWorkingState,
+          creativeIdeationDetected,
         });
         const hermesResult = await runHermesCmoRuntime(hermesRequest, { toolTimeoutMs: asyncToolRunTimeoutMs });
         const counterValidation = validateHermesCmoChatCounters(hermesResult);
@@ -3660,6 +3679,7 @@ export async function createAppChatSession(
           liveAttemptStartedAt: runStartedAt,
           liveAttemptDurationMs: durationMs,
           totalDurationMs: Date.now() - requestStartedMs,
+          ...(normalizeRouteDecision(hermesResult.hermesCmoRouteDecision) ? { routeDecision: normalizeRouteDecision(hermesResult.hermesCmoRouteDecision), route_decision: normalizeRouteDecision(hermesResult.hermesCmoRouteDecision) } : {}),
           cmoRunId,
           cmoRunStatus: "completed" as const,
           cmoRunEndpoint: "/agents/cmo/tool-execute" as const,
@@ -3978,6 +3998,7 @@ export async function createAppChatSession(
           userIdentity,
           inputMaterialAttachments: hermesAttachmentRefs,
           creativeWorkingState,
+          creativeIdeationDetected,
         });
         const hermesFallbackResult = await runHermesCmoRuntime(hermesFallbackRequest);
         sessionLocalResearchResults = mergeSessionLocalResearchResults(
@@ -4033,6 +4054,7 @@ export async function createAppChatSession(
         runtimeProvider = mappedHermesFallbackResult.runtimeProvider;
         runtimeAgent = mappedHermesFallbackResult.runtimeAgent;
         fallbackDurationMs = Date.now() - fallbackStartedMs;
+        routeDecision = normalizeRouteDecision(hermesFallbackResult.hermesCmoRouteDecision);
         productFallbackReason = reason;
         hermesCmoStatus = "failed_then_existing_fallback";
         hermesCmoCounters = mappedHermesFallbackResult.hermesCmoCounters;
@@ -4119,6 +4141,7 @@ export async function createAppChatSession(
         userIdentity,
         inputMaterialAttachments: hermesAttachmentRefs,
         creativeWorkingState,
+        creativeIdeationDetected,
       });
       hermesRequestSent = true;
       const hermesResult = await runHermesCmoRuntime(hermesRequest);
@@ -4187,6 +4210,7 @@ export async function createAppChatSession(
       liveAttemptDurationMs = Date.now() - hermesStartedMs;
       fallbackDurationMs = undefined;
       timeoutMs = undefined;
+      routeDecision = normalizeRouteDecision(hermesResult.hermesCmoRouteDecision);
       calledHermesCmo = true;
       hermesCmoStatus = mappedHermesResult.hermesCmoStatus;
       hermesCmoCounters = mappedHermesResult.hermesCmoCounters;
@@ -4723,6 +4747,8 @@ export async function createAppChatSession(
   if (hermesCmoMetadata) {
     hermesCmoMetadata = {
       ...hermesCmoMetadata,
+      ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
+      ...(hermesCmoNativeCreativeRequested ? { cmo_owns_creative_decision: true } : {}),
       ...lensReadoutMetadata({
         context: lensReadoutContext as unknown as Record<string, unknown> | null,
         warning: lensReadoutContextWarning,
