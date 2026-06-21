@@ -102,6 +102,19 @@ requireSource(runtimeSource, /routeDecision === "creative_ideation" \|\| routeDe
 requireSource(runtimeSource, /requestCreativeFlagIsTrue\(request, "creative_ideation_detected"\)/, "runtime validation must require creative ideation flag");
 requireSource(runtimeSource, /requestCreativeFlagIsTrue\(request, "cmo_owns_creative_decision"\)/, "runtime validation must require CMO decision ownership");
 requireSource(runtimeSource, /allowCreativeIdeation: allowCreativeIdeationAnswerBasis/, "runtime validation must conditionally allow creative_ideation answer basis");
+requireSource(runtimeSource, /normalizeHermesCreativeIdeationResponse/, "runtime must canonicalize Creative ideation before M1 validation");
+requireSource(runtimeSource, /safeCreativeIdeationRawActivityTypes/, "runtime creative ideation canonicalizer");
+requireSource(runtimeSource, /"creative\.ideation\.draft_proposed"/, "runtime activity validation must accept draft proposed event");
+requireSource(runtimeSource, /"creative\.ideation\.draft_updated"/, "runtime activity validation must accept draft updated event");
+requireSource(runtimeSource, /"creative\.ideation\.draft_refined"/, "runtime activity validation must accept draft refined event");
+requireSource(runtimeSource, /"creative\.ideation\.clarification_requested"/, "runtime activity validation must accept clarification event");
+requireSource(runtimeSource, /creativeIdeationEventToProductEvent/, "runtime must map raw creative ideation events to Product-safe activity events");
+requireSource(runtimeSource, /type: "cmo\.durable_action\.proposed"/, "runtime canonicalizer must not pass raw creative ideation event types into M1 activity validation");
+requireSource(runtimeSource, /requestAllowsCreativeIdeationAnswerBasis\(request\)[\s\S]*answerBasis\.mode !== "creative_ideation"/, "runtime canonicalizer must require creative request context and creative answer basis");
+requireSource(runtimeSource, /creative_ideation_canonicalized: true/, "runtime diagnostics must mark creative ideation canonicalization");
+requireSource(runtimeSource, /raw_activity_event_types: rawActivityEventTypes/, "runtime diagnostics must preserve raw activity event types");
+requireSource(runtimeSource, /activity_events_allowed_for_creative_ideation: true/, "runtime diagnostics must expose creative ideation activity canonicalization");
+requireSource(runtimeSource, /rejected_activity_event_type/, "runtime diagnostics must expose rejected activity event type");
 requireSource(runtimeSource, /responseAnswerBasis\.mode === "creative_ideation"/, "runtime diagnostics must detect creative ideation responses");
 requireSource(runtimeSource, /creative_ideation_response_received: true/, "runtime diagnostics must trace creative ideation responses");
 requireSource(runtimeSource, /rejected_by_m1_validator: false/, "runtime diagnostics must mark accepted ideation responses");
@@ -112,6 +125,7 @@ requireSource(runtimeSource, /creative_ideation_detected: constraints\.creative_
 requireSource(runtimeSource, /cmo_owns_creative_decision: constraints\.cmo_owns_creative_decision === true/, "runtime trace must include CMO decision ownership");
 requireSource(runtimeSource, /upload_endpoint: `\$\{productPublicOrigin\(\)\}\/api\/cmo\/apps\/\$\{encodeURIComponent\(appId\)\}\/creative\/artifact-ingest`/, "runtime upload endpoint");
 forbidSource(runtimeSource, /const answerBasisModes = new Set[\s\S]*"creative_ideation"[\s\S]*\]\);[\s\S]*const answerFormats/s, "runtime must not globally allow creative_ideation answer basis");
+forbidSource(runtimeSource, /const activityTypes = new Set[\s\S]*"creative\.ideation\.draft_proposed"[\s\S]*\]\);[\s\S]*const creativeLifecycleActivityTypes/s, "runtime must not globally allow creative ideation activity events");
 
 requireSource(storeSource, /let creativeWorkingState: CmoCreativeWorkingState \| undefined = continuedSession\?\.creativeWorkingState;/, "store session state");
 requireSource(storeSource, /hasCreativeWorkingState: creativeWorkingStatePresent/, "store route state");
@@ -125,9 +139,17 @@ requireSource(storeSource, /creativeDecision \? \{ creativeDecision \}/, "store 
 requireSource(storeSource, /creative_ideation_response_received/, "store must persist creative ideation diagnostics");
 requireSource(storeSource, /answer_basis_mode/, "store must persist answer basis diagnostics");
 requireSource(storeSource, /typeof value\.rejected_by_m1_validator === "boolean"/, "store must preserve accepted validator diagnostic false");
+requireSource(storeSource, /activity_events_allowed_for_creative_ideation/, "store must persist creative ideation activity diagnostics");
+requireSource(storeSource, /raw_activity_event_types/, "store must persist raw activity event diagnostics");
+requireSource(storeSource, /creative_ideation_canonicalized/, "store must persist creative ideation canonicalization diagnostics");
+requireSource(storeSource, /creative_state_persisted: creativeStatePersisted/, "store must persist creative state persistence diagnostics");
 requireSource(mapperSource, /creative_state_update_present: creativeStateUpdatePresent/, "mapper must expose creative state update diagnostics");
 requireSource(mapperSource, /creative_decision_present: creativeDecisionPresent/, "mapper must expose creative decision diagnostics");
 requireSource(mapperSource, /answer_basis_mode: answerBasisMode/, "mapper must expose answer basis diagnostics");
+requireSource(mapperSource, /activity_event_types: activityEventTypes/, "mapper must expose activity event type diagnostics");
+requireSource(mapperSource, /activity_events_allowed_for_creative_ideation/, "mapper must expose creative ideation activity diagnostics");
+requireSource(mapperSource, /raw_activity_event_types: rawActivityEventTypes/, "mapper must expose raw activity event type diagnostics");
+requireSource(mapperSource, /creative_ideation_canonicalized/, "mapper must expose creative ideation canonicalization diagnostics");
 
 requireSource(uiSource, /renderCreativeAssets\(message\)/, "UI must keep rendering creative assets");
 forbidSource(storeSource, /Ok b[aạ]n t[aạ]o [đd]i|message\s*={2,3}\s*["'`]Ok b/i, "Product store");

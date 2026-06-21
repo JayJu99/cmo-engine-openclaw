@@ -907,6 +907,12 @@ export interface HermesCmoChatMetadata {
   creative_ideation_response_received?: boolean;
   creative_state_update_present?: boolean;
   creative_decision_present?: boolean;
+  activity_event_types?: string[];
+  raw_activity_event_types?: string[];
+  activity_events_allowed_for_creative_ideation?: boolean;
+  creative_ideation_canonicalized?: boolean;
+  rejected_activity_event_type?: string;
+  creative_state_persisted?: boolean;
   answer_basis_mode?: string;
   creative_response_received?: boolean;
   creative_metadata_present?: boolean;

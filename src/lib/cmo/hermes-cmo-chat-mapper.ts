@@ -1234,6 +1234,22 @@ function metadataFromHermes(
     result.response.drafts_upsert !== undefined ||
     structuredOutput.drafts_upsert !== undefined;
   const creativeDecisionPresent = result.response.creative_decision !== undefined || structuredOutput.creative_decision !== undefined;
+  const activityEventTypes = activityEvents.map((event) => event.type);
+  const rawActivityEventTypes = Array.isArray(structuredOutput.raw_activity_event_types)
+    ? structuredOutput.raw_activity_event_types.filter((item): item is string => typeof item === "string")
+    : [];
+  const activityEventsAllowedForCreativeIdeation =
+    typeof structuredOutput.activity_events_allowed_for_creative_ideation === "boolean"
+      ? structuredOutput.activity_events_allowed_for_creative_ideation
+      : undefined;
+  const creativeIdeationCanonicalized =
+    typeof structuredOutput.creative_ideation_canonicalized === "boolean"
+      ? structuredOutput.creative_ideation_canonicalized
+      : undefined;
+  const rejectedActivityEventType =
+    typeof structuredOutput.rejected_activity_event_type === "string" && structuredOutput.rejected_activity_event_type.trim()
+      ? structuredOutput.rejected_activity_event_type.trim()
+      : undefined;
   const attachmentTraceSummary = isRecord(result.response.attachment_trace_summary) ? result.response.attachment_trace_summary : undefined;
   const cmoCallSurfUsed = toolsUsed.includes("cmo_call_surf") || executedCounts.surfCalls > 0;
   const cmoCallEchoUsed = toolsUsed.includes("cmo_call_echo") || executedCounts.echoCalls > 0;
@@ -1259,6 +1275,16 @@ function metadataFromHermes(
           creative_ideation_response_received: true,
           creative_state_update_present: creativeStateUpdatePresent,
           creative_decision_present: creativeDecisionPresent,
+          activity_event_types: activityEventTypes,
+          ...(rawActivityEventTypes.length > 0 ? { raw_activity_event_types: rawActivityEventTypes } : {}),
+          ...(typeof activityEventsAllowedForCreativeIdeation === "boolean"
+            ? { activity_events_allowed_for_creative_ideation: activityEventsAllowedForCreativeIdeation }
+            : {}),
+          ...(typeof creativeIdeationCanonicalized === "boolean"
+            ? { creative_ideation_canonicalized: creativeIdeationCanonicalized }
+            : {}),
+          ...(rejectedActivityEventType ? { rejected_activity_event_type: rejectedActivityEventType } : {}),
+          fallback_used: false,
           rejected_by_m1_validator: false,
         }
       : {}),

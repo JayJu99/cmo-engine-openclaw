@@ -2205,6 +2205,14 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(value.creative_ideation_response_received === true ? { creative_ideation_response_received: true } : {}),
     ...(typeof value.creative_state_update_present === "boolean" ? { creative_state_update_present: value.creative_state_update_present } : {}),
     ...(typeof value.creative_decision_present === "boolean" ? { creative_decision_present: value.creative_decision_present } : {}),
+    ...(Array.isArray(value.activity_event_types) ? { activity_event_types: value.activity_event_types.map((item) => stringValue(item)).filter((item): item is string => Boolean(item)) } : {}),
+    ...(Array.isArray(value.raw_activity_event_types) ? { raw_activity_event_types: value.raw_activity_event_types.map((item) => stringValue(item)).filter((item): item is string => Boolean(item)) } : {}),
+    ...(typeof value.activity_events_allowed_for_creative_ideation === "boolean"
+      ? { activity_events_allowed_for_creative_ideation: value.activity_events_allowed_for_creative_ideation }
+      : {}),
+    ...(typeof value.creative_ideation_canonicalized === "boolean" ? { creative_ideation_canonicalized: value.creative_ideation_canonicalized } : {}),
+    ...(stringValue(value.rejected_activity_event_type) ? { rejected_activity_event_type: stringValue(value.rejected_activity_event_type) } : {}),
+    ...(typeof value.creative_state_persisted === "boolean" ? { creative_state_persisted: value.creative_state_persisted } : {}),
     ...(stringValue(value.answer_basis_mode) ? { answer_basis_mode: stringValue(value.answer_basis_mode) } : {}),
     ...(value.creative_response_received === true ? { creative_response_received: true } : {}),
     ...(typeof value.creative_metadata_present === "boolean" ? { creative_metadata_present: value.creative_metadata_present } : {}),
@@ -2559,11 +2567,17 @@ function creativeStateMetadata(
   creativeWorkingState: CmoCreativeWorkingState | undefined,
   creativeDecision: CmoCreativeDecision | undefined,
 ): Partial<HermesCmoChatMetadata> {
+  const creativeStatePersisted = Boolean(
+    creativeWorkingState &&
+      (creativeWorkingState.drafts.length > 0 || creativeWorkingState.active_draft_id),
+  );
+
   return {
     ...(hasCreativeWorkingStateDrafts(creativeWorkingState) ? { creative_draft_active: true } : {}),
     ...(creativeWorkingState?.active_draft_id ? { creative_active_draft_id: creativeWorkingState.active_draft_id } : {}),
     ...(creativeWorkingState ? { creative_drafts_count: creativeWorkingState.drafts.length } : {}),
     ...(creativeDecision ? { creative_decision: creativeDecision } : {}),
+    creative_state_persisted: creativeStatePersisted,
   };
 }
 
@@ -2768,7 +2782,10 @@ function isTimedOutHermesError(reason: string): boolean {
 }
 
 function creativeM1RejectedField(reason: string): string | undefined {
-  if (!/creative_metadata_present=true/i.test(reason) || !/rejected_by_m1_validator=true/i.test(reason)) {
+  if (
+    !/rejected_by_m1_validator=true/i.test(reason) ||
+    !(/creative_metadata_present=true/i.test(reason) || /creative_ideation_response_received=true/i.test(reason))
+  ) {
     return undefined;
   }
 
@@ -2776,6 +2793,10 @@ function creativeM1RejectedField(reason: string): string | undefined {
   const rejected = explicit ?? reason.match(/Rejected field:\s*([^.\n]+)/i)?.[1];
 
   return rejected?.trim();
+}
+
+function isCreativeIdeationM1Rejection(reason: string): boolean {
+  return /creative_ideation_response_received=true/i.test(reason) && /rejected_by_m1_validator=true/i.test(reason);
 }
 
 function parseCreativeRejectedSideEffectType(reason: string): string | undefined {
@@ -4242,6 +4263,7 @@ export async function createAppChatSession(
       const m1RejectedField = hermesCmoCreativeExecutionRequested ? creativeM1RejectedField(reason) : undefined;
       const sideEffectRejectedType = hermesCmoCreativeExecutionRequested ? parseCreativeRejectedSideEffectType(reason) : undefined;
       const creativeValidationRejected = Boolean(m1RejectedField);
+      const creativeIdeationValidationRejected = isCreativeIdeationM1Rejection(reason);
       const creativeSideEffectRejected = Boolean(sideEffectRejectedType);
 
       console.warn(
@@ -4396,10 +4418,15 @@ export async function createAppChatSession(
         echoCalls = hermesCmoMetadata.echoCalls;
         usedHermesCmoChat = true;
       } else if (creativeValidationRejected) {
+        const validationLabel = creativeIdeationValidationRejected ? "Creative ideation" : "Creative execution";
+        const validationRouteDecision = creativeIdeationValidationRejected ? "creative_ideation" : "creative_execution";
+
         answer = [
-          "Creative execution returned generated asset metadata, but Product rejected the response during M1 validation.",
+          creativeIdeationValidationRejected
+            ? "Creative ideation returned a draft response, but Product rejected it during M1 validation."
+            : "Creative execution returned generated asset metadata, but Product rejected the response during M1 validation.",
           `Rejected field: ${m1RejectedField}.`,
-          "No workspace-context fallback was used for this Creative generation request.",
+          "No workspace-context fallback was used for this Creative request.",
         ].join("\n");
         status = "failed";
         assumptions = [];
@@ -4409,8 +4436,8 @@ export async function createAppChatSession(
         runtimeStatus = "runtime_error";
         runtimeMode = "configured_but_unreachable";
         attemptedRuntimeMode = "live";
-        runtimeLabel = "Hermes CMO Creative execution";
-        runtimeError = "Creative metadata was rejected by Product M1 validation.";
+        runtimeLabel = `Hermes CMO ${validationLabel}`;
+        runtimeError = `${validationLabel} response was rejected by Product M1 validation.`;
         runtimeErrorReason = "invalid_response";
         runtimeProvider = "hermes";
         runtimeAgent = "creative";
@@ -4418,10 +4445,10 @@ export async function createAppChatSession(
         timeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
         outerTimeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
         outerTimeoutSource = "creative_execute";
-        routeDecision = "creative_execution";
-        creativeExecutionRequested = true;
-        creativeResponseReceived = true;
-        creativeMetadataPresent = true;
+        routeDecision = validationRouteDecision;
+        creativeExecutionRequested = !creativeIdeationValidationRejected;
+        creativeResponseReceived = !creativeIdeationValidationRejected;
+        creativeMetadataPresent = !creativeIdeationValidationRejected;
         creativeRejectedByM1Validator = true;
         creativeRejectedField = m1RejectedField;
         creativeFallbackUsed = false;
@@ -4439,10 +4466,14 @@ export async function createAppChatSession(
           runtime_kind: "ai_agent",
           requested_endpoint: "/agents/cmo/execute",
           fallback_used: false,
-          route_decision: "creative_execution",
-          creative_execution_requested: true,
-          creative_response_received: true,
-          creative_metadata_present: true,
+          route_decision: validationRouteDecision,
+          ...(creativeIdeationValidationRejected
+            ? { creative_ideation_response_received: true }
+            : {
+                creative_execution_requested: true,
+                creative_response_received: true,
+                creative_metadata_present: true,
+              }),
           rejected_by_m1_validator: true,
           rejected_field: m1RejectedField,
           agentsUsed: ["cmo", "creative"],
