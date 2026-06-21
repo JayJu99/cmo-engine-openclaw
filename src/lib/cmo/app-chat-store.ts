@@ -3338,6 +3338,7 @@ export async function createAppChatSession(
     message: request.message,
     forceFallback: request.forceFallback,
     hasCreativeWorkingState: creativeWorkingStatePresent,
+    creativeWorkingState,
   });
   const legacyHermesCmoChatRequested = !request.forceFallback && shouldUseHermesCmoChat(request.appId);
   const preliminaryHermesCmoChatRequested = legacyHermesCmoChatRequested || preliminaryHermesCmoRoute.endpointKind === "agent_chat";
@@ -3356,6 +3357,7 @@ export async function createAppChatSession(
     forceFallback: request.forceFallback,
     hasSourceOrToolTask: sourceOrToolTask,
     hasCreativeWorkingState: creativeWorkingStatePresent,
+    creativeWorkingState,
   });
   const hermesCmoChatV11Requested = hermesCmoRoute.endpointKind === "agent_chat";
   const hermesCmoCreativeExecutionRequested = hermesCmoRoute.reason === "creative_execution";
@@ -3369,7 +3371,9 @@ export async function createAppChatSession(
   const hermesCmoLegacyRequested =
     legacyHermesCmoChatRequested ||
     hermesCmoRoute.endpointKind === "tool_execute" ||
-    hermesCmoNativeCreativeRequested;
+    hermesCmoCreativeExecutionRequested ||
+    hermesCmoRoute.reason === "creative_ideation" ||
+    hermesCmoRoute.reason === "creative_session";
   const hermesCmoChatRequested = hermesCmoChatV11Requested || hermesCmoLegacyRequested;
   const lensReadoutContextResult = isCmoLensDirectContextEnabled()
     ? await getLensReadoutContextForAppSafe({

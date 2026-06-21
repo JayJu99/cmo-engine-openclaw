@@ -1,4 +1,5 @@
-import { isCreativeDraftSessionIntent, isCreativeSessionFollowupIntent, routeIntentForMessage, type CmoRouteIntent } from "@/lib/cmo/app-routing-intent";
+import { classifyCreativeSessionFollowup, isCreativeDraftSessionIntent, routeIntentForMessage, type CmoRouteIntent } from "@/lib/cmo/app-routing-intent";
+import type { CmoCreativeWorkingState } from "@/lib/cmo/app-workspace-types";
 import {
   getCmoHermesCmoCanaryApps,
   getCmoHermesCmoChatV11CanaryApps,
@@ -21,6 +22,7 @@ export interface HermesCmoChatRouteInput {
   forceFallback?: boolean;
   hasSourceOrToolTask?: boolean;
   hasCreativeWorkingState?: boolean;
+  creativeWorkingState?: CmoCreativeWorkingState;
 }
 
 export interface HermesCmoChatRouteResolution {
@@ -64,7 +66,9 @@ export function shouldUseHermesCmoToolChat(appId: string): boolean {
 }
 
 export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): HermesCmoChatRouteResolution {
-  const routeIntent = routeIntentForMessage(input.message);
+  const creativeWorkingState = input.creativeWorkingState ?? (input.hasCreativeWorkingState === true ? { drafts: [] } : undefined);
+  const routeIntent = routeIntentForMessage(input.message, { creativeWorkingState });
+  const creativeSessionClassification = classifyCreativeSessionFollowup(input.message, creativeWorkingState);
   const v11Enabled = isCmoHermesCmoChatV11Enabled();
   const v11Canary = appIsCanary(input.appId, getCmoHermesCmoChatV11CanaryApps());
   const toolChatEnabled = isCmoHermesCmoToolChatEnabled();
@@ -101,8 +105,7 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
     };
   }
 
-  const creativeSessionFollowup = input.hasCreativeWorkingState === true &&
-    (routeIntent === "creative_session" || routeIntent === "creative_ideation" || isCreativeSessionFollowupIntent(input.message));
+  const creativeSessionFollowup = creativeSessionClassification.detected;
 
   if (creativeSessionFollowup || routeIntent === "creative_ideation" || isCreativeDraftSessionIntent(input.message)) {
     return {

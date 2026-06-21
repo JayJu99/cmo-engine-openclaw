@@ -536,7 +536,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const creativeSessionFollowupDetected = input.creativeSessionFollowupDetected === true;
   const creativeNativeSession = creativeWorkingStatePresent || creativeIdeationDetected || creativeSessionFollowupDetected;
   const creativeSessionFollowupIntent = creativeSessionFollowupDetected
-    ? classifyCreativeSessionFollowupIntent(input.message)
+    ? classifyCreativeSessionFollowupIntent(input.message, creativeWorkingStateForHermes)
     : "none";
   const creativeExecutionMode = /\b(video|motion)\b/.test(leadingIntentText(input.message)) ? "creative.generate_video" : "creative.generate_image";
   const omittedCreativeMissingContext = creativeExecutionIntent
@@ -1134,7 +1134,7 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
 
     const question = response.clarifying_question.question?.trim() ?? "";
 
-    return question;
+    return question ? ["## Need Clarification", "", question].join("\n") : "";
   }
 
   const classification = classificationFromResponse(response);
