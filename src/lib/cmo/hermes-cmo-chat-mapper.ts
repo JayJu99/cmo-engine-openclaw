@@ -1224,7 +1224,16 @@ function metadataFromHermes(
   const toolTraceSummary = isRecord(result.response.tool_trace_summary) ? result.response.tool_trace_summary : {};
   const toolReadsCount = toolReadsCountFromResponse(result.response, activityEvents);
   const contextResolution = contextResolutionFromResponse(result.response);
-  const answerBasis = isRecord(result.response.answer_basis) ? result.response.answer_basis : {};
+  const structuredOutput: Record<string, unknown> = isRecord(result.response.structured_output) ? result.response.structured_output : {};
+  const answerBasis: Record<string, unknown> = isRecord(result.response.answer_basis) ? result.response.answer_basis : {};
+  const answerBasisMode = typeof answerBasis.mode === "string" ? answerBasis.mode : undefined;
+  const creativeIdeationResponseReceived = answerBasisMode === "creative_ideation";
+  const creativeStateUpdatePresent =
+    result.response.suggested_creative_state_update !== undefined ||
+    structuredOutput.suggested_creative_state_update !== undefined ||
+    result.response.drafts_upsert !== undefined ||
+    structuredOutput.drafts_upsert !== undefined;
+  const creativeDecisionPresent = result.response.creative_decision !== undefined || structuredOutput.creative_decision !== undefined;
   const attachmentTraceSummary = isRecord(result.response.attachment_trace_summary) ? result.response.attachment_trace_summary : undefined;
   const cmoCallSurfUsed = toolsUsed.includes("cmo_call_surf") || executedCounts.surfCalls > 0;
   const cmoCallEchoUsed = toolsUsed.includes("cmo_call_echo") || executedCounts.echoCalls > 0;
@@ -1244,6 +1253,15 @@ function metadataFromHermes(
     hermesEndpointTimeoutSource: result.hermesCmoEndpointTimeoutSource,
     route_decision: result.hermesCmoRouteDecision,
     ...(result.hermesCmoRouteDecision === "creative_execution" ? { creative_execution_requested: true } : {}),
+    ...(answerBasisMode ? { answer_basis_mode: answerBasisMode } : {}),
+    ...(creativeIdeationResponseReceived
+      ? {
+          creative_ideation_response_received: true,
+          creative_state_update_present: creativeStateUpdatePresent,
+          creative_decision_present: creativeDecisionPresent,
+          rejected_by_m1_validator: false,
+        }
+      : {}),
     hermesToolEndpointEnabled: result.hermesCmoToolEndpointEnabled,
     ...(result.hermesCmoEndpointKind === "tool_execute" ? { tool_capable_cmo: true } : {}),
     ...(result.sideEffects !== undefined ? { sideEffects: result.sideEffects } : {}),

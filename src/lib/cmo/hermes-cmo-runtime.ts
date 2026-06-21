@@ -164,6 +164,7 @@ export interface HermesCmoRuntimeRequest {
     heartbeat_required: boolean;
     [key: string]: unknown;
   };
+  route_decision?: HermesCmoRouteDecision;
   artifact_transport?: {
     mode: "product_upload";
     upload_endpoint: string;
@@ -238,6 +239,7 @@ export interface HermesCmoRuntimeAnswerBasis {
     | "session_source_artifact"
     | "insufficient_context"
     | "clarification"
+    | "creative_ideation"
     | "save_to_vault"
     | "tool_read"
     | "attachment_read";
@@ -408,6 +410,7 @@ const simpleAnswerModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "session_source_artifact",
   "insufficient_context",
   "clarification",
+  "creative_ideation",
 ]);
 const classifications = new Set<HermesCmoClassification>([
   "native_conversation",
@@ -787,12 +790,28 @@ interface HermesCmoResponseNormalizeOptions {
   activityEventsCandidate?: unknown[];
 }
 
+interface HermesCmoAnswerBasisModeOptions {
+  allowToolRead?: boolean;
+  allowCreativeIdeation?: boolean;
+}
+
 const isToolCapableResponseCandidate = (response: Record<string, unknown>): boolean =>
   (response[HERMES_ORIGINAL_SCHEMA_VERSION] ?? response.schema_version) === "hermes.cmo.tool_response.v1" &&
   (response[HERMES_ORIGINAL_MODE] ?? response.mode) === "cmo.tool_capable";
 
-const answerBasisModeIsAllowed = (mode: unknown, allowToolRead: boolean): mode is HermesCmoRuntimeAnswerBasis["mode"] =>
-  answerBasisModes.has(mode as HermesCmoRuntimeAnswerBasis["mode"]) || (allowToolRead && mode === "tool_read");
+const answerBasisModeIsAllowed = (
+  mode: unknown,
+  options: HermesCmoAnswerBasisModeOptions | boolean = {},
+): mode is HermesCmoRuntimeAnswerBasis["mode"] => {
+  const allowToolRead = typeof options === "boolean" ? options : options.allowToolRead === true;
+  const allowCreativeIdeation = typeof options === "boolean" ? false : options.allowCreativeIdeation === true;
+
+  return (
+    answerBasisModes.has(mode as HermesCmoRuntimeAnswerBasis["mode"]) ||
+    allowToolRead && mode === "tool_read" ||
+    allowCreativeIdeation && mode === "creative_ideation"
+  );
+};
 
 const answerTextFromKnownSimpleShape = (answer: unknown): string | null => {
   if (!isRecord(answer)) {
@@ -813,13 +832,13 @@ const answerTextFromKnownSimpleShape = (answer: unknown): string | null => {
 const answerModeFromResponse = (
   response: Record<string, unknown>,
   answerBasis: Record<string, unknown>,
-  allowToolRead = false,
+  options: HermesCmoAnswerBasisModeOptions | boolean = {},
 ): HermesCmoRuntimeAnswerBasis["mode"] | null => {
   const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
   const candidates = [response.classification, structuredOutput.classification, answerBasis.mode];
 
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && answerBasisModeIsAllowed(candidate, allowToolRead)) {
+    if (typeof candidate === "string" && answerBasisModeIsAllowed(candidate, options)) {
       return candidate as HermesCmoRuntimeAnswerBasis["mode"];
     }
   }
@@ -892,9 +911,10 @@ const normalizeHermesCmoResponseCandidate = (
   const schemaVersion = originalSchemaVersion === "hermes.cmo.tool_response.v1" ? "hermes.cmo.response.v1" : originalSchemaVersion;
   const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
   const answerBasisMode = typeof answerBasis.mode === "string" ? answerBasis.mode : undefined;
-  const canNormalizeAnswerBasis = answerBasisMode !== undefined && answerBasisModeIsAllowed(answerBasisMode, toolCapableResponse);
+  const canNormalizeAnswerBasis = answerBasisMode !== undefined &&
+    answerBasisModeIsAllowed(answerBasisMode, { allowToolRead: toolCapableResponse, allowCreativeIdeation: true });
   const clarifyingQuestion = isRecord(response.clarifying_question) ? response.clarifying_question : {};
-  const answerMode = answerModeFromResponse(response, answerBasis, toolCapableResponse);
+  const answerMode = answerModeFromResponse(response, answerBasis, { allowToolRead: toolCapableResponse, allowCreativeIdeation: true });
 
   return {
     ...response,
@@ -1224,6 +1244,7 @@ const responseValidationFailureReason = (
   const activitySummary = response.activity_summary;
   const activitySummaryFailure = activitySummaryFailureReason(activitySummary, response);
   const toolTraceSummaryRejection = safeToolTraceSummaryRejection(response.tool_trace_summary);
+  const allowCreativeIdeationAnswerBasis = requestAllowsCreativeIdeationAnswerBasis(request);
 
   if (response.direct_vault_write === true) return "direct_vault_write=true";
   if (response.direct_memory_mutation === true) return "direct_memory_mutation=true";
@@ -1240,7 +1261,7 @@ const responseValidationFailureReason = (
   if (response.session_id !== request.session_id) return `session_id_mismatch:${String(response.session_id)}`;
   if (response.turn_id !== request.turn_id) return `turn_id_mismatch:${String(response.turn_id)}`;
   if (!responseStatuses.has(response.status as HermesCmoRuntimeResponse["status"])) return `status=${String(response.status)}`;
-  if (!validateAnswerBasis(response.answer_basis, { allowToolRead: isToolCapableResponseCandidate(response) })) {
+  if (!validateAnswerBasis(response.answer_basis, { allowToolRead: isToolCapableResponseCandidate(response), allowCreativeIdeation: allowCreativeIdeationAnswerBasis })) {
     const basis = isRecord(response.answer_basis) ? response.answer_basis : {};
 
     return `answer_basis_invalid:mode=${String(basis.mode)}`;
@@ -1731,6 +1752,43 @@ const requestIsCreativeIdeation = (request: HermesCmoRuntimeRequest): boolean =>
 const requestMayLeadToCreativeExecution = (request: HermesCmoRuntimeRequest): boolean =>
   requestIsCreativeExecution(request) || requestIsCreativeIdeation(request) || requestHasCreativeWorkingState(request);
 
+const requestRouteDecision = (request: HermesCmoRuntimeRequest): unknown => {
+  const input = isRecord(request.input) ? request.input : {};
+
+  return request.route_decision ?? request.constraints.route_decision ?? request.context_pack.route_decision ?? input.route_decision;
+};
+
+const requestCreativeFlagIsTrue = (request: HermesCmoRuntimeRequest, key: string): boolean => {
+  const input = isRecord(request.input) ? request.input : {};
+  const toolPolicy = isRecord(request.tool_policy) ? request.tool_policy : {};
+  const executionBoundary = nestedRecord(request.constraints, "execution_boundary");
+  const h5LiveAdapter = nestedRecord(request.constraints, "h5_live_adapter");
+  const creativePolicy = nestedRecord(nestedRecord(request.constraints, "m1_clean_cmo_skill_kernel"), "creative_policy");
+
+  return (
+    request[key] === true ||
+    request.intent[key] === true ||
+    input[key] === true ||
+    request.context_pack[key] === true ||
+    request.constraints[key] === true ||
+    toolPolicy[key] === true ||
+    executionBoundary[key] === true ||
+    h5LiveAdapter[key] === true ||
+    creativePolicy[key] === true ||
+    key === "cmo_owns_creative_decision" && creativePolicy.cmo_owns_decision === true
+  );
+};
+
+const requestAllowsCreativeIdeationAnswerBasis = (request: HermesCmoRuntimeRequest): boolean => {
+  const routeDecision = requestRouteDecision(request);
+
+  return (
+    (routeDecision === "creative_ideation" || routeDecision === "creative_session") &&
+    requestCreativeFlagIsTrue(request, "creative_ideation_detected") &&
+    requestCreativeFlagIsTrue(request, "cmo_owns_creative_decision")
+  );
+};
+
 const creativeExecutionModeFromRequest = (request: HermesCmoRuntimeRequest): "creative.generate_image" | "creative.generate_video" => {
   const input = isRecord(request.input) ? request.input : {};
   const creativeIntent = isRecord(input.creative_execution_intent) ? input.creative_execution_intent : {};
@@ -1821,6 +1879,26 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: Herm
     toolEndpointEnabled: toolEndpointEnabled || toolChatCanaryEnabled,
   };
 };
+
+const withHermesCmoRouteDecision = (
+  request: HermesCmoRuntimeRequest,
+  routeDecision: HermesCmoRouteDecision,
+): HermesCmoRuntimeRequest => ({
+  ...request,
+  route_decision: routeDecision,
+  input: {
+    ...(isRecord(request.input) ? request.input : {}),
+    route_decision: routeDecision,
+  },
+  context_pack: {
+    ...request.context_pack,
+    route_decision: routeDecision,
+  },
+  constraints: {
+    ...request.constraints,
+    route_decision: routeDecision,
+  },
+});
 
 const omitSourceCacheText = (record: Record<string, unknown>): Record<string, unknown> => {
   const rest = { ...record };
@@ -2256,6 +2334,15 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
   };
 };
 
+const responseHasCreativeStateUpdate = (response: Record<string, unknown>, structuredOutput: Record<string, unknown>): boolean =>
+  response.suggested_creative_state_update !== undefined ||
+  structuredOutput.suggested_creative_state_update !== undefined ||
+  response.drafts_upsert !== undefined ||
+  structuredOutput.drafts_upsert !== undefined;
+
+const responseHasCreativeDecision = (response: Record<string, unknown>, structuredOutput: Record<string, unknown>): boolean =>
+  response.creative_decision !== undefined || structuredOutput.creative_decision !== undefined;
+
 const responseTraceSummary = (payload: unknown): Record<string, unknown> => {
   const root = isRecord(payload) ? payload : {};
   const response = isRecord(root.response) ? root.response : root;
@@ -2282,6 +2369,9 @@ const responseTraceSummary = (payload: unknown): Record<string, unknown> => {
     status: response.status,
     classification: response.classification ?? structuredOutput.classification,
     answer_basis_mode: answerBasis.mode,
+    creative_ideation_response_received: answerBasis.mode === "creative_ideation" ? true : undefined,
+    creative_state_update_present: responseHasCreativeStateUpdate(response, structuredOutput),
+    creative_decision_present: responseHasCreativeDecision(response, structuredOutput),
     delegations: Array.isArray(response.delegations)
       ? response.delegations.map((delegation) => {
           const record = isRecord(delegation) ? delegation : {};
@@ -2646,10 +2736,10 @@ const validateHermesCmoRuntimeAnswer = (answer: unknown): answer is HermesCmoRun
 
 const validateAnswerBasis = (
   answerBasis: unknown,
-  options: { allowToolRead?: boolean } = {},
+  options: HermesCmoAnswerBasisModeOptions = {},
 ): answerBasis is HermesCmoRuntimeAnswerBasis =>
   isRecord(answerBasis) &&
-  answerBasisModeIsAllowed(answerBasis.mode, options.allowToolRead === true) &&
+  answerBasisModeIsAllowed(answerBasis.mode, options) &&
   isStringList(answerBasis.missing_inputs) &&
   Array.isArray(answerBasis.assumptions_used) &&
   answerBasis.assumptions_used.every((item) => typeof item === "string" || isRecord(item)) &&
@@ -2796,6 +2886,7 @@ export const validateHermesCmoRuntimeResponse = (
   const answerBasis = responseCandidate.answer_basis;
   const clarifyingQuestion = responseCandidate.clarifying_question;
   const activitySummaryFailure = activitySummaryFailureReason(activitySummary, responseCandidate);
+  const allowCreativeIdeationAnswerBasis = requestAllowsCreativeIdeationAnswerBasis(request);
 
   if (
     responseCandidate.schema_version !== "hermes.cmo.response.v1" ||
@@ -2803,7 +2894,7 @@ export const validateHermesCmoRuntimeResponse = (
     responseCandidate.session_id !== request.session_id ||
     responseCandidate.turn_id !== request.turn_id ||
     !responseStatuses.has(responseCandidate.status as HermesCmoRuntimeResponse["status"]) ||
-    !validateAnswerBasis(answerBasis, { allowToolRead: isToolCapableResponseCandidate(responseCandidate) }) ||
+    !validateAnswerBasis(answerBasis, { allowToolRead: isToolCapableResponseCandidate(responseCandidate), allowCreativeIdeation: allowCreativeIdeationAnswerBasis }) ||
     !validateContextResolution(responseCandidate.context_resolution) ||
     !validateClarifyingQuestion(clarifyingQuestion) ||
     !validateHermesCmoRuntimeAnswer(responseCandidate.answer) ||
@@ -2983,6 +3074,30 @@ const extractLiveResponsePayload = (
         side_effects_present: sideEffectsValidation.present,
         side_effects_allowed_for_creative: sideEffectsValidation.allowedForCreative === true,
         ...(sideEffectsValidation.rejectedType ? { rejected_side_effect_type: sideEffectsValidation.rejectedType } : {}),
+      },
+    };
+  }
+  const responseStructuredOutput = isRecord(responseCandidate.structured_output) ? responseCandidate.structured_output : {};
+  const responseAnswerBasis = isRecord(responseCandidate.answer_basis) ? responseCandidate.answer_basis : {};
+  const creativeIdeationResponseReceived = responseAnswerBasis.mode === "creative_ideation";
+  if (creativeIdeationResponseReceived) {
+    responseCandidate = {
+      ...responseCandidate,
+      structured_output: {
+        ...responseStructuredOutput,
+        creative_ideation_response_received: true,
+        creative_state_update_present: responseHasCreativeStateUpdate(responseCandidate, responseStructuredOutput),
+        creative_decision_present: responseHasCreativeDecision(responseCandidate, responseStructuredOutput),
+        answer_basis_mode: "creative_ideation",
+        rejected_by_m1_validator: false,
+      },
+      activity_summary: {
+        ...(isRecord(responseCandidate.activity_summary) ? responseCandidate.activity_summary : {}),
+        creative_ideation_response_received: true,
+        creative_state_update_present: responseHasCreativeStateUpdate(responseCandidate, responseStructuredOutput),
+        creative_decision_present: responseHasCreativeDecision(responseCandidate, responseStructuredOutput),
+        answer_basis_mode: "creative_ideation",
+        rejected_by_m1_validator: false,
       },
     };
   }
@@ -3494,6 +3609,7 @@ export async function runHermesCmoRuntime(request: unknown, options: HermesCmoRu
   });
   const initialConfig = selectedHermesCmoConfig(outboundRequest, options);
   outboundRequest = initialConfig.endpointKind === "tool_execute" ? toolEndpointRequest(outboundRequest) : outboundRequest;
+  outboundRequest = withHermesCmoRouteDecision(outboundRequest, initialConfig.routeDecision);
 
   if (!validateHermesCmoRuntimeRequest(outboundRequest)) {
     throw new Error("M1 Hermes CMO runtime produced an invalid outbound hermes.cmo.request.v1 envelope.");
@@ -3538,7 +3654,8 @@ export async function runHermesCmoRuntime(request: unknown, options: HermesCmoRu
     }
 
     const synthesisConfig = selectedHermesCmoConfig(synthesisRequest, options);
-    const outboundSynthesisRequest = synthesisConfig.endpointKind === "tool_execute" ? toolEndpointRequest(synthesisRequest) : synthesisRequest;
+    const outboundSynthesisBase = synthesisConfig.endpointKind === "tool_execute" ? toolEndpointRequest(synthesisRequest) : synthesisRequest;
+    const outboundSynthesisRequest = withHermesCmoRouteDecision(outboundSynthesisBase, synthesisConfig.routeDecision);
     const synthesisPayload = await callHermesCmoAgent(outboundSynthesisRequest, synthesisConfig);
     return extractLiveResponsePayload(
       synthesisPayload,

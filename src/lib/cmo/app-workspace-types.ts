@@ -904,6 +904,10 @@ export interface HermesCmoChatMetadata {
   creative_ideation_detected?: boolean;
   cmo_owns_creative_decision?: boolean;
   creative_execution_requested?: boolean;
+  creative_ideation_response_received?: boolean;
+  creative_state_update_present?: boolean;
+  creative_decision_present?: boolean;
+  answer_basis_mode?: string;
   creative_response_received?: boolean;
   creative_metadata_present?: boolean;
   creative_draft_active?: boolean;

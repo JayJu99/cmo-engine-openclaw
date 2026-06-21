@@ -97,12 +97,21 @@ requireSource(mapperSource, /creative_decision_owner_when_live: "hermes_cmo"/, "
 requireSource(runtimeSource, /requestHasCreativeWorkingState/, "runtime");
 requireSource(runtimeSource, /requestIsCreativeIdeation/, "runtime");
 requireSource(runtimeSource, /requestMayLeadToCreativeExecution/, "runtime");
+requireSource(runtimeSource, /requestAllowsCreativeIdeationAnswerBasis/, "runtime validation");
+requireSource(runtimeSource, /routeDecision === "creative_ideation" \|\| routeDecision === "creative_session"/, "runtime validation must require creative route decision");
+requireSource(runtimeSource, /requestCreativeFlagIsTrue\(request, "creative_ideation_detected"\)/, "runtime validation must require creative ideation flag");
+requireSource(runtimeSource, /requestCreativeFlagIsTrue\(request, "cmo_owns_creative_decision"\)/, "runtime validation must require CMO decision ownership");
+requireSource(runtimeSource, /allowCreativeIdeation: allowCreativeIdeationAnswerBasis/, "runtime validation must conditionally allow creative_ideation answer basis");
+requireSource(runtimeSource, /responseAnswerBasis\.mode === "creative_ideation"/, "runtime diagnostics must detect creative ideation responses");
+requireSource(runtimeSource, /creative_ideation_response_received: true/, "runtime diagnostics must trace creative ideation responses");
+requireSource(runtimeSource, /rejected_by_m1_validator: false/, "runtime diagnostics must mark accepted ideation responses");
 requireSource(runtimeSource, /creativeIdeation[\s\S]*\? "creative_ideation"/, "runtime must trace creative_ideation route decision");
 requireSource(runtimeSource, /artifact_transport: creativeArtifactTransportForRequest\(request\)/, "runtime must include M13B artifact transport");
 requireSource(runtimeSource, /creative_execution_may_be_requested_by_cmo: creativeTurnMayExecute/, "runtime must allow CMO-owned draft execution");
 requireSource(runtimeSource, /creative_ideation_detected: constraints\.creative_ideation_detected === true/, "runtime trace must include creative_ideation_detected");
 requireSource(runtimeSource, /cmo_owns_creative_decision: constraints\.cmo_owns_creative_decision === true/, "runtime trace must include CMO decision ownership");
 requireSource(runtimeSource, /upload_endpoint: `\$\{productPublicOrigin\(\)\}\/api\/cmo\/apps\/\$\{encodeURIComponent\(appId\)\}\/creative\/artifact-ingest`/, "runtime upload endpoint");
+forbidSource(runtimeSource, /const answerBasisModes = new Set[\s\S]*"creative_ideation"[\s\S]*\]\);[\s\S]*const answerFormats/s, "runtime must not globally allow creative_ideation answer basis");
 
 requireSource(storeSource, /let creativeWorkingState: CmoCreativeWorkingState \| undefined = continuedSession\?\.creativeWorkingState;/, "store session state");
 requireSource(storeSource, /hasCreativeWorkingState: creativeWorkingStatePresent/, "store route state");
@@ -113,6 +122,12 @@ requireSource(storeSource, /applySuggestedCreativeStateUpdate\([\s\S]*extractSug
 requireSource(storeSource, /extractCreativeDecision\(hermesResult\.response\)/, "store must persist creative decision");
 requireSource(storeSource, /creativeWorkingState \? \{ creativeWorkingState \}/, "store must persist creativeWorkingState in session/messages/response");
 requireSource(storeSource, /creativeDecision \? \{ creativeDecision \}/, "store must persist creativeDecision in session/messages/response");
+requireSource(storeSource, /creative_ideation_response_received/, "store must persist creative ideation diagnostics");
+requireSource(storeSource, /answer_basis_mode/, "store must persist answer basis diagnostics");
+requireSource(storeSource, /typeof value\.rejected_by_m1_validator === "boolean"/, "store must preserve accepted validator diagnostic false");
+requireSource(mapperSource, /creative_state_update_present: creativeStateUpdatePresent/, "mapper must expose creative state update diagnostics");
+requireSource(mapperSource, /creative_decision_present: creativeDecisionPresent/, "mapper must expose creative decision diagnostics");
+requireSource(mapperSource, /answer_basis_mode: answerBasisMode/, "mapper must expose answer basis diagnostics");
 
 requireSource(uiSource, /renderCreativeAssets\(message\)/, "UI must keep rendering creative assets");
 forbidSource(storeSource, /Ok b[aạ]n t[aạ]o [đd]i|message\s*={2,3}\s*["'`]Ok b/i, "Product store");
