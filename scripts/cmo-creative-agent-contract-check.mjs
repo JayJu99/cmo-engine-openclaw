@@ -187,6 +187,7 @@ const [
   creativeAssetResponseSource,
   creativeAssetPreviewRouteSource,
   creativeAssetDownloadRouteSource,
+  packageSource,
 ] = await Promise.all([
   read("src/lib/cmo/hermes-cmo-runtime.ts"),
   read("src/lib/cmo/app-routing-intent.ts"),
@@ -208,6 +209,7 @@ const [
   read("src/lib/cmo/creative-asset-response.ts"),
   read("src/app/api/cmo/apps/[appId]/creative/assets/[assetId]/preview/route.ts"),
   read("src/app/api/cmo/apps/[appId]/creative/assets/[assetId]/download/route.ts"),
+  read("package.json"),
 ]);
 
 assert.match(runtimeSource, /"creative"/, "creative must be accepted by runtime agent registry");
@@ -268,8 +270,8 @@ assert.match(outerRuntimeSource, /getCmoHermesCreativeExecuteTimeoutMs\(\)/, "Ou
 assert.match(outerRuntimeSource, /Creative app-chat turn timed out; no workspace fallback used\./, "Outer app-chat Creative timeout must not log workspace fallback");
 assert.match(outerRuntimeSource, /outer_timeout_ms/, "Outer app-chat timeout metadata must include timeout ms");
 assert.match(outerRuntimeSource, /outer_timeout_source/, "Outer app-chat timeout metadata must include timeout source");
-assert.match(storeSource, /Creative execution timed out before Hermes returned the generated asset metadata/, "Creative timeout must render a Creative-specific timeout message");
-assert.match(storeSource, /No workspace-context fallback was used for this Creative generation request/, "Creative timeout must not silently fall back to workspace context");
+assert.doesNotMatch(storeSource, /Creative execution timed out before Hermes returned the generated asset metadata/, "Creative timeout must not render Product-authored CMO prose");
+assert.doesNotMatch(storeSource, /No workspace-context fallback was used for this Creative generation request/, "Creative timeout must not render Product-authored CMO prose");
 assert.match(mapperSource, /agentsUsedFromMetadata/, "Creative activity metadata must survive mapping");
 assert.match(storeSource, /extractCreativeAssetsFromHermesResponse/, "Creative responses must become session artifacts");
 assert.match(storeSource, /runtimeResult\.rawRuntimeResponse/, "App-turn Creative metadata must be extracted from the raw runtime response");
@@ -280,10 +282,14 @@ assert.match(storeSource, /side_effects_allowed_for_creative/, "Creative side-ef
 assert.match(storeSource, /rejected_side_effect_type/, "Rejected Creative side-effect type must be persisted");
 assert.match(storeSource, /fallback_used: creativeFallbackUsed/, "Successful Creative metadata must not be overwritten by workspace fallback");
 assert.match(remoteClientSource, /extractCreativeAssetsFromHermesResponse/, "Remote app-turn responses must use Creative normalization");
-assert.match(remoteClientSource, /creativeMetadataFallbackAnswer/, "Remote app-turn Creative metadata must be a successful response without answer text");
+assert.match(remoteClientSource, /creativeNarrativeFromPayload/, "Remote app-turn Creative metadata may use Creative-provided narrative only");
+assert.doesNotMatch(remoteClientSource, /creativeMetadataFallbackAnswer/, "Remote app-turn Creative metadata must not synthesize Product answer copy");
 assert.match(openClawClientSource, /extractCreativeAssetsFromHermesResponse/, "Direct app-turn responses must use Creative normalization");
-assert.match(openClawClientSource, /Product recorded the asset metadata/, "Direct app-turn Creative metadata must get a safe status answer");
+assert.match(openClawClientSource, /creativeNarrativeFromPayload/, "Direct app-turn Creative metadata may use Creative-provided narrative only");
+assert.doesNotMatch(openClawClientSource, /Product recorded the asset metadata/, "Direct app-turn Creative metadata must not synthesize Product answer copy");
 assert.match(mapperSource, /hasCreativeExecutionMetadata/, "Hermes execute response mapper must accept Creative metadata without a conventional answer");
+assert.match(mapperSource, /creativeNarrativeFromHermes/, "Hermes execute response mapper may use Hermes or Creative narrative only");
+assert.doesNotMatch(mapperSource, /Creative execution completed and returned generated asset metadata/, "Hermes execute response mapper must not synthesize Product Creative answer copy");
 assert.match(uiSource, /Creative Assets/, "Chat UI must render Creative asset cards");
 assert.match(uiSource, /Artifact transport missing/, "UI must show missing transport state");
 assert.match(uiSource, /creativeAssetPreviewUrl/, "UI must resolve Creative preview URLs through a single safe helper");
@@ -296,8 +302,10 @@ assert.match(uiSource, /const downloadUrl = creativeAssetDownloadUrl\(asset, app
 assert.match(uiSource, /referrerPolicy="no-referrer"/, "Creative preview image must not leak referrer details to signed URL hosts");
 assert.match(uiSource, /onError=\{markPreviewFailed\}/, "Creative preview image must expose a safe failed-load state");
 assert.match(uiSource, /Preview failed to load/, "Creative preview load failure must render a specific state");
-assert.match(uiSource, /Download remains available/, "Download must remain available when preview rendering fails");
+assert.doesNotMatch(uiSource, /Download remains available/, "Creative asset card must not render Product-authored explanatory prose");
+assert.doesNotMatch(uiSource, /Creative generated an asset/, "Creative asset card must not render Product-authored explanatory prose");
 assert.match(uiSource, /transport_status/, "UI must display Creative artifact transport status");
+assert.match(packageSource, /smoke:cmo-creative-user-copy/, "Creative user-facing copy audit must be wired into package scripts");
 assert.match(uiSource, /has_signed_url/, "Missing Creative preview diagnostics must include signed URL presence");
 assert.match(uiSource, /has_render_url/, "Missing Creative preview diagnostics must include render URL presence");
 assert.match(uiSource, /resolved_preview_url_host/, "Creative preview diagnostics must include URL host without the signed token");

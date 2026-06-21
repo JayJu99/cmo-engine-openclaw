@@ -1777,11 +1777,6 @@ export function CMOChatPanel({
                     <div className="flex size-full flex-col items-center justify-center gap-2 px-4 text-center">
                       <icons.AlertTriangle className="size-6 text-orange-600" />
                       <div className="text-sm font-bold text-slate-900">{previewFailed && previewUrl ? "Preview failed to load" : "Artifact transport missing"}</div>
-                      <p className="max-w-xs text-xs leading-5 text-slate-600">
-                        {previewFailed && previewUrl
-                          ? "Download remains available from the uploaded Product asset URL."
-                          : "Creative generated an asset, but Product cannot fetch the local artifact yet."}
-                      </p>
                       <div className="max-w-xs rounded bg-orange-50 px-2 py-1 text-[11px] font-semibold leading-4 text-orange-800">
                         asset={previewDiagnostics.asset_id} app={previewDiagnostics.app_id} transport={previewDiagnostics.transport_status} storage={String(previewDiagnostics.has_storage_path)} mime={previewDiagnostics.mime_type} status={previewDiagnostics.http_status} signed={String(previewDiagnostics.has_signed_url)} render={String(previewDiagnostics.has_render_url)} host={previewDiagnostics.resolved_preview_url_host || "same-origin"} sign_path={String(previewDiagnostics.resolved_preview_url_path_starts_with_storage_sign)}
                       </div>

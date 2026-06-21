@@ -828,11 +828,7 @@ export class LiveOpenClawRuntime implements CmoRuntime {
       });
       if (timeoutConfig.creativeExecutionRequested && runtimeErrorReason === "timeout") {
         return {
-          answer: [
-            "Creative execution timed out before the remote CMO adapter returned generated asset metadata.",
-            `Product waited ${timeoutMs}ms for the Creative app-chat turn.`,
-            "No workspace-context fallback was used for this image or video generation request.",
-          ].join("\n"),
+          answer: "",
           assumptions: [],
           suggestedActions: [],
           runtimeStatus: "runtime_error",

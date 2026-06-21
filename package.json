@@ -12,6 +12,7 @@
     "smoke:vault-graph-api-contract": "node scripts/cmo-vault-graph-api-contract-check.mjs",
     "smoke:cmo-creative-agent": "node scripts/cmo-creative-agent-contract-check.mjs",
     "smoke:cmo-creative-draft-state": "node scripts/cmo-creative-draft-state-check.mjs",
+    "smoke:cmo-creative-user-copy": "node scripts/cmo-creative-user-copy-audit.mjs",
     "adapter:dev": "node --watch services/vps-cmo-adapter/server.mjs",
     "adapter:build": "node --check services/vps-cmo-adapter/server.mjs",
     "adapter:start": "node services/vps-cmo-adapter/server.mjs"

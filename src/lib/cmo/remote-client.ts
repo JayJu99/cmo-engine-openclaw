@@ -377,13 +377,38 @@ function isDiagnosticOnlyAnswer(answer: string): boolean {
   );
 }
 
-function creativeMetadataFallbackAnswer(assetCount: number): string {
-  return [
-    "Creative execution completed and returned generated asset metadata.",
-    assetCount > 0
-      ? "Product recorded the asset metadata. Artifact transport is required before a browser preview can be shown."
-      : "Product received Creative metadata, but no retrievable browser artifact was included.",
-  ].join("\n");
+function firstStringFromRecord(value: unknown, keys: string[]): string {
+  if (!isRecord(value)) {
+    return "";
+  }
+
+  for (const key of keys) {
+    const candidate = trimString(value[key]);
+
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return "";
+}
+
+function creativeNarrativeFromPayload(payload: unknown): string {
+  const data = isRecord(payload) && isRecord(payload.data) ? payload.data : null;
+  const source = data ?? payload;
+  const narrativeKeys = ["visual_summary", "visualSummary", "notes", "note"];
+  const directNarrative = firstStringFromRecord(source, narrativeKeys) || firstStringFromRecord(payload, narrativeKeys);
+
+  if (directNarrative) {
+    return directNarrative;
+  }
+
+  const creativeAssets = extractCreativeAssetsFromHermesResponse(payload);
+  const assetNarrative = creativeAssets
+    .map((asset) => firstStringFromRecord(asset, narrativeKeys))
+    .find((value) => Boolean(value));
+
+  return assetNarrative ?? "";
 }
 
 function normalizeAppTurnResponse(payload: unknown): CmoAppTurnResponse {
@@ -414,9 +439,9 @@ function normalizeAppTurnResponse(payload: unknown): CmoAppTurnResponse {
   const creativeMetadataPresent = hasCreativeExecutionMetadata(payload) ||
     hasCreativeExecutionMetadata(source) ||
     creativeAssets.length > 0;
-  const answer = trimString(source.answer) || (creativeMetadataPresent ? creativeMetadataFallbackAnswer(creativeAssets.length) : "");
+  const answer = trimString(source.answer) || (creativeMetadataPresent ? creativeNarrativeFromPayload(payload) : "");
 
-  if (!answer) {
+  if (!answer && !creativeMetadataPresent) {
     throw new CmoAdapterError("Remote CMO Adapter app-turn response did not include a usable answer", 502, "cmo_app_turn_empty_answer");
   }
 

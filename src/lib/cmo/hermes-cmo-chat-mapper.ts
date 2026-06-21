@@ -1084,18 +1084,57 @@ function sourceTransformAnswerFromDelegations(result: HermesCmoRuntimeResult): s
   return outputs.length ? outputs.join("\n\n") : null;
 }
 
+function firstStringFromRecord(value: unknown, keys: string[]): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  for (const key of keys) {
+    const candidate = value[key];
+
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return null;
+}
+
+function creativeNarrativeFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmoRuntimeResult): string {
+  const narrativeKeys = ["visual_summary", "visualSummary", "notes", "note"];
+  const directNarrative = firstStringFromRecord(response, narrativeKeys);
+
+  if (directNarrative) {
+    return compactMultilineText(directNarrative, 1200);
+  }
+
+  const resultNarrative = firstStringFromRecord(result?.response, narrativeKeys);
+
+  if (resultNarrative) {
+    return compactMultilineText(resultNarrative, 1200);
+  }
+
+  const creativeAssets = Array.isArray(response.creative_assets)
+    ? response.creative_assets
+    : Array.isArray(result?.response.creative_assets)
+      ? result.response.creative_assets
+      : [];
+  const assetNarrative = creativeAssets
+    .map((asset) => firstStringFromRecord(asset, narrativeKeys))
+    .find((value): value is string => Boolean(value));
+
+  return assetNarrative ? compactMultilineText(assetNarrative, 1200) : "";
+}
+
 function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmoRuntimeResult): string {
   if (!response.answer) {
     if (hasCreativeExecutionMetadata(response) || hasCreativeExecutionMetadata(result?.response)) {
-      return [
-        "Creative execution completed and returned generated asset metadata.",
-        "Product recorded the asset metadata. Artifact transport is required before a browser preview can be shown.",
-      ].join("\n");
+      return creativeNarrativeFromHermes(response, result);
     }
 
-    const question = response.clarifying_question.question ?? "Please provide the missing context before CMO continues.";
+    const question = response.clarifying_question.question?.trim() ?? "";
 
-    return ["## Need Clarification", "", question].join("\n");
+    return question;
   }
 
   const classification = classificationFromResponse(response);
@@ -1112,10 +1151,7 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
 
   return body || answer.summary.trim() || (
     hasCreativeExecutionMetadata(response) || hasCreativeExecutionMetadata(result?.response)
-      ? [
-          "Creative execution completed and returned generated asset metadata.",
-          "Product recorded the asset metadata. Artifact transport is required before a browser preview can be shown.",
-        ].join("\n")
+      ? creativeNarrativeFromHermes(response, result)
       : ""
   );
 }

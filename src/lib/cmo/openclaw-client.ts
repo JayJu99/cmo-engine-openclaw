@@ -375,6 +375,40 @@ function pickAnswerBody(payload: unknown): string {
   return trimString(answer?.body ?? dataAnswer?.body);
 }
 
+function firstStringFromRecord(value: unknown, keys: string[]): string {
+  if (!isRecord(value)) {
+    return "";
+  }
+
+  for (const key of keys) {
+    const candidate = trimString(value[key]);
+
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return "";
+}
+
+function creativeNarrativeFromPayload(payload: unknown): string {
+  const data = isRecord(payload) && isRecord(payload.data) ? payload.data : null;
+  const source = data ?? payload;
+  const narrativeKeys = ["visual_summary", "visualSummary", "notes", "note"];
+  const directNarrative = firstStringFromRecord(source, narrativeKeys) || firstStringFromRecord(payload, narrativeKeys);
+
+  if (directNarrative) {
+    return directNarrative;
+  }
+
+  const creativeAssets = extractCreativeAssetsFromHermesResponse(payload);
+  const assetNarrative = creativeAssets
+    .map((asset) => firstStringFromRecord(asset, narrativeKeys))
+    .find((value) => Boolean(value));
+
+  return assetNarrative ?? "";
+}
+
 function pickStatus(payload: unknown): string {
   if (!isRecord(payload)) {
     return "";
@@ -478,16 +512,9 @@ function normalizeAppTurnRuntimeResult(payload: unknown, config: OpenClawCmoRunt
     creativeAssets.length > 0;
   const answer = trimString(source.answer) ||
     pickAnswerBody(payload) ||
-    (creativeMetadataPresent
-      ? [
-          "Creative execution completed and returned generated asset metadata.",
-          creativeAssets.length > 0
-            ? "Product recorded the asset metadata. Artifact transport is required before a browser preview can be shown."
-            : "Product received Creative metadata, but no retrievable browser artifact was included.",
-        ].join("\n")
-      : "");
+    (creativeMetadataPresent ? creativeNarrativeFromPayload(payload) : "");
 
-  if (!answer) {
+  if (!answer && !creativeMetadataPresent) {
     throw new CmoAdapterError("OpenClaw CMO app-turn response did not include a usable answer", 502, "openclaw_cmo_empty_answer");
   }
 

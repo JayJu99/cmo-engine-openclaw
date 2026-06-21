@@ -4321,11 +4321,7 @@ export async function createAppChatSession(
           sourceMode: "creative.generate_image",
         };
 
-        answer = [
-          "Creative execution timed out before Hermes returned the generated asset metadata.",
-          `Product waited ${creativeTimeoutMs}ms for /agents/cmo/execute.`,
-          "No workspace-context fallback was used for this Creative generation request. Retry the generation or check the Hermes Creative trace for the matching response.",
-        ].join("\n");
+        answer = "";
         status = "failed";
         assumptions = [];
         suggestedActions = [];
@@ -4378,11 +4374,7 @@ export async function createAppChatSession(
       } else if (creativeSideEffectRejected) {
         const creativeTimeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
 
-        answer = [
-          "Creative execution returned generated asset metadata, but Product rejected unsafe Creative side effects.",
-          `Rejected side effect: ${sideEffectRejectedType}.`,
-          "No workspace-context fallback was used for this Creative generation request.",
-        ].join("\n");
+        answer = "";
         status = "failed";
         assumptions = [];
         suggestedActions = [];
@@ -4446,15 +4438,7 @@ export async function createAppChatSession(
           ? "creative_session"
           : creativeIdeationValidationRejected ? "creative_ideation" : "creative_execution";
 
-        answer = [
-          creativeSessionValidationRejected
-            ? "Creative session returned a draft response, but Product rejected it during M1 validation."
-            : creativeIdeationValidationRejected
-              ? "Creative ideation returned a draft response, but Product rejected it during M1 validation."
-              : "Creative execution returned generated asset metadata, but Product rejected the response during M1 validation.",
-          `Rejected field: ${m1RejectedField}.`,
-          "No workspace-context fallback was used for this Creative request.",
-        ].join("\n");
+        answer = "";
         status = "failed";
         assumptions = [];
         suggestedActions = [];
