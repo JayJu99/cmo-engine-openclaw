@@ -226,6 +226,7 @@ function recentConversationMessages(history: CMOChatMessage[]): HermesCmoReplayM
 function creativeWorkingStateForHermesCamelCase(state: CmoCreativeWorkingState): Record<string, unknown> {
   return {
     activeDraftId: state.active_draft_id ?? null,
+    activeAssetId: state.active_asset_id ?? null,
     drafts: state.drafts.map((draft) => ({
       draftId: draft.draft_id,
       kind: draft.kind,
@@ -237,6 +238,19 @@ function creativeWorkingStateForHermesCamelCase(state: CmoCreativeWorkingState):
       ...(draft.status ? { status: draft.status } : {}),
       ...(draft.created_turn_id ? { createdTurnId: draft.created_turn_id } : {}),
       ...(draft.updated_turn_id ? { updatedTurnId: draft.updated_turn_id } : {}),
+    })),
+    assets: (state.assets ?? []).map((asset) => ({
+      assetId: asset.asset_id,
+      kind: asset.kind,
+      ...(asset.status ? { status: asset.status } : {}),
+      ...(asset.prompt ? { prompt: asset.prompt } : {}),
+      ...(asset.visual_summary ? { visualSummary: asset.visual_summary } : {}),
+      ...(asset.model ? { model: asset.model } : {}),
+      ...(asset.operation ? { operation: asset.operation } : {}),
+      ...(asset.render_url ? { renderUrl: asset.render_url } : {}),
+      ...(asset.signed_url ? { signedUrl: asset.signed_url } : {}),
+      ...(asset.sha256 ? { sha256: asset.sha256 } : {}),
+      ...(typeof asset.bytes === "number" ? { bytes: asset.bytes } : {}),
     })),
   };
 }
@@ -545,7 +559,12 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     attachments: input.inputMaterialAttachments ?? [],
   };
   const creativeWorkingStateForHermes = input.creativeWorkingState &&
-    (input.creativeWorkingState.drafts.length > 0 || input.creativeWorkingState.active_draft_id)
+    (
+      input.creativeWorkingState.drafts.length > 0 ||
+      (input.creativeWorkingState.assets?.length ?? 0) > 0 ||
+      input.creativeWorkingState.active_draft_id ||
+      input.creativeWorkingState.active_asset_id
+    )
     ? input.creativeWorkingState
     : undefined;
   const creativeWorkingStatePresent = Boolean(creativeWorkingStateForHermes);
@@ -769,7 +788,11 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         ? {
             creative_working_state_present: true,
             creative_active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
+            active_creative_context_present: true,
+            active_creative_asset_id: creativeWorkingStateForHermes.active_asset_id ?? null,
             creative_drafts_count: creativeWorkingStateForHermes.drafts.length,
+            creative_assets_count: creativeWorkingStateForHermes.assets?.length ?? 0,
+            creative_session_from_asset: Boolean(creativeWorkingStateForHermes.active_asset_id || (creativeWorkingStateForHermes.assets?.length ?? 0) > 0),
             creative_session_followup_detected: creativeSessionFollowupDetected,
             creative_side_effects_allowed: true,
             requires_user_confirmation_before_creative_execute: true,
@@ -829,7 +852,11 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         ? {
             creative_working_state_present: true,
             creative_active_draft_id: creativeWorkingStateForHermes.active_draft_id ?? null,
+            active_creative_context_present: true,
+            active_creative_asset_id: creativeWorkingStateForHermes.active_asset_id ?? null,
             creative_drafts_count: creativeWorkingStateForHermes.drafts.length,
+            creative_assets_count: creativeWorkingStateForHermes.assets?.length ?? 0,
+            creative_session_from_asset: Boolean(creativeWorkingStateForHermes.active_asset_id || (creativeWorkingStateForHermes.assets?.length ?? 0) > 0),
             creative_session_followup_detected: creativeSessionFollowupDetected,
             creative_execution_may_be_requested_by_cmo: true,
             creative_side_effects_allowed: true,

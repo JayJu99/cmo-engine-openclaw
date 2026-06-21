@@ -1756,7 +1756,12 @@ const requestHasCreativeWorkingState = (request: HermesCmoRuntimeRequest): boole
     return false;
   }
 
-  return Array.isArray(state.drafts) && state.drafts.length > 0 || typeof state.active_draft_id === "string";
+  return (
+    Array.isArray(state.drafts) && state.drafts.length > 0 ||
+    Array.isArray(state.assets) && state.assets.length > 0 ||
+    typeof state.active_draft_id === "string" ||
+    typeof state.active_asset_id === "string"
+  );
 };
 
 const requestIsCreativeIdeation = (request: HermesCmoRuntimeRequest): boolean => {
@@ -2328,6 +2333,9 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
   const creativePolicy = nestedRecord(nestedRecord(constraints, "m1_clean_cmo_skill_kernel"), "creative_policy");
   const allowedAgents = Array.isArray(constraints.allowed_agents) ? constraints.allowed_agents : [];
   const artifactTransport: Record<string, unknown> = isRecord(request.artifact_transport) ? request.artifact_transport : {};
+  const activeCreativeContextPresent = constraints.active_creative_context_present === true || constraints.creative_working_state_present === true;
+  const creativeAssetsCount = typeof constraints.creative_assets_count === "number" ? constraints.creative_assets_count : undefined;
+  const creativeSessionFromAsset = constraints.creative_session_from_asset === true || (creativeAssetsCount ?? 0) > 0 || typeof constraints.active_creative_asset_id === "string";
 
   return {
     endpoint_path: config.endpointPath,
@@ -2349,6 +2357,12 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
     creative_execution_requested: constraints.creative_execution_requested === true,
     creative_ideation_detected: constraints.creative_ideation_detected === true,
     creative_working_state_present: constraints.creative_working_state_present === true,
+    active_creative_context_present: activeCreativeContextPresent,
+    active_creative_asset_id: constraints.active_creative_asset_id,
+    creative_assets_count: creativeAssetsCount,
+    creative_session_from_asset: creativeSessionFromAsset,
+    route_overrode_tool_execute_due_to_creative_context: config.routeDecision === "creative_session" && activeCreativeContextPresent,
+    tool_execute_suppressed_for_creative_followup: config.endpointKind === "execute" && config.routeDecision === "creative_session",
     creative_session_followup_detected: constraints.creative_session_followup_detected === true,
     creative_session_active_draft_id: constraints.creative_active_draft_id,
     creative_session_drafts_count: constraints.creative_drafts_count,

@@ -66,6 +66,7 @@ import { buildDecisionLayer } from "@/lib/cmo/decision-layer";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import { extractCreativeAssetsFromHermesResponse, hasCreativeExecutionMetadata } from "@/lib/cmo/creative-agent";
 import {
+  applyCreativeAssetStateUpdate,
   applySuggestedCreativeStateUpdate,
   extractCreativeDecision,
   extractSuggestedCreativeStateUpdate,
@@ -2208,6 +2209,19 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(typeof value.creative_decision_present === "boolean" ? { creative_decision_present: value.creative_decision_present } : {}),
     ...(stringValue(value.creative_session_decision_action) ? { creative_session_decision_action: stringValue(value.creative_session_decision_action) } : {}),
     ...(stringValue(value.creative_session_active_draft_id) ? { creative_session_active_draft_id: stringValue(value.creative_session_active_draft_id) } : {}),
+    ...(typeof value.active_creative_context_present === "boolean" ? { active_creative_context_present: value.active_creative_context_present } : {}),
+    ...(stringValue(value.active_creative_asset_id) ? { active_creative_asset_id: stringValue(value.active_creative_asset_id) } : {}),
+    ...(stringValue(value.creative_session_active_asset_id) ? { creative_session_active_asset_id: stringValue(value.creative_session_active_asset_id) } : {}),
+    ...(typeof value.creative_assets_count === "number" && Number.isFinite(value.creative_assets_count)
+      ? { creative_assets_count: Math.max(0, Math.floor(value.creative_assets_count)) }
+      : {}),
+    ...(typeof value.creative_session_from_asset === "boolean" ? { creative_session_from_asset: value.creative_session_from_asset } : {}),
+    ...(typeof value.route_overrode_tool_execute_due_to_creative_context === "boolean"
+      ? { route_overrode_tool_execute_due_to_creative_context: value.route_overrode_tool_execute_due_to_creative_context }
+      : {}),
+    ...(typeof value.tool_execute_suppressed_for_creative_followup === "boolean"
+      ? { tool_execute_suppressed_for_creative_followup: value.tool_execute_suppressed_for_creative_followup }
+      : {}),
     ...(typeof value.creative_session_followup_detected === "boolean" ? { creative_session_followup_detected: value.creative_session_followup_detected } : {}),
     ...(typeof value.creative_working_state_present === "boolean" ? { creative_working_state_present: value.creative_working_state_present } : {}),
     ...(stringValue(value.execute_decision_source) ? { execute_decision_source: stringValue(value.execute_decision_source) } : {}),
@@ -2579,14 +2593,26 @@ function creativeStateMetadata(
 ): Partial<HermesCmoChatMetadata> {
   const creativeStatePersisted = Boolean(
     creativeWorkingState &&
-      (creativeWorkingState.drafts.length > 0 || creativeWorkingState.active_draft_id),
+      (
+        creativeWorkingState.drafts.length > 0 ||
+        (creativeWorkingState.assets?.length ?? 0) > 0 ||
+        creativeWorkingState.active_draft_id ||
+        creativeWorkingState.active_asset_id
+      ),
   );
+  const creativeAssetsCount = creativeWorkingState?.assets?.length ?? 0;
+  const activeAssetId = creativeWorkingState?.active_asset_id;
 
   return {
     ...(hasCreativeWorkingStateDrafts(creativeWorkingState) ? { creative_draft_active: true } : {}),
     ...(creativeWorkingState?.active_draft_id ? { creative_active_draft_id: creativeWorkingState.active_draft_id } : {}),
     ...(creativeWorkingState?.active_draft_id ? { creative_session_active_draft_id: creativeWorkingState.active_draft_id } : {}),
+    ...(activeAssetId ? { active_creative_asset_id: activeAssetId } : {}),
+    ...(activeAssetId ? { creative_session_active_asset_id: activeAssetId } : {}),
     ...(creativeWorkingState ? { creative_drafts_count: creativeWorkingState.drafts.length } : {}),
+    ...(creativeWorkingState ? { creative_assets_count: creativeAssetsCount } : {}),
+    ...(creativeStatePersisted ? { active_creative_context_present: true } : {}),
+    ...(creativeAssetsCount > 0 || activeAssetId ? { creative_session_from_asset: true } : {}),
     ...(creativeDecision ? { creative_decision: creativeDecision } : {}),
     ...(creativeDecision ? { creative_session_decision_action: creativeDecision.action } : {}),
     ...(creativeDecision?.operation ? { creative_decision_operation: creativeDecision.operation } : {}),
@@ -3221,6 +3247,9 @@ export async function createAppChatSession(
   let creativeWorkingState: CmoCreativeWorkingState | undefined = continuedSession?.creativeWorkingState;
   let creativeDecision: CmoCreativeDecision | undefined = continuedSession?.creativeDecision;
   const creativeWorkingStatePresent = hasCreativeWorkingStateDrafts(creativeWorkingState);
+  const activeCreativeAssetId = creativeWorkingState?.active_asset_id;
+  const creativeAssetsCount = creativeWorkingState?.assets?.length ?? 0;
+  const creativeSessionFromAsset = Boolean(activeCreativeAssetId || creativeAssetsCount > 0);
   const sessionResolutionDurationMs = Date.now() - sessionResolutionStartedMs;
   const messageId = `msg_${randomUUID().slice(0, 12)}`;
   const assistantId = `msg_${randomUUID().slice(0, 12)}`;
@@ -3367,6 +3396,8 @@ export async function createAppChatSession(
     hermesCmoRoute.reason === "creative_session";
   const creativeIdeationDetected = hermesCmoRoute.reason === "creative_ideation";
   const creativeSessionFollowupDetected = hermesCmoRoute.reason === "creative_session";
+  const routeOverrodeToolExecuteDueToCreativeContext = hermesCmoRoute.reason === "creative_session" && creativeWorkingStatePresent;
+  const toolExecuteSuppressedForCreativeFollowup = hermesCmoRoute.endpointKind === "execute" && hermesCmoRoute.reason === "creative_session";
   const creativeWorkingStateForHermes = hermesCmoNativeCreativeRequested ? creativeWorkingState : undefined;
   const hermesCmoLegacyRequested =
     legacyHermesCmoChatRequested ||
@@ -3673,19 +3704,11 @@ export async function createAppChatSession(
         }
 
         const mappedHermesResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesResult));
-        const completedCreativeWorkingState = applySuggestedCreativeStateUpdate(
+        let completedCreativeWorkingState = applySuggestedCreativeStateUpdate(
           pendingSession.creativeWorkingState,
           extractSuggestedCreativeStateUpdate(hermesResult.response),
         );
         const completedCreativeDecision = extractCreativeDecision(hermesResult.response) ?? pendingSession.creativeDecision;
-        mappedHermesResult.hermesCmoMetadata = {
-          ...mappedHermesResult.hermesCmoMetadata,
-          ...creativeStateMetadata(completedCreativeWorkingState, completedCreativeDecision),
-          ...lensReadoutMetadata({
-            context: lensReadoutContext as unknown as Record<string, unknown> | null,
-            warning: lensReadoutContextWarning,
-          }),
-        };
         const completedAt = new Date().toISOString();
         const durationMs = Date.now() - runStartedMs;
         const toolsUsed = safeCmoRunToolsUsed(mappedHermesResult.hermesCmoMetadata.agentsUsed);
@@ -3703,16 +3726,26 @@ export async function createAppChatSession(
             userQuestion: request.message,
           }),
         );
+        const completedCreativeArtifacts = creativeAssetsFromHermesPayload({
+          response: hermesResult.response,
+          tenantId: requestTenantId,
+          workspaceId: request.workspaceId,
+          appId: request.appId,
+          jobId: cmoRunId,
+          createdAt: completedAt,
+        });
+        completedCreativeWorkingState = applyCreativeAssetStateUpdate(completedCreativeWorkingState, completedCreativeArtifacts);
+        mappedHermesResult.hermesCmoMetadata = {
+          ...mappedHermesResult.hermesCmoMetadata,
+          ...creativeStateMetadata(completedCreativeWorkingState, completedCreativeDecision),
+          ...lensReadoutMetadata({
+            context: lensReadoutContext as unknown as Record<string, unknown> | null,
+            warning: lensReadoutContextWarning,
+          }),
+        };
         const completedSessionArtifacts = mergeHermesCmoChatV11Artifacts(
           sessionArtifacts,
-          creativeAssetsFromHermesPayload({
-            response: hermesResult.response,
-            tenantId: requestTenantId,
-            workspaceId: request.workspaceId,
-            appId: request.appId,
-            jobId: cmoRunId,
-            createdAt: completedAt,
-          }),
+          completedCreativeArtifacts,
         );
         const completedDecisionLayer = buildDecisionLayer({
           workspaceId: request.workspaceId,
@@ -3969,6 +4002,18 @@ export async function createAppChatSession(
         extractSuggestedCreativeStateUpdate(chatResult.response),
       );
       creativeDecision = extractCreativeDecision(chatResult.response) ?? creativeDecision;
+      const chatCreativeArtifacts = [
+        ...mappedChat.artifactsOut,
+        ...creativeAssetsFromHermesPayload({
+          response: { artifacts: mappedChat.artifactsOut },
+          tenantId: requestTenantId,
+          workspaceId: request.workspaceId,
+          appId: request.appId,
+          jobId: `creative_${messageId}`,
+          createdAt: now,
+        }),
+      ];
+      creativeWorkingState = applyCreativeAssetStateUpdate(creativeWorkingState, chatCreativeArtifacts);
 
       answer = mappedChat.answer;
       status = chatResult.response.status === "completed" ? "completed" : "failed";
@@ -4000,17 +4045,7 @@ export async function createAppChatSession(
       forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
       delegationsMode = mappedChat.metadata.delegationsMode;
       productRenderSource = "hermes_cmo";
-      sessionArtifacts = mergeHermesCmoChatV11Artifacts(sessionArtifacts, [
-        ...mappedChat.artifactsOut,
-        ...creativeAssetsFromHermesPayload({
-          response: { artifacts: mappedChat.artifactsOut },
-          tenantId: requestTenantId,
-          workspaceId: request.workspaceId,
-          appId: request.appId,
-          jobId: `creative_${messageId}`,
-          createdAt: now,
-        }),
-      ]);
+      sessionArtifacts = mergeHermesCmoChatV11Artifacts(sessionArtifacts, chatCreativeArtifacts);
       sessionSummary = mergeHermesCmoChatV11SessionSummary(sessionSummary, mappedChat.suggestedSessionSummaryUpdate);
       suggestedVaultUpdates = mergeSuggestedVaultUpdates(suggestedVaultUpdates, mappedChat.suggestedVaultUpdates);
       usedHermesCmoChat = true;
@@ -4077,16 +4112,18 @@ export async function createAppChatSession(
           extractSuggestedCreativeStateUpdate(hermesFallbackResult.response),
         );
         creativeDecision = extractCreativeDecision(hermesFallbackResult.response) ?? creativeDecision;
+        const fallbackCreativeArtifacts = creativeAssetsFromHermesPayload({
+          response: hermesFallbackResult.response,
+          tenantId: requestTenantId,
+          workspaceId: request.workspaceId,
+          appId: request.appId,
+          jobId: `creative_${messageId}`,
+          createdAt: now,
+        });
+        creativeWorkingState = applyCreativeAssetStateUpdate(creativeWorkingState, fallbackCreativeArtifacts);
         sessionArtifacts = mergeHermesCmoChatV11Artifacts(
           sessionArtifacts,
-          creativeAssetsFromHermesPayload({
-            response: hermesFallbackResult.response,
-            tenantId: requestTenantId,
-            workspaceId: request.workspaceId,
-            appId: request.appId,
-            jobId: `creative_${messageId}`,
-            createdAt: now,
-          }),
+          fallbackCreativeArtifacts,
         );
 
         answer = mappedHermesFallbackResult.answer;
@@ -4230,6 +4267,7 @@ export async function createAppChatSession(
         jobId: `creative_${messageId}`,
         createdAt: now,
       });
+      creativeWorkingState = applyCreativeAssetStateUpdate(creativeWorkingState, creativeArtifacts);
       if (hermesCmoCreativeExecutionRequested) {
         const structuredOutput = isRecord(hermesResult.response.structured_output) ? hermesResult.response.structured_output : {};
         creativeResponseReceived = true;
@@ -4623,6 +4661,7 @@ export async function createAppChatSession(
         creativeMetadataPresent = runtimeResult.rawRuntimeResponse !== undefined &&
           (hasCreativeExecutionMetadata(runtimeResult.rawRuntimeResponse) || creativeArtifacts.length > 0);
         if (creativeArtifacts.length) {
+          creativeWorkingState = applyCreativeAssetStateUpdate(creativeWorkingState, creativeArtifacts);
           sessionArtifacts = mergeHermesCmoChatV11Artifacts(sessionArtifacts, creativeArtifacts);
         }
         if (creativeMetadataPresent) {
@@ -4800,6 +4839,12 @@ export async function createAppChatSession(
     hermesCmoMetadata = {
       ...hermesCmoMetadata,
       ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
+      ...(creativeWorkingStatePresent ? { active_creative_context_present: true } : {}),
+      ...(activeCreativeAssetId ? { active_creative_asset_id: activeCreativeAssetId } : {}),
+      ...(creativeWorkingStatePresent ? { creative_assets_count: creativeAssetsCount } : {}),
+      ...(creativeSessionFromAsset ? { creative_session_from_asset: true } : {}),
+      ...(routeOverrodeToolExecuteDueToCreativeContext ? { route_overrode_tool_execute_due_to_creative_context: true } : {}),
+      ...(toolExecuteSuppressedForCreativeFollowup ? { tool_execute_suppressed_for_creative_followup: true } : {}),
       ...(hermesCmoNativeCreativeRequested ? { cmo_owns_creative_decision: true } : {}),
       ...lensReadoutMetadata({
         context: lensReadoutContext as unknown as Record<string, unknown> | null,

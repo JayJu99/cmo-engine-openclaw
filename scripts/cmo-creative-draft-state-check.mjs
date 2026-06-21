@@ -47,6 +47,9 @@ function forbidSource(source, pattern, label) {
 }
 
 requireSource(typesSource, /export interface CmoCreativeWorkingState[\s\S]*active_draft_id\?: string \| null;[\s\S]*drafts: CmoCreativeDraft\[];/, "types");
+requireSource(typesSource, /export interface CmoCreativeAssetState[\s\S]*asset_id: string;[\s\S]*render_url\?: string;/, "types must include Creative asset state");
+requireSource(typesSource, /active_asset_id\?: string \| null;/, "types must persist active Creative asset id");
+requireSource(typesSource, /assets\?: CmoCreativeAssetState\[];/, "types must persist Creative assets in working state");
 requireSource(typesSource, /export interface CmoCreativeDecision[\s\S]*action: CmoCreativeDecisionAction;/, "types");
 requireSource(typesSource, /"present_draft"/, "types must accept Hermes CMO present_draft decisions");
 requireSource(typesSource, /"show_draft"/, "types must accept Hermes CMO show_draft decisions");
@@ -61,6 +64,8 @@ requireSource(helperSource, /new Map<string, CmoCreativeDraft>/, "draft helper m
 requireSource(helperSource, /draftsById\.set\(draft\.draft_id,[\s\S]*\.\.\.\(draftsById\.get\(draft\.draft_id\)/, "draft helper must upsert without dropping existing fields");
 requireSource(helperSource, /extractSuggestedCreativeStateUpdate/, "draft helper");
 requireSource(helperSource, /extractCreativeDecision/, "draft helper");
+requireSource(helperSource, /normalizeCreativeAssetState/, "draft helper must normalize Creative asset context");
+requireSource(helperSource, /applyCreativeAssetStateUpdate/, "draft helper must merge Creative asset context");
 requireSource(helperSource, /value === "present_draft"/, "draft helper must normalize Hermes present_draft decision");
 requireSource(helperSource, /value === "show_draft"/, "draft helper must normalize Hermes show_draft decision");
 requireSource(helperSource, /value === "blocked"/, "draft helper must normalize blocked decision");
@@ -99,6 +104,21 @@ const activeCreativeState = {
     },
   ],
 };
+const activeAssetCreativeState = {
+  active_asset_id: "asset_001",
+  drafts: [],
+  assets: [
+    {
+      asset_id: "asset_001",
+      kind: "image",
+      status: "stored",
+      prompt: "Premium black and gold Eggs Vault key visual",
+      visual_summary: "Square key visual with an egg hero object.",
+      render_url: "https://product.example/assets/asset_001.png",
+      operation: "creative.generate_image",
+    },
+  ],
+};
 
 for (const message of [
   "Minh muon tao hinh anh trung chu de world cup",
@@ -131,6 +151,9 @@ assert.equal(intent.routeIntentForMessage("Traffic tuan nay the nao?", { creativ
 assert.equal(intent.routeIntentForMessage("Dune volume hom qua bao nhieu?", { creativeWorkingState: activeCreativeState }), "cmo_default", "Dune metric requests must not be forced into Creative");
 assert.equal(intent.routeIntentForMessage("Task nao dang pending?", { creativeWorkingState: activeCreativeState }), "cmo_default", "task status requests must not be forced into Creative");
 assert.equal(intent.routeIntentForMessage("Doc link nay va tom tat giup minh https://example.com"), "cmo_default", "source/tool read requests must not be classified as creative");
+assert.equal(intent.routeIntentForMessage("Minh muon doi thanh trai trung mau cam, nen sang hon", { creativeWorkingState: activeAssetCreativeState }), "creative_session", "asset-only Creative context must route refinement follow-up to CMO-native execute");
+assert.equal(intent.routeIntentForMessage("Ok ban tao di", { creativeWorkingState: activeAssetCreativeState }), "creative_session", "asset-only Creative context must route confirmation follow-up to CMO-native execute");
+assert.equal(intent.routeIntentForMessage("Conversion rate hom qua the nao?", { creativeWorkingState: activeAssetCreativeState }), "cmo_default", "asset context must not hijack analytics questions");
 
 const turn1HermesResponse = {
   answer_basis: { mode: "creative_ideation" },
@@ -164,6 +187,9 @@ let threeTurnDecision = draftState.extractCreativeDecision(turn1HermesResponse);
 assert.equal(threeTurnDecision.action, "propose_draft", "turn 1 must persist CMO propose_draft decision");
 assert.equal(threeTurnCreativeState.active_draft_id, "creative_draft_001", "turn 1 must persist active draft id");
 assert.equal(threeTurnCreativeState.drafts.length, 1, "turn 1 must persist draft without duplication");
+const generatedAssetState = draftState.applyCreativeAssetStateUpdate(undefined, activeAssetCreativeState.assets);
+assert.equal(generatedAssetState.active_asset_id, "asset_001", "explicit generation must persist active Creative asset id");
+assert.equal(generatedAssetState.assets.length, 1, "explicit generation must persist active Creative asset context");
 
 const turn2Message = "Walk me through the concept before making anything";
 assert.equal(intent.routeIntentForMessage(turn2Message, { creativeWorkingState: threeTurnCreativeState }), "creative_session", "turn 2 must send history and state back to CMO");
@@ -210,6 +236,12 @@ requireSource(mapperSource, /messages: recentConversationMessages\(input\.histor
 requireSource(mapperSource, /creativeWorkingStateForHermesCamelCase/, "Hermes mapper must build camelCase creativeWorkingState");
 requireSource(mapperSource, /creativeWorkingState: creativeWorkingStateCamelCase/, "Hermes mapper must send camelCase creativeWorkingState");
 requireSource(mapperSource, /creative_working_state: creativeWorkingStateForHermes/, "Hermes mapper must send snake_case creative_working_state");
+requireSource(mapperSource, /activeAssetId: state\.active_asset_id \?\? null/, "Hermes mapper must send camelCase activeAssetId");
+requireSource(mapperSource, /assets: \(state\.assets \?\? \[]\)\.map/, "Hermes mapper must send Creative asset context");
+requireSource(mapperSource, /active_creative_context_present: true/, "Hermes mapper must trace active Creative context");
+requireSource(mapperSource, /active_creative_asset_id: creativeWorkingStateForHermes\.active_asset_id \?\? null/, "Hermes mapper must trace active Creative asset id");
+requireSource(mapperSource, /creative_assets_count: creativeWorkingStateForHermes\.assets\?\.length \?\? 0/, "Hermes mapper must trace Creative asset count");
+requireSource(mapperSource, /creative_session_from_asset: Boolean/, "Hermes mapper must trace asset-origin Creative session");
 requireSource(mapperSource, /creativeSession: true/, "Hermes mapper must mark Creative session ownership");
 requireSource(mapperSource, /cmoOwnsCreativeDecision: true/, "Hermes mapper must mark CMO decision ownership");
 requireSource(mapperSource, /creativeDecisionOwnerWhenLive: "hermes_cmo"/, "Hermes mapper must mark Creative decision owner");
@@ -229,6 +261,7 @@ forbidSource(mapperSource, /creative_execution_allowed/, "Hermes mapper must not
 forbidSource(mapperSource, /intent: "execute_draft"/, "Hermes mapper must not send execute_draft intent");
 
 requireSource(runtimeSource, /requestHasCreativeWorkingState/, "runtime");
+requireSource(runtimeSource, /Array\.isArray\(state\.assets\) && state\.assets\.length > 0/, "runtime must treat asset-only Creative context as working state");
 requireSource(runtimeSource, /requestIsCreativeIdeation/, "runtime");
 requireSource(runtimeSource, /requestMayLeadToCreativeExecution/, "runtime");
 requireSource(runtimeSource, /const creativeNativeSession = creativeIdeationDetected \|\| creativeWorkingStatePresent;/, "runtime must treat Creative state as CMO-native session");
@@ -236,6 +269,11 @@ requireSource(runtimeSource, /const creativeSideEffectsAllowed = creativeNativeS
 requireSource(runtimeSource, /artifact_transport: creativeArtifactTransportForRequest\(request\)/, "runtime must include M13B artifact transport");
 requireSource(runtimeSource, /creative_side_effects_allowed: creativeSideEffectsAllowed/, "runtime must trace Creative side-effect capability");
 requireSource(runtimeSource, /requires_user_confirmation_before_creative_execute: creativeNativeSession/, "runtime must trace confirmation boundary");
+requireSource(runtimeSource, /active_creative_context_present: activeCreativeContextPresent/, "runtime must trace active Creative context");
+requireSource(runtimeSource, /active_creative_asset_id: constraints\.active_creative_asset_id/, "runtime must trace active Creative asset id");
+requireSource(runtimeSource, /creative_assets_count: creativeAssetsCount/, "runtime must trace Creative assets count");
+requireSource(runtimeSource, /route_overrode_tool_execute_due_to_creative_context/, "runtime must trace Creative context route override");
+requireSource(runtimeSource, /tool_execute_suppressed_for_creative_followup/, "runtime must trace tool-execute suppression for Creative follow-up");
 requireSource(runtimeSource, /creative_execution_requested: creativeExecutionRequested/, "runtime must preserve explicit Creative execution path");
 requireSource(runtimeSource, /\.\.\.\(creativeExecutionRequested \? \{ allowCreativeExecution: true \} : \{\}\)/, "runtime may expose legacy allow only for explicit Creative execution");
 requireSource(runtimeSource, /"blocked"/, "runtime must accept blocked creative session decisions");
@@ -258,7 +296,12 @@ forbidSource(runtimeSource, /const answerBasisModes = new Set[\s\S]*"creative_id
 forbidSource(runtimeSource, /const activityTypes = new Set[\s\S]*"creative\.ideation\.draft_proposed"[\s\S]*\]\);[\s\S]*const creativeLifecycleActivityTypes/s, "runtime must not globally allow creative ideation activity events");
 
 requireSource(storeSource, /let creativeWorkingState: CmoCreativeWorkingState \| undefined = continuedSession\?\.creativeWorkingState;/, "store session state");
+requireSource(storeSource, /applyCreativeAssetStateUpdate/, "store must persist Creative assets into working state");
 requireSource(storeSource, /creativeWorkingState,/, "store must pass creative state to router and Hermes");
+requireSource(storeSource, /activeCreativeAssetId = creativeWorkingState\?\.active_asset_id/, "store must track active Creative asset id");
+requireSource(storeSource, /creativeAssetsCount = creativeWorkingState\?\.assets\?\.length \?\? 0/, "store must track Creative assets count");
+requireSource(storeSource, /routeOverrodeToolExecuteDueToCreativeContext/, "store must trace Creative context route override");
+requireSource(storeSource, /toolExecuteSuppressedForCreativeFollowup/, "store must trace tool-execute suppression");
 requireSource(storeSource, /hermesCmoRoute\.reason === "creative_ideation"/, "store must treat creative ideation as CMO-native creative");
 requireSource(storeSource, /hermesCmoRoute\.reason === "creative_session"/, "store must treat creative session as CMO-native creative");
 requireSource(storeSource, /creativeWorkingStateForHermes = hermesCmoNativeCreativeRequested \? creativeWorkingState : undefined/, "store must only send creative state on native creative turns");

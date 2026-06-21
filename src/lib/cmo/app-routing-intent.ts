@@ -2,7 +2,9 @@ export type CmoRouteIntent = "cmo_review" | "echo_execution" | "creative_executi
 
 export interface CreativeWorkingStateIntentContext {
   active_draft_id?: string | null;
+  active_asset_id?: string | null;
   drafts?: unknown[];
+  assets?: unknown[];
 }
 
 function normalize(value: string): string {
@@ -25,9 +27,13 @@ function creativeStateHasDraft(state: CreativeWorkingStateIntentContext | undefi
   const activeDraftId = typeof state?.active_draft_id === "string" && state.active_draft_id.trim()
     ? state.active_draft_id.trim()
     : undefined;
+  const activeAssetId = typeof state?.active_asset_id === "string" && state.active_asset_id.trim()
+    ? state.active_asset_id.trim()
+    : undefined;
   const draftsCount = Array.isArray(state?.drafts) ? state.drafts.length : 0;
+  const assetsCount = Array.isArray(state?.assets) ? state.assets.length : 0;
 
-  return Boolean(activeDraftId || draftsCount > 0);
+  return Boolean(activeDraftId || activeAssetId || draftsCount > 0 || assetsCount > 0);
 }
 
 export function leadingIntentText(message: string): string {
@@ -179,6 +185,16 @@ export function isCreativeSessionTransportContinuation(
     "hinh",
     "anh",
     "mau",
+    "nen",
+    "sang",
+    "toi",
+    "color",
+    "background",
+    "lighter",
+    "brighter",
+    "orange",
+    "variant",
+    "version",
     "nhap",
     "thao",
     "tuong",

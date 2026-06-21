@@ -1,6 +1,7 @@
 import type {
   CmoCreativeDecision,
   CmoCreativeDecisionAction,
+  CmoCreativeAssetState,
   CmoCreativeDraft,
   CmoCreativeDraftKind,
   CmoCreativeWorkingState,
@@ -12,6 +13,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function normalizeCreativeDraftKind(value: unknown): CmoCreativeDraftKind | undefined {
@@ -44,6 +49,33 @@ export function normalizeCreativeDraft(value: unknown): CmoCreativeDraft | undef
   };
 }
 
+export function normalizeCreativeAssetState(value: unknown): CmoCreativeAssetState | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const assetId = stringValue(value.asset_id ?? value.assetId ?? value.id);
+  const kind = normalizeCreativeDraftKind(value.kind ?? value.asset_type ?? value.assetType ?? value.type) ?? "image";
+
+  if (!assetId) {
+    return undefined;
+  }
+
+  return {
+    asset_id: assetId,
+    kind,
+    ...(stringValue(value.status) ? { status: stringValue(value.status) } : {}),
+    ...(stringValue(value.prompt ?? value.prompt_used ?? value.promptUsed) ? { prompt: stringValue(value.prompt ?? value.prompt_used ?? value.promptUsed) } : {}),
+    ...(stringValue(value.visual_summary ?? value.visualSummary ?? value.notes) ? { visual_summary: stringValue(value.visual_summary ?? value.visualSummary ?? value.notes) } : {}),
+    ...(stringValue(value.model) ? { model: stringValue(value.model) } : {}),
+    ...(stringValue(value.operation) ? { operation: stringValue(value.operation) } : {}),
+    ...(stringValue(value.render_url ?? value.renderUrl ?? value.preview_url ?? value.previewUrl ?? value.url) ? { render_url: stringValue(value.render_url ?? value.renderUrl ?? value.preview_url ?? value.previewUrl ?? value.url) } : {}),
+    ...(stringValue(value.signed_url ?? value.signedUrl) ? { signed_url: stringValue(value.signed_url ?? value.signedUrl) } : {}),
+    ...(stringValue(value.sha256) ? { sha256: stringValue(value.sha256) } : {}),
+    ...(numberValue(value.bytes) !== undefined ? { bytes: numberValue(value.bytes) } : {}),
+  };
+}
+
 export function normalizeCreativeWorkingState(value: unknown): CmoCreativeWorkingState | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -53,17 +85,26 @@ export function normalizeCreativeWorkingState(value: unknown): CmoCreativeWorkin
     ? value.drafts.map(normalizeCreativeDraft).filter((draft): draft is CmoCreativeDraft => Boolean(draft))
     : [];
   const dedupedDrafts = Array.from(new Map(drafts.map((draft) => [draft.draft_id, draft])).values());
+  const assets = Array.isArray(value.assets)
+    ? value.assets.map(normalizeCreativeAssetState).filter((asset): asset is CmoCreativeAssetState => Boolean(asset))
+    : [];
+  const dedupedAssets = Array.from(new Map(assets.map((asset) => [asset.asset_id, asset])).values());
   const activeDraftId = value.active_draft_id === null
     ? null
     : stringValue(value.active_draft_id ?? value.activeDraftId);
+  const activeAssetId = value.active_asset_id === null
+    ? null
+    : stringValue(value.active_asset_id ?? value.activeAssetId);
 
-  if (!dedupedDrafts.length && !activeDraftId) {
+  if (!dedupedDrafts.length && !dedupedAssets.length && !activeDraftId && !activeAssetId) {
     return undefined;
   }
 
   return {
     ...(activeDraftId !== undefined ? { active_draft_id: activeDraftId } : {}),
+    ...(activeAssetId !== undefined ? { active_asset_id: activeAssetId } : {}),
     drafts: dedupedDrafts,
+    ...(dedupedAssets.length ? { assets: dedupedAssets } : {}),
   };
 }
 
@@ -132,6 +173,41 @@ export function applySuggestedCreativeStateUpdate(
   return nextState;
 }
 
+export function applyCreativeAssetStateUpdate(
+  current: CmoCreativeWorkingState | undefined,
+  assetsInput: unknown[],
+): CmoCreativeWorkingState | undefined {
+  const assets = assetsInput
+    .map(normalizeCreativeAssetState)
+    .filter((asset): asset is CmoCreativeAssetState => Boolean(asset));
+
+  if (!assets.length) {
+    return current;
+  }
+
+  const assetsById = new Map<string, CmoCreativeAssetState>();
+
+  for (const asset of current?.assets ?? []) {
+    assetsById.set(asset.asset_id, asset);
+  }
+
+  for (const asset of assets) {
+    assetsById.set(asset.asset_id, {
+      ...(assetsById.get(asset.asset_id) ?? {}),
+      ...asset,
+    });
+  }
+
+  const activeAssetId = assets[assets.length - 1]?.asset_id ?? current?.active_asset_id;
+
+  return normalizeCreativeWorkingState({
+    ...(current?.active_draft_id !== undefined ? { active_draft_id: current.active_draft_id } : {}),
+    ...(activeAssetId !== undefined ? { active_asset_id: activeAssetId } : {}),
+    drafts: current?.drafts ?? [],
+    assets: Array.from(assetsById.values()),
+  });
+}
+
 export function extractSuggestedCreativeStateUpdate(response: unknown): unknown {
   if (!isRecord(response)) {
     return undefined;
@@ -191,5 +267,5 @@ export function extractCreativeDecision(response: unknown): CmoCreativeDecision 
 }
 
 export function hasCreativeWorkingStateDrafts(state: CmoCreativeWorkingState | undefined): boolean {
-  return Boolean(state && (state.drafts.length > 0 || state.active_draft_id));
+  return Boolean(state && (state.drafts.length > 0 || state.active_draft_id || (state.assets?.length ?? 0) > 0 || state.active_asset_id));
 }

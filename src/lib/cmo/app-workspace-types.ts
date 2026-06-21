@@ -660,9 +660,25 @@ export interface CmoCreativeDraft {
   updated_turn_id?: string;
 }
 
+export interface CmoCreativeAssetState {
+  asset_id: string;
+  kind: CmoCreativeDraftKind;
+  status?: string;
+  prompt?: string;
+  visual_summary?: string;
+  model?: string;
+  operation?: string;
+  render_url?: string;
+  signed_url?: string;
+  sha256?: string;
+  bytes?: number;
+}
+
 export interface CmoCreativeWorkingState {
   active_draft_id?: string | null;
+  active_asset_id?: string | null;
   drafts: CmoCreativeDraft[];
+  assets?: CmoCreativeAssetState[];
 }
 
 export interface CmoCreativeDecision {
