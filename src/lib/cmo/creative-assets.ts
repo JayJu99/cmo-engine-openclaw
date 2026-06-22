@@ -43,6 +43,7 @@ export interface CmoCreativeStoredAsset {
   type: "image" | "video";
   storagePath: string;
   mimeType: string;
+  status: string;
   bytes?: number;
   sha256?: string;
 }
@@ -272,7 +273,7 @@ export async function getCmoCreativeStoredAsset(input: {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("cmo_creative_assets")
-    .select("id,tenant_id,workspace_id,app_id,type,storage_path,bytes,sha256,metadata_json")
+    .select("id,tenant_id,workspace_id,app_id,type,storage_path,bytes,sha256,status,metadata_json")
     .eq("id", input.assetId)
     .eq("tenant_id", input.tenantId)
     .eq("workspace_id", input.workspaceId)
@@ -301,6 +302,7 @@ export async function getCmoCreativeStoredAsset(input: {
     type: data.type === "video" ? "video" : "image",
     storagePath: data.storage_path,
     mimeType,
+    status: typeof data.status === "string" ? data.status : "",
     ...(typeof data.bytes === "number" && Number.isFinite(data.bytes) ? { bytes: Math.floor(data.bytes) } : {}),
     ...(typeof data.sha256 === "string" && /^[a-f0-9]{64}$/i.test(data.sha256) ? { sha256: data.sha256.toLowerCase() } : {}),
   };

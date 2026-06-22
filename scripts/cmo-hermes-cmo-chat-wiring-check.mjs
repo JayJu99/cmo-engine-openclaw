@@ -972,6 +972,72 @@ try {
     assert.equal(eggsStrategyRequest.intent.explicit_command, null);
     assert.match(JSON.stringify(eggsStrategyRequest), /No accepted project context found at 12 Knowledge\/Workspace Lessons\/eggs-vault/);
 
+    const creativeReferenceInput = JSON.parse(JSON.stringify(sampleTurnInput));
+    creativeReferenceInput.message = "Make the current image brighter but keep composition.";
+    creativeReferenceInput.request.workspaceId = "eggs-vault";
+    creativeReferenceInput.request.appId = "eggs-vault";
+    creativeReferenceInput.request.appName = "Eggs Vault";
+    creativeReferenceInput.contextPackage.workspaceId = "eggs-vault";
+    creativeReferenceInput.contextPackage.app.id = "eggs-vault";
+    creativeReferenceInput.contextPackage.app.name = "Eggs Vault";
+    const creativeReferenceRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...creativeReferenceInput,
+      sessionId: "session_eggs_creative_reference",
+      userMessageId: "msg_eggs_creative_reference",
+      createdAt: "2026-06-20T10:02:00.000Z",
+      userIdentity: { userId: "user_eggs", userEmail: "jay@example.com" },
+      creativeWorkingState: {
+        active_draft_id: "draft_eggs_reference",
+        active_asset_id: "creative_uploaded_primary",
+        drafts: [
+          {
+            draft_id: "draft_eggs_reference",
+            kind: "image",
+            prompt: "Make the current image brighter but keep composition.",
+            status: "draft",
+          },
+        ],
+        assets: [
+          {
+            asset_id: "creative_uploaded_primary",
+            kind: "image",
+            status: "stored",
+            mime_type: "image/png",
+            bytes: 123456,
+            sha256: "abababababababababababababababababababababababababababababababab",
+            render_url: "https://gestlbswqvibztqcidis.supabase.co/storage/v1/object/sign/cmo-creative-assets/path.png?token=redacted",
+          },
+        ],
+      },
+      creativeSessionFollowupDetected: true,
+      activeCreativeAssetResolutionSource: "creativeWorkingState",
+    });
+    assert.equal(creativeReferenceRequest.intent.explicit_command, null, "CMO-native creative sessions must not force explicit Creative generation");
+    assert.equal(creativeReferenceRequest.creativeSession, true);
+    assert.equal(creativeReferenceRequest.cmoOwnsCreativeDecision, true);
+    assert.equal(creativeReferenceRequest.creativeDecisionOwnerWhenLive, "hermes_cmo");
+    assert.equal(creativeReferenceRequest.reference_assets.length, 1);
+    assert.equal(creativeReferenceRequest.referenceAssets.length, 1);
+    assert.equal(creativeReferenceRequest.reference_assets[0].asset_id, "creative_uploaded_primary");
+    assert.equal(creativeReferenceRequest.reference_assets[0].kind, "image");
+    assert.equal(creativeReferenceRequest.reference_assets[0].role, "source_image");
+    assert.equal(creativeReferenceRequest.reference_assets[0].mime_type, "image/png");
+    assert.equal(creativeReferenceRequest.reference_assets[0].sha256, "abababababababababababababababababababababababababababababababab");
+    assert.equal(creativeReferenceRequest.reference_assets[0].bytes, 123456);
+    assert.equal(
+      creativeReferenceRequest.reference_assets[0].fetch_url,
+      "https://cmo.jayju.cloud/api/cmo/apps/eggs-vault/creative/assets/creative_uploaded_primary/download",
+    );
+    assert.equal(creativeReferenceRequest.reference_assets[0].fetchUrl, creativeReferenceRequest.reference_assets[0].fetch_url);
+    assert.equal(creativeReferenceRequest.referenceAssets[0].assetId, "creative_uploaded_primary");
+    assert.equal(creativeReferenceRequest.referenceAssets[0].mimeType, "image/png");
+    assert.equal(creativeReferenceRequest.referenceAssets[0].authRef, "cmo_creative_artifact_read_key");
+    assert.equal(creativeReferenceRequest.referenceAssets[0].authHeader, "x-cmo-creative-artifact-key");
+    assert.equal(creativeReferenceRequest.reference_assets[0].auth_ref, "cmo_creative_artifact_read_key");
+    assert.equal(creativeReferenceRequest.reference_assets[0].auth_header, "x-cmo-creative-artifact-key");
+    assert.doesNotMatch(JSON.stringify(creativeReferenceRequest.reference_assets), /CMO_CREATIVE_ARTIFACT_READ_KEY|token=redacted|\/tmp|\[hermes_local_artifact_path_redacted\]/);
+    assert.doesNotMatch(creativeReferenceRequest.reference_assets[0].fetch_url, /storage\/v1\/object\/sign/, "Primary fetch URL must not be a Supabase signed URL");
+
     const chatV11Request = chatV11.buildHermesCmoChatV11Request({
       ...sampleTurnInput,
       sessionId: "session_h6",

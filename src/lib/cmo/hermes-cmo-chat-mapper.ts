@@ -62,6 +62,8 @@ export interface HermesCmoChatRequestInput extends CmoRuntimeTurnInput {
 const MAX_REPLAY_MESSAGES = 16;
 const MAX_REPLAY_MESSAGE_CHARS = 4000;
 const CMO_DEFAULT_PUBLIC_APP_URL = "https://cmo.jayju.cloud" as const;
+const CMO_CREATIVE_ARTIFACT_AUTH_REF = "cmo_creative_artifact_read_key" as const;
+const CMO_CREATIVE_ARTIFACT_AUTH_HEADER = "x-cmo-creative-artifact-key" as const;
 
 interface HermesCmoReplayMessage {
   role: "user" | "assistant";
@@ -280,15 +282,23 @@ function creativeReferenceAssetsForHermes(
     return [];
   }
 
+  const fetchUrl = creativeAssetDownloadFetchUrl(appId, activeAsset.asset_id);
+
   return [
     {
       asset_id: activeAsset.asset_id,
+      assetId: activeAsset.asset_id,
       kind: "image",
       role: "source_image",
-      ...(activeAsset.mime_type ? { mime_type: activeAsset.mime_type } : {}),
+      ...(activeAsset.mime_type ? { mime_type: activeAsset.mime_type, mimeType: activeAsset.mime_type } : {}),
       ...(activeAsset.sha256 ? { sha256: activeAsset.sha256 } : {}),
       ...(typeof activeAsset.bytes === "number" ? { bytes: activeAsset.bytes } : {}),
       fetch_url: creativeAssetDownloadFetchUrl(appId, activeAsset.asset_id),
+      fetchUrl,
+      auth_ref: CMO_CREATIVE_ARTIFACT_AUTH_REF,
+      authRef: CMO_CREATIVE_ARTIFACT_AUTH_REF,
+      auth_header: CMO_CREATIVE_ARTIFACT_AUTH_HEADER,
+      authHeader: CMO_CREATIVE_ARTIFACT_AUTH_HEADER,
     },
   ];
 }

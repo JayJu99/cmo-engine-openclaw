@@ -484,6 +484,7 @@ const creativeExecutionActivityTypes = new Set<HermesActivityType>([
   "creative.completed",
   "creative.uploaded",
 ]);
+const creativeLifecycleActivityTypes = creativeExecutionActivityTypes;
 const safeCreativeIdeationRawActivityTypes = new Set<string>([
   "creative.ideation.draft_proposed",
   "creative.ideation.draft_updated",
@@ -1426,6 +1427,37 @@ const responseHasCreativeExecutionResult = (
   );
 };
 
+const creativeExecutionErrors = (
+  response: Record<string, unknown>,
+  structuredOutput: Record<string, unknown>,
+): Record<string, unknown>[] => [
+  ...(Array.isArray(response.errors) ? response.errors.filter(isRecord) : []),
+  ...(Array.isArray(structuredOutput.errors) ? structuredOutput.errors.filter(isRecord) : []),
+];
+
+const responseHasCreativeExecutionFailure = (
+  response: Record<string, unknown>,
+  structuredOutput: Record<string, unknown>,
+): boolean => {
+  const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
+  const creativeDecision = creativeDecisionFromResponse(response, structuredOutput);
+  const action = typeof creativeDecision?.action === "string" ? creativeDecision.action : undefined;
+  const operation = typeof creativeDecision?.operation === "string" ? creativeDecision.operation : undefined;
+  const errors = creativeExecutionErrors(response, structuredOutput);
+  const referenceFetchFailed = errors.some((error) =>
+    error.type === "reference_asset_fetch_failed" ||
+    typeof error.code === "string" && error.code.startsWith("reference_fetch_")
+  );
+
+  return (
+    response.status === "failed" &&
+    answerBasis.mode === "creative_execution" &&
+    action === "execute" &&
+    (!operation || operation.startsWith("creative.")) &&
+    referenceFetchFailed
+  );
+};
+
 const normalizeCreativeExecutionResponseCandidate = (
   response: Record<string, unknown>,
   request: HermesCmoRuntimeRequest,
@@ -1543,7 +1575,7 @@ const sourceModeIsCreativeExecution = (
 ): boolean =>
   sourceMode === "creative_execution" &&
     requestMayLeadToCreativeExecution(request) &&
-  creativeExecutionActivityTypes.has(eventType as HermesActivityType);
+  creativeLifecycleActivityTypes.has(eventType as HermesActivityType);
 
 const activityEventTypeIsAllowed = (eventType: unknown): eventType is HermesActivityType =>
   activityTypes.has(eventType as HermesActivityType);
@@ -1998,7 +2030,7 @@ const requestAllowsCmoOwnedCreativeExecutionAnswerBasis = (
     requestHasCmoCreativeDecisionOwner(request) &&
     requestHasActiveCreativeExecutionContext(request) &&
     requestArtifactTransportMode(request) === "product_upload" &&
-    responseHasCreativeExecutionResult(response, structuredOutput)
+    (responseHasCreativeExecutionResult(response, structuredOutput) || responseHasCreativeExecutionFailure(response, structuredOutput))
   );
 };
 
@@ -2547,6 +2579,21 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
       ? request.referenceAssets.filter(isRecord)
       : [];
   const firstReferenceAsset = referenceAssets[0];
+  const referenceFetchUrl = typeof firstReferenceAsset?.fetch_url === "string"
+    ? firstReferenceAsset.fetch_url
+    : typeof firstReferenceAsset?.fetchUrl === "string"
+      ? firstReferenceAsset.fetchUrl
+      : undefined;
+  const referenceAuthRef = typeof firstReferenceAsset?.auth_ref === "string"
+    ? firstReferenceAsset.auth_ref
+    : typeof firstReferenceAsset?.authRef === "string"
+      ? firstReferenceAsset.authRef
+      : undefined;
+  const referenceAuthHeader = typeof firstReferenceAsset?.auth_header === "string"
+    ? firstReferenceAsset.auth_header
+    : typeof firstReferenceAsset?.authHeader === "string"
+      ? firstReferenceAsset.authHeader
+      : undefined;
 
   return {
     endpoint_path: config.endpointPath,
@@ -2579,9 +2626,17 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
     creative_assets_count: creativeAssetsCount,
     creative_session_from_asset: creativeSessionFromAsset,
     reference_assets_count: referenceAssets.length,
-    reference_asset_fetch_url_present: typeof firstReferenceAsset?.fetch_url === "string" && firstReferenceAsset.fetch_url.startsWith("https://"),
+    active_reference_asset_id: typeof firstReferenceAsset?.asset_id === "string" ? firstReferenceAsset.asset_id : firstReferenceAsset?.assetId,
+    reference_asset_fetch_url_present: typeof referenceFetchUrl === "string" && Boolean(referenceFetchUrl),
+    reference_asset_fetch_url_absolute: typeof referenceFetchUrl === "string" && /^https?:\/\//i.test(referenceFetchUrl),
+    reference_asset_auth_ref_present: referenceAuthRef === "cmo_creative_artifact_read_key",
+    reference_asset_auth_header: referenceAuthHeader,
     reference_asset_sha256_present: typeof firstReferenceAsset?.sha256 === "string" && Boolean(firstReferenceAsset.sha256),
     reference_asset_bytes_present: typeof firstReferenceAsset?.bytes === "number" && Number.isFinite(firstReferenceAsset.bytes),
+    s2s_artifact_download_enabled: Boolean(process.env.CMO_CREATIVE_ARTIFACT_READ_KEY?.trim()),
+    s2s_artifact_download_auth_used: false,
+    s2s_artifact_download_auth_valid: false,
+    s2s_artifact_download_http_status: undefined,
     route_overrode_tool_execute_due_to_creative_context: config.routeDecision === "creative_session" && activeCreativeContextPresent,
     tool_execute_suppressed_for_creative_followup: config.endpointKind === "execute" && config.routeDecision === "creative_session",
     creative_session_followup_detected: constraints.creative_session_followup_detected === true,
@@ -2849,7 +2904,20 @@ const normalizeHermesCmoOwnedCreativeExecutionResponse = (
   const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
   const artifacts = Array.isArray(response.artifacts) ? response.artifacts : [];
   const creativeAssets = creativeResponseArtifacts(response);
-  const answer = normalizeHermesCmoRuntimeAnswer(response.answer, "creative_execution");
+  const failedReferenceFetch = responseHasCreativeExecutionFailure(response, structuredOutput);
+  const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
+  const answer = normalizeHermesCmoRuntimeAnswer(
+    failedReferenceFetch && (response.answer === undefined || response.answer === null)
+      ? {
+          format: "markdown",
+          title: "Creative Reference Fetch Failed",
+          summary: "Creative reference image could not be fetched.",
+          decision: "Check artifact read access.",
+          body: "Creative reference image could not be fetched. Check artifact read access.",
+        }
+      : response.answer,
+    "creative_execution",
+  );
   const rejectedCreativeExecutionEvent = rawActivityEventTypes.find(
     (eventType) => eventType.startsWith("creative.") && !safeCreativeExecutionRawActivityTypes.has(eventType),
   );
@@ -2877,6 +2945,14 @@ const normalizeHermesCmoOwnedCreativeExecutionResponse = (
     response: {
       ...response,
       answer,
+      answer_basis: {
+        ...answerBasis,
+        mode: "creative_execution",
+        missing_inputs: Array.isArray(answerBasis.missing_inputs) ? answerBasis.missing_inputs : [],
+        assumptions_used: Array.isArray(answerBasis.assumptions_used) ? answerBasis.assumptions_used : [],
+        user_can_override: typeof answerBasis.user_can_override === "boolean" ? answerBasis.user_can_override : true,
+        suggested_user_inputs: Array.isArray(answerBasis.suggested_user_inputs) ? answerBasis.suggested_user_inputs : [],
+      },
       clarifying_question: isRecord(response.clarifying_question)
         ? response.clarifying_question
         : {
@@ -2901,6 +2977,8 @@ const normalizeHermesCmoOwnedCreativeExecutionResponse = (
         fallback_used: false,
         rejected_by_m1_validator: false,
         creative_assets_count: creativeAssets.length,
+        ...(failedReferenceFetch ? { creative_reference_fetch_failed: true } : {}),
+        ...(failedReferenceFetch ? { error_code: "reference_asset_fetch_failed" } : {}),
         ...(requestActiveCreativeAssetId(request) ? { active_creative_asset_id: requestActiveCreativeAssetId(request) } : {}),
         reference_assets_count: requestReferenceAssets(request).length,
         artifact_transport_mode: requestArtifactTransportMode(request),
@@ -2921,6 +2999,7 @@ const normalizeHermesCmoOwnedCreativeExecutionResponse = (
         m1_validation_result: "accepted",
         fallback_used: false,
         rejected_by_m1_validator: false,
+        ...(failedReferenceFetch ? { creative_reference_fetch_failed: true } : {}),
       },
     },
     activityEventsCandidate: canonicalActivityEvents,

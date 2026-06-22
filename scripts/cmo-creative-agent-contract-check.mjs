@@ -188,6 +188,7 @@ const [
   creativeAssetPreviewRouteSource,
   creativeAssetDownloadRouteSource,
   packageSource,
+  envExampleSource,
 ] = await Promise.all([
   read("src/lib/cmo/hermes-cmo-runtime.ts"),
   read("src/lib/cmo/app-routing-intent.ts"),
@@ -210,6 +211,7 @@ const [
   read("src/app/api/cmo/apps/[appId]/creative/assets/[assetId]/preview/route.ts"),
   read("src/app/api/cmo/apps/[appId]/creative/assets/[assetId]/download/route.ts"),
   read("package.json"),
+  read(".env.example"),
 ]);
 
 assert.match(runtimeSource, /"creative"/, "creative must be accepted by runtime agent registry");
@@ -230,6 +232,9 @@ assert.match(configSource, /CMO_HERMES_CREATIVE_ENABLED/, "Creative enabled conf
 assert.match(configSource, /CMO_HERMES_CREATIVE_CALL_MODE/, "Creative call mode config is required");
 assert.match(configSource, /CMO_HERMES_CREATIVE_PROFILE/, "Creative profile config is required");
 assert.match(configSource, /CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS/, "Creative execute timeout config is required");
+assert.match(configSource, /getCmoCreativeArtifactReadKey/, "Creative artifact read key must be server config only");
+assert.match(envExampleSource, /CMO_CREATIVE_ARTIFACT_READ_KEY=/, "Creative artifact read key must be documented in env example");
+assert.match(envExampleSource, /x-cmo-creative-artifact-key/, "Artifact read env docs must document the internal auth header");
 assert.match(configSource, /getCmoHermesCreativeExecuteTimeoutMs[\s\S]*300_000/, "Creative execute timeout must default to 300000ms");
 assert.match(runtimeSource, /creative_call_mode.*via_cmo/s, "default Creative call mode must route through CMO");
 assert.match(routeIntentSource, /creative_execution/, "Product routing intent must classify explicit Creative execution");
@@ -290,6 +295,13 @@ assert.doesNotMatch(openClawClientSource, /Product recorded the asset metadata/,
 assert.match(mapperSource, /hasCreativeExecutionMetadata/, "Hermes execute response mapper must accept Creative metadata without a conventional answer");
 assert.match(mapperSource, /creativeNarrativeFromHermes/, "Hermes execute response mapper may use Hermes or Creative narrative only");
 assert.doesNotMatch(mapperSource, /Creative execution completed and returned generated asset metadata/, "Hermes execute response mapper must not synthesize Product Creative answer copy");
+assert.match(mapperSource, /CMO_CREATIVE_ARTIFACT_AUTH_REF = "cmo_creative_artifact_read_key"/, "Reference assets must use symbolic artifact auth_ref");
+assert.match(mapperSource, /CMO_CREATIVE_ARTIFACT_AUTH_HEADER = "x-cmo-creative-artifact-key"/, "Reference assets must declare the artifact read auth header");
+assert.match(mapperSource, /fetch_url: creativeAssetDownloadFetchUrl\(appId, activeAsset\.asset_id\)/, "Reference assets must include snake_case absolute Product fetch URL");
+assert.match(mapperSource, /fetchUrl/, "Reference assets must include camelCase absolute Product fetch URL");
+assert.match(mapperSource, /auth_ref: CMO_CREATIVE_ARTIFACT_AUTH_REF/, "Reference assets must include auth_ref without raw secret");
+assert.match(mapperSource, /auth_header: CMO_CREATIVE_ARTIFACT_AUTH_HEADER/, "Reference assets must include auth_header without raw secret");
+assert.doesNotMatch(mapperSource, /CMO_CREATIVE_ARTIFACT_READ_KEY/, "Mapper must not read or embed raw artifact read key");
 assert.match(uiSource, /Creative Assets/, "Chat UI must render Creative asset cards");
 assert.match(uiSource, /Artifact transport missing/, "UI must show missing transport state");
 assert.match(uiSource, /creativeAssetPreviewUrl/, "UI must resolve Creative preview URLs through a single safe helper");
@@ -324,13 +336,21 @@ assert.match(ingestRouteSource, /workspace_id/, "Creative ingest endpoint must a
 assert.match(ingestRouteSource, /asset_id/, "Creative ingest endpoint must accept Hermes asset_id multipart field");
 assert.match(ingestRouteSource, /render_url/, "Creative ingest response must include Product render_url receipt field");
 assert.match(creativeAssetsSource, /getCmoCreativeStoredAsset/, "Product must look up Creative assets before proxying private storage bytes");
+assert.match(creativeAssetsSource, /\.select\("id,tenant_id,workspace_id,app_id,type,storage_path,bytes,sha256,status,metadata_json"\)/, "Creative asset lookup must read stored status before download");
 assert.match(creativeAssetsSource, /\.from\("cmo_creative_assets"\)[\s\S]*\.eq\("id", input\.assetId\)[\s\S]*\.eq\("tenant_id", input\.tenantId\)[\s\S]*\.eq\("workspace_id", input\.workspaceId\)[\s\S]*\.eq\("app_id", input\.appId\)/, "Creative asset lookup must be scoped by asset/app/workspace/tenant");
 assert.match(creativeAssetsSource, /downloadCmoCreativeStoredAsset/, "Product must download Creative assets server-side from private Supabase Storage");
 assert.match(creativeAssetsSource, /\.storage[\s\S]*\.from\(CMO_CREATIVE_ASSETS_BUCKET\)[\s\S]*\.download\(asset\.storagePath\)/, "Creative proxy must read bytes from the private cmo-creative-assets bucket");
 assert.match(creativeAssetsSource, /mime_type: mimeType/, "Creative ingest metadata must preserve mime_type for proxy response headers");
 assert.match(creativeAssetResponseSource, /requireRequestUserIfAuthRequired/, "Creative asset proxy must validate Product user/session access when auth is required");
+assert.match(creativeAssetResponseSource, /CMO_CREATIVE_ARTIFACT_READ_HEADER = "x-cmo-creative-artifact-key"/, "Creative asset proxy must accept the internal artifact read header");
+assert.match(creativeAssetResponseSource, /getCmoCreativeArtifactReadKey/, "Creative asset proxy must validate the dedicated artifact read key");
+assert.match(creativeAssetResponseSource, /timingSafeEqual/, "Creative asset proxy should use constant-time key comparison");
+assert.match(creativeAssetResponseSource, /creative_artifact_read_unauthorized/, "Wrong artifact read key must return 401");
 assert.match(creativeAssetResponseSource, /Authentication required[\s\S]*401[\s\S]*authentication_required/, "Creative asset proxy must return 401 for missing required auth");
 assert.match(creativeAssetResponseSource, /requireWorkspaceRegistryEntry/, "Creative asset proxy must use workspace registry scope");
+assert.match(creativeAssetResponseSource, /STORED_ASSET_STATUSES/, "Creative asset proxy must validate stored/uploaded status before serving bytes");
+assert.match(creativeAssetResponseSource, /CMO_CREATIVE_ALLOWED_MIME_TYPES/, "Creative asset proxy must validate allowed MIME types before serving bytes");
+assert.match(creativeAssetResponseSource, /hermes_local_artifact_path_redacted/, "Creative asset proxy must not serve redacted Hermes local paths");
 assert.match(creativeAssetResponseSource, /Content-Type/, "Creative preview route must set Content-Type");
 assert.match(creativeAssetResponseSource, /Content-Length/, "Creative preview route should set Content-Length when available");
 assert.match(creativeAssetResponseSource, /Cache-Control"[\s\S]*private, max-age=300/, "Creative preview route must set private short cache headers");

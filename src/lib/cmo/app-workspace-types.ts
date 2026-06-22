@@ -967,9 +967,17 @@ export interface HermesCmoChatMetadata {
   creative_assets_count?: number;
   creative_session_from_asset?: boolean;
   reference_assets_count?: number;
+  active_reference_asset_id?: string;
   reference_asset_fetch_url_present?: boolean;
+  reference_asset_fetch_url_absolute?: boolean;
+  reference_asset_auth_ref_present?: boolean;
+  reference_asset_auth_header?: string;
   reference_asset_sha256_present?: boolean;
   reference_asset_bytes_present?: boolean;
+  s2s_artifact_download_enabled?: boolean;
+  s2s_artifact_download_auth_used?: boolean;
+  s2s_artifact_download_auth_valid?: boolean;
+  s2s_artifact_download_http_status?: number;
   artifact_transport_mode?: string;
   creative_decision?: CmoCreativeDecision;
   rejected_by_m1_validator?: boolean;

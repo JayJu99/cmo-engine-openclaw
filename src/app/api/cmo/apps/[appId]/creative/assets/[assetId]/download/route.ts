@@ -9,6 +9,7 @@ export async function GET(_request: Request, context: { params: Promise<{ appId:
     const { appId, assetId } = await context.params;
 
     return await cmoCreativeAssetResponse({
+      request: _request,
       appId,
       assetId,
       mode: "download",

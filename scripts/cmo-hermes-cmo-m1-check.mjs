@@ -617,7 +617,8 @@ const startServer = async () => {
             body.request_id === "req_m13_creative_unsafe_side_effect" ||
             body.request_id === "req_m13_creative_executed_echo_true";
           const firstCallCmoOwnedCreativeExecution =
-            body.request_id === "req_m13_cmo_owned_creative_execution_live_shape";
+            body.request_id === "req_m13_cmo_owned_creative_execution_live_shape" ||
+            body.request_id === "req_m13_cmo_owned_creative_reference_fetch_failed";
           const firstCallCreativeNative = firstCallCreativeExecution || firstCallCmoOwnedCreativeExecution;
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
           assert.equal(body.user_message, body.intent?.user_message);
@@ -771,6 +772,35 @@ const startServer = async () => {
                 events_count: 2,
                 final_state: "completed",
               },
+            });
+            return;
+          }
+
+          if (
+            body.request_id === "req_m13_cmo_owned_creative_reference_fetch_failed"
+          ) {
+            writeJson(response, 200, {
+              schema_version: "hermes.cmo.response.v1",
+              request_id: body.request_id,
+              session_id: body.session_id,
+              turn_id: body.turn_id,
+              status: "failed",
+              response_status: "failed",
+              answer_basis: {
+                mode: "creative_execution",
+              },
+              creative_decision: {
+                action: "execute",
+                operation: "creative.edit_image",
+              },
+              creative_assets: [],
+              errors: [
+                {
+                  type: "reference_asset_fetch_failed",
+                  code: "reference_fetch_http_error",
+                  http_status: 401,
+                },
+              ],
             });
             return;
           }
@@ -3505,6 +3535,7 @@ try {
   let m13CreativeTopLevelSuccessResult;
   let m13CreativeUploadedAssetResult;
   let m13CmoOwnedCreativeExecutionResult;
+  let m13CmoOwnedCreativeReferenceFetchFailedResult;
   let m13CreativeExecutedCreativeResult;
   let m13CreativeFalseOnlySideEffectsResult;
 
@@ -5055,6 +5086,19 @@ try {
     assert.equal(m13CmoOwnedCreativeExecutionResult.response.artifacts[0].render_url, "https://cmo.jayju.cloud/api/signed/creative_edited_fixture");
     assert.deepEqual(m13CmoOwnedCreativeExecutionResult.activity_events.map((event) => event.type), ["creative.started", "creative.generating"]);
     assert.deepEqual(m13CmoOwnedCreativeExecutionResult.activity_events.map((event) => event.source.mode), ["creative_execution", "creative_execution"]);
+    m13CmoOwnedCreativeReferenceFetchFailedResult = await runHermesCmoRuntime(m13CmoOwnedCreativeSessionExecutionRequest("req_m13_cmo_owned_creative_reference_fetch_failed"));
+    assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.status, "failed");
+    assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.answer_basis.mode, "creative_execution");
+    assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.answer.body, "Creative reference image could not be fetched. Check artifact read access.");
+    assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.structured_output.creative_execution_response_received, true);
+    assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.structured_output.creative_execution_owner, "cmo");
+    assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.structured_output.creative_execution_requested, false);
+    assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.structured_output.creative_reference_fetch_failed, true);
+    assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.structured_output.error_code, "reference_asset_fetch_failed");
+    assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.structured_output.rejected_by_m1_validator, false);
+    assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.structured_output.m1_validation_result, "accepted");
+    assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.structured_output.fallback_used, false);
+    assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.structured_output.reference_assets_count, 1);
     assert.equal(
       validateHermesCmoRuntimeResponse(
         {

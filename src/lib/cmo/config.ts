@@ -166,6 +166,10 @@ export function getCmoHermesCreativeProfile(): string {
   return process.env.CMO_HERMES_CREATIVE_PROFILE?.trim() || "creative";
 }
 
+export function getCmoCreativeArtifactReadKey(): string {
+  return process.env.CMO_CREATIVE_ARTIFACT_READ_KEY?.trim() ?? "";
+}
+
 export function getCmoVaultAgentHandoffMode(): CmoVaultAgentHandoffMode {
   const mode = process.env.CMO_VAULT_AGENT_HANDOFF_MODE;
 
