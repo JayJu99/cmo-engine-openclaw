@@ -2419,7 +2419,7 @@ const traceValue = (value: unknown, depth = 0): unknown => {
 const hermesTracePath = (request: HermesCmoRuntimeRequest, suffix: string) =>
   path.join(
     traceDirectory(),
-    `${new Date().toISOString().replace(/[:.]/g, "-")}_${safeTraceId(request.workspace.app_id)}_${safeTraceId(request.session_id)}_${safeTraceId(request.turn_id)}_${suffix}.json`,
+    `${safeTraceId(request.created_at.replace(/[:.]/g, "-"))}_${safeTraceId(request.workspace.app_id)}_${safeTraceId(request.session_id)}_${safeTraceId(request.turn_id)}_${suffix}.json`,
   );
 
 const writeHermesTrace = async (

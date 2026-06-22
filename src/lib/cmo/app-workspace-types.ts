@@ -970,6 +970,7 @@ export interface HermesCmoChatMetadata {
   active_creative_context_present?: boolean;
   active_creative_asset_resolved?: boolean;
   active_creative_asset_resolution_source?: string;
+  active_asset_id?: string;
   active_creative_asset_id?: string;
   creative_session_active_asset_id?: string;
   creative_assets_count?: number;
@@ -1375,6 +1376,9 @@ export interface CMOChatMessage {
   creativeExecutionRequested?: boolean;
   creativeResponseReceived?: boolean;
   creativeMetadataPresent?: boolean;
+  active_asset_id?: string;
+  active_creative_asset_id?: string;
+  creative_session_active_asset_id?: string;
   creativeNormalizationError?: string;
   creativeFallbackUsed?: boolean;
   creativeRejectedByM1Validator?: boolean;
@@ -1553,6 +1557,9 @@ export interface CMOChatSession {
   creativeExecutionRequested?: boolean;
   creativeResponseReceived?: boolean;
   creativeMetadataPresent?: boolean;
+  active_asset_id?: string;
+  active_creative_asset_id?: string;
+  creative_session_active_asset_id?: string;
   creativeNormalizationError?: string;
   creativeFallbackUsed?: boolean;
   creativeRejectedByM1Validator?: boolean;
@@ -1684,6 +1691,9 @@ export interface CMOAppChatResponse {
   creativeExecutionRequested?: boolean;
   creativeResponseReceived?: boolean;
   creativeMetadataPresent?: boolean;
+  active_asset_id?: string;
+  active_creative_asset_id?: string;
+  creative_session_active_asset_id?: string;
   creativeNormalizationError?: string;
   creativeFallbackUsed?: boolean;
   creativeRejectedByM1Validator?: boolean;

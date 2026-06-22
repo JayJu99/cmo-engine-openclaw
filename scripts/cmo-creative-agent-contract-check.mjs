@@ -173,6 +173,7 @@ const [
   outerRuntimeSource,
   typesSource,
   mapperSource,
+  chatV11Source,
   storeSource,
   uiSource,
   configSource,
@@ -196,6 +197,7 @@ const [
   read("src/lib/cmo/runtime.ts"),
   read("src/lib/cmo/app-workspace-types.ts"),
   read("src/lib/cmo/hermes-cmo-chat-mapper.ts"),
+  read("src/lib/cmo/hermes-cmo-chat-v11.ts"),
   read("src/lib/cmo/app-chat-store.ts"),
   read("src/components/cmo-apps/cmo-chat-panel.tsx"),
   read("src/lib/cmo/config.ts"),
@@ -270,6 +272,8 @@ assert.match(runtimeSource, /timeout_source/, "Hermes CMO trace must include the
 assert.match(runtimeSource, /route_decision/, "Hermes CMO trace must include the route decision");
 assert.match(runtimeSource, /creative_trace/, "Hermes CMO trace must include Creative routing diagnostics");
 assert.match(runtimeSource, /writeHermesTrace\(request, "response"[\s\S]*creative_long_running_turn: config\.creativeLongRunningTurn/, "Successful long-running Creative responses must write _response.json traces");
+assert.match(runtimeSource, /request\.created_at\.replace\(\/\[:\.\]\/g, "-"\)/, "Hermes CMO runtime request/response trace files must share the request created_at prefix");
+assert.match(chatV11Source, /chatTracePrefixes[\s\S]*hermesCmoChatV11TracePrefix\(request\)[\s\S]*_\$\{safeTraceId\(request\.app_id\)\}/, "Hermes CMO chat v1.1 request/response trace files must share a stable request prefix");
 assert.match(runtimeSource, /allowSubAgentExecution: specialistExecutionAllowed/, "Creative execution must not be blocked by Echo/Surf orchestration mode");
 assert.match(outerRuntimeSource, /appTurnTimeoutConfig/, "Outer app-chat runtime must have explicit timeout selection");
 assert.match(outerRuntimeSource, /getCmoHermesCreativeExecuteTimeoutMs\(\)/, "Outer app-chat Creative execution must use the Creative-specific timeout");
@@ -288,6 +292,9 @@ assert.match(storeSource, /creativeAssets: turnCreativeArtifacts/, "Assistant me
 assert.match(storeSource, /creative_assets: turnCreativeArtifacts/, "Assistant message must persist snake_case Creative assets alias");
 assert.match(storeSource, /active_asset_id: finalActiveCreativeAssetId/, "Creative metadata must persist final active_asset_id");
 assert.match(storeSource, /creative_session_active_asset_id: finalActiveCreativeAssetId/, "Creative metadata must persist final creative_session_active_asset_id");
+assert.match(storeSource, /resolvedFinalActiveCreativeAssetId = creativeWorkingState\?\.active_asset_id \?\? finalCanonicalCreativeAssetStates\.at\(-1\)\?\.asset_id/, "Creative active asset must fall back to newest canonical creativeAssets item");
+assert.match(storeSource, /active_asset_id: normalizeOptionalString\(message\.active_asset_id\)/, "Message normalization must preserve active_asset_id");
+assert.match(storeSource, /active_creative_asset_id: normalizeOptionalString\(message\.active_creative_asset_id\)/, "Message normalization must preserve active_creative_asset_id");
 assert.match(storeSource, /runtimeResult\.rawRuntimeResponse/, "App-turn Creative metadata must be extracted from the raw runtime response");
 assert.match(storeSource, /creative_response_received/, "Creative response diagnostics must be persisted");
 assert.match(storeSource, /creative_metadata_present/, "Creative metadata presence must be traced");

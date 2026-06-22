@@ -173,6 +173,7 @@ const traceDirectory = () => {
 };
 
 const safeTraceId = (value: string) => value.replace(/[^a-z0-9_.-]+/gi, "_").slice(0, 96) || "unknown";
+const chatTracePrefixes = new Map<string, string>();
 
 function compactText(value: string, maxChars: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
@@ -261,10 +262,23 @@ const chatResponseTraceSummary = (payload: unknown): Record<string, unknown> => 
   };
 };
 
+const hermesCmoChatV11TracePrefix = (request: HermesCmoChatV11Request) => {
+  const existing = chatTracePrefixes.get(request.request_id);
+
+  if (existing) {
+    return existing;
+  }
+
+  const prefix = `${new Date().toISOString().replace(/[:.]/g, "-")}_${safeTraceId(request.request_id)}`;
+  chatTracePrefixes.set(request.request_id, prefix);
+
+  return prefix;
+};
+
 const hermesCmoChatV11TracePath = (request: HermesCmoChatV11Request, suffix: string) =>
   path.join(
     traceDirectory(),
-    `${new Date().toISOString().replace(/[:.]/g, "-")}_${safeTraceId(request.app_id)}_${safeTraceId(request.session_id)}_${safeTraceId(request.turn_id)}_${suffix}.json`,
+    `${hermesCmoChatV11TracePrefix(request)}_${safeTraceId(request.app_id)}_${safeTraceId(request.session_id)}_${safeTraceId(request.turn_id)}_${suffix}.json`,
   );
 
 export async function writeHermesCmoChatV11Trace(

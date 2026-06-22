@@ -2318,6 +2318,7 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     value.active_creative_asset_resolution_source === "none"
       ? { active_creative_asset_resolution_source: value.active_creative_asset_resolution_source }
       : {}),
+    ...(stringValue(value.active_asset_id) ? { active_asset_id: stringValue(value.active_asset_id) } : {}),
     ...(stringValue(value.active_creative_asset_id) ? { active_creative_asset_id: stringValue(value.active_creative_asset_id) } : {}),
     ...(stringValue(value.creative_session_active_asset_id) ? { creative_session_active_asset_id: stringValue(value.creative_session_active_asset_id) } : {}),
     ...(typeof value.creative_assets_count === "number" && Number.isFinite(value.creative_assets_count)
@@ -3165,6 +3166,9 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             creativeMetadataPresent: typeof (message.creativeMetadataPresent ?? message.creative_metadata_present) === "boolean"
               ? Boolean(message.creativeMetadataPresent ?? message.creative_metadata_present)
               : undefined,
+            active_asset_id: normalizeOptionalString(message.active_asset_id),
+            active_creative_asset_id: normalizeOptionalString(message.active_creative_asset_id),
+            creative_session_active_asset_id: normalizeOptionalString(message.creative_session_active_asset_id),
             creativeNormalizationError: normalizeOptionalString(message.creativeNormalizationError ?? message.creative_normalization_error ?? message.normalization_error),
             creativeFallbackUsed: typeof (message.creativeFallbackUsed ?? message.creative_fallback_used ?? message.fallback_used) === "boolean"
               ? Boolean(message.creativeFallbackUsed ?? message.creative_fallback_used ?? message.fallback_used)
@@ -3329,6 +3333,9 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     creativeMetadataPresent: typeof (value.creativeMetadataPresent ?? value.creative_metadata_present) === "boolean"
       ? Boolean(value.creativeMetadataPresent ?? value.creative_metadata_present)
       : undefined,
+    active_asset_id: normalizeOptionalString(value.active_asset_id),
+    active_creative_asset_id: normalizeOptionalString(value.active_creative_asset_id),
+    creative_session_active_asset_id: normalizeOptionalString(value.creative_session_active_asset_id),
     creativeNormalizationError: normalizeOptionalString(value.creativeNormalizationError ?? value.creative_normalization_error ?? value.normalization_error),
     creativeFallbackUsed: typeof (value.creativeFallbackUsed ?? value.creative_fallback_used ?? value.fallback_used) === "boolean"
       ? Boolean(value.creativeFallbackUsed ?? value.creative_fallback_used ?? value.fallback_used)
@@ -5044,8 +5051,17 @@ export async function createAppChatSession(
     creativeWorkingState = applyCreativeAssetStateUpdate(creativeWorkingState, turnCreativeArtifacts);
   }
   creativeWorkingState = normalizeCreativeWorkingState(creativeWorkingState);
+  const finalCanonicalCreativeAssetStates = sanitizeCreativeAssetStates(turnCreativeArtifacts);
+  const resolvedFinalActiveCreativeAssetId = creativeWorkingState?.active_asset_id ?? finalCanonicalCreativeAssetStates.at(-1)?.asset_id;
+  if (resolvedFinalActiveCreativeAssetId && creativeWorkingState?.active_asset_id !== resolvedFinalActiveCreativeAssetId) {
+    creativeWorkingState = normalizeCreativeWorkingState({
+      ...(creativeWorkingState ?? { drafts: [] }),
+      active_asset_id: resolvedFinalActiveCreativeAssetId,
+      assets: creativeWorkingState?.assets?.length ? creativeWorkingState.assets : finalCanonicalCreativeAssetStates,
+    });
+  }
   const finalCreativeWorkingStatePresent = hasCreativeWorkingStateDrafts(creativeWorkingState);
-  const finalActiveCreativeAssetId = creativeWorkingState?.active_asset_id;
+  const finalActiveCreativeAssetId = creativeWorkingState?.active_asset_id ?? resolvedFinalActiveCreativeAssetId;
   const finalCreativeAssetsCount = creativeWorkingState?.assets?.length ?? 0;
   const finalCreativeSessionFromAsset = Boolean(finalActiveCreativeAssetId || finalCreativeAssetsCount > 0);
 
