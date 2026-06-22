@@ -317,6 +317,10 @@ forbidSource(runtimeSource, /const activityTypes = new Set[\s\S]*"creative\.idea
 
 requireSource(storeSource, /let creativeWorkingState: CmoCreativeWorkingState \| undefined = continuedSession\?\.creativeWorkingState;/, "store session state");
 requireSource(storeSource, /applyCreativeAssetStateUpdate/, "store must persist Creative assets into working state");
+requireSource(storeSource, /let turnCreativeArtifacts: Record<string, unknown>\[] = \[];/, "store must track current-turn Creative artifacts separately");
+requireSource(storeSource, /turnCreativeArtifacts = creativeArtifacts;/, "store must capture current-turn Creative artifacts");
+requireSource(storeSource, /\.\.\.\(turnCreativeArtifacts\.length \? \{ sessionArtifacts: turnCreativeArtifacts \} : \{\}\)/, "assistant message must render only current-turn Creative artifacts");
+forbidSource(storeSource, /\.\.\.\(sessionArtifacts\.length \? \{ sessionArtifacts \} : \{\}\),[\s\S]{0,900}contextUsedCount:/, "assistant message must not render merged session artifacts as current turn assets");
 requireSource(storeSource, /resolveActiveCreativeAsset\(continuedSession\)/, "store must resolve active Creative asset before routing");
 requireSource(storeSource, /activeCreativeAssetResolution\.asset[\s\S]*applyCreativeAssetStateUpdate/, "store must hydrate working state from resolved asset");
 requireSource(storeSource, /creativeWorkingState,/, "store must pass creative state to router and Hermes");
@@ -339,6 +343,11 @@ requireSource(mapperSource, /creative_decision_present: creativeDecisionPresent/
 requireSource(mapperSource, /creative_session_canonicalized/, "mapper must expose creative session canonicalization diagnostics");
 
 requireSource(uiSource, /renderCreativeAssets\(message\)/, "UI must keep rendering creative assets");
+requireSource(uiSource, /Using reference image/, "UI must show neutral reference image badge instead of old asset card");
+requireSource(uiSource, /Creative draft updated/, "UI must show neutral draft update badge for refine-only turns");
+requireSource(uiSource, /if \(!assets\.length\)/, "UI must not render Creative asset card when current turn has no new assets");
+requireSource(uiSource, /message\.routeDecision === "creative_session"[\s\S]*message\.routeDecision === "creative_ideation"[\s\S]*message\.routeDecision === "creative_execution"/, "UI neutral Creative badges must be gated to Creative-native turns");
+requireSource(uiSource, /const assets = creativeAssetRecords\(message\)/, "UI asset cards must come from current assistant message artifacts");
 forbidSource(storeSource, /Ok b[a-z]*n t[a-z]*o [a-z]*i|message\s*={2,3}\s*["'`]Ok b/i, "Product store");
 forbidSource(storeSource, /callCreative|executeCreative|Creative Agent direct/i, "Product store must not call Creative directly");
 

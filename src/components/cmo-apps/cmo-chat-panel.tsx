@@ -1705,8 +1705,29 @@ export function CMOChatPanel({
   function renderCreativeAssets(message: CMOChatMessage) {
     const assets = creativeAssetRecords(message);
 
-    if (message.role !== "assistant" || !assets.length) {
+    if (message.role !== "assistant") {
       return null;
+    }
+
+    if (!assets.length) {
+      const state = message.creativeWorkingState;
+      const activeAssetId = state?.active_asset_id;
+      const hasReferenceAsset = Boolean(activeAssetId || state?.assets?.length);
+      const decisionAction = message.creativeDecision?.action;
+      const creativeTurn = message.routeDecision === "creative_session" || message.routeDecision === "creative_ideation" || message.routeDecision === "creative_execution";
+      const draftUpdated = decisionAction === "refine_draft" || decisionAction === "propose_draft" || decisionAction === "present_draft" || decisionAction === "show_draft";
+
+      if (!creativeTurn || (!hasReferenceAsset && !draftUpdated)) {
+        return null;
+      }
+
+      return (
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-4 text-xs">
+          {hasReferenceAsset ? <Badge variant="slate">Using reference image</Badge> : null}
+          {draftUpdated ? <Badge variant="orange">Creative draft updated</Badge> : null}
+          {activeAssetId ? <span className="font-bold text-slate-600">{activeAssetId}</span> : null}
+        </div>
+      );
     }
 
     return (
