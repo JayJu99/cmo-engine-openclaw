@@ -240,8 +240,8 @@ assert.match(mapperSource, /missing_accepted_context_blocks_creative_execution:\
 assert.match(mapperSource, /optional_context_gaps/, "Missing accepted project context must be optional diagnostic context for Creative execution");
 assert.match(mapperSource, /Do not invent unsupported product mechanics/, "Creative execution must preserve factual-claim guardrails");
 assert.match(storeSource, /hermesCmoCreativeExecutionRequested/, "Creative execution route must trigger Hermes live runtime");
-assert.match(runtimeSource, /!creativeExecution && \(toolChatCanaryEnabled/, "Creative execution must not be routed to the read-only tool endpoint");
-assert.match(runtimeSource, /creativeExecution[\s\S]*getCmoHermesCreativeExecuteTimeoutMs\(\)/, "Creative execution must use the Creative-specific timeout");
+assert.match(runtimeSource, /!creativeNativeExecuteEndpoint && \(toolChatCanaryEnabled/, "Creative execution must not be routed to the read-only tool endpoint");
+assert.match(runtimeSource, /creativeLongRunningTurn[\s\S]*getCmoHermesCreativeExecuteTimeoutMs\(\)/, "Creative execution/session must use the Creative-specific timeout");
 assert.match(runtimeSource, /creative\.generate_video/, "Creative video execution mode must be accepted");
 assert.match(runtimeSource, /creative_missing_accepted_context_blocks_execution:\s*creativeExecutionRequested \? false : null/, "Runtime Creative envelope must not require accepted context");
 assert.match(runtimeSource, /artifact_transport/, "Creative execution payload must include Product-owned artifact transport");

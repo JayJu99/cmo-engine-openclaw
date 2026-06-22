@@ -302,6 +302,7 @@ export interface HermesCmoRuntimeResult {
   hermesCmoEndpointTimeoutSource: HermesCmoTimeoutSource;
   hermesCmoRouteDecision: HermesCmoRouteDecision;
   hermesCmoToolEndpointEnabled: boolean;
+  creativeLongRunningTurn: boolean;
   sideEffects?: false | Record<string, false>;
   request: HermesCmoRuntimeRequest;
   response: HermesCmoRuntimeResponse;
@@ -328,6 +329,7 @@ interface HermesCmoAgentConfig {
   timeoutMs: number;
   timeoutSource: HermesCmoTimeoutSource;
   routeDecision: HermesCmoRouteDecision;
+  creativeLongRunningTurn: boolean;
   toolEndpointEnabled: boolean;
 }
 
@@ -1766,6 +1768,55 @@ const requestHasCreativeWorkingState = (request: HermesCmoRuntimeRequest): boole
   );
 };
 
+const creativeWorkingStateFromRequest = (request: HermesCmoRuntimeRequest): Record<string, unknown> | null => {
+  if (isRecord(request.creative_working_state)) {
+    return request.creative_working_state;
+  }
+
+  if (isRecord(request.input) && isRecord(request.input.creative_working_state)) {
+    return request.input.creative_working_state;
+  }
+
+  if (isRecord(request.context_pack.creative_working_state)) {
+    return request.context_pack.creative_working_state;
+  }
+
+  return null;
+};
+
+const requestReferenceAssets = (request: HermesCmoRuntimeRequest): Record<string, unknown>[] =>
+  Array.isArray(request.reference_assets)
+    ? request.reference_assets.filter(isRecord)
+    : Array.isArray(request.referenceAssets)
+      ? request.referenceAssets.filter(isRecord)
+      : [];
+
+const requestActiveCreativeAssetId = (request: HermesCmoRuntimeRequest): string | undefined => {
+  const state = creativeWorkingStateFromRequest(request);
+  const input = isRecord(request.input) ? request.input : {};
+
+  const value =
+    request.constraints.active_creative_asset_id ??
+    request.constraints.activeCreativeAssetId ??
+    state?.active_asset_id ??
+    state?.activeAssetId ??
+    input.active_creative_asset_id ??
+    input.activeCreativeAssetId;
+
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+};
+
+const requestCreativeAssetsCount = (request: HermesCmoRuntimeRequest): number => {
+  const state = creativeWorkingStateFromRequest(request);
+  const count = request.constraints.creative_assets_count;
+
+  if (typeof count === "number" && Number.isFinite(count)) {
+    return Math.max(0, Math.floor(count));
+  }
+
+  return Array.isArray(state?.assets) ? state.assets.length : 0;
+};
+
 const requestIsCreativeIdeation = (request: HermesCmoRuntimeRequest): boolean => {
   const input = isRecord(request.input) ? request.input : {};
   const creativeIdeationIntent = isRecord(input.creative_ideation_intent) ? input.creative_ideation_intent : {};
@@ -1783,6 +1834,13 @@ const requestIsCreativeIdeation = (request: HermesCmoRuntimeRequest): boolean =>
 
 const requestMayLeadToCreativeExecution = (request: HermesCmoRuntimeRequest): boolean =>
   requestIsCreativeExecution(request) || requestIsCreativeIdeation(request) || requestHasCreativeWorkingState(request);
+
+const requestArtifactTransportMode = (request: HermesCmoRuntimeRequest): string | undefined => {
+  const transport: Record<string, unknown> = isRecord(request.artifact_transport) ? request.artifact_transport : {};
+  const mode = transport.mode;
+
+  return typeof mode === "string" && mode.trim() ? mode.trim() : undefined;
+};
 
 const requestRouteDecision = (request: HermesCmoRuntimeRequest): unknown => {
   const input = isRecord(request.input) ? request.input : {};
@@ -1853,6 +1911,27 @@ const positiveTimeoutOverride = (value: unknown): number | undefined => {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 };
 
+const requestIsCreativeLongRunningTurn = (request: HermesCmoRuntimeRequest, routeDecision?: HermesCmoRouteDecision): boolean => {
+  const decision = routeDecision ?? requestRouteDecision(request);
+  const explicitCreativeExecution = requestIsCreativeExecution(request) || decision === "creative_execution";
+
+  if (explicitCreativeExecution) {
+    return true;
+  }
+
+  if (decision !== "creative_session") {
+    return false;
+  }
+
+  return (
+    requestReferenceAssets(request).length > 0 ||
+    Boolean(requestActiveCreativeAssetId(request)) ||
+    requestCreativeAssetsCount(request) > 0 ||
+    requestArtifactTransportMode(request) === "product_upload" ||
+    requestHasCreativeWorkingState(request)
+  );
+};
+
 const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: HermesCmoRuntimeOptions = {}): HermesCmoAgentConfig => {
   const baseUrl = process.env.CMO_HERMES_BASE_URL?.trim().replace(/\/+$/g, "") ?? "";
   const apiKey = process.env.CMO_HERMES_API_KEY?.trim() ?? "";
@@ -1863,32 +1942,34 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: Herm
   const explicitCreativeExecution = requestIsCreativeExecution(request);
   const creativeIdeation = requestIsCreativeIdeation(request);
   const creativeSession = !explicitCreativeExecution && !creativeIdeation && requestHasCreativeWorkingState(request);
-  const creativeExecution = explicitCreativeExecution || creativeIdeation || creativeSession;
-  const useToolEndpoint = !creativeExecution && (toolChatCanaryEnabled || (toolEndpointEnabled && (externalResearch || requestIsSourceBackedOrSeeking(request))));
+  const creativeNativeExecuteEndpoint = explicitCreativeExecution || creativeIdeation || creativeSession;
+  const routeDecision: HermesCmoRouteDecision = explicitCreativeExecution
+    ? "creative_execution"
+    : creativeIdeation
+      ? "creative_ideation"
+      : creativeSession
+        ? "creative_session"
+        : "execute";
+  const creativeLongRunningTurn = requestIsCreativeLongRunningTurn(request, routeDecision);
+  const useToolEndpoint = !creativeNativeExecuteEndpoint && (toolChatCanaryEnabled || (toolEndpointEnabled && (externalResearch || requestIsSourceBackedOrSeeking(request))));
   const configuredToolEndpoint = getCmoHermesCmoToolEndpoint();
   const endpointPath = useToolEndpoint ? endpointPathFromConfig(configuredToolEndpoint) : HERMES_CMO_AGENT_PATH;
   const toolTimeoutOverride = positiveTimeoutOverride(options.toolTimeoutMs);
   const timeoutMs = useToolEndpoint
     ? toolTimeoutOverride ?? getCmoHermesCmoToolTimeoutMs()
-    : creativeExecution
+    : creativeLongRunningTurn
       ? getCmoHermesCreativeExecuteTimeoutMs()
       : hermesTimeoutMs();
   const timeoutSource: HermesCmoTimeoutSource = useToolEndpoint
     ? toolTimeoutOverride !== undefined
       ? "tool_timeout_override"
       : "tool_endpoint"
-    : creativeExecution
+    : creativeLongRunningTurn
       ? "creative_execute"
       : "default_execute";
-  const routeDecision: HermesCmoRouteDecision = useToolEndpoint
+  const selectedRouteDecision: HermesCmoRouteDecision = useToolEndpoint
     ? "tool_execute"
-    : explicitCreativeExecution
-      ? "creative_execution"
-      : creativeIdeation
-        ? "creative_ideation"
-        : creativeSession
-          ? "creative_session"
-          : "execute";
+    : routeDecision;
 
   if (!envEnabled(process.env.CMO_HERMES_EXECUTION_ENABLED)) {
     throw new Error("CMO_HERMES_EXECUTION_ENABLED must be true for the live-only Hermes CMO runtime.");
@@ -1909,7 +1990,8 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: Herm
     apiKey,
     timeoutMs,
     timeoutSource,
-    routeDecision,
+    routeDecision: selectedRouteDecision,
+    creativeLongRunningTurn,
     toolEndpointEnabled: toolEndpointEnabled || toolChatCanaryEnabled,
   };
 };
@@ -2351,6 +2433,10 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
     route_decision: config.routeDecision,
     timeout_ms: config.timeoutMs,
     timeout_source: config.timeoutSource,
+    creative_long_running_turn: config.creativeLongRunningTurn,
+    ...(config.creativeLongRunningTurn ? { creative_timeout_ms: config.timeoutMs } : {}),
+    ...(config.creativeLongRunningTurn ? { outer_timeout_source: "creative_execute" } : {}),
+    workspace_fallback_suppressed_for_creative: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
     tool_endpoint_enabled: config.toolEndpointEnabled,
     creative_agent_allowed: allowedAgents.includes("creative"),
     product_requested_execution:
@@ -2786,6 +2872,8 @@ const buildHermesCmoLiveRequest = (
   const creativeTurnMayExecute = creativeSideEffectsAllowed && creativeViaCmoAllowed;
   const creativeExecutionMode = creativeExecutionModeFromRequest(request);
   const creativeAgentAllowed = creativeViaCmoAllowed && creativeTurnMayExecute;
+  const creativeSessionLongRunningTurn = creativeExecutionRequested || creativeWorkingStatePresent;
+  const creativeSessionTimeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
   const specialistExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed || creativeTurnMayExecute;
   const allowedAgentsForRequest: HermesAllowedAgent[] = [
     ...(boundedDelegationAllowed ? ["echo", "surf"] as const : echoRetryAllowed ? ["echo"] as const : []),
@@ -2840,6 +2928,10 @@ const buildHermesCmoLiveRequest = (
       creative_working_state_present: creativeWorkingStatePresent,
       creative_execution_may_be_requested_by_cmo: creativeTurnMayExecute,
       creative_side_effects_allowed: creativeSideEffectsAllowed,
+      creative_long_running_turn: creativeSessionLongRunningTurn,
+      ...(creativeSessionLongRunningTurn ? { creative_timeout_ms: creativeSessionTimeoutMs } : {}),
+      ...(creativeSessionLongRunningTurn ? { timeout_source: "creative_execute", outer_timeout_source: "creative_execute" } : {}),
+      ...(creativeNativeSession || creativeExecutionRequested ? { workspace_fallback_suppressed_for_creative: true } : {}),
       requires_user_confirmation_before_creative_execute: creativeNativeSession,
       cmo_owns_creative_decision: creativeIdeationDetected || creativeWorkingStatePresent || creativeExecutionRequested,
       creative_execution_mode: creativeExecutionRequested ? creativeExecutionMode : null,
@@ -3808,6 +3900,9 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       tool_endpoint_enabled: config.toolEndpointEnabled,
       timeout_ms: config.timeoutMs,
       timeout_source: config.timeoutSource,
+      creative_long_running_turn: config.creativeLongRunningTurn,
+      ...(config.creativeLongRunningTurn ? { creative_timeout_ms: config.timeoutMs } : {}),
+      workspace_fallback_suppressed_for_creative: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
       creative_trace: creativeRequestTraceSummary(request, config),
       request,
     });
@@ -3836,6 +3931,9 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       tool_endpoint_enabled: config.toolEndpointEnabled,
       timeout_ms: config.timeoutMs,
       timeout_source: config.timeoutSource,
+      creative_long_running_turn: config.creativeLongRunningTurn,
+      ...(config.creativeLongRunningTurn ? { creative_timeout_ms: config.timeoutMs } : {}),
+      workspace_fallback_suppressed_for_creative: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
       http_status: response.status,
       summary: responseTraceSummary(payload),
       response: payload,
@@ -3851,6 +3949,9 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       tool_endpoint_enabled: config.toolEndpointEnabled,
       timeout_ms: config.timeoutMs,
       timeout_source: config.timeoutSource,
+      creative_long_running_turn: config.creativeLongRunningTurn,
+      ...(config.creativeLongRunningTurn ? { creative_timeout_ms: config.timeoutMs } : {}),
+      workspace_fallback_suppressed_for_creative: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
       error: error instanceof Error ? error.message : String(error),
     });
     if (error instanceof Error && error.name === "AbortError") {
@@ -4074,6 +4175,7 @@ export async function runHermesCmoRuntime(request: unknown, options: HermesCmoRu
     hermesCmoEndpointTimeoutSource: initialConfig.timeoutSource,
     hermesCmoRouteDecision: initialConfig.routeDecision,
     hermesCmoToolEndpointEnabled: initialConfig.toolEndpointEnabled,
+    creativeLongRunningTurn: initialConfig.creativeLongRunningTurn,
     ...(firstResult.sideEffects !== undefined ? { sideEffects: firstResult.sideEffects } : {}),
     request: outboundRequest,
     response,

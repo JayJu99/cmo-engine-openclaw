@@ -283,6 +283,16 @@ requireSource(runtimeSource, /requestMayLeadToCreativeExecution/, "runtime");
 requireSource(runtimeSource, /const creativeNativeSession = creativeIdeationDetected \|\| creativeWorkingStatePresent;/, "runtime must treat Creative state as CMO-native session");
 requireSource(runtimeSource, /const creativeSideEffectsAllowed = creativeNativeSession \|\| creativeExecutionRequested;/, "runtime must expose capability without forcing execution");
 requireSource(runtimeSource, /artifact_transport: creativeArtifactTransportForRequest\(request\)/, "runtime must include M13B artifact transport");
+requireSource(runtimeSource, /requestIsCreativeLongRunningTurn/, "runtime must classify Creative long-running turns centrally");
+requireSource(runtimeSource, /decision !== "creative_session"[\s\S]*return false/, "runtime long-running classifier must scope session checks to Creative sessions");
+requireSource(runtimeSource, /requestReferenceAssets\(request\)\.length > 0/, "runtime must use Creative timeout for session turns with reference assets");
+requireSource(runtimeSource, /Boolean\(requestActiveCreativeAssetId\(request\)\)/, "runtime must use Creative timeout for session turns with active assets");
+requireSource(runtimeSource, /requestCreativeAssetsCount\(request\) > 0/, "runtime must use Creative timeout for session turns with stored Creative assets");
+requireSource(runtimeSource, /requestArtifactTransportMode\(request\) === "product_upload"/, "runtime must use Creative timeout for session turns with Product artifact transport");
+requireSource(runtimeSource, /creativeLongRunningTurn[\s\S]*getCmoHermesCreativeExecuteTimeoutMs\(\)/, "runtime must apply Creative timeout to long-running Creative turns");
+requireSource(runtimeSource, /creative_long_running_turn: config\.creativeLongRunningTurn/, "runtime trace must include Creative long-running diagnostic");
+requireSource(runtimeSource, /creative_timeout_ms: config\.timeoutMs/, "runtime trace must include Creative timeout diagnostic");
+requireSource(runtimeSource, /workspace_fallback_suppressed_for_creative/, "runtime trace must suppress workspace fallback for Creative-native turns");
 requireSource(runtimeSource, /creative_side_effects_allowed: creativeSideEffectsAllowed/, "runtime must trace Creative side-effect capability");
 requireSource(runtimeSource, /requires_user_confirmation_before_creative_execute: creativeNativeSession/, "runtime must trace confirmation boundary");
 requireSource(runtimeSource, /active_creative_context_present: activeCreativeContextPresent/, "runtime must trace active Creative context");
@@ -323,6 +333,10 @@ requireSource(storeSource, /\.\.\.\(turnCreativeArtifacts\.length \? \{ sessionA
 forbidSource(storeSource, /\.\.\.\(sessionArtifacts\.length \? \{ sessionArtifacts \} : \{\}\),[\s\S]{0,900}contextUsedCount:/, "assistant message must not render merged session artifacts as current turn assets");
 requireSource(storeSource, /resolveActiveCreativeAsset\(continuedSession\)/, "store must resolve active Creative asset before routing");
 requireSource(storeSource, /activeCreativeAssetResolution\.asset[\s\S]*applyCreativeAssetStateUpdate/, "store must hydrate working state from resolved asset");
+requireSource(storeSource, /const hermesCmoCreativeLongRunningTurn =[\s\S]*hermesCmoRoute\.reason === "creative_execution"[\s\S]*hermesCmoRoute\.reason === "creative_session"/, "store must classify Creative execution/session turns as long-running");
+requireSource(storeSource, /const creativeTimeout = hermesCmoCreativeLongRunningTurn && isTimedOutHermesError\(reason\)/, "store must handle Creative session timeout without workspace fallback");
+requireSource(storeSource, /workspace_fallback_suppressed_for_creative: true/, "store must trace workspace fallback suppression for Creative turns");
+requireSource(storeSource, /timeoutMs = hermesCmoCreativeLongRunningTurn \? hermesResult\.hermesCmoEndpointTimeoutMs : undefined/, "store must persist Creative long-running timeout metadata on success");
 requireSource(storeSource, /creativeWorkingState,/, "store must pass creative state to router and Hermes");
 requireSource(storeSource, /activeCreativeAssetId = creativeWorkingState\?\.active_asset_id/, "store must track active Creative asset id");
 requireSource(storeSource, /activeCreativeAssetResolutionSource: activeCreativeAssetResolution\.source/, "store must pass active asset resolution source to Hermes mapper");
@@ -341,6 +355,8 @@ requireSource(storeSource, /creative_state_persisted: creativeStatePersisted/, "
 requireSource(mapperSource, /creative_state_update_present: creativeStateUpdatePresent/, "mapper must expose creative state update diagnostics");
 requireSource(mapperSource, /creative_decision_present: creativeDecisionPresent/, "mapper must expose creative decision diagnostics");
 requireSource(mapperSource, /creative_session_canonicalized/, "mapper must expose creative session canonicalization diagnostics");
+requireSource(mapperSource, /creative_long_running_turn: result\.creativeLongRunningTurn/, "mapper must expose Creative long-running diagnostics");
+requireSource(mapperSource, /artifact_transport_mode: artifactTransportMode/, "mapper must expose artifact transport mode diagnostics");
 
 requireSource(uiSource, /renderCreativeAssets\(message\)/, "UI must keep rendering creative assets");
 requireSource(uiSource, /Using reference image/, "UI must show neutral reference image badge instead of old asset card");

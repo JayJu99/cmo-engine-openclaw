@@ -1468,6 +1468,14 @@ function metadataFromHermes(
       : undefined;
   const creativeSubprocessExecuted = hasCreativeExecutionMetadata(result.response);
   const artifactTransportAttempted = isRecord(result.request.artifact_transport);
+  const artifactTransportMode = artifactTransportAttempted && typeof result.request.artifact_transport?.mode === "string"
+    ? result.request.artifact_transport.mode
+    : undefined;
+  const referenceAssetsCount = Array.isArray(result.request.reference_assets)
+    ? result.request.reference_assets.length
+    : Array.isArray(result.request.referenceAssets)
+      ? result.request.referenceAssets.length
+      : undefined;
   const attachmentTraceSummary = isRecord(result.response.attachment_trace_summary) ? result.response.attachment_trace_summary : undefined;
   const cmoCallSurfUsed = toolsUsed.includes("cmo_call_surf") || executedCounts.surfCalls > 0;
   const cmoCallEchoUsed = toolsUsed.includes("cmo_call_echo") || executedCounts.echoCalls > 0;
@@ -1486,6 +1494,12 @@ function metadataFromHermes(
     hermesEndpointTimeoutMs: result.hermesCmoEndpointTimeoutMs,
     hermesEndpointTimeoutSource: result.hermesCmoEndpointTimeoutSource,
     route_decision: result.hermesCmoRouteDecision,
+    creative_long_running_turn: result.creativeLongRunningTurn,
+    ...(result.creativeLongRunningTurn ? { creative_timeout_ms: result.hermesCmoEndpointTimeoutMs } : {}),
+    ...(result.creativeLongRunningTurn ? { timeout_source: result.hermesCmoEndpointTimeoutSource } : {}),
+    ...(result.creativeLongRunningTurn ? { outer_timeout_source: "creative_execute" } : {}),
+    ...(result.creativeLongRunningTurn ? { workspace_fallback_suppressed_for_creative: true } : {}),
+    fallback_used: false,
     ...(result.hermesCmoRouteDecision === "creative_execution" ? { creative_execution_requested: true } : {}),
     ...(answerBasisMode ? { answer_basis_mode: answerBasisMode } : {}),
     ...(creativeNativeResponseReceived
@@ -1502,6 +1516,10 @@ function metadataFromHermes(
             ? { creative_session_followup_detected: true }
             : {}),
           ...(result.request.constraints.creative_working_state_present === true ? { creative_working_state_present: true } : {}),
+          ...(typeof result.request.constraints.active_creative_asset_id === "string" ? { active_creative_asset_id: result.request.constraints.active_creative_asset_id } : {}),
+          ...(typeof result.request.constraints.creative_assets_count === "number" ? { creative_assets_count: result.request.constraints.creative_assets_count } : {}),
+          ...(typeof referenceAssetsCount === "number" ? { reference_assets_count: referenceAssetsCount } : {}),
+          ...(artifactTransportMode ? { artifact_transport_mode: artifactTransportMode } : {}),
           ...(creativeDecisionAction === "execute"
             ? { execute_decision_source: "hermes_cmo_creative_decision" }
             : {}),
@@ -1520,7 +1538,6 @@ function metadataFromHermes(
             ? { creative_session_canonicalized: creativeSessionCanonicalized }
             : {}),
           ...(rejectedActivityEventType ? { rejected_activity_event_type: rejectedActivityEventType } : {}),
-          fallback_used: false,
           rejected_by_m1_validator: false,
         }
       : {}),
