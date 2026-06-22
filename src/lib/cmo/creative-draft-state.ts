@@ -25,9 +25,111 @@ const LOCAL_OR_REDACTED_ARTIFACT_PATTERN = /^(?:file:|[A-Za-z]:[\\/]|\/(?:tmp|va
 const RENDERABLE_CREATIVE_ASSET_STATUSES = new Set(["stored", "uploaded", "available", "completed", "success"]);
 const RENDERABLE_CREATIVE_TRANSPORT_STATUSES = new Set(["uploaded", "available"]);
 const RENDERABLE_CREATIVE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm"]);
+const IMAGE_GENERATION_OPERATION_PATTERN = /(?:responses[ _-]?image[ _-]?generation|image[ _-]?generation|creative\.edit_image)/i;
 
 function normalizeCreativeDraftKind(value: unknown): CmoCreativeDraftKind | undefined {
   return value === "image" || value === "video" ? value : undefined;
+}
+
+function pathForMediaInference(value: unknown): string | undefined {
+  const rawValue = stringValue(value);
+
+  if (!rawValue || LOCAL_OR_REDACTED_ARTIFACT_PATTERN.test(rawValue)) {
+    return undefined;
+  }
+
+  if (/^https?:\/\//i.test(rawValue)) {
+    try {
+      return new URL(rawValue).pathname.toLowerCase();
+    } catch {
+      return rawValue.toLowerCase();
+    }
+  }
+
+  return rawValue.split(/[?#]/, 1)[0]?.toLowerCase();
+}
+
+function inferMimeTypeFromPath(value: unknown): string | undefined {
+  const path = pathForMediaInference(value);
+
+  if (!path) {
+    return undefined;
+  }
+
+  if (path.endsWith(".png")) return "image/png";
+  if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+  if (path.endsWith(".webp")) return "image/webp";
+  if (path.endsWith(".mp4")) return "video/mp4";
+  if (path.endsWith(".webm")) return "video/webm";
+
+  return undefined;
+}
+
+function inferCreativeMimeType(value: Record<string, unknown>): string | undefined {
+  const explicitMimeType = stringValue(value.mime_type ?? value.mimeType ?? value.content_type ?? value.contentType);
+
+  if (explicitMimeType) {
+    return explicitMimeType.toLowerCase();
+  }
+
+  for (const candidate of [
+    value.filename,
+    value.file_name,
+    value.fileName,
+    value.path,
+    value.image_path,
+    value.storage_path,
+    value.storagePath,
+    value.render_url,
+    value.renderUrl,
+    value.signed_url,
+    value.signedUrl,
+    value.preview_url,
+    value.previewUrl,
+    value.url,
+  ]) {
+    const inferred = inferMimeTypeFromPath(candidate);
+
+    if (inferred) {
+      return inferred;
+    }
+  }
+
+  const operation = stringValue(value.operation);
+  const assetId = stringValue(value.asset_id ?? value.assetId ?? value.id);
+  const hasPreview = Boolean(
+    stringValue(value.render_url ?? value.renderUrl ?? value.signed_url ?? value.signedUrl ?? value.preview_url ?? value.previewUrl ?? value.url),
+  );
+
+  if (operation && IMAGE_GENERATION_OPERATION_PATTERN.test(operation) && (hasPreview || assetId && PRODUCT_CREATIVE_ASSET_ID_PATTERN.test(assetId))) {
+    return "image/png";
+  }
+
+  return undefined;
+}
+
+function inferCreativeAssetKind(input: { rawKind?: unknown; mimeType?: string; operation?: unknown }): CmoCreativeDraftKind | undefined {
+  const explicitKind = normalizeCreativeDraftKind(input.rawKind);
+
+  if (explicitKind) {
+    return explicitKind;
+  }
+
+  if (input.mimeType?.startsWith("video/")) {
+    return "video";
+  }
+
+  if (input.mimeType?.startsWith("image/")) {
+    return "image";
+  }
+
+  const operation = stringValue(input.operation);
+
+  if (operation && IMAGE_GENERATION_OPERATION_PATTERN.test(operation)) {
+    return "image";
+  }
+
+  return undefined;
 }
 
 function normalizedAssetPreviewIdentity(asset: CmoCreativeAssetState): string | undefined {
@@ -59,7 +161,8 @@ function isExplicitProductBackedCreativeAsset(asset: CmoCreativeAssetState): boo
   const assetId = stringValue(asset.asset_id);
 
   return Boolean(
-    assetId && PRODUCT_CREATIVE_ASSET_ID_PATTERN.test(assetId) ||
+    asset.product_backed === true ||
+      assetId && PRODUCT_CREATIVE_ASSET_ID_PATTERN.test(assetId) ||
       transportStatus && RENDERABLE_CREATIVE_TRANSPORT_STATUSES.has(transportStatus) ||
       storagePath && !LOCAL_OR_REDACTED_ARTIFACT_PATTERN.test(storagePath),
   );
@@ -127,7 +230,7 @@ export function isProductBackedRenderableCreativeAsset(value: unknown): boolean 
     return false;
   }
 
-  return Boolean(normalizedAssetPreviewIdentity(asset) || asset.transport_status === "uploaded");
+  return Boolean(normalizedAssetPreviewIdentity(asset) || asset.transport_status === "uploaded" || asset.preview_available === true);
 }
 
 export function sanitizeCreativeAssetStates(values: unknown[]): CmoCreativeAssetState[] {
@@ -171,7 +274,23 @@ export function normalizeCreativeAssetState(value: unknown): CmoCreativeAssetSta
   }
 
   const assetId = stringValue(value.asset_id ?? value.assetId ?? value.id);
-  const kind = normalizeCreativeDraftKind(value.kind ?? value.asset_type ?? value.assetType ?? value.type) ?? "image";
+  const mimeType = inferCreativeMimeType(value);
+  const kind = inferCreativeAssetKind({
+    rawKind: value.kind ?? value.asset_type ?? value.assetType ?? value.type,
+    mimeType,
+    operation: value.operation,
+  }) ?? "image";
+  const storagePath = stringValue(value.storage_path ?? value.storagePath);
+  const previewUrl = stringValue(value.preview_url ?? value.previewUrl);
+  const renderUrl = stringValue(value.render_url ?? value.renderUrl ?? value.preview_url ?? value.previewUrl ?? value.url);
+  const signedUrl = stringValue(value.signed_url ?? value.signedUrl);
+  const transportStatus = stringValue(value.transport_status ?? value.transportStatus);
+  const productBacked = Boolean(
+    assetId && PRODUCT_CREATIVE_ASSET_ID_PATTERN.test(assetId) ||
+      transportStatus && RENDERABLE_CREATIVE_TRANSPORT_STATUSES.has(transportStatus) ||
+      storagePath && !LOCAL_OR_REDACTED_ARTIFACT_PATTERN.test(storagePath),
+  );
+  const previewAvailable = Boolean(previewUrl || renderUrl || signedUrl || storagePath);
 
   if (!assetId) {
     return undefined;
@@ -185,13 +304,15 @@ export function normalizeCreativeAssetState(value: unknown): CmoCreativeAssetSta
     ...(stringValue(value.visual_summary ?? value.visualSummary ?? value.notes) ? { visual_summary: stringValue(value.visual_summary ?? value.visualSummary ?? value.notes) } : {}),
     ...(stringValue(value.model) ? { model: stringValue(value.model) } : {}),
     ...(stringValue(value.operation) ? { operation: stringValue(value.operation) } : {}),
-    ...(stringValue(value.mime_type ?? value.mimeType) ? { mime_type: stringValue(value.mime_type ?? value.mimeType) } : {}),
+    ...(mimeType ? { mime_type: mimeType } : {}),
     ...(normalizeCreativeDraftKind(value.asset_type ?? value.assetType) ? { asset_type: normalizeCreativeDraftKind(value.asset_type ?? value.assetType) } : {}),
-    ...(stringValue(value.storage_path ?? value.storagePath) ? { storage_path: stringValue(value.storage_path ?? value.storagePath) } : {}),
-    ...(stringValue(value.preview_url ?? value.previewUrl) ? { preview_url: stringValue(value.preview_url ?? value.previewUrl) } : {}),
-    ...(stringValue(value.render_url ?? value.renderUrl ?? value.preview_url ?? value.previewUrl ?? value.url) ? { render_url: stringValue(value.render_url ?? value.renderUrl ?? value.preview_url ?? value.previewUrl ?? value.url) } : {}),
-    ...(stringValue(value.signed_url ?? value.signedUrl) ? { signed_url: stringValue(value.signed_url ?? value.signedUrl) } : {}),
-    ...(stringValue(value.transport_status ?? value.transportStatus) ? { transport_status: stringValue(value.transport_status ?? value.transportStatus) } : {}),
+    ...(productBacked ? { product_backed: true } : {}),
+    ...(storagePath ? { storage_path: storagePath, storage_backed: true } : {}),
+    ...(previewAvailable ? { preview_available: true, download_available: true } : {}),
+    ...(previewUrl ? { preview_url: previewUrl } : {}),
+    ...(renderUrl ? { render_url: renderUrl } : {}),
+    ...(signedUrl ? { signed_url: signedUrl } : {}),
+    ...(transportStatus ? { transport_status: transportStatus } : {}),
     ...(stringValue(value.sha256) ? { sha256: stringValue(value.sha256) } : {}),
     ...(numberValue(value.bytes) !== undefined ? { bytes: numberValue(value.bytes) } : {}),
   };

@@ -281,6 +281,7 @@ assert.doesNotMatch(storeSource, /No workspace-context fallback was used for thi
 assert.match(mapperSource, /agentsUsedFromMetadata/, "Creative activity metadata must survive mapping");
 assert.match(storeSource, /extractCreativeAssetsFromHermesResponse/, "Creative responses must become session artifacts");
 assert.match(storeSource, /sanitizeCreativeAssetStates/, "Creative session state must sanitize Product-backed Creative assets");
+assert.match(storeSource, /creativeMissingRenderableAssetWarning/, "Creative execution with metadata but zero renderable assets must show a Creative warning");
 assert.match(storeSource, /runtimeResult\.rawRuntimeResponse/, "App-turn Creative metadata must be extracted from the raw runtime response");
 assert.match(storeSource, /creative_response_received/, "Creative response diagnostics must be persisted");
 assert.match(storeSource, /creative_metadata_present/, "Creative metadata presence must be traced");
@@ -368,6 +369,8 @@ assert.match(creativeAgentSource, /creative_assets/, "Product must parse Hermes 
 assert.match(creativeAgentSource, /generated_assets/, "Product must parse Hermes generated_assets responses");
 assert.match(creativeAgentSource, /isProductBackedRenderableCreativeAsset/, "Product must prefer renderable Product-backed Creative assets");
 assert.match(creativeAgentSource, /dedupeCreativeArtifacts/, "Product must dedupe duplicate Creative asset aliases");
+assert.match(creativeAgentSource, /collectCreativeAssetCandidateRecords/, "Product must recursively promote nested Creative asset records");
+assert.match(creativeAgentSource, /content_type/, "Product Creative normalizer must accept content_type aliases");
 assert.match(creativeAgentSource, /render_url/, "Product Creative normalizer must preserve uploaded render_url");
 assert.match(migrationSource, /cmo_creative_jobs/, "Creative jobs table migration is required");
 assert.match(migrationSource, /cmo_creative_assets/, "Creative assets table migration is required");

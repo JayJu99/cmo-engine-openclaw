@@ -69,6 +69,9 @@ requireSource(helperSource, /applyCreativeAssetStateUpdate/, "draft helper must 
 requireSource(helperSource, /sanitizeCreativeAssetStates/, "draft helper must sanitize renderable Product-backed Creative assets");
 requireSource(helperSource, /isSyntheticCreativeAssetId/, "draft helper must identify synthetic Creative placeholder ids");
 requireSource(helperSource, /isProductBackedRenderableCreativeAsset/, "draft helper must expose Product-backed renderability checks");
+requireSource(helperSource, /inferCreativeMimeType/, "draft helper must infer missing Creative asset mime types");
+requireSource(helperSource, /content_type/, "draft helper must accept content_type mime aliases");
+requireSource(helperSource, /\.png"\)\) return "image\/png"/, "draft helper must infer image/png from URL or filename extension");
 requireSource(helperSource, /value === "present_draft"/, "draft helper must normalize Hermes present_draft decision");
 requireSource(helperSource, /value === "show_draft"/, "draft helper must normalize Hermes show_draft decision");
 requireSource(helperSource, /value === "blocked"/, "draft helper must normalize blocked decision");
@@ -202,6 +205,28 @@ assert.equal(generatedAssetState.assets[0].mime_type, "image/png", "explicit gen
 assert.equal(generatedAssetState.assets[0].sha256, "a".repeat(64), "explicit generation must persist Creative asset sha256");
 assert.equal(generatedAssetState.assets[0].bytes, 123456, "explicit generation must persist Creative asset bytes");
 
+const directGeneratedAssetWithInferredMedia = {
+  asset_id: "creative_asset_req_h6_msg_a1247a0c-e1b_001",
+  status: "stored",
+  bytes: 1651793,
+  sha256: "a21e7197b6c3407790fccc3f0a70cfe0d184bbf4aad38de891f29795c603888e",
+  operation: "responses image_generation",
+  transport_status: "uploaded",
+  render_url: "https://product.example/storage/v1/object/sign/cmo-creative-assets/tenant/workspace/app/job/creative.png?token=redacted",
+  signed_url: "https://product.example/storage/v1/object/sign/cmo-creative-assets/tenant/workspace/app/job/creative.png?token=redacted",
+  preview_url: "https://product.example/storage/v1/object/sign/cmo-creative-assets/tenant/workspace/app/job/creative.png?token=redacted",
+  mime_type: null,
+  storage_path: null,
+};
+const inferredDirectGeneratedState = draftState.applyCreativeAssetStateUpdate(undefined, [directGeneratedAssetWithInferredMedia]);
+assert.equal(inferredDirectGeneratedState.assets.length, 1, "direct Product-backed generation with missing mime/storage_path must become a renderable Creative asset");
+assert.equal(inferredDirectGeneratedState.assets[0].mime_type, "image/png", "direct Product-backed generation must infer image/png from Product preview URL");
+assert.equal(inferredDirectGeneratedState.assets[0].kind, "image", "direct Product-backed generation must infer image kind");
+assert.equal(inferredDirectGeneratedState.assets[0].product_backed, true, "direct Product-backed generation must normalize product_backed");
+assert.equal(inferredDirectGeneratedState.assets[0].preview_available, true, "direct Product-backed generation must normalize preview availability");
+assert.equal(inferredDirectGeneratedState.active_asset_id, "creative_asset_req_h6_msg_a1247a0c-e1b_001", "direct Product-backed generation must become active Creative asset id");
+assert.equal(draftState.isProductBackedRenderableCreativeAsset(directGeneratedAssetWithInferredMedia), true, "missing explicit mime/storage_path must not block Product-backed renderability");
+
 const duplicateCreativeAssetState = draftState.applyCreativeAssetStateUpdate(undefined, [
   activeAssetCreativeState.assets[0],
   {
@@ -217,6 +242,16 @@ const duplicateCreativeAssetState = draftState.applyCreativeAssetStateUpdate(und
 assert.equal(duplicateCreativeAssetState.active_asset_id, "creative_asset_001", "synthetic duplicate must not become active Creative asset id");
 assert.equal(duplicateCreativeAssetState.assets.length, 1, "synthetic duplicate must be deduped from Creative working state");
 assert.equal(duplicateCreativeAssetState.assets[0].asset_id, "creative_asset_001", "Product-backed asset must win duplicate Creative asset normalization");
+
+const syntheticOnlyState = draftState.applyCreativeAssetStateUpdate(undefined, [
+  {
+    asset_id: "creative_creative_msg_a1247a0c-e1b_1",
+    kind: "image",
+    status: "stored",
+    render_url: "https://product.example/storage/v1/object/sign/cmo-creative-assets/tenant/workspace/app/job/creative.png?token=redacted",
+  },
+]);
+assert.equal(syntheticOnlyState, undefined, "synthetic-only Creative placeholders must not create active Creative state");
 
 const sanitizedLoadedState = draftState.normalizeCreativeWorkingState({
   active_asset_id: "creative_creative_msg_e3077b07-c99_1",

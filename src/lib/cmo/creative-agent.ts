@@ -1,4 +1,8 @@
-import { isProductBackedRenderableCreativeAsset } from "./creative-draft-state";
+import {
+  isProductBackedRenderableCreativeAsset,
+  isSyntheticCreativeAssetId,
+  normalizeCreativeAssetState,
+} from "./creative-draft-state";
 
 export const CMO_CREATIVE_AGENT_ID = "creative" as const;
 export const CMO_CREATIVE_AGENT_LABEL = "Creative Agent" as const;
@@ -198,6 +202,38 @@ function dedupeCreativeArtifacts(assets: CmoCreativeAssetArtifact[]): CmoCreativ
   });
 }
 
+function isCreativeAssetCandidateRecord(value: Record<string, unknown>): boolean {
+  const assetId = stringValue(value.asset_id ?? value.assetId ?? value.id, 140);
+
+  return value.schema_version === "cmo.creative_asset.v1" ||
+    value.type === "creative_asset" ||
+    Boolean(assetId && /^creative_/.test(assetId)) ||
+    hasCreativeExecutionMetadata(value);
+}
+
+function collectCreativeAssetCandidateRecords(value: unknown, output: Record<string, unknown>[], seen: WeakSet<object>, depth = 0) {
+  if (depth > 6 || !isRecord(value) || seen.has(value)) {
+    return;
+  }
+
+  seen.add(value);
+
+  if (isCreativeAssetCandidateRecord(value)) {
+    output.push(value);
+  }
+
+  for (const item of Object.values(value)) {
+    if (Array.isArray(item)) {
+      for (const child of item) {
+        collectCreativeAssetCandidateRecords(child, output, seen, depth + 1);
+      }
+      continue;
+    }
+
+    collectCreativeAssetCandidateRecords(item, output, seen, depth + 1);
+  }
+}
+
 export function isCreativeLifecycleState(value: unknown): value is CmoCreativeLifecycleState {
   return typeof value === "string" && CREATIVE_LIFECYCLE_SET.has(value);
 }
@@ -351,7 +387,8 @@ export function normalizeCreativeResponse(
           transport_status: value.transport_status ?? value.transportStatus,
           provider: value.provider,
           bytes: value.bytes,
-          mime_type: value.mime_type ?? value.mimeType,
+          filename: value.filename ?? value.file_name ?? value.fileName,
+          mime_type: value.mime_type ?? value.mimeType ?? value.content_type ?? value.contentType,
           sha256: value.sha256,
           width: value.width,
           height: value.height,
@@ -377,8 +414,19 @@ export function normalizeCreativeResponse(
     const sha256 = sha256Value(image.sha256);
     const explicitAssetId = stringValue(image.asset_id ?? image.id, 120);
     const assetId = explicitAssetId ?? `creative_${safeIdSegment(sha256 ?? `${context.jobId ?? "job"}_${index + 1}`)}`;
-    const assetType = image.asset_type === "video" || image.assetType === "video" || image.type === "video" ? "video" : "image";
-    const mimeType = stringValue(image.mime_type ?? image.mimeType, 120);
+    const normalizedAssetState = normalizeCreativeAssetState({
+      ...image,
+      asset_id: assetId,
+      render_url: previewUrl,
+      preview_url: previewUrl,
+      signed_url: previewUrl,
+      storage_path: storagePath,
+      operation: image.operation ?? value.operation,
+      status: statusFromCreativeStatus(status, hasPreview),
+      transport_status: transportStatus,
+    });
+    const assetType = normalizedAssetState?.kind ?? (image.asset_type === "video" || image.assetType === "video" || image.type === "video" ? "video" : "image");
+    const mimeType = normalizedAssetState?.mime_type ?? stringValue(image.mime_type ?? image.mimeType ?? image.content_type ?? image.contentType, 120);
 
     return {
       schema_version: "cmo.creative_asset.v1",
@@ -426,6 +474,8 @@ export function extractCreativeAssetsFromHermesResponse(
   }
 
   const structured = isRecord(response.structured_output) ? response.structured_output : {};
+  const recursiveCandidates: Record<string, unknown>[] = [];
+  collectCreativeAssetCandidateRecords(response, recursiveCandidates, new WeakSet<object>());
   const candidates = [
     response,
     structured.creative_response,
@@ -440,6 +490,7 @@ export function extractCreativeAssetsFromHermesResponse(
     isRecord(response.data) ? response.data : undefined,
     ...(Array.isArray(response.artifacts) ? response.artifacts : []),
     ...(Array.isArray(structured.artifacts) ? structured.artifacts : []),
+    ...recursiveCandidates,
   ];
   const assets: CmoCreativeAssetArtifact[] = [];
 
@@ -451,5 +502,5 @@ export function extractCreativeAssetsFromHermesResponse(
 
   const productBackedAssets = assets.filter(isProductBackedRenderableCreativeAsset);
 
-  return dedupeCreativeArtifacts(productBackedAssets.length ? productBackedAssets : assets);
+  return dedupeCreativeArtifacts(productBackedAssets.length ? productBackedAssets : assets.filter((asset) => !isSyntheticCreativeAssetId(asset.asset_id)));
 }

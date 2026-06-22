@@ -2742,6 +2742,25 @@ function creativeStateMetadata(
   };
 }
 
+function isGenericCreativeSuccessWithoutAssetAnswer(value: string): boolean {
+  const genericCreativeSuccessPattern = new RegExp(
+    ["Creative execution completed", "returned generated asset", "metadata"].join(".*"),
+    "i",
+  );
+
+  return !value.trim() || genericCreativeSuccessPattern.test(value);
+}
+
+function creativeMissingRenderableAssetWarning(): string {
+  return [
+    "## Creative Asset Not Ready",
+    "",
+    "Creative returned generation metadata, but Product could not find a renderable Product-backed asset for this turn.",
+    "",
+    "No preview card was shown because the asset was missing a durable Product preview/download reference.",
+  ].join("\n");
+}
+
 async function readHermesRawActivityJson(response: Response): Promise<unknown> {
   const text = await response.text();
 
@@ -4423,6 +4442,14 @@ export async function createAppChatSession(
         creativeArtifacts,
       );
       answer = mappedHermesResult.answer;
+      if (
+        hermesCmoCreativeExecutionRequested &&
+        creativeMetadataPresent === true &&
+        !creativeArtifacts.length &&
+        isGenericCreativeSuccessWithoutAssetAnswer(answer)
+      ) {
+        answer = creativeMissingRenderableAssetWarning();
+      }
       status = "completed";
       assumptions = mappedHermesResult.assumptions;
       suggestedActions = mappedHermesResult.suggestedActions;
@@ -4902,6 +4929,13 @@ export async function createAppChatSession(
           runtimeProvider = runtimeProvider ?? "hermes";
           runtimeAgent = "creative";
           creativeFallbackUsed = false;
+        }
+        if (
+          creativeMetadataPresent === true &&
+          !creativeArtifacts.length &&
+          isGenericCreativeSuccessWithoutAssetAnswer(answer)
+        ) {
+          answer = creativeMissingRenderableAssetWarning();
         }
       } catch (error) {
         creativeNormalizationError = error instanceof Error ? error.message : "Creative response normalization failed.";

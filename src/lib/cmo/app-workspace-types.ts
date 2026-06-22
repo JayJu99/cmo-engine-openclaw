@@ -664,6 +664,10 @@ export interface CmoCreativeAssetState {
   asset_id: string;
   kind: CmoCreativeDraftKind;
   status?: string;
+  product_backed?: boolean;
+  storage_backed?: boolean;
+  preview_available?: boolean;
+  download_available?: boolean;
   prompt?: string;
   visual_summary?: string;
   model?: string;
