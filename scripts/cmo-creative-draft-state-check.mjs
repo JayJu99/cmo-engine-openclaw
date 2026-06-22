@@ -271,6 +271,27 @@ const sanitizedLoadedState = draftState.normalizeCreativeWorkingState({
 assert.equal(sanitizedLoadedState.active_asset_id, "creative_asset_001", "session-load sanitization must repair stale synthetic active asset id");
 assert.equal(sanitizedLoadedState.assets.length, 1, "session-load sanitization must keep only renderable Product-backed assets");
 
+const editedAsset = {
+  ...directGeneratedAssetWithInferredMedia,
+  asset_id: "creative_asset_req_h6_msg_edit_001",
+  render_url: "https://product.example/storage/v1/object/sign/cmo-creative-assets/tenant/workspace/app/job/edited.png?token=redacted",
+  signed_url: "https://product.example/storage/v1/object/sign/cmo-creative-assets/tenant/workspace/app/job/edited.png?token=redacted",
+  preview_url: "https://product.example/storage/v1/object/sign/cmo-creative-assets/tenant/workspace/app/job/edited.png?token=redacted",
+  sha256: "b21e7197b6c3407790fccc3f0a70cfe0d184bbf4aad38de891f29795c603888e",
+};
+const stateAfterEdit = draftState.applyCreativeAssetStateUpdate(inferredDirectGeneratedState, [editedAsset]);
+assert.equal(stateAfterEdit.assets.length, 2, "repeated edit flow must retain direct generation and edited Product-backed assets");
+assert.equal(stateAfterEdit.active_asset_id, "creative_asset_req_h6_msg_edit_001", "latest edited Product-backed asset must become active reference asset");
+const stateAfterThirdEdit = draftState.applyCreativeAssetStateUpdate(stateAfterEdit, [{
+  ...editedAsset,
+  asset_id: "creative_asset_req_h6_msg_edit_002",
+  render_url: "https://product.example/storage/v1/object/sign/cmo-creative-assets/tenant/workspace/app/job/edited-2.png?token=redacted",
+  signed_url: "https://product.example/storage/v1/object/sign/cmo-creative-assets/tenant/workspace/app/job/edited-2.png?token=redacted",
+  preview_url: "https://product.example/storage/v1/object/sign/cmo-creative-assets/tenant/workspace/app/job/edited-2.png?token=redacted",
+  sha256: "c21e7197b6c3407790fccc3f0a70cfe0d184bbf4aad38de891f29795c603888e",
+}]);
+assert.equal(stateAfterThirdEdit.active_asset_id, "creative_asset_req_h6_msg_edit_002", "third edit must use the latest edited Product-backed asset, not the original");
+
 const turn2Message = "Walk me through the concept before making anything";
 assert.equal(intent.routeIntentForMessage(turn2Message, { creativeWorkingState: threeTurnCreativeState }), "creative_session", "turn 2 must send history and state back to CMO");
 const turn2HermesResponse = {

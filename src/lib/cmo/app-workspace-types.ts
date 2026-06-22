@@ -1399,6 +1399,8 @@ export interface CMOChatMessage {
   attachments?: CmoSessionAttachment[];
   activeSourceId?: string;
   sessionSummary?: string;
+  creativeAssets?: Record<string, unknown>[];
+  creative_assets?: Record<string, unknown>[];
   sessionArtifacts?: Record<string, unknown>[];
   suggestedVaultUpdates?: Record<string, unknown>[];
   vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
@@ -1575,6 +1577,8 @@ export interface CMOChatSession {
   attachments?: CmoSessionAttachment[];
   activeSourceId?: string;
   sessionSummary?: string;
+  creativeAssets?: Record<string, unknown>[];
+  creative_assets?: Record<string, unknown>[];
   sessionArtifacts?: Record<string, unknown>[];
   suggestedVaultUpdates?: Record<string, unknown>[];
   vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
@@ -1703,6 +1707,8 @@ export interface CMOAppChatResponse {
   sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
   activeSourceId?: string;
   sessionSummary?: string;
+  creativeAssets?: Record<string, unknown>[];
+  creative_assets?: Record<string, unknown>[];
   sessionArtifacts?: Record<string, unknown>[];
   suggestedVaultUpdates?: Record<string, unknown>[];
   vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];

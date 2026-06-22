@@ -612,13 +612,27 @@ function creativeAssetPreviewDiagnostics(asset: Record<string, unknown>, appId: 
 }
 
 function creativeAssetRecords(message: CMOChatMessage): Record<string, unknown>[] {
-  return (message.sessionArtifacts ?? []).filter((artifact) =>
+  const assets = [
+    ...(message.creativeAssets ?? []),
+    ...(message.creative_assets ?? []),
+    ...(message.sessionArtifacts ?? []),
+  ];
+  const byId = new Map<string, Record<string, unknown>>();
+
+  for (const artifact of assets) {
+    if (
     isRecord(artifact) &&
     artifact.schema_version === "cmo.creative_asset.v1" &&
     artifact.type === "creative_asset" &&
     artifact.agent === "creative" &&
-    isProductBackedRenderableCreativeAsset(artifact),
-  ) as Record<string, unknown>[];
+      isProductBackedRenderableCreativeAsset(artifact)
+    ) {
+      const assetId = recordString(artifact, ["asset_id", "assetId", "id"]);
+      byId.set(assetId || JSON.stringify(artifact), artifact);
+    }
+  }
+
+  return Array.from(byId.values());
 }
 
 function renderAssistantEvidence(message: CMOChatMessage) {

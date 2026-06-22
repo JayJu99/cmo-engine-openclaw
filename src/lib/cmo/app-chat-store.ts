@@ -3193,6 +3193,10 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             sessionLocalResearchResults: normalizeSessionLocalResearchResults(message.sessionLocalResearchResults, undefined, id),
             attachments: normalizeCmoSessionAttachments(message.attachments),
             sessionSummary: normalizeOptionalString(message.sessionSummary),
+            creativeAssets: sanitizeHermesCmoChatV11Records(message.creativeAssets ?? message.creative_assets, undefined, { allowTopLevelContent: true })
+              .filter(isProductBackedRenderableCreativeAsset),
+            creative_assets: sanitizeHermesCmoChatV11Records(message.creative_assets ?? message.creativeAssets, undefined, { allowTopLevelContent: true })
+              .filter(isProductBackedRenderableCreativeAsset),
             sessionArtifacts: sanitizeHermesCmoChatV11Records(message.sessionArtifacts, undefined, { allowTopLevelContent: true }),
             suggestedVaultUpdates: mergeSuggestedVaultUpdates(undefined, sanitizeHermesCmoChatV11Records(message.suggestedVaultUpdates)),
             vaultUpdateApprovalEvents: normalizeVaultUpdateApprovalEvents(message.vaultUpdateApprovalEvents),
@@ -3227,6 +3231,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     : normalizeCmoSessionAttachments(messages.flatMap((message) => message.attachments ?? []));
   const activeSourceId = normalizeOptionalString(value.activeSourceId);
   const sessionSummary = normalizeOptionalString(value.sessionSummary);
+  const sessionCreativeAssets = sanitizeHermesCmoChatV11Records(value.creativeAssets ?? value.creative_assets, undefined, { allowTopLevelContent: true })
+    .filter(isProductBackedRenderableCreativeAsset);
   const sessionArtifacts = sanitizeHermesCmoChatV11Records(value.sessionArtifacts, undefined, { allowTopLevelContent: true });
   const creativeWorkingState = normalizeCreativeWorkingState(value.creativeWorkingState ?? value.creative_working_state);
   const creativeDecision = normalizeCreativeDecision(value.creativeDecision ?? value.creative_decision);
@@ -3353,6 +3359,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     ...(attachments.length ? { attachments } : {}),
     ...(normalizedActiveSourceId ? { activeSourceId: normalizedActiveSourceId } : {}),
     ...(sessionSummary ? { sessionSummary } : {}),
+    ...(sessionCreativeAssets.length ? { creativeAssets: sessionCreativeAssets, creative_assets: sessionCreativeAssets } : {}),
     ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
     ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
     ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
@@ -3393,7 +3400,6 @@ export async function createAppChatSession(
   const creativeWorkingStatePresent = hasCreativeWorkingStateDrafts(creativeWorkingState);
   const activeCreativeAssetId = creativeWorkingState?.active_asset_id;
   const creativeAssetsCount = creativeWorkingState?.assets?.length ?? 0;
-  const creativeSessionFromAsset = Boolean(activeCreativeAssetId || creativeAssetsCount > 0);
   const sessionResolutionDurationMs = Date.now() - sessionResolutionStartedMs;
   const messageId = `msg_${randomUUID().slice(0, 12)}`;
   const assistantId = `msg_${randomUUID().slice(0, 12)}`;
@@ -5033,6 +5039,16 @@ export async function createAppChatSession(
   }
   }
 
+  turnCreativeArtifacts = turnCreativeArtifacts.filter(isProductBackedRenderableCreativeAsset);
+  if (turnCreativeArtifacts.length) {
+    creativeWorkingState = applyCreativeAssetStateUpdate(creativeWorkingState, turnCreativeArtifacts);
+  }
+  creativeWorkingState = normalizeCreativeWorkingState(creativeWorkingState);
+  const finalCreativeWorkingStatePresent = hasCreativeWorkingStateDrafts(creativeWorkingState);
+  const finalActiveCreativeAssetId = creativeWorkingState?.active_asset_id;
+  const finalCreativeAssetsCount = creativeWorkingState?.assets?.length ?? 0;
+  const finalCreativeSessionFromAsset = Boolean(finalActiveCreativeAssetId || finalCreativeAssetsCount > 0);
+
   const decisionLayer = buildDecisionLayer({
     workspaceId: request.workspaceId,
     appId: request.appId,
@@ -5063,8 +5079,8 @@ export async function createAppChatSession(
     ...(hermesCmoCreativeLongRunningTurn ? { timeout_source: "creative_execute" } : {}),
     ...(hermesCmoNativeCreativeRequested ? { workspace_fallback_suppressed_for_creative: true } : {}),
     ...(hermesCmoNativeCreativeRequested ? { fallback_used: false } : {}),
-    ...(activeCreativeAssetId ? { active_creative_asset_id: activeCreativeAssetId } : {}),
-    ...(creativeAssetsCount > 0 ? { creative_assets_count: creativeAssetsCount } : {}),
+    ...(finalActiveCreativeAssetId ? { active_creative_asset_id: finalActiveCreativeAssetId, active_asset_id: finalActiveCreativeAssetId, creative_session_active_asset_id: finalActiveCreativeAssetId } : {}),
+    ...(finalCreativeAssetsCount > 0 ? { creative_assets_count: finalCreativeAssetsCount } : {}),
     ...(activeCreativeAssetResolution.asset ? { reference_assets_count: 1 } : {}),
     ...(hermesCmoNativeCreativeRequested ? { artifact_transport_mode: "product_upload" } : {}),
     ...(creativeExecutionRequested === true ? { creativeExecutionRequested: true, creative_execution_requested: true } : {}),
@@ -5106,12 +5122,12 @@ export async function createAppChatSession(
     hermesCmoMetadata = {
       ...hermesCmoMetadata,
       ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
-      ...(creativeWorkingStatePresent ? { active_creative_context_present: true } : {}),
+      ...(finalCreativeWorkingStatePresent ? { active_creative_context_present: true } : {}),
       ...(activeCreativeAssetResolution.asset ? { active_creative_asset_resolved: true } : {}),
       ...(activeCreativeAssetResolution.source ? { active_creative_asset_resolution_source: activeCreativeAssetResolution.source } : {}),
-      ...(activeCreativeAssetId ? { active_creative_asset_id: activeCreativeAssetId } : {}),
-      ...(creativeWorkingStatePresent ? { creative_assets_count: creativeAssetsCount } : {}),
-      ...(creativeSessionFromAsset ? { creative_session_from_asset: true } : {}),
+      ...(finalActiveCreativeAssetId ? { active_creative_asset_id: finalActiveCreativeAssetId, active_asset_id: finalActiveCreativeAssetId, creative_session_active_asset_id: finalActiveCreativeAssetId } : {}),
+      ...(finalCreativeWorkingStatePresent ? { creative_assets_count: finalCreativeAssetsCount } : {}),
+      ...(finalCreativeSessionFromAsset ? { creative_session_from_asset: true } : {}),
       ...(routeOverrodeToolExecuteDueToCreativeContext ? { route_overrode_tool_execute_due_to_creative_context: true } : {}),
       ...(toolExecuteSuppressedForCreativeFollowup ? { tool_execute_suppressed_for_creative_followup: true } : {}),
       ...(hermesCmoNativeCreativeRequested ? { cmo_owns_creative_decision: true } : {}),
@@ -5189,6 +5205,7 @@ export async function createAppChatSession(
     sessionLocalResearchResults,
     ...(activeSourceId ? { activeSourceId } : {}),
     ...(sessionSummary ? { sessionSummary } : {}),
+    ...(turnCreativeArtifacts.length ? { creativeAssets: turnCreativeArtifacts, creative_assets: turnCreativeArtifacts } : {}),
     ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
     ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
     ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
@@ -5267,6 +5284,7 @@ export async function createAppChatSession(
         ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
         ...(activeSourceId ? { activeSourceId } : {}),
         ...(sessionSummary ? { sessionSummary } : {}),
+        ...(turnCreativeArtifacts.length ? { creativeAssets: turnCreativeArtifacts, creative_assets: turnCreativeArtifacts } : {}),
         ...(turnCreativeArtifacts.length ? { sessionArtifacts: turnCreativeArtifacts } : {}),
         ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
         ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
@@ -5425,6 +5443,7 @@ export async function createAppChatSession(
     sessionLocalResearchResults,
     ...(activeSourceId ? { activeSourceId } : {}),
     ...(sessionSummary ? { sessionSummary } : {}),
+    ...(turnCreativeArtifacts.length ? { creativeAssets: turnCreativeArtifacts, creative_assets: turnCreativeArtifacts } : {}),
     ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
     ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
     ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),

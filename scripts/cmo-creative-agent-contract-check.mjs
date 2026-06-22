@@ -282,6 +282,12 @@ assert.match(mapperSource, /agentsUsedFromMetadata/, "Creative activity metadata
 assert.match(storeSource, /extractCreativeAssetsFromHermesResponse/, "Creative responses must become session artifacts");
 assert.match(storeSource, /sanitizeCreativeAssetStates/, "Creative session state must sanitize Product-backed Creative assets");
 assert.match(storeSource, /creativeMissingRenderableAssetWarning/, "Creative execution with metadata but zero renderable assets must show a Creative warning");
+assert.match(storeSource, /finalActiveCreativeAssetId/, "Creative persistence must recompute active asset id after artifact normalization");
+assert.match(storeSource, /finalCreativeAssetsCount/, "Creative persistence must recompute asset count after artifact normalization");
+assert.match(storeSource, /creativeAssets: turnCreativeArtifacts/, "Assistant message must persist canonical Creative assets");
+assert.match(storeSource, /creative_assets: turnCreativeArtifacts/, "Assistant message must persist snake_case Creative assets alias");
+assert.match(storeSource, /active_asset_id: finalActiveCreativeAssetId/, "Creative metadata must persist final active_asset_id");
+assert.match(storeSource, /creative_session_active_asset_id: finalActiveCreativeAssetId/, "Creative metadata must persist final creative_session_active_asset_id");
 assert.match(storeSource, /runtimeResult\.rawRuntimeResponse/, "App-turn Creative metadata must be extracted from the raw runtime response");
 assert.match(storeSource, /creative_response_received/, "Creative response diagnostics must be persisted");
 assert.match(storeSource, /creative_metadata_present/, "Creative metadata presence must be traced");
