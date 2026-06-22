@@ -13,6 +13,7 @@ import { icons } from "@/components/dashboard/icons";
 import { assistantDisplayMarkdown } from "@/lib/cmo/assistant-markdown-display";
 import { buildCmoEvidenceSources } from "@/lib/cmo/cmo-chat-evidence-display";
 import { isBrowserPreviewUrl } from "@/lib/cmo/creative-agent";
+import { isProductBackedRenderableCreativeAsset } from "@/lib/cmo/creative-draft-state";
 import type {
   AppWorkspace,
   CMOAppChatResponse,
@@ -615,7 +616,8 @@ function creativeAssetRecords(message: CMOChatMessage): Record<string, unknown>[
     isRecord(artifact) &&
     artifact.schema_version === "cmo.creative_asset.v1" &&
     artifact.type === "creative_asset" &&
-    artifact.agent === "creative",
+    artifact.agent === "creative" &&
+    isProductBackedRenderableCreativeAsset(artifact),
   ) as Record<string, unknown>[];
 }
 
@@ -1711,8 +1713,11 @@ export function CMOChatPanel({
 
     if (!assets.length) {
       const state = message.creativeWorkingState;
-      const activeAssetId = state?.active_asset_id;
-      const hasReferenceAsset = Boolean(activeAssetId || state?.assets?.length);
+      const stateAssets = (state?.assets ?? []).filter(isProductBackedRenderableCreativeAsset);
+      const activeAssetId = state?.active_asset_id && stateAssets.some((asset) => asset.asset_id === state.active_asset_id)
+        ? state.active_asset_id
+        : stateAssets.at(-1)?.asset_id;
+      const hasReferenceAsset = Boolean(activeAssetId || stateAssets.length);
       const decisionAction = message.creativeDecision?.action;
       const creativeTurn = message.routeDecision === "creative_session" || message.routeDecision === "creative_ideation" || message.routeDecision === "creative_execution";
       const draftUpdated = decisionAction === "refine_draft" || decisionAction === "propose_draft" || decisionAction === "present_draft" || decisionAction === "show_draft";

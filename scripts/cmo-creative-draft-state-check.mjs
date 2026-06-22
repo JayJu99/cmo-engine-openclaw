@@ -66,6 +66,9 @@ requireSource(helperSource, /extractSuggestedCreativeStateUpdate/, "draft helper
 requireSource(helperSource, /extractCreativeDecision/, "draft helper");
 requireSource(helperSource, /normalizeCreativeAssetState/, "draft helper must normalize Creative asset context");
 requireSource(helperSource, /applyCreativeAssetStateUpdate/, "draft helper must merge Creative asset context");
+requireSource(helperSource, /sanitizeCreativeAssetStates/, "draft helper must sanitize renderable Product-backed Creative assets");
+requireSource(helperSource, /isSyntheticCreativeAssetId/, "draft helper must identify synthetic Creative placeholder ids");
+requireSource(helperSource, /isProductBackedRenderableCreativeAsset/, "draft helper must expose Product-backed renderability checks");
 requireSource(helperSource, /value === "present_draft"/, "draft helper must normalize Hermes present_draft decision");
 requireSource(helperSource, /value === "show_draft"/, "draft helper must normalize Hermes show_draft decision");
 requireSource(helperSource, /value === "blocked"/, "draft helper must normalize blocked decision");
@@ -105,16 +108,18 @@ const activeCreativeState = {
   ],
 };
 const activeAssetCreativeState = {
-  active_asset_id: "asset_001",
+  active_asset_id: "creative_asset_001",
   drafts: [],
   assets: [
     {
-      asset_id: "asset_001",
+      asset_id: "creative_asset_001",
       kind: "image",
       status: "stored",
       prompt: "Premium black and gold Eggs Vault key visual",
       visual_summary: "Square key visual with an egg hero object.",
       mime_type: "image/png",
+      storage_path: "tenant/workspace/app/job/creative_asset_001/creative.png",
+      transport_status: "uploaded",
       sha256: "a".repeat(64),
       bytes: 123456,
       render_url: "https://product.example/assets/asset_001.png",
@@ -191,11 +196,45 @@ assert.equal(threeTurnDecision.action, "propose_draft", "turn 1 must persist CMO
 assert.equal(threeTurnCreativeState.active_draft_id, "creative_draft_001", "turn 1 must persist active draft id");
 assert.equal(threeTurnCreativeState.drafts.length, 1, "turn 1 must persist draft without duplication");
 const generatedAssetState = draftState.applyCreativeAssetStateUpdate(undefined, activeAssetCreativeState.assets);
-assert.equal(generatedAssetState.active_asset_id, "asset_001", "explicit generation must persist active Creative asset id");
+assert.equal(generatedAssetState.active_asset_id, "creative_asset_001", "explicit generation must persist active Creative asset id");
 assert.equal(generatedAssetState.assets.length, 1, "explicit generation must persist active Creative asset context");
 assert.equal(generatedAssetState.assets[0].mime_type, "image/png", "explicit generation must persist Creative asset mime type");
 assert.equal(generatedAssetState.assets[0].sha256, "a".repeat(64), "explicit generation must persist Creative asset sha256");
 assert.equal(generatedAssetState.assets[0].bytes, 123456, "explicit generation must persist Creative asset bytes");
+
+const duplicateCreativeAssetState = draftState.applyCreativeAssetStateUpdate(undefined, [
+  activeAssetCreativeState.assets[0],
+  {
+    asset_id: "creative_creative_msg_e3077b07-c99_1",
+    kind: "image",
+    status: "stored",
+    mime_type: "image/png",
+    transport_status: "uploaded",
+    render_url: "https://product.example/assets/asset_001.png",
+    signed_url: "https://product.example/assets/asset_001.png?token=placeholder",
+  },
+]);
+assert.equal(duplicateCreativeAssetState.active_asset_id, "creative_asset_001", "synthetic duplicate must not become active Creative asset id");
+assert.equal(duplicateCreativeAssetState.assets.length, 1, "synthetic duplicate must be deduped from Creative working state");
+assert.equal(duplicateCreativeAssetState.assets[0].asset_id, "creative_asset_001", "Product-backed asset must win duplicate Creative asset normalization");
+
+const sanitizedLoadedState = draftState.normalizeCreativeWorkingState({
+  active_asset_id: "creative_creative_msg_e3077b07-c99_1",
+  drafts: [],
+  assets: [
+    activeAssetCreativeState.assets[0],
+    {
+      asset_id: "creative_creative_msg_e3077b07-c99_1",
+      kind: "image",
+      status: "stored",
+      mime_type: "image/png",
+      transport_status: "uploaded",
+      render_url: "https://product.example/assets/asset_001.png",
+    },
+  ],
+});
+assert.equal(sanitizedLoadedState.active_asset_id, "creative_asset_001", "session-load sanitization must repair stale synthetic active asset id");
+assert.equal(sanitizedLoadedState.assets.length, 1, "session-load sanitization must keep only renderable Product-backed assets");
 
 const turn2Message = "Walk me through the concept before making anything";
 assert.equal(intent.routeIntentForMessage(turn2Message, { creativeWorkingState: threeTurnCreativeState }), "creative_session", "turn 2 must send history and state back to CMO");
@@ -340,7 +379,7 @@ forbidSource(runtimeSource, /allow_creative_execution/, "runtime must not emit l
 forbidSource(runtimeSource, /const answerBasisModes = new Set[\s\S]*"creative_ideation"[\s\S]*\]\);[\s\S]*const answerFormats/s, "runtime must not globally allow creative_ideation answer basis");
 forbidSource(runtimeSource, /const activityTypes = new Set[\s\S]*"creative\.ideation\.draft_proposed"[\s\S]*\]\);[\s\S]*const creativeLifecycleActivityTypes/s, "runtime must not globally allow creative ideation activity events");
 
-requireSource(storeSource, /let creativeWorkingState: CmoCreativeWorkingState \| undefined = continuedSession\?\.creativeWorkingState;/, "store session state");
+requireSource(storeSource, /let creativeWorkingState: CmoCreativeWorkingState \| undefined = normalizeCreativeWorkingState\(continuedSession\?\.creativeWorkingState\);/, "store session state must sanitize loaded Creative working state");
 requireSource(storeSource, /applyCreativeAssetStateUpdate/, "store must persist Creative assets into working state");
 requireSource(storeSource, /let turnCreativeArtifacts: Record<string, unknown>\[] = \[];/, "store must track current-turn Creative artifacts separately");
 requireSource(storeSource, /turnCreativeArtifacts = creativeArtifacts;/, "store must capture current-turn Creative artifacts");

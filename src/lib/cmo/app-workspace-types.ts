@@ -669,8 +669,12 @@ export interface CmoCreativeAssetState {
   model?: string;
   operation?: string;
   mime_type?: string;
+  asset_type?: CmoCreativeDraftKind;
+  storage_path?: string;
+  preview_url?: string;
   render_url?: string;
   signed_url?: string;
+  transport_status?: string;
   sha256?: string;
   bytes?: number;
 }

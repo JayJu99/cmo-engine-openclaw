@@ -12,6 +12,7 @@ import {
   getCmoCreativeStoredAsset,
   type CmoCreativeStoredAsset,
 } from "@/lib/cmo/creative-assets";
+import { isSyntheticCreativeAssetId } from "@/lib/cmo/creative-draft-state";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { isCmoAuthEnabled } from "@/lib/supabase/config";
@@ -130,6 +131,11 @@ export async function cmoCreativeAssetResponse(input: {
   }
 
   const registryEntry = requireWorkspaceRegistryEntry(app.id);
+
+  if (isSyntheticCreativeAssetId(input.assetId)) {
+    throw new CmoAdapterError("Creative asset is not renderable.", 404, "creative_asset_not_renderable");
+  }
+
   const asset = await getCmoCreativeStoredAsset({
     tenantId: registryEntry.tenantId,
     workspaceId: registryEntry.workspaceId,

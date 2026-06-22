@@ -72,9 +72,10 @@ import {
   extractCreativeDecision,
   extractSuggestedCreativeStateUpdate,
   hasCreativeWorkingStateDrafts,
-  normalizeCreativeAssetState,
+  isProductBackedRenderableCreativeAsset,
   normalizeCreativeDecision,
   normalizeCreativeWorkingState,
+  sanitizeCreativeAssetStates,
 } from "@/lib/cmo/creative-draft-state";
 import { routeIntentForMessage } from "@/lib/cmo/app-routing-intent";
 import { executeMixedCmoEcho, isMixedCmoEchoRequest, mixedEchoNeedsClarification, buildMixedCmoEchoRuntimeMessage, maybeHandleEchoBridge } from "@/lib/cmo/echo-bridge";
@@ -159,16 +160,11 @@ interface ActiveCreativeAssetResolution {
 }
 
 function isReferenceableCreativeImageAsset(asset: CmoCreativeAssetState | undefined): asset is CmoCreativeAssetState {
-  if (!asset || asset.kind !== "image" || !asset.asset_id) {
-    return false;
-  }
-
-  return !asset.status || asset.status === "stored" || asset.status === "uploaded" || asset.status === "available";
+  return Boolean(asset?.kind === "image" && isProductBackedRenderableCreativeAsset(asset));
 }
 
 function normalizeCreativeAssetCandidates(values: unknown[]): CmoCreativeAssetState[] {
-  return values
-    .flatMap((value) => {
+  const candidates = values.flatMap((value) => {
       if (Array.isArray(value)) {
         return value;
       }
@@ -178,9 +174,9 @@ function normalizeCreativeAssetCandidates(values: unknown[]): CmoCreativeAssetSt
       }
 
       return [value];
-    })
-    .map(normalizeCreativeAssetState)
-    .filter(isReferenceableCreativeImageAsset);
+    });
+
+  return sanitizeCreativeAssetStates(candidates).filter(isReferenceableCreativeImageAsset);
 }
 
 function messageCreativeAssetCandidates(message: CMOChatMessage): CmoCreativeAssetState[] {
@@ -211,8 +207,7 @@ function resolveActiveCreativeAsset(session: CMOChatSession | null): ActiveCreat
   ];
 
   if (activeAssetId) {
-    const activeAsset = allKnownAssets.find((asset) => asset.asset_id === activeAssetId) ??
-      normalizeCreativeAssetState({ asset_id: activeAssetId, kind: "image" });
+    const activeAsset = allKnownAssets.find((asset) => asset.asset_id === activeAssetId);
 
     if (isReferenceableCreativeImageAsset(activeAsset)) {
       return { asset: activeAsset, source: "creativeWorkingState" };
@@ -2716,26 +2711,27 @@ function creativeStateMetadata(
   creativeWorkingState: CmoCreativeWorkingState | undefined,
   creativeDecision: CmoCreativeDecision | undefined,
 ): Partial<HermesCmoChatMetadata> {
+  const sanitizedCreativeWorkingState = normalizeCreativeWorkingState(creativeWorkingState);
   const creativeStatePersisted = Boolean(
-    creativeWorkingState &&
+    sanitizedCreativeWorkingState &&
       (
-        creativeWorkingState.drafts.length > 0 ||
-        (creativeWorkingState.assets?.length ?? 0) > 0 ||
-        creativeWorkingState.active_draft_id ||
-        creativeWorkingState.active_asset_id
+        sanitizedCreativeWorkingState.drafts.length > 0 ||
+        (sanitizedCreativeWorkingState.assets?.length ?? 0) > 0 ||
+        sanitizedCreativeWorkingState.active_draft_id ||
+        sanitizedCreativeWorkingState.active_asset_id
       ),
   );
-  const creativeAssetsCount = creativeWorkingState?.assets?.length ?? 0;
-  const activeAssetId = creativeWorkingState?.active_asset_id;
+  const creativeAssetsCount = sanitizedCreativeWorkingState?.assets?.length ?? 0;
+  const activeAssetId = sanitizedCreativeWorkingState?.active_asset_id;
 
   return {
-    ...(hasCreativeWorkingStateDrafts(creativeWorkingState) ? { creative_draft_active: true } : {}),
-    ...(creativeWorkingState?.active_draft_id ? { creative_active_draft_id: creativeWorkingState.active_draft_id } : {}),
-    ...(creativeWorkingState?.active_draft_id ? { creative_session_active_draft_id: creativeWorkingState.active_draft_id } : {}),
+    ...(hasCreativeWorkingStateDrafts(sanitizedCreativeWorkingState) ? { creative_draft_active: true } : {}),
+    ...(sanitizedCreativeWorkingState?.active_draft_id ? { creative_active_draft_id: sanitizedCreativeWorkingState.active_draft_id } : {}),
+    ...(sanitizedCreativeWorkingState?.active_draft_id ? { creative_session_active_draft_id: sanitizedCreativeWorkingState.active_draft_id } : {}),
     ...(activeAssetId ? { active_creative_asset_id: activeAssetId } : {}),
     ...(activeAssetId ? { creative_session_active_asset_id: activeAssetId } : {}),
-    ...(creativeWorkingState ? { creative_drafts_count: creativeWorkingState.drafts.length } : {}),
-    ...(creativeWorkingState ? { creative_assets_count: creativeAssetsCount } : {}),
+    ...(sanitizedCreativeWorkingState ? { creative_drafts_count: sanitizedCreativeWorkingState.drafts.length } : {}),
+    ...(sanitizedCreativeWorkingState ? { creative_assets_count: creativeAssetsCount } : {}),
     ...(creativeStatePersisted ? { active_creative_context_present: true } : {}),
     ...(creativeAssetsCount > 0 || activeAssetId ? { creative_session_from_asset: true } : {}),
     ...(creativeDecision ? { creative_decision: creativeDecision } : {}),
@@ -3369,7 +3365,7 @@ export async function createAppChatSession(
   const sessionResolutionStartedMs = Date.now();
   const existingSession = request.sessionId ? await readAppChatSession(request.sessionId) : null;
   const continuedSession = existingSession?.appId === request.appId ? existingSession : null;
-  let creativeWorkingState: CmoCreativeWorkingState | undefined = continuedSession?.creativeWorkingState;
+  let creativeWorkingState: CmoCreativeWorkingState | undefined = normalizeCreativeWorkingState(continuedSession?.creativeWorkingState);
   let creativeDecision: CmoCreativeDecision | undefined = continuedSession?.creativeDecision;
   const activeCreativeAssetResolution = resolveActiveCreativeAsset(continuedSession);
   creativeWorkingState = activeCreativeAssetResolution.asset

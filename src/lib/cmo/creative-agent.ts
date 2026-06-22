@@ -1,3 +1,5 @@
+import { isProductBackedRenderableCreativeAsset } from "./creative-draft-state";
+
 export const CMO_CREATIVE_AGENT_ID = "creative" as const;
 export const CMO_CREATIVE_AGENT_LABEL = "Creative Agent" as const;
 export const CMO_CREATIVE_AGENT_ROLE = "visual execution specialist" as const;
@@ -148,6 +150,54 @@ function statusFromCreativeStatus(value: unknown, hasPreview: boolean): CmoCreat
   return hasPreview ? "stored" : "artifact_transport_missing";
 }
 
+function creativeArtifactIdentity(asset: CmoCreativeAssetArtifact): string | undefined {
+  const value = asset.signed_url ?? asset.render_url ?? asset.preview_url ?? asset.storage_path ?? asset.sha256;
+
+  if (!value) {
+    return undefined;
+  }
+
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return value;
+    }
+  }
+
+  return value;
+}
+
+function dedupeCreativeArtifacts(assets: CmoCreativeAssetArtifact[]): CmoCreativeAssetArtifact[] {
+  const byId = new Map<string, CmoCreativeAssetArtifact>();
+  const byIdentity = new Map<string, CmoCreativeAssetArtifact>();
+
+  for (const asset of assets) {
+    const existingById = byId.get(asset.asset_id);
+    const merged = existingById ? { ...existingById, ...asset } : asset;
+    const identity = creativeArtifactIdentity(merged);
+    const existingByIdentity = identity ? byIdentity.get(identity) : undefined;
+    const next = existingByIdentity ? { ...existingByIdentity, ...merged } : merged;
+
+    byId.delete(next.asset_id);
+    byId.set(next.asset_id, next);
+
+    if (identity) {
+      byIdentity.delete(identity);
+      byIdentity.set(identity, next);
+    }
+  }
+
+  const identityWinners = new Set(byIdentity.values());
+
+  return Array.from(byId.values()).filter((asset) => {
+    const identity = creativeArtifactIdentity(asset);
+
+    return !identity || identityWinners.has(asset);
+  });
+}
+
 export function isCreativeLifecycleState(value: unknown): value is CmoCreativeLifecycleState {
   return typeof value === "string" && CREATIVE_LIFECYCLE_SET.has(value);
 }
@@ -257,6 +307,7 @@ export function normalizeCreativeResponse(
     agent === CMO_CREATIVE_AGENT_ID ||
     Array.isArray(value.images) && value.images.some(isRecord) ||
     Array.isArray(value.creative_assets) && value.creative_assets.some(isRecord) ||
+    Array.isArray(value.generated_assets) && value.generated_assets.some(isRecord) ||
     hasCreativeExecutionMetadata(value);
 
   if (!looksCreative) {
@@ -270,6 +321,8 @@ export function normalizeCreativeResponse(
   const notes = stringValue(value.notes, 1200);
   const images = Array.isArray(value.creative_assets) && value.creative_assets.some(isRecord)
     ? value.creative_assets.filter(isRecord)
+    : Array.isArray(value.generated_assets) && value.generated_assets.some(isRecord)
+    ? value.generated_assets.filter(isRecord)
     : Array.isArray(value.images)
     ? value.images.filter(isRecord)
     : (
@@ -379,6 +432,8 @@ export function extractCreativeAssetsFromHermesResponse(
     structured.creative,
     ...(Array.isArray(response.creative_assets) ? response.creative_assets : []),
     ...(Array.isArray(structured.creative_assets) ? structured.creative_assets : []),
+    ...(Array.isArray(response.generated_assets) ? response.generated_assets : []),
+    ...(Array.isArray(structured.generated_assets) ? structured.generated_assets : []),
     isRecord(response.answer) ? response.answer : undefined,
     isRecord(response.response) ? response.response : undefined,
     isRecord(response.body) ? response.body : undefined,
@@ -386,13 +441,15 @@ export function extractCreativeAssetsFromHermesResponse(
     ...(Array.isArray(response.artifacts) ? response.artifacts : []),
     ...(Array.isArray(structured.artifacts) ? structured.artifacts : []),
   ];
-  const byId = new Map<string, CmoCreativeAssetArtifact>();
+  const assets: CmoCreativeAssetArtifact[] = [];
 
   for (const candidate of candidates) {
     for (const asset of normalizeCreativeResponse(candidate, context)) {
-      byId.set(asset.asset_id, asset);
+      assets.push(asset);
     }
   }
 
-  return Array.from(byId.values());
+  const productBackedAssets = assets.filter(isProductBackedRenderableCreativeAsset);
+
+  return dedupeCreativeArtifacts(productBackedAssets.length ? productBackedAssets : assets);
 }

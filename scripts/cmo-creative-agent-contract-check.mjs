@@ -269,6 +269,7 @@ assert.match(runtimeSource, /rejected_side_effect_type/, "Rejected Creative side
 assert.match(runtimeSource, /timeout_source/, "Hermes CMO trace must include the timeout source");
 assert.match(runtimeSource, /route_decision/, "Hermes CMO trace must include the route decision");
 assert.match(runtimeSource, /creative_trace/, "Hermes CMO trace must include Creative routing diagnostics");
+assert.match(runtimeSource, /writeHermesTrace\(request, "response"[\s\S]*creative_long_running_turn: config\.creativeLongRunningTurn/, "Successful long-running Creative responses must write _response.json traces");
 assert.match(runtimeSource, /allowSubAgentExecution: specialistExecutionAllowed/, "Creative execution must not be blocked by Echo/Surf orchestration mode");
 assert.match(outerRuntimeSource, /appTurnTimeoutConfig/, "Outer app-chat runtime must have explicit timeout selection");
 assert.match(outerRuntimeSource, /getCmoHermesCreativeExecuteTimeoutMs\(\)/, "Outer app-chat Creative execution must use the Creative-specific timeout");
@@ -279,6 +280,7 @@ assert.doesNotMatch(storeSource, /Creative execution timed out before Hermes ret
 assert.doesNotMatch(storeSource, /No workspace-context fallback was used for this Creative generation request/, "Creative timeout must not render Product-authored CMO prose");
 assert.match(mapperSource, /agentsUsedFromMetadata/, "Creative activity metadata must survive mapping");
 assert.match(storeSource, /extractCreativeAssetsFromHermesResponse/, "Creative responses must become session artifacts");
+assert.match(storeSource, /sanitizeCreativeAssetStates/, "Creative session state must sanitize Product-backed Creative assets");
 assert.match(storeSource, /runtimeResult\.rawRuntimeResponse/, "App-turn Creative metadata must be extracted from the raw runtime response");
 assert.match(storeSource, /creative_response_received/, "Creative response diagnostics must be persisted");
 assert.match(storeSource, /creative_metadata_present/, "Creative metadata presence must be traced");
@@ -303,6 +305,7 @@ assert.match(mapperSource, /auth_ref: CMO_CREATIVE_ARTIFACT_AUTH_REF/, "Referenc
 assert.match(mapperSource, /auth_header: CMO_CREATIVE_ARTIFACT_AUTH_HEADER/, "Reference assets must include auth_header without raw secret");
 assert.doesNotMatch(mapperSource, /CMO_CREATIVE_ARTIFACT_READ_KEY/, "Mapper must not read or embed raw artifact read key");
 assert.match(uiSource, /Creative Assets/, "Chat UI must render Creative asset cards");
+assert.match(uiSource, /isProductBackedRenderableCreativeAsset/, "Chat UI must render only Product-backed Creative asset cards");
 assert.match(uiSource, /Artifact transport missing/, "UI must show missing transport state");
 assert.match(uiSource, /creativeAssetPreviewUrl/, "UI must resolve Creative preview URLs through a single safe helper");
 assert.match(uiSource, /\["signed_url", "signedUrl", "render_url", "renderUrl", "preview_url", "previewUrl"\]/, "UI preview resolver must prefer signed URL before render URL");
@@ -351,6 +354,7 @@ assert.match(creativeAssetResponseSource, /requireWorkspaceRegistryEntry/, "Crea
 assert.match(creativeAssetResponseSource, /STORED_ASSET_STATUSES/, "Creative asset proxy must validate stored/uploaded status before serving bytes");
 assert.match(creativeAssetResponseSource, /CMO_CREATIVE_ALLOWED_MIME_TYPES/, "Creative asset proxy must validate allowed MIME types before serving bytes");
 assert.match(creativeAssetResponseSource, /hermes_local_artifact_path_redacted/, "Creative asset proxy must not serve redacted Hermes local paths");
+assert.match(creativeAssetResponseSource, /creative_asset_not_renderable/, "Creative asset proxy must reject synthetic non-renderable placeholders");
 assert.match(creativeAssetResponseSource, /Content-Type/, "Creative preview route must set Content-Type");
 assert.match(creativeAssetResponseSource, /Content-Length/, "Creative preview route should set Content-Length when available");
 assert.match(creativeAssetResponseSource, /Cache-Control"[\s\S]*private, max-age=300/, "Creative preview route must set private short cache headers");
@@ -361,6 +365,9 @@ assert.match(creativeAssetPreviewRouteSource, /mode: "preview"/, "Preview route 
 assert.match(creativeAssetDownloadRouteSource, /mode: "download"/, "Download route must call shared proxy in download mode");
 assert.match(creativeAgentSource, /value\.image_path/, "Product must parse Hermes Creative image_path execution responses");
 assert.match(creativeAgentSource, /creative_assets/, "Product must parse Hermes uploaded creative_assets responses");
+assert.match(creativeAgentSource, /generated_assets/, "Product must parse Hermes generated_assets responses");
+assert.match(creativeAgentSource, /isProductBackedRenderableCreativeAsset/, "Product must prefer renderable Product-backed Creative assets");
+assert.match(creativeAgentSource, /dedupeCreativeArtifacts/, "Product must dedupe duplicate Creative asset aliases");
 assert.match(creativeAgentSource, /render_url/, "Product Creative normalizer must preserve uploaded render_url");
 assert.match(migrationSource, /cmo_creative_jobs/, "Creative jobs table migration is required");
 assert.match(migrationSource, /cmo_creative_assets/, "Creative assets table migration is required");

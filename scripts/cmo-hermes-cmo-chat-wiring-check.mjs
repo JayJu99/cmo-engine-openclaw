@@ -84,11 +84,13 @@ const loadCompiledModules = async () => {
   const mapperOut = path.join(tmpDir, "hermes-cmo-chat-mapper.js");
   const chatV11Out = path.join(tmpDir, "hermes-cmo-chat-v11.js");
   const creativeAgentOut = path.join(tmpDir, "creative-agent.js");
+  const creativeDraftStateOut = path.join(tmpDir, "creative-draft-state.js");
   const sessionWorkingMemoryOut = path.join(tmpDir, "session-working-memory.js");
   const userMetadataOut = path.join(tmpDir, "user-metadata.js");
 
   await transpile(path.join(cmoDir, "config.ts"), configOut);
   await transpile(path.join(cmoDir, "app-routing-intent.ts"), appRoutingIntentOut);
+  await transpile(path.join(cmoDir, "creative-draft-state.ts"), creativeDraftStateOut);
   await transpile(path.join(cmoDir, "creative-agent.ts"), creativeAgentOut);
   await transpile(path.join(cmoDir, "session-working-memory.ts"), sessionWorkingMemoryOut);
   await transpile(path.join(cmoDir, "user-metadata.ts"), userMetadataOut);

@@ -5,7 +5,7 @@ import type {
   CmoCreativeDraft,
   CmoCreativeDraftKind,
   CmoCreativeWorkingState,
-} from "@/lib/cmo/app-workspace-types";
+} from "./app-workspace-types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -19,8 +19,124 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+const PRODUCT_CREATIVE_ASSET_ID_PATTERN = /^creative_asset_/;
+const SYNTHETIC_CREATIVE_ASSET_ID_PATTERN = /^creative_(?:creative_)?msg_/;
+const LOCAL_OR_REDACTED_ARTIFACT_PATTERN = /^(?:file:|[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|private|Volumes)\b|\[hermes_local_artifact_path_redacted\])/i;
+const RENDERABLE_CREATIVE_ASSET_STATUSES = new Set(["stored", "uploaded", "available", "completed", "success"]);
+const RENDERABLE_CREATIVE_TRANSPORT_STATUSES = new Set(["uploaded", "available"]);
+const RENDERABLE_CREATIVE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm"]);
+
 function normalizeCreativeDraftKind(value: unknown): CmoCreativeDraftKind | undefined {
   return value === "image" || value === "video" ? value : undefined;
+}
+
+function normalizedAssetPreviewIdentity(asset: CmoCreativeAssetState): string | undefined {
+  const value = stringValue(asset.signed_url ?? asset.render_url ?? asset.preview_url ?? asset.storage_path ?? asset.sha256);
+
+  if (!value) {
+    return undefined;
+  }
+
+  if (LOCAL_OR_REDACTED_ARTIFACT_PATTERN.test(value)) {
+    return undefined;
+  }
+
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return value;
+    }
+  }
+
+  return value;
+}
+
+function isExplicitProductBackedCreativeAsset(asset: CmoCreativeAssetState): boolean {
+  const transportStatus = stringValue(asset.transport_status);
+  const storagePath = stringValue(asset.storage_path);
+  const assetId = stringValue(asset.asset_id);
+
+  return Boolean(
+    assetId && PRODUCT_CREATIVE_ASSET_ID_PATTERN.test(assetId) ||
+      transportStatus && RENDERABLE_CREATIVE_TRANSPORT_STATUSES.has(transportStatus) ||
+      storagePath && !LOCAL_OR_REDACTED_ARTIFACT_PATTERN.test(storagePath),
+  );
+}
+
+function dedupeRenderableCreativeAssets(assets: CmoCreativeAssetState[]): CmoCreativeAssetState[] {
+  const byAssetId = new Map<string, CmoCreativeAssetState>();
+  const byIdentity = new Map<string, CmoCreativeAssetState>();
+
+  for (const asset of assets) {
+    const existingById = byAssetId.get(asset.asset_id);
+    const merged = existingById ? { ...existingById, ...asset } : asset;
+    const identity = normalizedAssetPreviewIdentity(merged);
+    const existingByIdentity = identity ? byIdentity.get(identity) : undefined;
+    const next = existingByIdentity ? { ...existingByIdentity, ...merged } : merged;
+
+    byAssetId.delete(next.asset_id);
+    byAssetId.set(next.asset_id, next);
+
+    if (identity) {
+      byIdentity.delete(identity);
+      byIdentity.set(identity, next);
+    }
+  }
+
+  const identityWinners = new Set(byIdentity.values());
+
+  return Array.from(byAssetId.values()).filter((asset) => {
+    const identity = normalizedAssetPreviewIdentity(asset);
+
+    return !identity || identityWinners.has(asset);
+  });
+}
+
+export function isSyntheticCreativeAssetId(value: unknown): boolean {
+  return typeof value === "string" && SYNTHETIC_CREATIVE_ASSET_ID_PATTERN.test(value.trim());
+}
+
+export function isProductBackedRenderableCreativeAsset(value: unknown): boolean {
+  const asset = normalizeCreativeAssetState(value);
+
+  if (!asset || isSyntheticCreativeAssetId(asset.asset_id)) {
+    return false;
+  }
+
+  if (!asset.mime_type || !RENDERABLE_CREATIVE_MIME_TYPES.has(asset.mime_type)) {
+    return false;
+  }
+
+  if (asset.kind !== "image" && asset.kind !== "video") {
+    return false;
+  }
+
+  if (asset.status && !RENDERABLE_CREATIVE_ASSET_STATUSES.has(asset.status)) {
+    return false;
+  }
+
+  if (!isExplicitProductBackedCreativeAsset(asset)) {
+    return false;
+  }
+
+  const pathValues = [asset.storage_path, asset.render_url, asset.preview_url, asset.signed_url].filter((item): item is string => Boolean(item));
+
+  if (pathValues.some((item) => LOCAL_OR_REDACTED_ARTIFACT_PATTERN.test(item))) {
+    return false;
+  }
+
+  return Boolean(normalizedAssetPreviewIdentity(asset) || asset.transport_status === "uploaded");
+}
+
+export function sanitizeCreativeAssetStates(values: unknown[]): CmoCreativeAssetState[] {
+  const assets = values
+    .map(normalizeCreativeAssetState)
+    .filter((asset): asset is CmoCreativeAssetState => Boolean(asset))
+    .filter(isProductBackedRenderableCreativeAsset);
+
+  return dedupeRenderableCreativeAssets(assets);
 }
 
 export function normalizeCreativeDraft(value: unknown): CmoCreativeDraft | undefined {
@@ -70,8 +186,12 @@ export function normalizeCreativeAssetState(value: unknown): CmoCreativeAssetSta
     ...(stringValue(value.model) ? { model: stringValue(value.model) } : {}),
     ...(stringValue(value.operation) ? { operation: stringValue(value.operation) } : {}),
     ...(stringValue(value.mime_type ?? value.mimeType) ? { mime_type: stringValue(value.mime_type ?? value.mimeType) } : {}),
+    ...(normalizeCreativeDraftKind(value.asset_type ?? value.assetType) ? { asset_type: normalizeCreativeDraftKind(value.asset_type ?? value.assetType) } : {}),
+    ...(stringValue(value.storage_path ?? value.storagePath) ? { storage_path: stringValue(value.storage_path ?? value.storagePath) } : {}),
+    ...(stringValue(value.preview_url ?? value.previewUrl) ? { preview_url: stringValue(value.preview_url ?? value.previewUrl) } : {}),
     ...(stringValue(value.render_url ?? value.renderUrl ?? value.preview_url ?? value.previewUrl ?? value.url) ? { render_url: stringValue(value.render_url ?? value.renderUrl ?? value.preview_url ?? value.previewUrl ?? value.url) } : {}),
     ...(stringValue(value.signed_url ?? value.signedUrl) ? { signed_url: stringValue(value.signed_url ?? value.signedUrl) } : {}),
+    ...(stringValue(value.transport_status ?? value.transportStatus) ? { transport_status: stringValue(value.transport_status ?? value.transportStatus) } : {}),
     ...(stringValue(value.sha256) ? { sha256: stringValue(value.sha256) } : {}),
     ...(numberValue(value.bytes) !== undefined ? { bytes: numberValue(value.bytes) } : {}),
   };
@@ -87,15 +207,18 @@ export function normalizeCreativeWorkingState(value: unknown): CmoCreativeWorkin
     : [];
   const dedupedDrafts = Array.from(new Map(drafts.map((draft) => [draft.draft_id, draft])).values());
   const assets = Array.isArray(value.assets)
-    ? value.assets.map(normalizeCreativeAssetState).filter((asset): asset is CmoCreativeAssetState => Boolean(asset))
+    ? sanitizeCreativeAssetStates(value.assets)
     : [];
-  const dedupedAssets = Array.from(new Map(assets.map((asset) => [asset.asset_id, asset])).values());
+  const dedupedAssets = dedupeRenderableCreativeAssets(assets);
   const activeDraftId = value.active_draft_id === null
     ? null
     : stringValue(value.active_draft_id ?? value.activeDraftId);
-  const activeAssetId = value.active_asset_id === null
+  const rawActiveAssetId = value.active_asset_id === null
     ? null
     : stringValue(value.active_asset_id ?? value.activeAssetId);
+  const activeAssetId = rawActiveAssetId && dedupedAssets.some((asset) => asset.asset_id === rawActiveAssetId)
+    ? rawActiveAssetId
+    : dedupedAssets.at(-1)?.asset_id;
 
   if (!dedupedDrafts.length && !dedupedAssets.length && !activeDraftId && !activeAssetId) {
     return undefined;
@@ -178,17 +301,15 @@ export function applyCreativeAssetStateUpdate(
   current: CmoCreativeWorkingState | undefined,
   assetsInput: unknown[],
 ): CmoCreativeWorkingState | undefined {
-  const assets = assetsInput
-    .map(normalizeCreativeAssetState)
-    .filter((asset): asset is CmoCreativeAssetState => Boolean(asset));
+  const assets = sanitizeCreativeAssetStates(assetsInput);
 
   if (!assets.length) {
-    return current;
+    return normalizeCreativeWorkingState(current);
   }
 
   const assetsById = new Map<string, CmoCreativeAssetState>();
 
-  for (const asset of current?.assets ?? []) {
+  for (const asset of sanitizeCreativeAssetStates(current?.assets ?? [])) {
     assetsById.set(asset.asset_id, asset);
   }
 
@@ -199,13 +320,14 @@ export function applyCreativeAssetStateUpdate(
     });
   }
 
-  const activeAssetId = assets[assets.length - 1]?.asset_id ?? current?.active_asset_id;
+  const dedupedAssets = dedupeRenderableCreativeAssets(Array.from(assetsById.values()));
+  const activeAssetId = assets.at(-1)?.asset_id ?? current?.active_asset_id;
 
   return normalizeCreativeWorkingState({
     ...(current?.active_draft_id !== undefined ? { active_draft_id: current.active_draft_id } : {}),
     ...(activeAssetId !== undefined ? { active_asset_id: activeAssetId } : {}),
     drafts: current?.drafts ?? [],
-    assets: Array.from(assetsById.values()),
+    assets: dedupedAssets,
   });
 }
 
