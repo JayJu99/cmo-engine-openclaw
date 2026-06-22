@@ -69,6 +69,7 @@ export function normalizeCreativeAssetState(value: unknown): CmoCreativeAssetSta
     ...(stringValue(value.visual_summary ?? value.visualSummary ?? value.notes) ? { visual_summary: stringValue(value.visual_summary ?? value.visualSummary ?? value.notes) } : {}),
     ...(stringValue(value.model) ? { model: stringValue(value.model) } : {}),
     ...(stringValue(value.operation) ? { operation: stringValue(value.operation) } : {}),
+    ...(stringValue(value.mime_type ?? value.mimeType) ? { mime_type: stringValue(value.mime_type ?? value.mimeType) } : {}),
     ...(stringValue(value.render_url ?? value.renderUrl ?? value.preview_url ?? value.previewUrl ?? value.url) ? { render_url: stringValue(value.render_url ?? value.renderUrl ?? value.preview_url ?? value.previewUrl ?? value.url) } : {}),
     ...(stringValue(value.signed_url ?? value.signedUrl) ? { signed_url: stringValue(value.signed_url ?? value.signedUrl) } : {}),
     ...(stringValue(value.sha256) ? { sha256: stringValue(value.sha256) } : {}),

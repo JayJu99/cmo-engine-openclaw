@@ -11,6 +11,7 @@ import type {
   CMOChatMessage,
   CMOChatSession,
   CMORuntimeStatus,
+  CmoCreativeAssetState,
   CmoCreativeDecision,
   CmoCreativeWorkingState,
   CmoAsyncToolRunStatus,
@@ -71,6 +72,7 @@ import {
   extractCreativeDecision,
   extractSuggestedCreativeStateUpdate,
   hasCreativeWorkingStateDrafts,
+  normalizeCreativeAssetState,
   normalizeCreativeDecision,
   normalizeCreativeWorkingState,
 } from "@/lib/cmo/creative-draft-state";
@@ -147,6 +149,92 @@ function creativeAssetsFromHermesPayload(input: {
     jobId: input.jobId,
     createdAt: input.createdAt,
   }).map((asset) => ({ ...asset }));
+}
+
+type ActiveCreativeAssetResolutionSource = "creativeWorkingState" | "sessionArtifacts" | "messageCreativeAssets" | "none";
+
+interface ActiveCreativeAssetResolution {
+  asset?: CmoCreativeAssetState;
+  source: ActiveCreativeAssetResolutionSource;
+}
+
+function isReferenceableCreativeImageAsset(asset: CmoCreativeAssetState | undefined): asset is CmoCreativeAssetState {
+  if (!asset || asset.kind !== "image" || !asset.asset_id) {
+    return false;
+  }
+
+  return !asset.status || asset.status === "stored" || asset.status === "uploaded" || asset.status === "available";
+}
+
+function normalizeCreativeAssetCandidates(values: unknown[]): CmoCreativeAssetState[] {
+  return values
+    .flatMap((value) => {
+      if (Array.isArray(value)) {
+        return value;
+      }
+
+      if (!isRecord(value)) {
+        return [];
+      }
+
+      return [value];
+    })
+    .map(normalizeCreativeAssetState)
+    .filter(isReferenceableCreativeImageAsset);
+}
+
+function messageCreativeAssetCandidates(message: CMOChatMessage): CmoCreativeAssetState[] {
+  const record = message as unknown as Record<string, unknown>;
+
+  return normalizeCreativeAssetCandidates([
+    record.creative_assets,
+    record.creativeAssets,
+    record.artifacts,
+  ]);
+}
+
+function resolveActiveCreativeAsset(session: CMOChatSession | null): ActiveCreativeAssetResolution {
+  if (!session) {
+    return { source: "none" };
+  }
+
+  const workingStateAssets = (session.creativeWorkingState?.assets ?? []).filter(isReferenceableCreativeImageAsset);
+  const activeAssetId = session.creativeWorkingState?.active_asset_id;
+  const sessionArtifactAssets = normalizeCreativeAssetCandidates(session.sessionArtifacts ?? []);
+  const messageCreativeAssets = [...session.messages].reverse().flatMap(messageCreativeAssetCandidates);
+  const messageSessionArtifactAssets = [...session.messages].reverse().flatMap((message) => normalizeCreativeAssetCandidates(message.sessionArtifacts ?? []));
+  const allKnownAssets = [
+    ...workingStateAssets,
+    ...sessionArtifactAssets,
+    ...messageCreativeAssets,
+    ...messageSessionArtifactAssets,
+  ];
+
+  if (activeAssetId) {
+    const activeAsset = allKnownAssets.find((asset) => asset.asset_id === activeAssetId) ??
+      normalizeCreativeAssetState({ asset_id: activeAssetId, kind: "image" });
+
+    if (isReferenceableCreativeImageAsset(activeAsset)) {
+      return { asset: activeAsset, source: "creativeWorkingState" };
+    }
+  }
+
+  const stateAsset = workingStateAssets.at(-1);
+  if (stateAsset) {
+    return { asset: stateAsset, source: "creativeWorkingState" };
+  }
+
+  const sessionArtifactAsset = sessionArtifactAssets.at(-1);
+  if (sessionArtifactAsset) {
+    return { asset: sessionArtifactAsset, source: "sessionArtifacts" };
+  }
+
+  const messageAsset = messageCreativeAssets.at(0) ?? messageSessionArtifactAssets.at(0);
+  if (messageAsset) {
+    return { asset: messageAsset, source: "messageCreativeAssets" };
+  }
+
+  return { source: "none" };
 }
 const MAX_VAULT_UPDATE_DRY_RUN_RESULTS = 40;
 const MAX_VAULT_UPDATE_WRITE_RESULTS = 40;
@@ -2210,12 +2298,25 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(stringValue(value.creative_session_decision_action) ? { creative_session_decision_action: stringValue(value.creative_session_decision_action) } : {}),
     ...(stringValue(value.creative_session_active_draft_id) ? { creative_session_active_draft_id: stringValue(value.creative_session_active_draft_id) } : {}),
     ...(typeof value.active_creative_context_present === "boolean" ? { active_creative_context_present: value.active_creative_context_present } : {}),
+    ...(typeof value.active_creative_asset_resolved === "boolean" ? { active_creative_asset_resolved: value.active_creative_asset_resolved } : {}),
+    ...(value.active_creative_asset_resolution_source === "creativeWorkingState" ||
+    value.active_creative_asset_resolution_source === "sessionArtifacts" ||
+    value.active_creative_asset_resolution_source === "messageCreativeAssets" ||
+    value.active_creative_asset_resolution_source === "none"
+      ? { active_creative_asset_resolution_source: value.active_creative_asset_resolution_source }
+      : {}),
     ...(stringValue(value.active_creative_asset_id) ? { active_creative_asset_id: stringValue(value.active_creative_asset_id) } : {}),
     ...(stringValue(value.creative_session_active_asset_id) ? { creative_session_active_asset_id: stringValue(value.creative_session_active_asset_id) } : {}),
     ...(typeof value.creative_assets_count === "number" && Number.isFinite(value.creative_assets_count)
       ? { creative_assets_count: Math.max(0, Math.floor(value.creative_assets_count)) }
       : {}),
     ...(typeof value.creative_session_from_asset === "boolean" ? { creative_session_from_asset: value.creative_session_from_asset } : {}),
+    ...(typeof value.reference_assets_count === "number" && Number.isFinite(value.reference_assets_count)
+      ? { reference_assets_count: Math.max(0, Math.floor(value.reference_assets_count)) }
+      : {}),
+    ...(typeof value.reference_asset_fetch_url_present === "boolean" ? { reference_asset_fetch_url_present: value.reference_asset_fetch_url_present } : {}),
+    ...(typeof value.reference_asset_sha256_present === "boolean" ? { reference_asset_sha256_present: value.reference_asset_sha256_present } : {}),
+    ...(typeof value.reference_asset_bytes_present === "boolean" ? { reference_asset_bytes_present: value.reference_asset_bytes_present } : {}),
     ...(typeof value.route_overrode_tool_execute_due_to_creative_context === "boolean"
       ? { route_overrode_tool_execute_due_to_creative_context: value.route_overrode_tool_execute_due_to_creative_context }
       : {}),
@@ -3246,6 +3347,10 @@ export async function createAppChatSession(
   const continuedSession = existingSession?.appId === request.appId ? existingSession : null;
   let creativeWorkingState: CmoCreativeWorkingState | undefined = continuedSession?.creativeWorkingState;
   let creativeDecision: CmoCreativeDecision | undefined = continuedSession?.creativeDecision;
+  const activeCreativeAssetResolution = resolveActiveCreativeAsset(continuedSession);
+  creativeWorkingState = activeCreativeAssetResolution.asset
+    ? applyCreativeAssetStateUpdate(creativeWorkingState, [activeCreativeAssetResolution.asset])
+    : creativeWorkingState;
   const creativeWorkingStatePresent = hasCreativeWorkingStateDrafts(creativeWorkingState);
   const activeCreativeAssetId = creativeWorkingState?.active_asset_id;
   const creativeAssetsCount = creativeWorkingState?.assets?.length ?? 0;
@@ -3695,6 +3800,7 @@ export async function createAppChatSession(
           creativeWorkingState: creativeWorkingStateForHermes,
           creativeIdeationDetected,
           creativeSessionFollowupDetected,
+          activeCreativeAssetResolutionSource: activeCreativeAssetResolution.source,
         });
         const hermesResult = await runHermesCmoRuntime(hermesRequest, { toolTimeoutMs: asyncToolRunTimeoutMs });
         const counterValidation = validateHermesCmoChatCounters(hermesResult);
@@ -4084,6 +4190,7 @@ export async function createAppChatSession(
           creativeWorkingState: creativeWorkingStateForHermes,
           creativeIdeationDetected,
           creativeSessionFollowupDetected,
+          activeCreativeAssetResolutionSource: activeCreativeAssetResolution.source,
         });
         const hermesFallbackResult = await runHermesCmoRuntime(hermesFallbackRequest);
         sessionLocalResearchResults = mergeSessionLocalResearchResults(
@@ -4230,6 +4337,7 @@ export async function createAppChatSession(
         creativeWorkingState: creativeWorkingStateForHermes,
         creativeIdeationDetected,
         creativeSessionFollowupDetected,
+        activeCreativeAssetResolutionSource: activeCreativeAssetResolution.source,
       });
       hermesRequestSent = true;
       const hermesResult = await runHermesCmoRuntime(hermesRequest);
@@ -4840,6 +4948,8 @@ export async function createAppChatSession(
       ...hermesCmoMetadata,
       ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
       ...(creativeWorkingStatePresent ? { active_creative_context_present: true } : {}),
+      ...(activeCreativeAssetResolution.asset ? { active_creative_asset_resolved: true } : {}),
+      ...(activeCreativeAssetResolution.source ? { active_creative_asset_resolution_source: activeCreativeAssetResolution.source } : {}),
       ...(activeCreativeAssetId ? { active_creative_asset_id: activeCreativeAssetId } : {}),
       ...(creativeWorkingStatePresent ? { creative_assets_count: creativeAssetsCount } : {}),
       ...(creativeSessionFromAsset ? { creative_session_from_asset: true } : {}),

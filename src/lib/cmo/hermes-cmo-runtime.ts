@@ -175,6 +175,8 @@ export interface HermesCmoRuntimeRequest {
     max_bytes: number;
   };
   creative_working_state?: unknown;
+  reference_assets?: unknown[];
+  referenceAssets?: unknown[];
   [key: string]: unknown;
 }
 
@@ -2336,6 +2338,12 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
   const activeCreativeContextPresent = constraints.active_creative_context_present === true || constraints.creative_working_state_present === true;
   const creativeAssetsCount = typeof constraints.creative_assets_count === "number" ? constraints.creative_assets_count : undefined;
   const creativeSessionFromAsset = constraints.creative_session_from_asset === true || (creativeAssetsCount ?? 0) > 0 || typeof constraints.active_creative_asset_id === "string";
+  const referenceAssets = Array.isArray(request.reference_assets)
+    ? request.reference_assets.filter(isRecord)
+    : Array.isArray(request.referenceAssets)
+      ? request.referenceAssets.filter(isRecord)
+      : [];
+  const firstReferenceAsset = referenceAssets[0];
 
   return {
     endpoint_path: config.endpointPath,
@@ -2358,9 +2366,15 @@ const creativeRequestTraceSummary = (request: HermesCmoRuntimeRequest, config: H
     creative_ideation_detected: constraints.creative_ideation_detected === true,
     creative_working_state_present: constraints.creative_working_state_present === true,
     active_creative_context_present: activeCreativeContextPresent,
+    active_creative_asset_resolved: constraints.active_creative_asset_resolved === true || referenceAssets.length > 0,
+    active_creative_asset_resolution_source: constraints.active_creative_asset_resolution_source,
     active_creative_asset_id: constraints.active_creative_asset_id,
     creative_assets_count: creativeAssetsCount,
     creative_session_from_asset: creativeSessionFromAsset,
+    reference_assets_count: referenceAssets.length,
+    reference_asset_fetch_url_present: typeof firstReferenceAsset?.fetch_url === "string" && firstReferenceAsset.fetch_url.startsWith("https://"),
+    reference_asset_sha256_present: typeof firstReferenceAsset?.sha256 === "string" && Boolean(firstReferenceAsset.sha256),
+    reference_asset_bytes_present: typeof firstReferenceAsset?.bytes === "number" && Number.isFinite(firstReferenceAsset.bytes),
     route_overrode_tool_execute_due_to_creative_context: config.routeDecision === "creative_session" && activeCreativeContextPresent,
     tool_execute_suppressed_for_creative_followup: config.endpointKind === "execute" && config.routeDecision === "creative_session",
     creative_session_followup_detected: constraints.creative_session_followup_detected === true,

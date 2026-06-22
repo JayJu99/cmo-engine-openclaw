@@ -114,6 +114,9 @@ const activeAssetCreativeState = {
       status: "stored",
       prompt: "Premium black and gold Eggs Vault key visual",
       visual_summary: "Square key visual with an egg hero object.",
+      mime_type: "image/png",
+      sha256: "a".repeat(64),
+      bytes: 123456,
       render_url: "https://product.example/assets/asset_001.png",
       operation: "creative.generate_image",
     },
@@ -190,6 +193,9 @@ assert.equal(threeTurnCreativeState.drafts.length, 1, "turn 1 must persist draft
 const generatedAssetState = draftState.applyCreativeAssetStateUpdate(undefined, activeAssetCreativeState.assets);
 assert.equal(generatedAssetState.active_asset_id, "asset_001", "explicit generation must persist active Creative asset id");
 assert.equal(generatedAssetState.assets.length, 1, "explicit generation must persist active Creative asset context");
+assert.equal(generatedAssetState.assets[0].mime_type, "image/png", "explicit generation must persist Creative asset mime type");
+assert.equal(generatedAssetState.assets[0].sha256, "a".repeat(64), "explicit generation must persist Creative asset sha256");
+assert.equal(generatedAssetState.assets[0].bytes, 123456, "explicit generation must persist Creative asset bytes");
 
 const turn2Message = "Walk me through the concept before making anything";
 assert.equal(intent.routeIntentForMessage(turn2Message, { creativeWorkingState: threeTurnCreativeState }), "creative_session", "turn 2 must send history and state back to CMO");
@@ -238,9 +244,19 @@ requireSource(mapperSource, /creativeWorkingState: creativeWorkingStateCamelCase
 requireSource(mapperSource, /creative_working_state: creativeWorkingStateForHermes/, "Hermes mapper must send snake_case creative_working_state");
 requireSource(mapperSource, /activeAssetId: state\.active_asset_id \?\? null/, "Hermes mapper must send camelCase activeAssetId");
 requireSource(mapperSource, /assets: \(state\.assets \?\? \[]\)\.map/, "Hermes mapper must send Creative asset context");
+requireSource(mapperSource, /creativeReferenceAssetsForHermes/, "Hermes mapper must build reference assets from active Creative state");
+requireSource(mapperSource, /reference_assets: creativeReferenceAssets/, "Hermes mapper must send snake_case reference_assets");
+requireSource(mapperSource, /referenceAssets: creativeReferenceAssets/, "Hermes mapper must send camelCase referenceAssets alias");
+requireSource(mapperSource, /role: "source_image"/, "Hermes mapper must mark reference asset source role");
+requireSource(mapperSource, /fetch_url: creativeAssetDownloadFetchUrl\(appId, activeAsset\.asset_id\)/, "Hermes mapper must use Product download route as reference fetch_url");
+requireSource(mapperSource, /\/api\/cmo\/apps\/\$\{encodeURIComponent\(appId\)\}\/creative\/assets\/\$\{encodeURIComponent\(assetId\)\}\/download/, "Hermes mapper must use Product same-origin asset download route");
 requireSource(mapperSource, /active_creative_context_present: true/, "Hermes mapper must trace active Creative context");
 requireSource(mapperSource, /active_creative_asset_id: creativeWorkingStateForHermes\.active_asset_id \?\? null/, "Hermes mapper must trace active Creative asset id");
 requireSource(mapperSource, /creative_assets_count: creativeWorkingStateForHermes\.assets\?\.length \?\? 0/, "Hermes mapper must trace Creative asset count");
+requireSource(mapperSource, /reference_assets_count: creativeReferenceAssets\.length/, "Hermes mapper must trace reference asset count");
+requireSource(mapperSource, /reference_asset_fetch_url_present: creativeReferenceAssets\.some/, "Hermes mapper must trace reference asset fetch_url");
+requireSource(mapperSource, /reference_asset_sha256_present: creativeReferenceAssets\.some/, "Hermes mapper must trace reference asset sha256");
+requireSource(mapperSource, /reference_asset_bytes_present: creativeReferenceAssets\.some/, "Hermes mapper must trace reference asset bytes");
 requireSource(mapperSource, /creative_session_from_asset: Boolean/, "Hermes mapper must trace asset-origin Creative session");
 requireSource(mapperSource, /creativeSession: true/, "Hermes mapper must mark Creative session ownership");
 requireSource(mapperSource, /cmoOwnsCreativeDecision: true/, "Hermes mapper must mark CMO decision ownership");
@@ -272,6 +288,10 @@ requireSource(runtimeSource, /requires_user_confirmation_before_creative_execute
 requireSource(runtimeSource, /active_creative_context_present: activeCreativeContextPresent/, "runtime must trace active Creative context");
 requireSource(runtimeSource, /active_creative_asset_id: constraints\.active_creative_asset_id/, "runtime must trace active Creative asset id");
 requireSource(runtimeSource, /creative_assets_count: creativeAssetsCount/, "runtime must trace Creative assets count");
+requireSource(runtimeSource, /reference_assets_count: referenceAssets\.length/, "runtime must trace reference asset count");
+requireSource(runtimeSource, /reference_asset_fetch_url_present/, "runtime must trace reference asset fetch_url");
+requireSource(runtimeSource, /reference_asset_sha256_present/, "runtime must trace reference asset sha256");
+requireSource(runtimeSource, /reference_asset_bytes_present/, "runtime must trace reference asset bytes");
 requireSource(runtimeSource, /route_overrode_tool_execute_due_to_creative_context/, "runtime must trace Creative context route override");
 requireSource(runtimeSource, /tool_execute_suppressed_for_creative_followup/, "runtime must trace tool-execute suppression for Creative follow-up");
 requireSource(runtimeSource, /creative_execution_requested: creativeExecutionRequested/, "runtime must preserve explicit Creative execution path");
@@ -297,8 +317,11 @@ forbidSource(runtimeSource, /const activityTypes = new Set[\s\S]*"creative\.idea
 
 requireSource(storeSource, /let creativeWorkingState: CmoCreativeWorkingState \| undefined = continuedSession\?\.creativeWorkingState;/, "store session state");
 requireSource(storeSource, /applyCreativeAssetStateUpdate/, "store must persist Creative assets into working state");
+requireSource(storeSource, /resolveActiveCreativeAsset\(continuedSession\)/, "store must resolve active Creative asset before routing");
+requireSource(storeSource, /activeCreativeAssetResolution\.asset[\s\S]*applyCreativeAssetStateUpdate/, "store must hydrate working state from resolved asset");
 requireSource(storeSource, /creativeWorkingState,/, "store must pass creative state to router and Hermes");
 requireSource(storeSource, /activeCreativeAssetId = creativeWorkingState\?\.active_asset_id/, "store must track active Creative asset id");
+requireSource(storeSource, /activeCreativeAssetResolutionSource: activeCreativeAssetResolution\.source/, "store must pass active asset resolution source to Hermes mapper");
 requireSource(storeSource, /creativeAssetsCount = creativeWorkingState\?\.assets\?\.length \?\? 0/, "store must track Creative assets count");
 requireSource(storeSource, /routeOverrodeToolExecuteDueToCreativeContext/, "store must trace Creative context route override");
 requireSource(storeSource, /toolExecuteSuppressedForCreativeFollowup/, "store must trace tool-execute suppression");
