@@ -1445,6 +1445,10 @@ function metadataFromHermes(
     typeof structuredOutput.activity_events_allowed_for_creative_ideation === "boolean"
       ? structuredOutput.activity_events_allowed_for_creative_ideation
       : undefined;
+  const activityEventsAllowedForCreativeExecution =
+    typeof structuredOutput.activity_events_allowed_for_creative_execution === "boolean"
+      ? structuredOutput.activity_events_allowed_for_creative_execution
+      : undefined;
   const creativeIdeationCanonicalized =
     typeof structuredOutput.creative_ideation_canonicalized === "boolean"
       ? structuredOutput.creative_ideation_canonicalized
@@ -1452,6 +1456,10 @@ function metadataFromHermes(
   const creativeSessionCanonicalized =
     typeof structuredOutput.creative_session_canonicalized === "boolean"
       ? structuredOutput.creative_session_canonicalized
+      : undefined;
+  const creativeExecutionCanonicalized =
+    typeof structuredOutput.creative_execution_canonicalized === "boolean"
+      ? structuredOutput.creative_execution_canonicalized
       : undefined;
   const rejectedActivityEventType =
     typeof structuredOutput.rejected_activity_event_type === "string" && structuredOutput.rejected_activity_event_type.trim()
@@ -1538,11 +1546,17 @@ function metadataFromHermes(
           ...(typeof activityEventsAllowedForCreativeIdeation === "boolean"
             ? { activity_events_allowed_for_creative_ideation: activityEventsAllowedForCreativeIdeation }
             : {}),
+          ...(typeof activityEventsAllowedForCreativeExecution === "boolean"
+            ? { activity_events_allowed_for_creative_execution: activityEventsAllowedForCreativeExecution }
+            : {}),
           ...(typeof creativeIdeationCanonicalized === "boolean"
             ? { creative_ideation_canonicalized: creativeIdeationCanonicalized }
             : {}),
           ...(typeof creativeSessionCanonicalized === "boolean"
             ? { creative_session_canonicalized: creativeSessionCanonicalized }
+            : {}),
+          ...(typeof creativeExecutionCanonicalized === "boolean"
+            ? { creative_execution_canonicalized: creativeExecutionCanonicalized }
             : {}),
           ...(rejectedActivityEventType ? { rejected_activity_event_type: rejectedActivityEventType } : {}),
           rejected_by_m1_validator: false,

@@ -2353,8 +2353,12 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(typeof value.activity_events_allowed_for_creative_ideation === "boolean"
       ? { activity_events_allowed_for_creative_ideation: value.activity_events_allowed_for_creative_ideation }
       : {}),
+    ...(typeof value.activity_events_allowed_for_creative_execution === "boolean"
+      ? { activity_events_allowed_for_creative_execution: value.activity_events_allowed_for_creative_execution }
+      : {}),
     ...(typeof value.creative_ideation_canonicalized === "boolean" ? { creative_ideation_canonicalized: value.creative_ideation_canonicalized } : {}),
     ...(typeof value.creative_session_canonicalized === "boolean" ? { creative_session_canonicalized: value.creative_session_canonicalized } : {}),
+    ...(typeof value.creative_execution_canonicalized === "boolean" ? { creative_execution_canonicalized: value.creative_execution_canonicalized } : {}),
     ...(stringValue(value.rejected_activity_event_type) ? { rejected_activity_event_type: stringValue(value.rejected_activity_event_type) } : {}),
     ...(typeof value.creative_state_persisted === "boolean" ? { creative_state_persisted: value.creative_state_persisted } : {}),
     ...(stringValue(value.answer_basis_mode) ? { answer_basis_mode: stringValue(value.answer_basis_mode) } : {}),

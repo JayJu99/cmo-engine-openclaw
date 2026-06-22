@@ -165,6 +165,80 @@ const m13CreativeExecutionRequest = (requestId) => ({
   },
 });
 
+const m13CmoOwnedCreativeSessionExecutionRequest = (requestId) => ({
+  ...sampleRequest,
+  request_id: requestId,
+  session_id: requestId.replace(/^req_/, "session_"),
+  turn_id: `${requestId.replace(/^req_/, "turn_")}_001`,
+  workspace: {
+    ...sampleRequest.workspace,
+    workspace_id: "hold-pay",
+    app_id: "hold-pay",
+    app_name: "Hold Pay",
+  },
+  intent: {
+    ...sampleRequest.intent,
+    user_message: "Doi tone cam trang va nen sang hon tu anh dang co.",
+    explicit_command: null,
+  },
+  creative_working_state: {
+    active_draft_id: "creative_draft_fixture",
+    active_asset_id: "creative_source_fixture",
+    drafts: [
+      {
+        draft_id: "creative_draft_fixture",
+        kind: "image",
+        title: "Fixture draft",
+        prompt: "Edit source image with orange and white tone.",
+        status: "draft",
+      },
+    ],
+    assets: [
+      {
+        asset_id: "creative_source_fixture",
+        kind: "image",
+        status: "stored",
+        mime_type: "image/png",
+        bytes: 2048,
+        sha256: "5656565656565656565656565656565656565656565656565656565656565656",
+      },
+    ],
+  },
+  reference_assets: [
+    {
+      asset_id: "creative_source_fixture",
+      kind: "image",
+      role: "source_image",
+      mime_type: "image/png",
+      bytes: 2048,
+      sha256: "5656565656565656565656565656565656565656565656565656565656565656",
+      fetch_url: "https://cmo.jayju.cloud/api/cmo/apps/hold-pay/creative/assets/creative_source_fixture/download",
+    },
+  ],
+  constraints: {
+    ...sampleRequest.constraints,
+    creative_execution_requested: false,
+    creative_long_running_turn: true,
+    creative_working_state_present: true,
+    active_creative_asset_id: "creative_source_fixture",
+    creative_assets_count: 1,
+    cmo_owns_creative_decision: true,
+  },
+  tool_policy: {
+    creative_execution_requested: false,
+    creativeDecisionOwnerWhenLive: "hermes_cmo",
+  },
+  artifact_transport: {
+    mode: "product_upload",
+    upload_endpoint: "https://cmo.jayju.cloud/api/cmo/apps/hold-pay/creative/artifact-ingest",
+    workspace_id: "hold-pay",
+    app_id: "hold-pay",
+    request_id: requestId,
+    accepted_mime_types: ["image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm"],
+    max_bytes: 52428800,
+  },
+});
+
 const m44eExternalResearchRequest = (requestId, userMessage = "Hiện tại trên thị trường có bên nào làm giống Feeback mình không?") => ({
   ...m44dToolEndpointRequest(requestId),
   workspace: {
@@ -542,21 +616,35 @@ const startServer = async () => {
             body.request_id === "req_m13_creative_false_only_side_effects" ||
             body.request_id === "req_m13_creative_unsafe_side_effect" ||
             body.request_id === "req_m13_creative_executed_echo_true";
+          const firstCallCmoOwnedCreativeExecution =
+            body.request_id === "req_m13_cmo_owned_creative_execution_live_shape";
+          const firstCallCreativeNative = firstCallCreativeExecution || firstCallCmoOwnedCreativeExecution;
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
           assert.equal(body.user_message, body.intent?.user_message);
           assert.equal(body.message, body.intent?.user_message);
           assert.equal(body.input?.user_message, body.intent?.user_message);
           assert.equal(body.input?.message, body.intent?.user_message);
-          assert.deepEqual(body.constraints.allowed_agents, firstCallProposalsOnly ? [] : firstCallCreativeExecution ? ["creative"] : ["echo", "surf"]);
-          assert.deepEqual(body.constraints.allowed_surf_modes, firstCallProposalsOnly || firstCallCreativeExecution ? [] : ["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
-          assert.equal(body.constraints.delegations_mode, firstCallProposalsOnly || firstCallCreativeExecution ? "proposals_only" : "echo_surf_bounded");
-          assert.equal(body.constraints.allowSubAgentExecution, firstCallCreativeExecution ? true : !firstCallProposalsOnly);
+          assert.deepEqual(body.constraints.allowed_agents, firstCallProposalsOnly ? [] : firstCallCreativeNative ? ["creative"] : ["echo", "surf"]);
+          assert.deepEqual(body.constraints.allowed_surf_modes, firstCallProposalsOnly || firstCallCreativeNative ? [] : ["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
+          assert.equal(body.constraints.delegations_mode, firstCallProposalsOnly || firstCallCreativeNative ? "proposals_only" : "echo_surf_bounded");
+          assert.equal(body.constraints.allowSubAgentExecution, firstCallCreativeNative ? true : !firstCallProposalsOnly);
           if (firstCallCreativeExecution) {
             assert.equal(body.constraints.creative_execution_requested, true);
             assert.equal(body.constraints.allowCreativeExecution, true);
             assert.equal(body.constraints.creative_call_mode, "via_cmo");
             assert.equal(body.constraints.execution_boundary?.creative_execution_allowed, true);
             assert.equal(body.constraints.execution_boundary?.creative_execution_requested, true);
+          } else if (firstCallCmoOwnedCreativeExecution) {
+            assert.equal(body.constraints.creative_execution_requested, false);
+            assert.equal(body.constraints.cmo_owns_creative_decision, true);
+            assert.equal(body.constraints.creative_long_running_turn, true);
+            assert.equal(body.constraints.execution_boundary?.creative_execution_requested, false);
+            assert.equal(body.constraints.execution_boundary?.cmo_owns_creative_decision, true);
+            assert.equal(body.constraints.execution_boundary?.creative_artifact_ingest_required_for_preview, true);
+            assert.equal(body.constraints.h5_live_adapter?.creative_execution_requested, false);
+            assert.equal(body.constraints.h5_live_adapter?.cmo_owns_creative_decision, true);
+          }
+          if (firstCallCreativeNative) {
             assert.deepEqual(body.artifact_transport, {
               mode: "product_upload",
               upload_endpoint: "https://cmo.jayju.cloud/api/cmo/apps/hold-pay/creative/artifact-ingest",
@@ -677,6 +765,99 @@ const startServer = async () => {
                   user_visible: true,
                   message: "Creative asset uploaded.",
                   data: {},
+                },
+              ],
+              activity_summary: {
+                events_count: 2,
+                final_state: "completed",
+              },
+            });
+            return;
+          }
+
+          if (
+            body.request_id === "req_m13_cmo_owned_creative_execution_live_shape"
+          ) {
+            writeJson(response, 200, {
+              schema_version: "hermes.cmo.response.v1",
+              request_id: body.request_id,
+              session_id: body.session_id,
+              turn_id: body.turn_id,
+              status: "completed",
+              answer_basis: {
+                mode: "creative_execution",
+                missing_inputs: [],
+                assumptions_used: [],
+                user_can_override: true,
+                suggested_user_inputs: [],
+              },
+              clarifying_question: {
+                required: false,
+                question: null,
+                reason: null,
+                missing_inputs: [],
+              },
+              answer: {
+                format: "markdown",
+                title: "Edited creative asset",
+                summary: "Edited image uploaded.",
+                decision: "execute",
+                body: "Edited image uploaded.",
+              },
+              structured_output: null,
+              creative_decision: {
+                action: "execute",
+                draft_id: "creative_draft_fixture",
+                operation: "creative.generate_image",
+              },
+              creative_assets: [
+                {
+                  schema_version: "cmo.creative_asset.v1",
+                  type: "creative_asset",
+                  asset_id: "creative_edited_fixture",
+                  asset_type: "image",
+                  agent: "creative",
+                  transport_status: "uploaded",
+                  status: "stored",
+                  storage_path: "holdstation/hold-pay/hold-pay/job/asset/edited.png",
+                  render_url: "https://cmo.jayju.cloud/api/signed/creative_edited_fixture",
+                  signed_url: "https://cmo.jayju.cloud/api/signed/creative_edited_fixture",
+                  bytes: 4096,
+                  sha256: "7878787878787878787878787878787878787878787878787878787878787878",
+                  mime_type: "image/png",
+                  model: "gpt-5.5",
+                  operation: "responses image_generation",
+                },
+              ],
+              artifacts: [
+                {
+                  schema_version: "cmo.creative_asset.v1",
+                  type: "creative_asset",
+                  asset_id: "creative_edited_fixture",
+                  asset_type: "image",
+                  agent: "creative",
+                  transport_status: "uploaded",
+                  status: "stored",
+                  render_url: "https://cmo.jayju.cloud/api/signed/creative_edited_fixture",
+                  signed_url: "https://cmo.jayju.cloud/api/signed/creative_edited_fixture",
+                  bytes: 4096,
+                  sha256: "7878787878787878787878787878787878787878787878787878787878787878",
+                  mime_type: "image/png",
+                },
+              ],
+              memory_suggestions: [],
+              activity_events: [
+                {
+                  type: "creative.started",
+                  status: "completed",
+                  message: "Creative execution started.",
+                  user_visible: true,
+                },
+                {
+                  type: "creative.generating",
+                  status: "running",
+                  message: "Creative image edit is generating.",
+                  user_visible: true,
                 },
               ],
               activity_summary: {
@@ -3323,6 +3504,7 @@ try {
   let m13CreativeTimeoutDefaultResult;
   let m13CreativeTopLevelSuccessResult;
   let m13CreativeUploadedAssetResult;
+  let m13CmoOwnedCreativeExecutionResult;
   let m13CreativeExecutedCreativeResult;
   let m13CreativeFalseOnlySideEffectsResult;
 
@@ -4855,6 +5037,102 @@ try {
     assert.equal(JSON.stringify(m13CreativeUploadedAssetResult.response.artifacts).includes("/tmp/"), false);
     assert.deepEqual(m13CreativeUploadedAssetResult.activity_events.map((event) => event.source.mode), ["creative_execution", "creative_execution"]);
     assert.deepEqual(m13CreativeUploadedAssetResult.activity_events.map((event) => event.type), ["creative.started", "creative.asset_ready"]);
+    m13CmoOwnedCreativeExecutionResult = await runHermesCmoRuntime(m13CmoOwnedCreativeSessionExecutionRequest("req_m13_cmo_owned_creative_execution_live_shape"));
+    assert.equal(m13CmoOwnedCreativeExecutionResult.hermesCmoRouteDecision, "creative_session");
+    assert.equal(m13CmoOwnedCreativeExecutionResult.hermesCmoEndpointTimeoutMs, 300000);
+    assert.equal(m13CmoOwnedCreativeExecutionResult.hermesCmoEndpointTimeoutSource, "creative_execute");
+    assert.equal(m13CmoOwnedCreativeExecutionResult.response.answer_basis.mode, "creative_execution");
+    assert.equal(m13CmoOwnedCreativeExecutionResult.response.structured_output.creative_execution_response_received, true);
+    assert.equal(m13CmoOwnedCreativeExecutionResult.response.structured_output.creative_execution_owner, "cmo");
+    assert.equal(m13CmoOwnedCreativeExecutionResult.response.structured_output.creative_execution_requested, false);
+    assert.equal(m13CmoOwnedCreativeExecutionResult.response.structured_output.creative_execution_canonicalized, true);
+    assert.equal(m13CmoOwnedCreativeExecutionResult.response.structured_output.activity_events_allowed_for_creative_execution, true);
+    assert.equal(m13CmoOwnedCreativeExecutionResult.response.structured_output.creative_ideation_canonicalized, undefined);
+    assert.equal(m13CmoOwnedCreativeExecutionResult.response.structured_output.activity_events_allowed_for_creative_ideation, undefined);
+    assert.equal(m13CmoOwnedCreativeExecutionResult.response.structured_output.m1_validation_result, "accepted");
+    assert.equal(m13CmoOwnedCreativeExecutionResult.response.structured_output.fallback_used, false);
+    assert.equal(m13CmoOwnedCreativeExecutionResult.response.artifacts[0].transport_status, "uploaded");
+    assert.equal(m13CmoOwnedCreativeExecutionResult.response.artifacts[0].render_url, "https://cmo.jayju.cloud/api/signed/creative_edited_fixture");
+    assert.deepEqual(m13CmoOwnedCreativeExecutionResult.activity_events.map((event) => event.type), ["creative.started", "creative.generating"]);
+    assert.deepEqual(m13CmoOwnedCreativeExecutionResult.activity_events.map((event) => event.source.mode), ["creative_execution", "creative_execution"]);
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          schema_version: "hermes.cmo.response.v1",
+          request_id: sampleRequest.request_id,
+          session_id: sampleRequest.session_id,
+          turn_id: sampleRequest.turn_id,
+          status: "completed",
+          answer_basis: {
+            mode: "creative_execution",
+            missing_inputs: [],
+            assumptions_used: [],
+            user_can_override: true,
+            suggested_user_inputs: [],
+          },
+          clarifying_question: {
+            required: false,
+            question: null,
+            reason: null,
+            missing_inputs: [],
+          },
+          answer: {
+            format: "markdown",
+            title: "Edited creative asset",
+            summary: "Edited image uploaded.",
+            decision: "execute",
+            body: "Edited image uploaded.",
+          },
+          structured_output: null,
+          creative_decision: {
+            action: "execute",
+            draft_id: "creative_draft_fixture",
+            operation: "creative.generate_image",
+          },
+          creative_assets: [
+            {
+              schema_version: "cmo.creative_asset.v1",
+              type: "creative_asset",
+              asset_id: "creative_edited_fixture",
+              asset_type: "image",
+              agent: "creative",
+              transport_status: "uploaded",
+              status: "stored",
+              render_url: "https://cmo.jayju.cloud/api/signed/creative_edited_fixture",
+              signed_url: "https://cmo.jayju.cloud/api/signed/creative_edited_fixture",
+              bytes: 4096,
+              sha256: "7878787878787878787878787878787878787878787878787878787878787878",
+              mime_type: "image/png",
+            },
+          ],
+          artifacts: [
+            {
+              schema_version: "cmo.creative_asset.v1",
+              type: "creative_asset",
+              asset_id: "creative_edited_fixture",
+              asset_type: "image",
+              agent: "creative",
+              transport_status: "uploaded",
+              status: "stored",
+              render_url: "https://cmo.jayju.cloud/api/signed/creative_edited_fixture",
+              signed_url: "https://cmo.jayju.cloud/api/signed/creative_edited_fixture",
+              bytes: 4096,
+              sha256: "7878787878787878787878787878787878787878787878787878787878787878",
+              mime_type: "image/png",
+            },
+          ],
+          delegations: [],
+          memory_suggestions: [],
+          activity_summary: {
+            events_count: 0,
+            final_state: "completed",
+          },
+        },
+        sampleRequest,
+      ),
+      false,
+      "creative_execution answer basis must reject outside Creative-native execution context",
+    );
     m13CreativeExecutedCreativeResult = await runHermesCmoRuntime(m13CreativeExecutionRequest("req_m13_creative_executed_creative_true"));
     assert.equal(m13CreativeExecutedCreativeResult.response.status, "completed");
     assert.equal(m13CreativeExecutedCreativeResult.response.routed_to_creative, true);

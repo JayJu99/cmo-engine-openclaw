@@ -316,8 +316,14 @@ requireSource(runtimeSource, /requestHasCmoCreativeDecisionOwner\(request\)/, "r
 requireSource(runtimeSource, /requestArtifactTransportMode\(request\) === "product_upload"/, "runtime must require Product artifact transport for CMO-owned execution");
 requireSource(runtimeSource, /responseHasCreativeExecutionResult\(response, structuredOutput\)/, "runtime must require execution result evidence for CMO-owned execution");
 requireSource(runtimeSource, /normalizeHermesCmoOwnedCreativeExecutionResponse/, "runtime must canonicalize CMO-owned Creative execution before M1 validation");
+requireSource(runtimeSource, /normalizeHermesCmoOwnedCreativeExecutionResponse\([\s\S]*rawValidationCandidate[\s\S]*normalizeHermesCreativeIdeationResponse/, "runtime must run CMO-owned Creative execution canonicalization before ideation canonicalization");
+requireSource(runtimeSource, /creativeExecutionCanonicalization\.canonicalized[\s\S]*canonicalized: false[\s\S]*normalizeHermesCreativeIdeationResponse/, "runtime must skip ideation canonicalization when execution canonicalization matched");
+requireSource(runtimeSource, /safeCreativeExecutionRawActivityTypes/, "runtime must define safe Creative execution activity events");
+requireSource(runtimeSource, /creativeExecutionEventToProductEvent/, "runtime must normalize Creative execution activity events separately");
 requireSource(runtimeSource, /creative_execution_response_received: true/, "runtime must trace accepted CMO-owned Creative execution response");
 requireSource(runtimeSource, /creative_execution_owner: "cmo"/, "runtime must trace CMO as Creative execution owner");
+requireSource(runtimeSource, /creative_execution_canonicalized: true/, "runtime must trace Creative execution canonicalization");
+requireSource(runtimeSource, /activity_events_allowed_for_creative_execution: true/, "runtime must trace Creative execution activity allowance");
 requireSource(runtimeSource, /m1_validation_result: "accepted"/, "runtime must trace accepted M1 validation for CMO-owned Creative execution");
 requireSource(runtimeSource, /normalizeHermesCreativeIdeationResponse/, "runtime must canonicalize Creative ideation before M1 validation");
 requireSource(runtimeSource, /safeCreativeIdeationRawActivityTypes/, "runtime creative ideation canonicalizer");
@@ -369,6 +375,8 @@ requireSource(mapperSource, /artifact_transport_mode: artifactTransportMode/, "m
 requireSource(mapperSource, /creativeExecutionResponseReceived = answerBasisMode === "creative_execution"/, "mapper must detect CMO-owned Creative execution responses");
 requireSource(mapperSource, /creative_execution_response_received: true/, "mapper must expose Creative execution response diagnostics");
 requireSource(mapperSource, /creative_execution_requested: false/, "mapper must preserve Product non-request ownership boundary");
+requireSource(mapperSource, /activity_events_allowed_for_creative_execution/, "mapper must expose Creative execution activity diagnostics");
+requireSource(mapperSource, /creative_execution_canonicalized/, "mapper must expose Creative execution canonicalization diagnostics");
 
 requireSource(uiSource, /renderCreativeAssets\(message\)/, "UI must keep rendering creative assets");
 requireSource(uiSource, /Using reference image/, "UI must show neutral reference image badge instead of old asset card");
