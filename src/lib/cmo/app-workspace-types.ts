@@ -930,6 +930,8 @@ export interface HermesCmoChatMetadata {
   creative_ideation_detected?: boolean;
   cmo_owns_creative_decision?: boolean;
   creative_execution_requested?: boolean;
+  creative_execution_response_received?: boolean;
+  creative_execution_owner?: "cmo";
   creative_ideation_response_received?: boolean;
   creative_session_response_received?: boolean;
   creative_state_update_present?: boolean;
@@ -970,6 +972,7 @@ export interface HermesCmoChatMetadata {
   creative_decision?: CmoCreativeDecision;
   rejected_by_m1_validator?: boolean;
   rejected_field?: string;
+  m1_validation_result?: "accepted";
   side_effects_present?: boolean;
   side_effects_allowed_for_creative?: boolean;
   rejected_side_effect_type?: string;

@@ -1417,7 +1417,8 @@ function metadataFromHermes(
   const answerBasisMode = typeof answerBasis.mode === "string" ? answerBasis.mode : undefined;
   const creativeIdeationResponseReceived = answerBasisMode === "creative_ideation";
   const creativeSessionResponseReceived = answerBasisMode === "creative_session" || answerBasisMode === "creative_refinement";
-  const creativeNativeResponseReceived = creativeIdeationResponseReceived || creativeSessionResponseReceived;
+  const creativeExecutionResponseReceived = answerBasisMode === "creative_execution";
+  const creativeNativeResponseReceived = creativeIdeationResponseReceived || creativeSessionResponseReceived || creativeExecutionResponseReceived;
   const creativeStateUpdatePresent =
     result.response.suggested_creative_state_update !== undefined ||
     structuredOutput.suggested_creative_state_update !== undefined ||
@@ -1506,6 +1507,12 @@ function metadataFromHermes(
       ? {
           ...(creativeIdeationResponseReceived ? { creative_ideation_response_received: true } : {}),
           ...(creativeSessionResponseReceived ? { creative_session_response_received: true } : {}),
+          ...(creativeExecutionResponseReceived ? {
+            creative_execution_response_received: true,
+            creative_execution_owner: "cmo",
+            creative_execution_requested: false,
+            m1_validation_result: "accepted",
+          } : {}),
           creative_state_update_present: creativeStateUpdatePresent,
           creative_decision_present: creativeDecisionPresent,
           ...(creativeDecisionAction ? { creative_session_decision_action: creativeDecisionAction } : {}),
