@@ -681,6 +681,9 @@ export interface CmoCreativeAssetState {
   transport_status?: string;
   sha256?: string;
   bytes?: number;
+  width?: number;
+  height?: number;
+  aspect_ratio?: number;
 }
 
 export interface CmoCreativeWorkingState {

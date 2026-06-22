@@ -1,6 +1,6 @@
 "use client";
 
-import type { ClipboardEvent, DragEvent } from "react";
+import type { CSSProperties, ClipboardEvent, DragEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -516,6 +516,79 @@ function recordNumber(record: Record<string, unknown>, keys: string[]): number |
   return undefined;
 }
 
+function nestedRecord(record: Record<string, unknown>, keys: string[]): Record<string, unknown> | undefined {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (isRecord(value)) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function creativeAssetNumber(asset: Record<string, unknown>, keys: string[]): number | undefined {
+  const direct = recordNumber(asset, keys);
+
+  if (direct !== undefined) {
+    return direct;
+  }
+
+  const metadata = nestedRecord(asset, ["metadata", "metadata_json", "metadataJson"]);
+
+  return metadata ? recordNumber(metadata, keys) : undefined;
+}
+
+function parseCreativeAspectRatio(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  const ratioParts = trimmed.match(/^(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)$/);
+
+  if (ratioParts) {
+    const width = Number(ratioParts[1]);
+    const height = Number(ratioParts[2]);
+
+    return width > 0 && height > 0 ? width / height : undefined;
+  }
+
+  const numeric = Number(trimmed);
+
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+}
+
+function creativeAssetAspectRatio(asset: Record<string, unknown>, measuredRatio?: number): number {
+  const explicit = parseCreativeAspectRatio(asset.aspect_ratio ?? asset.aspectRatio) ??
+    parseCreativeAspectRatio(nestedRecord(asset, ["metadata", "metadata_json", "metadataJson"])?.aspect_ratio) ??
+    parseCreativeAspectRatio(nestedRecord(asset, ["metadata", "metadata_json", "metadataJson"])?.aspectRatio);
+
+  if (explicit) {
+    return explicit;
+  }
+
+  const width = creativeAssetNumber(asset, ["width", "natural_width", "naturalWidth"]);
+  const height = creativeAssetNumber(asset, ["height", "natural_height", "naturalHeight"]);
+
+  if (width && height && width > 0 && height > 0) {
+    return width / height;
+  }
+
+  return measuredRatio && measuredRatio > 0 ? measuredRatio : 16 / 9;
+}
+
+function creativeAssetPreviewFrameStyle(asset: Record<string, unknown>, measuredRatio?: number): CSSProperties {
+  const ratio = Math.min(4, Math.max(0.45, creativeAssetAspectRatio(asset, measuredRatio)));
+
+  return { aspectRatio: `${ratio} / 1` };
+}
+
 interface CreativePreviewDiagnostics {
   asset_id: string;
   app_id: string;
@@ -802,6 +875,7 @@ export function CMOChatPanel({
   const [reviewingCandidateKey, setReviewingCandidateKey] = useState<string | null>(null);
   const [approvedCreativeAssetIds, setApprovedCreativeAssetIds] = useState<Set<string>>(() => new Set());
   const [creativePreviewFailures, setCreativePreviewFailures] = useState<Record<string, CreativePreviewDiagnostics>>({});
+  const [creativePreviewAspectRatios, setCreativePreviewAspectRatios] = useState<Record<string, number>>({});
   const [dryRunStatusMessage, setDryRunStatusMessage] = useState<string | null>(null);
   const [dryRunningApprovalId, setDryRunningApprovalId] = useState<string | null>(null);
   const [writeStatusMessage, setWriteStatusMessage] = useState<string | null>(null);
@@ -1772,12 +1846,14 @@ export function CMOChatPanel({
             const model = recordString(asset, ["model"]);
             const operation = recordString(asset, ["operation"]);
             const bytes = recordNumber(asset, ["bytes"]);
-            const width = recordNumber(asset, ["width"]);
-            const height = recordNumber(asset, ["height"]);
+            const width = creativeAssetNumber(asset, ["width"]);
+            const height = creativeAssetNumber(asset, ["height"]);
             const mimeType = recordString(asset, ["mime_type", "mimeType"]);
             const approved = approvedCreativeAssetIds.has(assetId);
             const previewFailed = Boolean(creativePreviewFailures[assetId]);
             const canPreview = Boolean(previewUrl) && !previewFailed;
+            const measuredAspectRatio = creativePreviewAspectRatios[assetId];
+            const previewFrameStyle = creativeAssetPreviewFrameStyle(asset, measuredAspectRatio);
             const dimensions = width && height ? `${width} x ${height}` : "";
             const markPreviewLoaded = () => {
               setCreativePreviewFailures((current) => {
@@ -1791,6 +1867,17 @@ export function CMOChatPanel({
                 return next;
               });
             };
+            const markPreviewImageLoaded = (image: HTMLImageElement) => {
+              markPreviewLoaded();
+
+              if (!image.naturalWidth || !image.naturalHeight) {
+                return;
+              }
+
+              const ratio = image.naturalWidth / image.naturalHeight;
+
+              setCreativePreviewAspectRatios((current) => current[assetId] === ratio ? current : { ...current, [assetId]: ratio });
+            };
             const markPreviewFailed = () => {
               const diagnostics = creativeAssetPreviewDiagnostics(asset, app.id, previewUrl);
 
@@ -1800,15 +1887,15 @@ export function CMOChatPanel({
 
             return (
               <div key={assetId} className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                <div className="aspect-square bg-white">
+                <div className="flex max-h-[70vh] min-h-40 w-full items-center justify-center bg-white p-2" style={previewFrameStyle}>
                   {canPreview && assetType === "image" ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={previewUrl}
                       alt={visualSummary || "Creative asset preview"}
-                      className="size-full object-cover"
+                      className="size-full object-contain"
                       referrerPolicy="no-referrer"
-                      onLoad={markPreviewLoaded}
+                      onLoad={(event) => markPreviewImageLoaded(event.currentTarget)}
                       onError={markPreviewFailed}
                     />
                   ) : canPreview && assetType === "video" ? (

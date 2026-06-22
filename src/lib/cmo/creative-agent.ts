@@ -73,6 +73,8 @@ export interface CmoCreativeAssetArtifact {
   mimeType?: string;
   width?: number;
   height?: number;
+  aspect_ratio?: number;
+  aspectRatio?: number;
   model?: string;
   operation?: string;
   status: CmoCreativeAssetStatus;
@@ -392,6 +394,7 @@ export function normalizeCreativeResponse(
           sha256: value.sha256,
           width: value.width,
           height: value.height,
+          aspect_ratio: value.aspect_ratio ?? value.aspectRatio,
           model: value.model,
           operation: value.operation,
         }]
@@ -453,6 +456,7 @@ export function normalizeCreativeResponse(
       ...(mimeType ? { mime_type: mimeType, mimeType } : {}),
       ...(numberValue(image.width) !== undefined ? { width: numberValue(image.width) } : {}),
       ...(numberValue(image.height) !== undefined ? { height: numberValue(image.height) } : {}),
+      ...(numberValue(image.aspect_ratio ?? image.aspectRatio) !== undefined ? { aspect_ratio: numberValue(image.aspect_ratio ?? image.aspectRatio), aspectRatio: numberValue(image.aspect_ratio ?? image.aspectRatio) } : {}),
       ...(stringValue(image.model ?? value.model, 160) ? { model: stringValue(image.model ?? value.model, 160) } : {}),
       ...(stringValue(image.operation ?? value.operation, 220) ? { operation: stringValue(image.operation ?? value.operation, 220) } : {}),
       status: statusFromCreativeStatus(status, hasPreview),

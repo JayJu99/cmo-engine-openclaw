@@ -315,6 +315,9 @@ export function normalizeCreativeAssetState(value: unknown): CmoCreativeAssetSta
     ...(transportStatus ? { transport_status: transportStatus } : {}),
     ...(stringValue(value.sha256) ? { sha256: stringValue(value.sha256) } : {}),
     ...(numberValue(value.bytes) !== undefined ? { bytes: numberValue(value.bytes) } : {}),
+    ...(numberValue(value.width) !== undefined ? { width: numberValue(value.width) } : {}),
+    ...(numberValue(value.height) !== undefined ? { height: numberValue(value.height) } : {}),
+    ...(numberValue(value.aspect_ratio ?? value.aspectRatio) !== undefined ? { aspect_ratio: numberValue(value.aspect_ratio ?? value.aspectRatio) } : {}),
   };
 }
 

@@ -324,6 +324,11 @@ assert.match(uiSource, /Artifact transport missing/, "UI must show missing trans
 assert.match(uiSource, /creativeAssetPreviewUrl/, "UI must resolve Creative preview URLs through a single safe helper");
 assert.match(uiSource, /\["signed_url", "signedUrl", "render_url", "renderUrl", "preview_url", "previewUrl"\]/, "UI preview resolver must prefer signed URL before render URL");
 assert.match(uiSource, /<img[\s\S]*src=\{previewUrl\}/, "Creative image preview img src must use the resolved signed/render URL");
+assert.match(uiSource, /creativeAssetPreviewFrameStyle/, "Creative preview frame must be aspect-aware");
+assert.match(uiSource, /naturalWidth[\s\S]*naturalHeight/, "Creative image preview must fall back to natural image dimensions");
+assert.match(uiSource, /className="size-full object-contain"/, "Creative image preview must contain rather than crop assets");
+assert.doesNotMatch(uiSource, /aspect-square bg-white/, "Creative asset preview must not force a square crop frame");
+assert.doesNotMatch(uiSource, /className="size-full object-cover"/, "Creative asset preview must not crop with object-cover");
 assert.match(uiSource, /creativeAssetProxyUrl/, "Uploaded Creative assets must use Product-owned same-origin asset proxy URLs");
 assert.match(uiSource, /\/api\/cmo\/apps\/\$\{encodeURIComponent\(input\.appId\)\}\/creative\/assets\/\$\{encodeURIComponent\(input\.assetId\)\}\/\$\{input\.mode\}/, "Creative proxy URL must be same-origin and app/asset scoped");
 assert.match(uiSource, /transportStatus === "uploaded"/, "Creative proxy preview must be scoped to uploaded assets");
