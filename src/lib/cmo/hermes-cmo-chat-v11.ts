@@ -12,7 +12,12 @@ import {
 } from "./hermes-cmo-chat-mapper";
 import { redactSensitiveText } from "./creative-agent";
 import { HERMES_CMO_CHAT_V11_ENDPOINT } from "./hermes-cmo-chat-router";
-import { sanitizeOutboundHermesPayload } from "./hermes-outbound-payload-sanitizer";
+import {
+  OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
+  outboundHermesCallsiteBlockedLiteralLabels,
+  sanitizeOutboundHermesPayload,
+  withOutboundHermesPayloadGuardDiagnostics,
+} from "./hermes-outbound-payload-sanitizer";
 import { normalizeCmoRuntimeUserIdentity } from "./user-metadata";
 
 const CHAT_REQUEST_SCHEMA = "hermes.cmo.chat.request.v1_1" as const;
@@ -1198,16 +1203,32 @@ async function httpFailureDetail(response: Response): Promise<{ reason: string; 
 export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): Promise<HermesCmoChatV11Run> {
   let request = buildHermesCmoChatV11Request(input);
   const outboundSanitizer = sanitizeOutboundHermesPayload(request);
-  request = outboundSanitizer.payload;
+  let outboundDiagnostics = {
+    ...outboundSanitizer.diagnostics,
+    outbound_callsite_guard_version: OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
+    outbound_callsite_guard_checked: true,
+    outbound_callsite_guard_blocked: false,
+  };
+  request = withOutboundHermesPayloadGuardDiagnostics(outboundSanitizer.payload, outboundDiagnostics);
+  let outboundPayloadJson = JSON.stringify(request);
+  const callsiteBlockedLiteralLabels = outboundHermesCallsiteBlockedLiteralLabels(outboundPayloadJson);
 
-  if (outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked) {
+  if (outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked || callsiteBlockedLiteralLabels.length > 0) {
+    outboundDiagnostics = {
+      ...outboundDiagnostics,
+      outbound_hermes_payload_path_like_blocked: true,
+      outbound_callsite_guard_blocked: true,
+    };
+    request = withOutboundHermesPayloadGuardDiagnostics(outboundSanitizer.payload, outboundDiagnostics);
+    outboundPayloadJson = JSON.stringify(request);
     await writeHermesCmoChatV11Trace(request, "error", {
       event: "error",
       fallback_used: false,
       fallback_reason: "Product blocked Hermes CMO chat request because outbound payload still contained path-like Creative artifact text.",
       fallback_eligible: false,
-      outbound_hermes_payload_guard: outboundSanitizer.diagnostics,
+      outbound_hermes_payload_guard: outboundDiagnostics,
       outbound_blocked_fields_preview: outboundSanitizer.blockedFieldsPreview,
+      outbound_callsite_blocked_literal_labels: callsiteBlockedLiteralLabels,
     });
 
     return {
@@ -1223,7 +1244,7 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
 
   await writeHermesCmoChatV11Trace(request, "request", {
     event: "request",
-    outbound_hermes_payload_guard: outboundSanitizer.diagnostics,
+    outbound_hermes_payload_guard: outboundDiagnostics,
     request,
   });
 
@@ -1260,7 +1281,7 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(request),
+      body: outboundPayloadJson,
       cache: "no-store",
       signal: controller.signal,
     });

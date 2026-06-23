@@ -1939,9 +1939,14 @@ try {
             CMO_HERMES_CMO_TRACE_DIR: successTraceDir,
           },
           async () => {
+            let chatV11FetchCalls = 0;
             globalThis.fetch = async (url, init) => {
+              chatV11FetchCalls += 1;
               assert.equal(url, "https://hermes.test/agents/cmo/chat");
               const body = JSON.parse(init.body);
+              assert.equal(body.outbound_hermes_payload_guard?.outbound_callsite_guard_version, "context-sanitizer-v2");
+              assert.equal(body.outbound_hermes_payload_guard?.outbound_callsite_guard_checked, true);
+              assert.equal(body.outbound_hermes_payload_guard?.outbound_callsite_guard_blocked, false);
 
               if (body.session_id === "session_long_stress_trace") {
                 return new Response(JSON.stringify({
@@ -2049,6 +2054,10 @@ try {
             assert.equal(requestTrace.requested_endpoint, "/agents/cmo/chat");
             assert.equal(requestTrace.request.schema_version, "hermes.cmo.chat.request.v1_1");
             assert.equal(requestTrace.request.intent.user_message, "Review activation plan.");
+            assert.equal(requestTrace.outbound_hermes_payload_guard.outbound_callsite_guard_version, "context-sanitizer-v2");
+            assert.equal(requestTrace.outbound_hermes_payload_guard.outbound_callsite_guard_checked, true);
+            assert.equal(requestTrace.outbound_hermes_payload_guard.outbound_callsite_guard_blocked, false);
+            assert.equal(requestTrace.request.outbound_hermes_payload_guard.outbound_callsite_guard_version, "context-sanitizer-v2");
             assert.equal(requestTrace.side_effects.vault_write, false);
             assert.equal(requestTrace.artifacts_out_count, 0);
             assert.equal(requestTrace.session_summary_update_present, false);
@@ -2075,6 +2084,21 @@ try {
             assert.equal(responseTrace.suggested_vault_updates_count, 2);
             assert.equal(responseTrace.state_contract.schema_version, "cmo.chat.state_contract.v1");
             assert.equal(responseTrace.state_contract.raw, undefined);
+            const fetchCallsBeforeBlockedGuard = chatV11FetchCalls;
+            const blockedChatResult = await chatV11.runHermesCmoChatV11(chatV11RunInput({
+              sessionId: "session_chat_v11_callsite_guard_blocked",
+              userMessageId: "msg_chat_v11_callsite_guard_blocked",
+              vaultContext: {
+                "[hermes_local_artifact_path_redacted]": true,
+              },
+            }));
+            assert.equal(blockedChatResult.ok, false);
+            assert.equal(blockedChatResult.fallbackEligible, false);
+            assert.match(blockedChatResult.fallbackReason, /outbound payload still contained path-like Creative artifact text/);
+            assert.equal(blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_guard_version, "context-sanitizer-v2");
+            assert.equal(blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_guard_checked, true);
+            assert.equal(blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_guard_blocked, true);
+            assert.equal(chatV11FetchCalls, fetchCallsBeforeBlockedGuard, "v1.1 call-site guard must block before fetch");
 
             const rollingTraceResult = await chatV11.runHermesCmoChatV11(chatV11RunInput({
               sessionId: "session_trace_rolling_replay",

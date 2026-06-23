@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -324,6 +324,18 @@ const m13PollutedCmoOwnedCreativeSessionExecutionRequest = (requestId) => {
   };
 };
 
+const m13CallsiteGuardBlockedCreativeSessionRequest = (requestId) => {
+  const request = m13CmoOwnedCreativeSessionExecutionRequest(requestId);
+
+  return {
+    ...request,
+    context_pack: {
+      ...request.context_pack,
+      "[hermes_local_artifact_path_redacted]": true,
+    },
+  };
+};
+
 const m13CreativeConversationResponse = (request, action = "advise", body = "This direction is not too soft; keep the softer tone but increase contrast in the headline and product moment.", overrides = {}) => ({
   schema_version: "hermes.cmo.response.v1",
   request_id: request.request_id,
@@ -570,6 +582,19 @@ const writeJson = (response, statusCode, payload) => {
 
 const outboundForbiddenValuePattern =
   /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/(?:tmp|Users|home|var|mnt)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
+const outboundCallsiteForbiddenLiterals = [
+  "[hermes_local_artifact_path_redacted]",
+  "hermes_local_artifact_path_redacted",
+  ".png_redact",
+  "/tmp/",
+  "/Users/",
+  "/home/",
+  "/var/",
+  "/mnt/",
+  "conversion_h_",
+  "creative-agent-images",
+  "cmo-creative-execute",
+];
 
 const collectForbiddenStringValues = (value, fields = [], pathParts = []) => {
   if (typeof value === "string") {
@@ -590,6 +615,9 @@ const collectForbiddenStringValues = (value, fields = [], pathParts = []) => {
 
   return fields;
 };
+
+const containsOutboundCallsiteForbiddenLiteral = (value) =>
+  outboundCallsiteForbiddenLiterals.some((literal) => value.includes(literal));
 
 const activity = (requestBody, seq, type, message) => ({
   ...(seq % 2 === 0 ? { schema_version: "hermes.activity.event.v1" } : {}),
@@ -753,6 +781,8 @@ const startServer = async () => {
           requestId: body.request_id,
           path: url.pathname,
           count: cmoCallCount,
+          rawBody,
+          body,
           allowedAgents: body.constraints?.allowed_agents,
           delegationsMode: body.constraints?.delegations_mode,
           sourceAcquisition: body.source_acquisition,
@@ -821,6 +851,12 @@ const startServer = async () => {
             assert.deepEqual(collectForbiddenStringValues(body), []);
             assert.equal(body.constraints?.outbound_hermes_payload_sanitized, true);
             assert.equal(body.constraints?.outbound_hermes_payload_path_like_blocked, false);
+            assert.equal(body.constraints?.outbound_callsite_guard_version, "context-sanitizer-v2");
+            assert.equal(body.constraints?.outbound_callsite_guard_checked, true);
+            assert.equal(body.constraints?.outbound_callsite_guard_blocked, false);
+            assert.equal(body.outbound_hermes_payload_guard?.outbound_callsite_guard_version, "context-sanitizer-v2");
+            assert.equal(body.outbound_hermes_payload_guard?.outbound_callsite_guard_checked, true);
+            assert.equal(body.outbound_hermes_payload_guard?.outbound_callsite_guard_blocked, false);
             assert.ok(body.constraints?.outbound_sanitized_field_count >= 10);
             assert.ok(
               body.constraints?.outbound_sanitized_fields_preview.includes("messages.0.content"),
@@ -3786,7 +3822,9 @@ try {
     CMO_HERMES_CMO_TOOL_ENDPOINT: process.env.CMO_HERMES_CMO_TOOL_ENDPOINT,
     CMO_HERMES_CMO_TOOL_TIMEOUT_MS: process.env.CMO_HERMES_CMO_TOOL_TIMEOUT_MS,
     CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS: process.env.CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS,
+    CMO_HERMES_CMO_TRACE_DIR: process.env.CMO_HERMES_CMO_TRACE_DIR,
   };
+  const m13TraceDir = await mkdtemp(path.join(os.tmpdir(), "hermes-cmo-m1-callsite-guard-traces-"));
 
   let result;
   let echoFailResult;
@@ -3828,6 +3866,7 @@ try {
     process.env.CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED = "false";
     process.env.CMO_HERMES_CMO_TOOL_ENDPOINT = "/agents/cmo/tool-execute";
     process.env.CMO_HERMES_CMO_TOOL_TIMEOUT_MS = "90000";
+    process.env.CMO_HERMES_CMO_TRACE_DIR = m13TraceDir;
     delete process.env.CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS;
 
     assert.equal(
@@ -5456,6 +5495,30 @@ try {
     assert.equal(m13CreativeOutboundSanitizedResult.response.structured_output.creative_conversation_response_received, true);
     assert.equal(m13CreativeOutboundSanitizedResult.response.structured_output.m1_validation_result, "accepted");
     assert.equal(m13CreativeOutboundSanitizedResult.response.structured_output.fallback_used, false);
+    const outboundSanitizedServerRequest = server.calls.cmoRequests.find((request) => request.requestId === "req_m13_creative_outbound_sanitized");
+    assert.ok(outboundSanitizedServerRequest, "Sanitized Creative request must be sent to fake Hermes");
+    assert.equal(containsOutboundCallsiteForbiddenLiteral(outboundSanitizedServerRequest.rawBody), false, "Fetch body must contain zero call-site forbidden literals");
+    assert.equal(outboundSanitizedServerRequest.body.outbound_hermes_payload_guard?.outbound_callsite_guard_version, "context-sanitizer-v2");
+    const outboundTraceFiles = await readdir(m13TraceDir);
+    const outboundRequestTraceName = outboundTraceFiles.find((fileName) =>
+      fileName.includes("session_m13_creative_outbound_sanitized") && fileName.endsWith("_request.json")
+    );
+    assert.ok(outboundRequestTraceName, "Canonical request trace for sanitized Creative request must exist");
+    const outboundRequestTraceText = await readFile(path.join(m13TraceDir, outboundRequestTraceName), "utf8");
+    assert.equal(containsOutboundCallsiteForbiddenLiteral(outboundRequestTraceText), false, "Canonical request trace must contain zero call-site forbidden literals");
+    const outboundRequestTrace = JSON.parse(outboundRequestTraceText);
+    assert.equal(outboundRequestTrace.outbound_hermes_payload_guard?.outbound_callsite_guard_version, "context-sanitizer-v2");
+    assert.equal(outboundRequestTrace.outbound_hermes_payload_guard?.outbound_callsite_guard_checked, true);
+    assert.equal(outboundRequestTrace.outbound_hermes_payload_guard?.outbound_callsite_guard_blocked, false);
+    assert.equal(outboundRequestTrace.request?.request_id, outboundSanitizedServerRequest.body.request_id);
+    assert.equal(outboundRequestTrace.request?.outbound_hermes_payload_guard?.outbound_callsite_guard_version, "context-sanitizer-v2");
+    const cmoCallsBeforeBlockedCallsiteGuard = server.calls.cmo;
+    await assert.rejects(
+      () => runHermesCmoRuntime(m13CallsiteGuardBlockedCreativeSessionRequest("req_m13_creative_callsite_guard_blocked")),
+      /outbound_callsite_guard_version=context-sanitizer-v2/,
+      "Call-site guard must block a payload with forbidden literals remaining after sanitizer",
+    );
+    assert.equal(server.calls.cmo, cmoCallsBeforeBlockedCallsiteGuard, "Call-site guard must block before fetch");
     m13CmoOwnedCreativeReferenceFetchFailedResult = await runHermesCmoRuntime(m13CmoOwnedCreativeSessionExecutionRequest("req_m13_cmo_owned_creative_reference_fetch_failed"));
     assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.status, "failed");
     assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.answer_basis.mode, "creative_execution");
@@ -5606,6 +5669,7 @@ try {
     }
     await server.close();
     await rm(tmpDir, { recursive: true, force: true });
+    await rm(m13TraceDir, { recursive: true, force: true });
   }
 
   console.log(

@@ -1,5 +1,19 @@
 const OUTBOUND_FORBIDDEN_TEXT_PATTERN =
   /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/(?:tmp|Users|home|var|mnt)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
+export const OUTBOUND_HERMES_CALLSITE_GUARD_VERSION = "context-sanitizer-v2" as const;
+const OUTBOUND_CALLSITE_FORBIDDEN_LITERALS = [
+  "[hermes_local_artifact_path_redacted]",
+  "hermes_local_artifact_path_redacted",
+  ".png_redact",
+  "/tmp/",
+  "/Users/",
+  "/home/",
+  "/var/",
+  "/mnt/",
+  "conversion_h_",
+  "creative-agent-images",
+  "cmo-creative-execute",
+] as const;
 
 const TEXT_PLACEHOLDER =
   "Creative artifact text was redacted by Product before sending this turn to Hermes. Use canonical chat text and Product reference asset metadata for context.";
@@ -26,6 +40,9 @@ export interface OutboundHermesPayloadSanitizerDiagnostics {
   outbound_hermes_payload_path_like_blocked: boolean;
   outbound_sanitized_field_count: number;
   outbound_sanitized_fields_preview: string[];
+  outbound_callsite_guard_version?: typeof OUTBOUND_HERMES_CALLSITE_GUARD_VERSION;
+  outbound_callsite_guard_checked?: boolean;
+  outbound_callsite_guard_blocked?: boolean;
   workspace_fallback_suppressed_for_creative?: true;
 }
 
@@ -40,6 +57,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 export const outboundHermesStringHasForbiddenArtifactText = (value: string): boolean =>
   OUTBOUND_FORBIDDEN_TEXT_PATTERN.test(value);
+
+export const outboundHermesCallsiteBlockedLiteralLabels = (outboundPayloadJson: string): string[] =>
+  OUTBOUND_CALLSITE_FORBIDDEN_LITERALS
+    .filter((literal) => outboundPayloadJson.includes(literal))
+    .map((literal) => literal.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase() || "forbidden_literal");
 
 const fieldPathPreview = (path: JsonPathSegment[]): string => {
   const preview = path.map((segment) => {
@@ -166,6 +188,11 @@ const addDiagnostics = <T>(payload: T, diagnostics: OutboundHermesPayloadSanitiz
 
   return next as T;
 };
+
+export const withOutboundHermesPayloadGuardDiagnostics = <T>(
+  payload: T,
+  diagnostics: OutboundHermesPayloadSanitizerDiagnostics,
+): T => addDiagnostics(payload, diagnostics);
 
 export function sanitizeOutboundHermesPayload<T>(
   payload: T,

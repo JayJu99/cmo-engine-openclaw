@@ -30,7 +30,12 @@ import {
   type CmoDecisionLabel,
   type CmoStrategicMode,
 } from "./hermes-cmo-skill-kernel";
-import { sanitizeOutboundHermesPayload } from "./hermes-outbound-payload-sanitizer";
+import {
+  OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
+  outboundHermesCallsiteBlockedLiteralLabels,
+  sanitizeOutboundHermesPayload,
+  withOutboundHermesPayloadGuardDiagnostics,
+} from "./hermes-outbound-payload-sanitizer";
 
 export const HERMES_CMO_RUNTIME_MODE = "live" as const;
 
@@ -4508,12 +4513,29 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
 
   try {
+    const creativeRoute = config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation";
     const outboundSanitizer = sanitizeOutboundHermesPayload(request, {
-      creativeRoute: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
+      creativeRoute,
     });
-    const outboundRequest = outboundSanitizer.payload;
+    let outboundDiagnostics = {
+      ...outboundSanitizer.diagnostics,
+      outbound_callsite_guard_version: OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
+      outbound_callsite_guard_checked: true,
+      outbound_callsite_guard_blocked: false,
+      ...(creativeRoute ? { workspace_fallback_suppressed_for_creative: true as const } : {}),
+    };
+    let outboundRequest = withOutboundHermesPayloadGuardDiagnostics(outboundSanitizer.payload, outboundDiagnostics);
+    let outboundPayloadJson = JSON.stringify(outboundRequest);
+    const callsiteBlockedLiteralLabels = outboundHermesCallsiteBlockedLiteralLabels(outboundPayloadJson);
 
-    if (outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked) {
+    if (outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked || callsiteBlockedLiteralLabels.length > 0) {
+      outboundDiagnostics = {
+        ...outboundDiagnostics,
+        outbound_hermes_payload_path_like_blocked: true,
+        outbound_callsite_guard_blocked: true,
+      };
+      outboundRequest = withOutboundHermesPayloadGuardDiagnostics(outboundSanitizer.payload, outboundDiagnostics);
+      outboundPayloadJson = JSON.stringify(outboundRequest);
       await writeHermesTrace(request, "error", {
         kind: "hermes_cmo_outbound_payload_blocked",
         endpoint_path: config.endpointPath,
@@ -4524,13 +4546,14 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
         timeout_source: config.timeoutSource,
         creative_long_running_turn: config.creativeLongRunningTurn,
         ...(config.creativeLongRunningTurn ? { creative_timeout_ms: config.timeoutMs } : {}),
-        workspace_fallback_suppressed_for_creative: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
-        outbound_hermes_payload_guard: outboundSanitizer.diagnostics,
+        workspace_fallback_suppressed_for_creative: creativeRoute,
+        outbound_hermes_payload_guard: outboundDiagnostics,
         outbound_blocked_fields_preview: outboundSanitizer.blockedFieldsPreview,
+        outbound_callsite_blocked_literal_labels: callsiteBlockedLiteralLabels,
       });
 
       throw new Error(
-        "Product blocked Hermes CMO request because outbound payload still contained path-like Creative artifact text. fallback_used=false workspace_fallback_suppressed_for_creative=true",
+        "Product blocked Hermes CMO request because outbound payload still contained path-like Creative artifact text. outbound_callsite_guard_version=context-sanitizer-v2 fallback_used=false workspace_fallback_suppressed_for_creative=true",
       );
     }
 
@@ -4544,8 +4567,8 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       timeout_source: config.timeoutSource,
       creative_long_running_turn: config.creativeLongRunningTurn,
       ...(config.creativeLongRunningTurn ? { creative_timeout_ms: config.timeoutMs } : {}),
-      workspace_fallback_suppressed_for_creative: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
-      outbound_hermes_payload_guard: outboundSanitizer.diagnostics,
+      workspace_fallback_suppressed_for_creative: creativeRoute,
+      outbound_hermes_payload_guard: outboundDiagnostics,
       creative_trace: creativeRequestTraceSummary(outboundRequest, config),
       request: outboundRequest,
     });
@@ -4556,7 +4579,7 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.apiKey}`,
       },
-      body: JSON.stringify(outboundRequest),
+      body: outboundPayloadJson,
       cache: "no-store",
       signal: controller.signal,
     });
@@ -4576,8 +4599,8 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       timeout_source: config.timeoutSource,
       creative_long_running_turn: config.creativeLongRunningTurn,
       ...(config.creativeLongRunningTurn ? { creative_timeout_ms: config.timeoutMs } : {}),
-      workspace_fallback_suppressed_for_creative: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
-      outbound_hermes_payload_guard: outboundSanitizer.diagnostics,
+      workspace_fallback_suppressed_for_creative: creativeRoute,
+      outbound_hermes_payload_guard: outboundDiagnostics,
       http_status: response.status,
       summary: responseTraceSummary(payload),
       response: payload,
@@ -4585,19 +4608,22 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
 
     return payload;
   } catch (error) {
-    await writeHermesTrace(request, "error", {
-      kind: "hermes_cmo_error",
-      endpoint_path: config.endpointPath,
-      endpoint_kind: config.endpointKind,
-      route_decision: config.routeDecision,
-      tool_endpoint_enabled: config.toolEndpointEnabled,
-      timeout_ms: config.timeoutMs,
-      timeout_source: config.timeoutSource,
-      creative_long_running_turn: config.creativeLongRunningTurn,
-      ...(config.creativeLongRunningTurn ? { creative_timeout_ms: config.timeoutMs } : {}),
-      workspace_fallback_suppressed_for_creative: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
-      error: error instanceof Error ? error.message : String(error),
-    });
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (!/Product blocked Hermes CMO request because outbound payload still contained path-like Creative artifact text/.test(errorMessage)) {
+      await writeHermesTrace(request, "error", {
+        kind: "hermes_cmo_error",
+        endpoint_path: config.endpointPath,
+        endpoint_kind: config.endpointKind,
+        route_decision: config.routeDecision,
+        tool_endpoint_enabled: config.toolEndpointEnabled,
+        timeout_ms: config.timeoutMs,
+        timeout_source: config.timeoutSource,
+        creative_long_running_turn: config.creativeLongRunningTurn,
+        ...(config.creativeLongRunningTurn ? { creative_timeout_ms: config.timeoutMs } : {}),
+        workspace_fallback_suppressed_for_creative: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
+        error: errorMessage,
+      });
+    }
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("Hermes CMO Agent request timed out.");
     }
