@@ -132,6 +132,45 @@ function compactMultilineText(value: string, maxChars = MAX_REPLAY_MESSAGE_CHARS
   return compact.length > maxChars ? `${compact.slice(0, maxChars - 3).trimEnd()}...` : compact;
 }
 
+function isInternalArtifactPathText(value: string): boolean {
+  const compact = compactMultilineText(value, 1600);
+
+  if (!compact) {
+    return false;
+  }
+
+  if (!/(\[hermes_local_artifact_path_redacted\]|(?:^|\s)(?:file:|[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|private|Volumes)\b))/i.test(compact)) {
+    return false;
+  }
+
+  const withoutInternalPaths = stripInternalArtifactPaths(compact);
+
+  return withoutInternalPaths.length === 0;
+}
+
+function stripInternalArtifactPaths(value: string): string {
+  return value
+    .replace(/\[hermes_local_artifact_path_redacted\][^\s]*/gi, "")
+    .replace(/(?:file:|[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|private|Volumes)\b)[^\s]*/gi, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function canonicalAssistantText(value: unknown, maxChars = MAX_REPLAY_MESSAGE_CHARS): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const compact = compactMultilineText(stripInternalArtifactPaths(value), maxChars);
+
+  if (!compact || isInternalArtifactPathText(compact)) {
+    return null;
+  }
+
+  return compact;
+}
+
 function isPendingToolRunPlaceholder(message: CMOChatMessage): boolean {
   if (message.role !== "assistant") {
     return false;
@@ -144,12 +183,182 @@ function isPendingToolRunPlaceholder(message: CMOChatMessage): boolean {
   return /^CMO is working\.\.\.(?:\s+Researching signals\.\.\.\s+Synthesizing answer\.\.\.)?$/i.test(compactText(message.content, 220));
 }
 
+function latestCreativeDraftForReplay(state: CmoCreativeWorkingState | undefined): CmoCreativeWorkingState["drafts"][number] | undefined {
+  if (!state?.drafts.length) {
+    return undefined;
+  }
+
+  if (state.active_draft_id) {
+    const activeDraft = state.drafts.find((draft) => draft.draft_id === state.active_draft_id);
+
+    if (activeDraft) {
+      return activeDraft;
+    }
+  }
+
+  return state.drafts.at(-1);
+}
+
+function creativeDraftReplayText(state: CmoCreativeWorkingState | undefined): string | null {
+  const draft = latestCreativeDraftForReplay(state);
+
+  if (!draft) {
+    return null;
+  }
+
+  const lines = [
+    canonicalAssistantText(draft.title, 300) ? `Creative draft: ${canonicalAssistantText(draft.title, 300)}` : null,
+    canonicalAssistantText(draft.brief, 1200) ? `Brief: ${canonicalAssistantText(draft.brief, 1200)}` : null,
+    canonicalAssistantText(draft.prompt, 3000) ? `Prompt: ${canonicalAssistantText(draft.prompt, 3000)}` : null,
+    canonicalAssistantText(draft.negative_prompt, 800) ? `Negative prompt: ${canonicalAssistantText(draft.negative_prompt, 800)}` : null,
+    canonicalAssistantText(draft.format, 160) ? `Format: ${canonicalAssistantText(draft.format, 160)}` : null,
+  ].filter((line): line is string => Boolean(line));
+
+  return lines.length ? compactMultilineText(lines.join("\n"), MAX_REPLAY_MESSAGE_CHARS) : null;
+}
+
+function creativeDraftRecordReplayText(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const title = canonicalAssistantText(value.title, 300);
+  const brief = canonicalAssistantText(value.brief, 1200);
+  const prompt = canonicalAssistantText(value.prompt, 3000);
+  const negativePrompt = canonicalAssistantText(value.negative_prompt ?? value.negativePrompt, 800);
+  const format = canonicalAssistantText(value.format, 160);
+  const lines = [
+    title ? `Creative draft: ${title}` : null,
+    brief ? `Brief: ${brief}` : null,
+    prompt ? `Prompt: ${prompt}` : null,
+    negativePrompt ? `Negative prompt: ${negativePrompt}` : null,
+    format ? `Format: ${format}` : null,
+  ].filter((line): line is string => Boolean(line));
+
+  return lines.length ? compactMultilineText(lines.join("\n"), MAX_REPLAY_MESSAGE_CHARS) : null;
+}
+
+function draftArrayFromRecord(value: Record<string, unknown>): unknown[] {
+  if (Array.isArray(value.drafts_upsert)) {
+    return value.drafts_upsert;
+  }
+
+  if (Array.isArray(value.draftsUpsert)) {
+    return value.draftsUpsert;
+  }
+
+  if (Array.isArray(value.drafts)) {
+    return value.drafts;
+  }
+
+  return [];
+}
+
+function creativeDraftReplayTextFromContainer(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const activeDraftId = canonicalAssistantText(value.active_draft_id ?? value.activeDraftId, 300);
+  const drafts = draftArrayFromRecord(value);
+  const activeDraft = activeDraftId
+    ? drafts.find((draft) => isRecord(draft) && (draft.draft_id === activeDraftId || draft.draftId === activeDraftId))
+    : undefined;
+  const selectedDraft = activeDraft ?? drafts.at(-1);
+
+  return creativeDraftRecordReplayText(selectedDraft);
+}
+
+function creativeDraftNarrativeFromHermesValue(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const structuredOutput = isRecord(value.structured_output) ? value.structured_output : undefined;
+  const containers = [
+    value,
+    value.suggested_creative_state_update,
+    value.suggestedCreativeStateUpdate,
+    value.creative_working_state,
+    value.creativeWorkingState,
+    structuredOutput,
+    structuredOutput?.suggested_creative_state_update,
+    structuredOutput?.suggestedCreativeStateUpdate,
+    structuredOutput?.creative_working_state,
+    structuredOutput?.creativeWorkingState,
+  ];
+
+  for (const container of containers) {
+    const replayText = creativeDraftReplayTextFromContainer(container);
+
+    if (replayText) {
+      return replayText;
+    }
+  }
+
+  return null;
+}
+
+function firstCanonicalStringFromRecord(value: unknown, keys: string[], maxChars = MAX_REPLAY_MESSAGE_CHARS): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  for (const key of keys) {
+    const candidate = canonicalAssistantText(value[key], maxChars);
+
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function creativeAssetReplayText(message: CMOChatMessage): string | null {
+  const assets = [
+    ...(message.creativeAssets ?? []),
+    ...(message.creative_assets ?? []),
+    ...(message.sessionArtifacts ?? []),
+    ...(message.creativeWorkingState?.assets ?? []),
+  ];
+  const replayKeys = ["visual_summary", "visualSummary", "prompt", "prompt_used", "promptUsed", "notes", "note"];
+
+  for (const asset of assets) {
+    const replayText = firstCanonicalStringFromRecord(asset, replayKeys, 3000);
+
+    if (replayText) {
+      return replayText;
+    }
+  }
+
+  return null;
+}
+
+function canonicalReplayContent(message: CMOChatMessage): string | null {
+  const directContent = canonicalAssistantText(message.content);
+
+  if (directContent) {
+    return directContent;
+  }
+
+  if (message.role !== "assistant") {
+    return null;
+  }
+
+  return creativeDraftReplayText(message.creativeWorkingState) ?? creativeAssetReplayText(message);
+}
+
 function replayableChatHistory(history: CMOChatMessage[]): ReplayableCmoChatMessage[] {
-  return history.filter((message): message is ReplayableCmoChatMessage =>
-    (message.role === "user" || message.role === "assistant") &&
-    message.content.trim().length > 0 &&
-    !isPendingToolRunPlaceholder(message)
-  );
+  return history.flatMap((message): ReplayableCmoChatMessage[] => {
+    if ((message.role !== "user" && message.role !== "assistant") || isPendingToolRunPlaceholder(message)) {
+      return [];
+    }
+
+    const content = canonicalReplayContent(message);
+
+    return content ? [{ ...message, content, role: message.role }] : [];
+  });
 }
 
 function contextItemSnapshot(item: ContextItem): Record<string, unknown> {
@@ -1211,34 +1420,18 @@ function sourceTransformAnswerFromDelegations(result: HermesCmoRuntimeResult): s
   return outputs.length ? outputs.join("\n\n") : null;
 }
 
-function firstStringFromRecord(value: unknown, keys: string[]): string | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-
-  for (const key of keys) {
-    const candidate = value[key];
-
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-
-  return null;
-}
-
 function creativeNarrativeFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmoRuntimeResult): string {
   const narrativeKeys = ["visual_summary", "visualSummary", "notes", "note"];
-  const directNarrative = firstStringFromRecord(response, narrativeKeys);
+  const directNarrative = firstCanonicalStringFromRecord(response, narrativeKeys, 1200);
 
   if (directNarrative) {
-    return compactMultilineText(directNarrative, 1200);
+    return directNarrative;
   }
 
-  const resultNarrative = firstStringFromRecord(result?.response, narrativeKeys);
+  const resultNarrative = firstCanonicalStringFromRecord(result?.response, narrativeKeys, 1200);
 
   if (resultNarrative) {
-    return compactMultilineText(resultNarrative, 1200);
+    return resultNarrative;
   }
 
   const creativeAssets = Array.isArray(response.creative_assets)
@@ -1247,14 +1440,20 @@ function creativeNarrativeFromHermes(response: HermesCmoRuntimeResponse, result?
       ? result.response.creative_assets
       : [];
   const assetNarrative = creativeAssets
-    .map((asset) => firstStringFromRecord(asset, narrativeKeys))
+    .map((asset) => firstCanonicalStringFromRecord(asset, narrativeKeys, 1200))
     .find((value): value is string => Boolean(value));
 
-  return assetNarrative ? compactMultilineText(assetNarrative, 1200) : "";
+  return assetNarrative ?? "";
 }
 
 function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmoRuntimeResult): string {
   if (!response.answer) {
+    const creativeDraftNarrative = creativeDraftNarrativeFromHermesValue(response) ?? creativeDraftNarrativeFromHermesValue(result?.response);
+
+    if (creativeDraftNarrative) {
+      return creativeDraftNarrative;
+    }
+
     if (hasCreativeExecutionMetadata(response) || hasCreativeExecutionMetadata(result?.response)) {
       return creativeNarrativeFromHermes(response, result);
     }
@@ -1268,15 +1467,18 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
   const transformed = (classification === "source_translate" || classification === "source_transform") && result
     ? sourceTransformAnswerFromDelegations(result)
     : null;
+  const canonicalTransformed = canonicalAssistantText(transformed);
 
-  if (transformed) {
-    return transformed;
+  if (canonicalTransformed) {
+    return canonicalTransformed;
   }
 
   const answer = response.answer;
-  const body = answer.body.trim();
+  const body = canonicalAssistantText(answer.body);
+  const summary = canonicalAssistantText(answer.summary);
+  const creativeDraftNarrative = creativeDraftNarrativeFromHermesValue(response) ?? creativeDraftNarrativeFromHermesValue(result?.response);
 
-  return body || answer.summary.trim() || (
+  return body ?? summary ?? creativeDraftNarrative ?? (
     hasCreativeExecutionMetadata(response) || hasCreativeExecutionMetadata(result?.response)
       ? creativeNarrativeFromHermes(response, result)
       : ""
@@ -1625,6 +1827,7 @@ export function sanitizeHermesCmoMappedChatResult(result: HermesCmoMappedChatRes
 
   return {
     ...result,
+    answer: canonicalAssistantText(result.answer) ?? "",
     delegationsMode: delegationSummary.length > 0 ? HERMES_CMO_BOUNDED_DELEGATIONS : HERMES_CMO_PROPOSALS_ONLY,
     hermesCmoCounters: counters,
     hermesCmoMetadata: metadata,

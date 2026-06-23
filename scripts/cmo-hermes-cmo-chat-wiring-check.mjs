@@ -2493,6 +2493,84 @@ try {
     assert.ok(option2ReplayRequest.messages.some((message) => message.role === "user" && /Giữ ý chính của option 2/.test(message.content)), "option 2 follow-up request must include current user rewrite request");
     assert.ok(!option2ReplayRequest.messages.some((message) => /CMO is working|Researching signals|Synthesizing answer/.test(message.content)), "pending assistant placeholder must not be replayed as semantic context");
     assert.ok(option2ReplayRequest.context_pack.selected_context.some((item) => item?.kind === "recent_chat_message" && item?.role === "assistant" && /2\. Bắt đầu dùng Hold Pay/.test(item.content)), "selected_context must also carry prior assistant option content");
+    const creativePromptReplay = "21:9 cinematic onboarding hero for Hold Pay merchant checkout, full-width store counter scene, clear payment moment, modern fintech palette.";
+    const creativePromptFollowup = "Ok create the 21:9 image from the prompt you suggested.";
+    const creativePromptReplayRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...sampleTurnInput,
+      message: creativePromptFollowup,
+      history: [
+        {
+          id: "msg_creative_prompt_user_1",
+          role: "user",
+          content: "Suggest a Creative prompt for a wide Hold Pay launch visual.",
+          createdAt: "2026-06-04T08:10:00.000Z",
+        },
+        {
+          id: "msg_creative_prompt_assistant_1",
+          role: "assistant",
+          content: "[hermes_local_artifact_path_redacted]/creative/session/msg_creative_prompt_assistant_1/output.png",
+          createdAt: "2026-06-04T08:10:10.000Z",
+          cmoRunStatus: "completed",
+          creativeWorkingState: {
+            active_draft_id: "creative_draft_prompt_001",
+            drafts: [
+              {
+                draft_id: "creative_draft_prompt_001",
+                kind: "image",
+                title: "Hold Pay wide launch visual",
+                brief: "Generate a wide campaign image for merchant onboarding.",
+                prompt: creativePromptReplay,
+                format: "21:9",
+                status: "ready",
+              },
+            ],
+          },
+        },
+        {
+          id: "msg_creative_prompt_user_2",
+          role: "user",
+          content: creativePromptFollowup,
+          createdAt: "2026-06-04T08:11:00.000Z",
+        },
+      ],
+      request: {
+        ...sampleTurnInput.request,
+        message: creativePromptFollowup,
+      },
+      sessionId: "session_creative_prompt_replay",
+      userMessageId: "msg_creative_prompt_user_2",
+      createdAt: "2026-06-04T08:11:00.000Z",
+      creativeSessionFollowupDetected: true,
+      creativeWorkingState: {
+        active_draft_id: "creative_draft_prompt_001",
+        drafts: [
+          {
+            draft_id: "creative_draft_prompt_001",
+            kind: "image",
+            title: "Hold Pay wide launch visual",
+            brief: "Generate a wide campaign image for merchant onboarding.",
+            prompt: creativePromptReplay,
+            format: "21:9",
+            status: "ready",
+          },
+        ],
+      },
+      userIdentity: {
+        userId: "04acf682-0067-4a8c-8a42-3520a30f8ccf",
+        userEmail: "jay@example.com",
+        userDisplayName: "Jay",
+        userSlug: "jay",
+      },
+    });
+    const creativePromptReplayJson = JSON.stringify({
+      messages: creativePromptReplayRequest.messages,
+      selected_context: creativePromptReplayRequest.context_pack.selected_context,
+      recent_session_summary: creativePromptReplayRequest.context_pack.recent_session_summary,
+    });
+    assert.ok(creativePromptReplayRequest.messages.some((message) => message.role === "assistant" && message.content.includes(creativePromptReplay)), "Creative follow-up replay must recover the prior assistant draft prompt");
+    assert.ok(creativePromptReplayRequest.context_pack.selected_context.some((item) => item?.kind === "recent_chat_message" && item?.role === "assistant" && item.content.includes(creativePromptReplay)), "Creative selected_context must recover the prior assistant draft prompt");
+    assert.ok(creativePromptReplayRequest.context_pack.recent_session_summary.includes(creativePromptReplay), "Creative recent_session_summary must recover the prior assistant draft prompt");
+    assert.doesNotMatch(creativePromptReplayJson, /\[hermes_local_artifact_path_redacted\]/, "redacted local artifact paths must not become canonical replay content");
     assert.equal(hermesRequest.constraints.allowSubAgentExecution, false);
     assert.equal(hermesRequest.constraints.allowSurfExecution, false);
     assert.equal(hermesRequest.constraints.allowEchoExecution, false);
@@ -3148,6 +3226,50 @@ try {
     });
     assert.equal(strategyOnlyReviewMapped.answer, "Legacy strategy_only review body stays structured.");
     assert.doesNotMatch(strategyOnlyReviewMapped.answer, /CMO strategic response|Decision:|REVIEW/);
+
+    const redactedCreativeBodyBase = makeRuntimeResult();
+    const redactedCreativeBodyMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...redactedCreativeBodyBase,
+      request: {
+        constraints: {},
+        input: {},
+      },
+      response: {
+        ...redactedCreativeBodyBase.response,
+        answer_basis: {
+          ...redactedCreativeBodyBase.response.answer_basis,
+          mode: "creative_session",
+        },
+        answer: {
+          ...redactedCreativeBodyBase.response.answer,
+          body: "[hermes_local_artifact_path_redacted]/creative/session/msg_creative_prompt_assistant_1/output.png",
+          summary: "",
+        },
+        suggested_creative_state_update: {
+          active_draft_id: "creative_draft_prompt_001",
+          drafts_upsert: [
+            {
+              draft_id: "creative_draft_prompt_001",
+              kind: "image",
+              prompt: "21:9 cinematic onboarding hero for Hold Pay merchant checkout.",
+              status: "ready",
+            },
+          ],
+        },
+      },
+    });
+    assert.match(redactedCreativeBodyMapped.answer, /Prompt: 21:9 cinematic onboarding hero for Hold Pay merchant checkout\./);
+    assert.doesNotMatch(redactedCreativeBodyMapped.answer, /\[hermes_local_artifact_path_redacted\]/, "redacted artifact body must not become canonical mapped assistant content");
+    const embeddedRedactedAnswer = mapper.sanitizeHermesCmoMappedChatResult({
+      ...redactedCreativeBodyMapped,
+      answer: [
+        "Creative prompt proposal:",
+        "Use a wide merchant checkout scene.",
+        "[hermes_local_artifact_path_redacted]/creative/session/msg_creative_prompt_assistant_1/output.png",
+      ].join("\n"),
+    });
+    assert.equal(embeddedRedactedAnswer.answer, "Creative prompt proposal:\nUse a wide merchant checkout scene.");
+    assert.doesNotMatch(embeddedRedactedAnswer.answer, /\[hermes_local_artifact_path_redacted\]/, "embedded redacted artifact paths must be stripped from canonical assistant content");
 
     const noDelegationNeedsSurfBase = makeRuntimeResult();
     const noDelegationNeedsSurfMapped = mapper.mapHermesCmoResponseToChatResult({
