@@ -30,6 +30,7 @@ import {
   type CmoDecisionLabel,
   type CmoStrategicMode,
 } from "./hermes-cmo-skill-kernel";
+import { sanitizeOutboundHermesPayload } from "./hermes-outbound-payload-sanitizer";
 
 export const HERMES_CMO_RUNTIME_MODE = "live" as const;
 
@@ -4507,7 +4508,33 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
 
   try {
-    await writeHermesTrace(request, "request", {
+    const outboundSanitizer = sanitizeOutboundHermesPayload(request, {
+      creativeRoute: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
+    });
+    const outboundRequest = outboundSanitizer.payload;
+
+    if (outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked) {
+      await writeHermesTrace(request, "error", {
+        kind: "hermes_cmo_outbound_payload_blocked",
+        endpoint_path: config.endpointPath,
+        endpoint_kind: config.endpointKind,
+        route_decision: config.routeDecision,
+        tool_endpoint_enabled: config.toolEndpointEnabled,
+        timeout_ms: config.timeoutMs,
+        timeout_source: config.timeoutSource,
+        creative_long_running_turn: config.creativeLongRunningTurn,
+        ...(config.creativeLongRunningTurn ? { creative_timeout_ms: config.timeoutMs } : {}),
+        workspace_fallback_suppressed_for_creative: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
+        outbound_hermes_payload_guard: outboundSanitizer.diagnostics,
+        outbound_blocked_fields_preview: outboundSanitizer.blockedFieldsPreview,
+      });
+
+      throw new Error(
+        "Product blocked Hermes CMO request because outbound payload still contained path-like Creative artifact text. fallback_used=false workspace_fallback_suppressed_for_creative=true",
+      );
+    }
+
+    await writeHermesTrace(outboundRequest, "request", {
       kind: "hermes_cmo_request",
       endpoint_path: config.endpointPath,
       endpoint_kind: config.endpointKind,
@@ -4518,8 +4545,9 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       creative_long_running_turn: config.creativeLongRunningTurn,
       ...(config.creativeLongRunningTurn ? { creative_timeout_ms: config.timeoutMs } : {}),
       workspace_fallback_suppressed_for_creative: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
-      creative_trace: creativeRequestTraceSummary(request, config),
-      request,
+      outbound_hermes_payload_guard: outboundSanitizer.diagnostics,
+      creative_trace: creativeRequestTraceSummary(outboundRequest, config),
+      request: outboundRequest,
     });
     const response = await fetch(config.endpoint, {
       method: "POST",
@@ -4528,7 +4556,7 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.apiKey}`,
       },
-      body: JSON.stringify(request),
+      body: JSON.stringify(outboundRequest),
       cache: "no-store",
       signal: controller.signal,
     });
@@ -4538,7 +4566,7 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
     }
 
     const payload = await parseHermesJson(response, "Hermes CMO Agent");
-    await writeHermesTrace(request, "response", {
+    await writeHermesTrace(outboundRequest, "response", {
       kind: "hermes_cmo_response",
       endpoint_path: config.endpointPath,
       endpoint_kind: config.endpointKind,
@@ -4549,6 +4577,7 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       creative_long_running_turn: config.creativeLongRunningTurn,
       ...(config.creativeLongRunningTurn ? { creative_timeout_ms: config.timeoutMs } : {}),
       workspace_fallback_suppressed_for_creative: config.routeDecision === "creative_execution" || config.routeDecision === "creative_session" || config.routeDecision === "creative_ideation",
+      outbound_hermes_payload_guard: outboundSanitizer.diagnostics,
       http_status: response.status,
       summary: responseTraceSummary(payload),
       response: payload,

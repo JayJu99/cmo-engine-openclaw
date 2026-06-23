@@ -12,6 +12,7 @@ import {
 } from "./hermes-cmo-chat-mapper";
 import { redactSensitiveText } from "./creative-agent";
 import { HERMES_CMO_CHAT_V11_ENDPOINT } from "./hermes-cmo-chat-router";
+import { sanitizeOutboundHermesPayload } from "./hermes-outbound-payload-sanitizer";
 import { normalizeCmoRuntimeUserIdentity } from "./user-metadata";
 
 const CHAT_REQUEST_SCHEMA = "hermes.cmo.chat.request.v1_1" as const;
@@ -104,6 +105,7 @@ export interface HermesCmoChatV11Request {
   };
   options: {
     mode: "cmo.normal_chat";
+    [key: string]: unknown;
   };
   tool_policy: {
     mode: "cmo.normal_chat";
@@ -1194,12 +1196,34 @@ async function httpFailureDetail(response: Response): Promise<{ reason: string; 
 }
 
 export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): Promise<HermesCmoChatV11Run> {
-  const request = buildHermesCmoChatV11Request(input);
+  let request = buildHermesCmoChatV11Request(input);
+  const outboundSanitizer = sanitizeOutboundHermesPayload(request);
+  request = outboundSanitizer.payload;
+
+  if (outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked) {
+    await writeHermesCmoChatV11Trace(request, "error", {
+      event: "error",
+      fallback_used: false,
+      fallback_reason: "Product blocked Hermes CMO chat request because outbound payload still contained path-like Creative artifact text.",
+      fallback_eligible: false,
+      outbound_hermes_payload_guard: outboundSanitizer.diagnostics,
+      outbound_blocked_fields_preview: outboundSanitizer.blockedFieldsPreview,
+    });
+
+    return {
+      ok: false,
+      request,
+      fallbackEligible: false,
+      fallbackReason: "Product blocked Hermes CMO chat request because outbound payload still contained path-like Creative artifact text.",
+    };
+  }
+
   const baseUrl = getCmoHermesBaseUrl();
   const apiKey = getCmoHermesApiKey();
 
   await writeHermesCmoChatV11Trace(request, "request", {
     event: "request",
+    outbound_hermes_payload_guard: outboundSanitizer.diagnostics,
     request,
   });
 

@@ -271,7 +271,7 @@ assert.match(runtimeSource, /rejected_side_effect_type/, "Rejected Creative side
 assert.match(runtimeSource, /timeout_source/, "Hermes CMO trace must include the timeout source");
 assert.match(runtimeSource, /route_decision/, "Hermes CMO trace must include the route decision");
 assert.match(runtimeSource, /creative_trace/, "Hermes CMO trace must include Creative routing diagnostics");
-assert.match(runtimeSource, /writeHermesTrace\(request, "response"[\s\S]*creative_long_running_turn: config\.creativeLongRunningTurn/, "Successful long-running Creative responses must write _response.json traces");
+assert.match(runtimeSource, /writeHermesTrace\(outboundRequest, "response"[\s\S]*creative_long_running_turn: config\.creativeLongRunningTurn/, "Successful long-running Creative responses must write _response.json traces");
 assert.match(runtimeSource, /request\.created_at\.replace\(\/\[:\.\]\/g, "-"\)/, "Hermes CMO runtime request/response trace files must share the request created_at prefix");
 assert.match(chatV11Source, /chatTracePrefixes[\s\S]*hermesCmoChatV11TracePrefix\(request\)[\s\S]*_\$\{safeTraceId\(request\.app_id\)\}/, "Hermes CMO chat v1.1 request/response trace files must share a stable request prefix");
 assert.match(runtimeSource, /allowSubAgentExecution: specialistExecutionAllowed/, "Creative execution must not be blocked by Echo/Surf orchestration mode");

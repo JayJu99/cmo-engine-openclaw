@@ -239,6 +239,87 @@ const m13CmoOwnedCreativeSessionExecutionRequest = (requestId) => ({
   },
 });
 
+const m13PollutedCmoOwnedCreativeSessionExecutionRequest = (requestId) => {
+  const request = m13CmoOwnedCreativeSessionExecutionRequest(requestId);
+
+  return {
+    ...request,
+    messages: [
+      {
+        role: "assistant",
+        content: "[hermes_local_artifact_path_redacted]/_crystal_egg_21x9.png_redact",
+        message_id: "assistant_polluted",
+        created_at: "2026-06-20T00:00:00.000Z",
+      },
+      {
+        role: "user",
+        content: "Nhìn hướng này có bị hiền quá không?",
+        message_id: "user_followup",
+        created_at: "2026-06-20T00:00:01.000Z",
+      },
+    ],
+    context_pack: {
+      ...request.context_pack,
+      selected_context: [
+        {
+          content: "[hermes_local_artifact_path_redacted]/pearl_m_t_qu_tr_ng.webp",
+          full_content: "/tmp/cmo-creative-execute/conversion_h_123/reference_assets/image.jpg",
+        },
+      ],
+      recent_session_summary: "assistant: [hermes_local_artifact_path_redacted]/accent_teal_quanh_egg_v_CTA_area.png",
+      all_context_items: [
+        {
+          content: "[hermes_local_artifact_path_redacted]/Content_Notes.md_Quality_missing.png_redact",
+          contentPreview: "/Users/admin/creative-agent-images/card.jpeg",
+        },
+      ],
+      missing_context: [
+        {
+          contentPreview: "missing context points at cmo-creative-execute/output.webp",
+        },
+      ],
+      context_used: [
+        {
+          contentPreview: "local preview [hermes_local_artifact_path_redacted]/codex-imagen-123.png_redact",
+        },
+      ],
+      creative_working_state: {
+        ...request.creative_working_state,
+        assets: request.creative_working_state.assets.map((asset) => ({
+          ...asset,
+          preview_url: "[hermes_local_artifact_path_redacted]/preview.png_redact",
+          render_url: "[hermes_local_artifact_path_redacted]/render.png",
+          signed_url: "/tmp/cmo-creative-execute/signed.png",
+        })),
+      },
+    },
+    input: {
+      ...request.input,
+      creative_working_state: {
+        ...request.creative_working_state,
+        assets: request.creative_working_state.assets.map((asset) => ({
+          ...asset,
+          render_url: "[hermes_local_artifact_path_redacted]/nested.png",
+        })),
+      },
+    },
+    creative_working_state: {
+      ...request.creative_working_state,
+      assets: request.creative_working_state.assets.map((asset) => ({
+        ...asset,
+        preview_url: "[hermes_local_artifact_path_redacted]/preview.png_redact",
+        render_url: "[hermes_local_artifact_path_redacted]/render.png",
+        signed_url: "/tmp/cmo-creative-execute/signed.png",
+      })),
+    },
+    reference_assets: request.reference_assets.map((asset) => ({
+      ...asset,
+      preview_url: "[hermes_local_artifact_path_redacted]/reference-preview.png",
+      render_url: "/tmp/cmo-creative-execute/reference-render.jpg",
+    })),
+  };
+};
+
 const m13CreativeConversationResponse = (request, action = "advise", body = "This direction is not too soft; keep the softer tone but increase contrast in the headline and product moment.", overrides = {}) => ({
   schema_version: "hermes.cmo.response.v1",
   request_id: request.request_id,
@@ -483,6 +564,29 @@ const writeJson = (response, statusCode, payload) => {
   response.end(JSON.stringify(payload));
 };
 
+const outboundForbiddenValuePattern =
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|conversion_h_|creative-agent-images|cmo-creative-execute|reference_assets|\.png_redact|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
+
+const collectForbiddenStringValues = (value, fields = [], pathParts = []) => {
+  if (typeof value === "string") {
+    if (outboundForbiddenValuePattern.test(value)) {
+      fields.push(pathParts.join("."));
+    }
+    return fields;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectForbiddenStringValues(item, fields, [...pathParts, String(index)]));
+    return fields;
+  }
+
+  if (value && typeof value === "object") {
+    Object.entries(value).forEach(([key, item]) => collectForbiddenStringValues(item, fields, [...pathParts, key]));
+  }
+
+  return fields;
+};
+
 const activity = (requestBody, seq, type, message) => ({
   ...(seq % 2 === 0 ? { schema_version: "hermes.activity.event.v1" } : {}),
   eventId: `evt_m1_${requestBody.request_id}_${seq}`,
@@ -668,7 +772,8 @@ const startServer = async () => {
           const firstCallCmoOwnedCreativeExecution =
             body.request_id === "req_m13_cmo_owned_creative_execution_live_shape" ||
             body.request_id === "req_m13_cmo_owned_creative_reference_fetch_failed" ||
-            body.request_id === "req_m13_creative_conversation_advisory";
+            body.request_id === "req_m13_creative_conversation_advisory" ||
+            body.request_id === "req_m13_creative_outbound_sanitized";
           const firstCallCreativeNative = firstCallCreativeExecution || firstCallCmoOwnedCreativeExecution;
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
           assert.equal(body.user_message, body.intent?.user_message);
@@ -707,6 +812,28 @@ const startServer = async () => {
             });
           } else {
             assert.equal(body.artifact_transport, undefined);
+          }
+          if (body.request_id === "req_m13_creative_outbound_sanitized") {
+            assert.deepEqual(collectForbiddenStringValues(body), []);
+            assert.equal(body.constraints?.outbound_hermes_payload_sanitized, true);
+            assert.equal(body.constraints?.outbound_hermes_payload_path_like_blocked, false);
+            assert.ok(body.constraints?.outbound_sanitized_field_count >= 10);
+            assert.equal(body.constraints?.workspace_fallback_suppressed_for_creative, true);
+            assert.equal(
+              body.messages[0].content,
+              "Creative asset was generated or updated. Use active asset metadata and Product reference assets for visual context.",
+            );
+            assert.equal(body.creative_working_state.assets[0].preview_url, null);
+            assert.equal(body.creative_working_state.assets[0].render_url, null);
+            assert.equal(body.creative_working_state.assets[0].signed_url, null);
+            assert.equal(body.context_pack.creative_working_state.assets[0].render_url, null);
+            assert.equal(body.input.creative_working_state.assets[0].render_url, null);
+            assert.equal(body.reference_assets[0].preview_url, null);
+            assert.equal(body.reference_assets[0].render_url, null);
+            assert.equal(
+              body.reference_assets[0].fetch_url,
+              "https://cmo.jayju.cloud/api/cmo/apps/hold-pay/creative/assets/creative_source_fixture/download",
+            );
           }
           assert.equal(body.constraints.execution_boundary?.vault_agent_execution_allowed, false);
           assert.equal(body.constraints.execution_boundary?.direct_supabase_mutations_allowed, false);
@@ -953,6 +1080,15 @@ const startServer = async () => {
               body,
               "advise",
               "Hướng này không bị hiền quá. Nó đang an toàn và premium; để mạnh hơn, tăng contrast ở hook, thêm một điểm căng về merchant checkout, và giữ visual 21:9 sạch thay vì thêm quá nhiều chi tiết.",
+            ));
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_outbound_sanitized") {
+            writeJson(response, 200, m13CreativeConversationResponse(
+              body,
+              "advise",
+              "This direction remains clean and premium. Add a sharper CTA contrast and one energetic accent while preserving the current image as reference.",
             ));
             return;
           }
@@ -3661,6 +3797,7 @@ try {
   let m13CmoOwnedCreativeExecutionResult;
   let m13CmoOwnedCreativeReferenceFetchFailedResult;
   let m13CreativeConversationAdvisoryResult;
+  let m13CreativeOutboundSanitizedResult;
   let m13CreativeExecutedCreativeResult;
   let m13CreativeFalseOnlySideEffectsResult;
 
@@ -5296,6 +5433,13 @@ try {
     assert.equal(m13CreativeConversationAdvisoryResult.response.structured_output.m1_validation_result, "accepted");
     assert.equal(m13CreativeConversationAdvisoryResult.response.structured_output.fallback_used, false);
     assert.equal(m13CreativeConversationAdvisoryResult.response.artifacts.length, 0);
+    m13CreativeOutboundSanitizedResult = await runHermesCmoRuntime(m13PollutedCmoOwnedCreativeSessionExecutionRequest("req_m13_creative_outbound_sanitized"));
+    assert.equal(m13CreativeOutboundSanitizedResult.response.status, "completed");
+    assert.equal(m13CreativeOutboundSanitizedResult.response.answer_basis.mode, "creative_conversation");
+    assert.match(m13CreativeOutboundSanitizedResult.response.answer?.body ?? "", /clean and premium/i);
+    assert.equal(m13CreativeOutboundSanitizedResult.response.structured_output.creative_conversation_response_received, true);
+    assert.equal(m13CreativeOutboundSanitizedResult.response.structured_output.m1_validation_result, "accepted");
+    assert.equal(m13CreativeOutboundSanitizedResult.response.structured_output.fallback_used, false);
     m13CmoOwnedCreativeReferenceFetchFailedResult = await runHermesCmoRuntime(m13CmoOwnedCreativeSessionExecutionRequest("req_m13_cmo_owned_creative_reference_fetch_failed"));
     assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.status, "failed");
     assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.answer_basis.mode, "creative_execution");

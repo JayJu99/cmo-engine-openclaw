@@ -83,6 +83,7 @@ const loadCompiledModules = async () => {
   const routerOut = path.join(tmpDir, "hermes-cmo-chat-router.js");
   const mapperOut = path.join(tmpDir, "hermes-cmo-chat-mapper.js");
   const chatV11Out = path.join(tmpDir, "hermes-cmo-chat-v11.js");
+  const outboundSanitizerOut = path.join(tmpDir, "hermes-outbound-payload-sanitizer.js");
   const creativeAgentOut = path.join(tmpDir, "creative-agent.js");
   const creativeDraftStateOut = path.join(tmpDir, "creative-draft-state.js");
   const sessionWorkingMemoryOut = path.join(tmpDir, "session-working-memory.js");
@@ -94,6 +95,7 @@ const loadCompiledModules = async () => {
   await transpile(path.join(cmoDir, "creative-agent.ts"), creativeAgentOut);
   await transpile(path.join(cmoDir, "session-working-memory.ts"), sessionWorkingMemoryOut);
   await transpile(path.join(cmoDir, "user-metadata.ts"), userMetadataOut);
+  await transpile(path.join(cmoDir, "hermes-outbound-payload-sanitizer.ts"), outboundSanitizerOut);
   await transpile(path.join(cmoDir, "hermes-cmo-chat-router.ts"), routerOut, (output) =>
     output
       .replace('require("@/lib/cmo/config")', 'require("./config.js")')
@@ -109,6 +111,7 @@ const loadCompiledModules = async () => {
     router: requireFromTmp(routerOut),
     mapper: requireFromTmp(mapperOut),
     chatV11: requireFromTmp(chatV11Out),
+    outboundSanitizer: requireFromTmp(outboundSanitizerOut),
     userMetadata: requireFromTmp(userMetadataOut),
   };
 };
@@ -472,7 +475,7 @@ const makeRuntimeResult = (overrides = {}) => {
 };
 
 try {
-  const { tmpDir, router, mapper, chatV11, userMetadata } = await loadCompiledModules();
+  const { tmpDir, router, mapper, chatV11, outboundSanitizer, userMetadata } = await loadCompiledModules();
   const rolloutWorkspaceIds = ["holdstation-mini-app", "aion", "feeback", "winance", "hold-pay", "holdstation-wallet"];
   let rollingReplaySmoke = null;
   let longSessionStressSmoke = null;
@@ -1039,6 +1042,99 @@ try {
     assert.equal(creativeReferenceRequest.reference_assets[0].auth_header, "x-cmo-creative-artifact-key");
     assert.doesNotMatch(JSON.stringify(creativeReferenceRequest.reference_assets), /CMO_CREATIVE_ARTIFACT_READ_KEY|token=redacted|\/tmp|\[hermes_local_artifact_path_redacted\]/);
     assert.doesNotMatch(creativeReferenceRequest.reference_assets[0].fetch_url, /storage\/v1\/object\/sign/, "Primary fetch URL must not be a Supabase signed URL");
+
+    const outboundForbiddenValuePattern =
+      /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|conversion_h_|creative-agent-images|cmo-creative-execute|reference_assets|\.png_redact|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
+    const collectForbiddenStringValues = (value, fields = [], pathParts = []) => {
+      if (typeof value === "string") {
+        if (outboundForbiddenValuePattern.test(value)) {
+          fields.push(pathParts.join("."));
+        }
+        return fields;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => collectForbiddenStringValues(item, fields, [...pathParts, String(index)]));
+        return fields;
+      }
+
+      if (value && typeof value === "object") {
+        Object.entries(value).forEach(([key, item]) => collectForbiddenStringValues(item, fields, [...pathParts, key]));
+      }
+
+      return fields;
+    };
+    const pollutedCreativeRequest = JSON.parse(JSON.stringify(creativeReferenceRequest));
+    pollutedCreativeRequest.messages = [
+      {
+        role: "assistant",
+        content: "[hermes_local_artifact_path_redacted]/_crystal_egg_21x9.png_redact",
+        message_id: "assistant_polluted",
+        created_at: "2026-06-20T10:01:00.000Z",
+      },
+      {
+        role: "user",
+        content: "Nhìn hướng này có bị hiền quá không?",
+        message_id: "user_followup",
+        created_at: "2026-06-20T10:02:00.000Z",
+      },
+    ];
+    pollutedCreativeRequest.context_pack.selected_context = [
+      {
+        content: "[hermes_local_artifact_path_redacted]/pearl_m_t_qu_tr_ng.webp",
+        full_content: "/tmp/cmo-creative-execute/conversion_h_123/reference_assets/image.jpg",
+      },
+    ];
+    pollutedCreativeRequest.context_pack.recent_session_summary =
+      "assistant: [hermes_local_artifact_path_redacted]/accent_teal_quanh_egg_v_CTA_area.png";
+    pollutedCreativeRequest.context_pack.all_context_items = [
+      {
+        content: "[hermes_local_artifact_path_redacted]/Content_Notes.md_Quality_missing.png_redact",
+        contentPreview: "/Users/admin/creative-agent-images/card.jpeg",
+      },
+    ];
+    pollutedCreativeRequest.context_pack.missing_context = [
+      {
+        contentPreview: "missing context points at cmo-creative-execute/output.webp",
+      },
+    ];
+    pollutedCreativeRequest.context_pack.context_used = [
+      {
+        contentPreview: "local preview [hermes_local_artifact_path_redacted]/codex-imagen-123.png_redact",
+      },
+    ];
+    pollutedCreativeRequest.creative_working_state.assets[0].preview_url = "[hermes_local_artifact_path_redacted]/preview.png_redact";
+    pollutedCreativeRequest.creative_working_state.assets[0].signed_url = "/tmp/cmo-creative-execute/signed.png";
+    pollutedCreativeRequest.creativeWorkingState.assets[0].renderUrl = "[hermes_local_artifact_path_redacted]/render.png";
+    pollutedCreativeRequest.creativeWorkingState.assets[0].signedUrl = "/Users/admin/creative-agent-images/signed.webp";
+    pollutedCreativeRequest.input.creative_working_state.assets[0].render_url = "[hermes_local_artifact_path_redacted]/nested.png";
+    pollutedCreativeRequest.context_pack.creative_working_state.assets[0].render_url = "[hermes_local_artifact_path_redacted]/context.png";
+    pollutedCreativeRequest.reference_assets[0].preview_url = "[hermes_local_artifact_path_redacted]/reference-preview.png";
+    pollutedCreativeRequest.referenceAssets[0].renderUrl = "/tmp/cmo-creative-execute/reference-render.jpg";
+    const sanitizedCreativeRequest = outboundSanitizer.sanitizeOutboundHermesPayload(pollutedCreativeRequest, { creativeRoute: true });
+    assert.equal(sanitizedCreativeRequest.diagnostics.outbound_hermes_payload_sanitized, true);
+    assert.equal(sanitizedCreativeRequest.diagnostics.outbound_hermes_payload_path_like_blocked, false);
+    assert.ok(sanitizedCreativeRequest.diagnostics.outbound_sanitized_field_count >= 12);
+    assert.equal(sanitizedCreativeRequest.diagnostics.workspace_fallback_suppressed_for_creative, true);
+    assert.deepEqual(collectForbiddenStringValues(sanitizedCreativeRequest.payload), []);
+    assert.equal(
+      sanitizedCreativeRequest.payload.messages[0].content,
+      "Creative asset was generated or updated. Use active asset metadata and Product reference assets for visual context.",
+    );
+    assert.equal(sanitizedCreativeRequest.payload.creative_working_state.assets[0].preview_url, null);
+    assert.equal(sanitizedCreativeRequest.payload.creative_working_state.assets[0].signed_url, null);
+    assert.equal(sanitizedCreativeRequest.payload.creativeWorkingState.assets[0].renderUrl, null);
+    assert.equal(sanitizedCreativeRequest.payload.creativeWorkingState.assets[0].signedUrl, null);
+    assert.equal(sanitizedCreativeRequest.payload.input.creative_working_state.assets[0].render_url, null);
+    assert.equal(sanitizedCreativeRequest.payload.context_pack.creative_working_state.assets[0].render_url, null);
+    assert.equal(sanitizedCreativeRequest.payload.reference_assets[0].preview_url, null);
+    assert.equal(sanitizedCreativeRequest.payload.referenceAssets[0].renderUrl, null);
+    assert.equal(
+      sanitizedCreativeRequest.payload.reference_assets[0].fetch_url,
+      "https://cmo.jayju.cloud/api/cmo/apps/eggs-vault/creative/assets/creative_uploaded_primary/download",
+    );
+    assert.equal(sanitizedCreativeRequest.payload.reference_assets[0].auth_ref, "cmo_creative_artifact_read_key");
+    assert.equal(sanitizedCreativeRequest.payload.referenceAssets[0].authHeader, "x-cmo-creative-artifact-key");
 
     const chatV11Request = chatV11.buildHermesCmoChatV11Request({
       ...sampleTurnInput,
