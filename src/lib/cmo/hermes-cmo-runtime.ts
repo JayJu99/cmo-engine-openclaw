@@ -1326,6 +1326,7 @@ const responseValidationFailureReason = (
   if (!validateContextResolution(response.context_resolution)) return "context_resolution_invalid";
   if (!validateClarifyingQuestion(response.clarifying_question)) return "clarifying_question_invalid";
   if (!validateHermesCmoRuntimeAnswer(response.answer)) return "answer_invalid";
+  if (answerHasUnsafeUserVisibleArtifactText(response.answer)) return "answer_path_like";
   if (!(isRecord(response.structured_output) || response.structured_output === null)) return "structured_output_invalid";
   if (!validateDelegations(response.delegations, options)) return "delegations_invalid";
   if (!Array.isArray(response.artifacts)) return "artifacts_invalid";
@@ -1572,7 +1573,12 @@ const creativeConversationValidationFailure = (
     return "creative_conversation_answer_empty";
   }
 
-  if (unsafeCreativeConversationAnswerPattern.test(answerText) || unsafeCreativeConversationAnswerPattern.test(clarificationQuestion)) {
+  if (
+    unsafeCreativeConversationAnswerPattern.test(answerText) ||
+    unsafeCreativeConversationAnswerPattern.test(clarificationQuestion) ||
+    unsafeUserVisibleAnswerPattern.test(answerText) ||
+    unsafeUserVisibleAnswerPattern.test(clarificationQuestion)
+  ) {
     return "creative_conversation_answer_path_like";
   }
 
@@ -3560,6 +3566,40 @@ const validateHermesCmoRuntimeAnswer = (answer: unknown): answer is HermesCmoRun
   );
 };
 
+const unsafeUserVisibleAnswerPattern =
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|conversion_h_|creative-agent-images|cmo-creative-execute|reference_assets|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
+
+const answerHasUnsafeUserVisibleArtifactText = (answer: unknown): boolean => {
+  if (typeof answer === "string") {
+    return unsafeUserVisibleAnswerPattern.test(answer);
+  }
+
+  if (!isRecord(answer)) {
+    return false;
+  }
+
+  return [answer.body, answer.content, answer.text, answer.answer, answer.message]
+    .some((value) => typeof value === "string" && unsafeUserVisibleAnswerPattern.test(value));
+};
+
+const pathLikeAnswerDetected = (response: Record<string, unknown>): boolean =>
+  answerHasUnsafeUserVisibleArtifactText(response.answer) ||
+  [response.message, response.content, response.user_visible, response.final_response]
+    .some((value) => {
+      if (typeof value === "string") {
+        return unsafeUserVisibleAnswerPattern.test(value);
+      }
+
+      if (!isRecord(value)) {
+        return false;
+      }
+
+      return answerHasUnsafeUserVisibleArtifactText(value.answer ?? value.content ?? value.message);
+    });
+
+const encodedAnswerPreview = (value: string): string =>
+  encodeURIComponent(traceString(value, 220)).replace(/\./g, "%2E");
+
 const validateAnswerBasis = (
   answerBasis: unknown,
   options: HermesCmoAnswerBasisModeOptions = {},
@@ -3732,6 +3772,7 @@ export const validateHermesCmoRuntimeResponse = (
     !validateContextResolution(responseCandidate.context_resolution) ||
     !validateClarifyingQuestion(clarifyingQuestion) ||
     !validateHermesCmoRuntimeAnswer(responseCandidate.answer) ||
+    answerHasUnsafeUserVisibleArtifactText(responseCandidate.answer) ||
     !(isRecord(responseCandidate.structured_output) || responseCandidate.structured_output === null) ||
     !validateDelegations(responseCandidate.delegations, options) ||
     !Array.isArray(responseCandidate.artifacts) ||
@@ -3963,6 +4004,8 @@ const extractLiveResponsePayload = (
   const creativeStateMutation = creativeConversationResponseReceived
     ? boolFromCreativeConversationField(responseCandidate, responseStructuredOutput, "creative_state_mutation") ?? false
     : undefined;
+  const nativeResponsePathLikeAnswerDetected = pathLikeAnswerDetected(responseCandidate);
+  const nativeResponseAnswerPreview = encodedAnswerPreview(creativeConversationAnswerText(responseCandidate));
   const activityEventTypes = activityEventTypesFrom(effectiveActivityEventsCandidate);
   const creativeIdeationActivityDiagnostics = {
     activity_event_types: activityEventTypes,
@@ -4037,7 +4080,7 @@ const extractLiveResponsePayload = (
     const creativeNativeValidationSuffix = creativeNativeResponseReceived
       ? creativeExecutionResponseReceived
         ? ` creative_execution_response_received=true creative_execution_owner=cmo answer_basis_mode=${String(responseAnswerBasis.mode)} creative_long_running_turn=true creative_execution_requested=false creative_state_update_present=${String(creativeStateUpdatePresent)} creative_decision_present=${String(creativeDecisionPresent)} creative_execution_canonicalized=${String(creativeExecutionCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeExecutionCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_execution=${String(creativeExecutionCanonicalization.canonicalized)} rejected_activity_event_type=${creativeExecutionCanonicalization.rejectedActivityEventType ?? "none"} fallback_used=false rejected_by_m1_validator=true rejected_field=${rejectedField}.`
-        : ` creative_ideation_response_received=${String(responseAnswerBasis.mode === "creative_ideation")} creative_session_response_received=${String(responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement")} creative_conversation_response_received=${String(creativeConversationResponseReceived)} creative_conversation_mode=${creativeConversationMode ?? "none"} answer_basis_mode=${String(responseAnswerBasis.mode)} creative_asset_mutation=${String(creativeAssetMutation ?? false)} creative_state_mutation=${String(creativeStateMutation ?? false)} creative_state_update_present=${String(creativeStateUpdatePresent)} creative_decision_present=${String(creativeDecisionPresent)} creative_ideation_canonicalized=${String(creativeIdeationCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeIdeationCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_ideation=${String(creativeIdeationCanonicalization.canonicalized)} rejected_activity_event_type=${creativeIdeationCanonicalization.rejectedActivityEventType ?? "none"} fallback_used=false rejected_by_m1_validator=true rejected_field=${rejectedField}.`
+        : ` creative_ideation_response_received=${String(responseAnswerBasis.mode === "creative_ideation")} creative_session_response_received=${String(responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement")} creative_conversation_response_received=${String(creativeConversationResponseReceived)} creative_conversation_mode=${creativeConversationMode ?? "none"} creative_conversation_rejected=${String(creativeConversationResponseReceived)} creative_conversation_rejection_reason=${creativeConversationResponseReceived ? rejectedField : "none"} creative_conversation_rejected_answer_preview=${creativeConversationResponseReceived ? nativeResponseAnswerPreview || "empty" : "none"} native_response_answer_basis_mode=${String(responseAnswerBasis.mode)} native_response_creative_decision_action=${creativeDecisionAction ?? "none"} native_response_path_like_answer_detected=${String(nativeResponsePathLikeAnswerDetected)} answer_basis_mode=${String(responseAnswerBasis.mode)} creative_asset_mutation=${String(creativeAssetMutation ?? false)} creative_state_mutation=${String(creativeStateMutation ?? false)} creative_state_update_present=${String(creativeStateUpdatePresent)} creative_decision_present=${String(creativeDecisionPresent)} creative_ideation_canonicalized=${String(creativeIdeationCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeIdeationCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_ideation=${String(creativeIdeationCanonicalization.canonicalized)} rejected_activity_event_type=${creativeIdeationCanonicalization.rejectedActivityEventType ?? "none"} fallback_used=false rejected_by_m1_validator=true rejected_field=${rejectedField}.`
       : "";
 
     throw new Error(
@@ -4072,7 +4115,7 @@ const extractLiveResponsePayload = (
     const creativeIdeationDiagnosticSuffix = creativeNativeResponseReceived
       ? creativeExecutionResponseReceived
         ? ` creative_execution_response_received=true creative_execution_owner=cmo answer_basis_mode=${String(responseAnswerBasis.mode)} creative_long_running_turn=true creative_execution_requested=false creative_execution_canonicalized=${String(creativeExecutionCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeExecutionCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_execution=${String(creativeExecutionCanonicalization.canonicalized)} rejected_activity_event_type=${creativeExecutionCanonicalization.rejectedActivityEventType ?? failedEventType ?? "unknown"} fallback_used=false rejected_by_m1_validator=true`
-        : ` creative_ideation_response_received=${String(responseAnswerBasis.mode === "creative_ideation")} creative_session_response_received=${String(responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement")} creative_conversation_response_received=${String(creativeConversationResponseReceived)} creative_conversation_mode=${creativeConversationMode ?? "none"} answer_basis_mode=${String(responseAnswerBasis.mode)} creative_asset_mutation=${String(creativeAssetMutation ?? false)} creative_state_mutation=${String(creativeStateMutation ?? false)} creative_state_update_present=${String(creativeStateUpdatePresent)} creative_decision_present=${String(creativeDecisionPresent)} creative_ideation_canonicalized=${String(creativeIdeationCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeIdeationCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_ideation=${String(creativeIdeationCanonicalization.canonicalized)} rejected_activity_event_type=${creativeIdeationCanonicalization.rejectedActivityEventType ?? failedEventType ?? "unknown"} fallback_used=false rejected_by_m1_validator=true`
+        : ` creative_ideation_response_received=${String(responseAnswerBasis.mode === "creative_ideation")} creative_session_response_received=${String(responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement")} creative_conversation_response_received=${String(creativeConversationResponseReceived)} creative_conversation_mode=${creativeConversationMode ?? "none"} creative_conversation_rejected=${String(creativeConversationResponseReceived)} creative_conversation_rejection_reason=activity_event_invalid creative_conversation_rejected_answer_preview=${creativeConversationResponseReceived ? nativeResponseAnswerPreview || "empty" : "none"} native_response_answer_basis_mode=${String(responseAnswerBasis.mode)} native_response_creative_decision_action=${creativeDecisionAction ?? "none"} native_response_path_like_answer_detected=${String(nativeResponsePathLikeAnswerDetected)} answer_basis_mode=${String(responseAnswerBasis.mode)} creative_asset_mutation=${String(creativeAssetMutation ?? false)} creative_state_mutation=${String(creativeStateMutation ?? false)} creative_state_update_present=${String(creativeStateUpdatePresent)} creative_decision_present=${String(creativeDecisionPresent)} creative_ideation_canonicalized=${String(creativeIdeationCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeIdeationCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_ideation=${String(creativeIdeationCanonicalization.canonicalized)} rejected_activity_event_type=${creativeIdeationCanonicalization.rejectedActivityEventType ?? failedEventType ?? "unknown"} fallback_used=false rejected_by_m1_validator=true`
       : "";
 
     throw new Error(`Hermes CMO Agent activity_events did not match hermes.activity.event.v1 or included forbidden delegation events. Rejected field: ${activityValidationFailureReason(failedEvent, request, effectiveActivityValidation)}.${creativeIdeationDiagnosticSuffix}`);

@@ -2308,6 +2308,14 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(value.creative_session_response_received === true ? { creative_session_response_received: true } : {}),
     ...(value.creative_conversation_response_received === true ? { creative_conversation_response_received: true } : {}),
     ...(stringValue(value.creative_conversation_mode) ? { creative_conversation_mode: stringValue(value.creative_conversation_mode) } : {}),
+    ...(value.creative_conversation_rejected === true ? { creative_conversation_rejected: true } : {}),
+    ...(stringValue(value.creative_conversation_rejection_reason) ? { creative_conversation_rejection_reason: stringValue(value.creative_conversation_rejection_reason) } : {}),
+    ...(stringValue(value.creative_conversation_rejected_answer_preview) ? { creative_conversation_rejected_answer_preview: stringValue(value.creative_conversation_rejected_answer_preview) } : {}),
+    ...(stringValue(value.native_response_answer_basis_mode) ? { native_response_answer_basis_mode: stringValue(value.native_response_answer_basis_mode) } : {}),
+    ...(stringValue(value.native_response_creative_decision_action) ? { native_response_creative_decision_action: stringValue(value.native_response_creative_decision_action) } : {}),
+    ...(typeof value.native_response_path_like_answer_detected === "boolean" ? { native_response_path_like_answer_detected: value.native_response_path_like_answer_detected } : {}),
+    ...(value.user_visible_answer_guard_triggered === true ? { user_visible_answer_guard_triggered: true } : {}),
+    ...(stringValue(value.user_visible_answer_guard_reason) ? { user_visible_answer_guard_reason: stringValue(value.user_visible_answer_guard_reason) } : {}),
     ...(typeof value.creative_asset_mutation === "boolean" ? { creative_asset_mutation: value.creative_asset_mutation } : {}),
     ...(typeof value.creative_state_mutation === "boolean" ? { creative_state_mutation: value.creative_state_mutation } : {}),
     ...(typeof value.creative_state_update_present === "boolean" ? { creative_state_update_present: value.creative_state_update_present } : {}),
@@ -2966,6 +2974,26 @@ function isTimedOutHermesError(reason: string): boolean {
   return /timed out|timeout|AbortError/i.test(reason);
 }
 
+function reasonToken(reason: string, key: string): string | undefined {
+  const token = reason.match(new RegExp(`\\b${key}=([^\\s.]+)`, "i"))?.[1];
+
+  return token && token !== "none" ? token.trim() : undefined;
+}
+
+function decodedReasonToken(reason: string, key: string): string | undefined {
+  const token = reasonToken(reason, key);
+
+  if (!token) {
+    return undefined;
+  }
+
+  try {
+    return decodeURIComponent(token);
+  } catch {
+    return token;
+  }
+}
+
 function creativeM1RejectedField(reason: string): string | undefined {
   if (
     !/rejected_by_m1_validator=true/i.test(reason) ||
@@ -2978,6 +3006,50 @@ function creativeM1RejectedField(reason: string): string | undefined {
   const rejected = explicit ?? reason.match(/Rejected field:\s*([^.\n]+)/i)?.[1];
 
   return rejected?.trim();
+}
+
+function creativeConversationRejectionDiagnostics(reason: string): Partial<HermesCmoChatMetadata> {
+  const conversationRejected =
+    /creative_conversation_rejected=true/i.test(reason) ||
+    /creative_conversation_response_received=true/i.test(reason) ||
+    /answer_basis_mode=creative_conversation/i.test(reason);
+
+  if (!conversationRejected) {
+    return {};
+  }
+
+  return {
+    creative_conversation_response_received: true,
+    creative_conversation_rejected: true,
+    ...(reasonToken(reason, "creative_conversation_rejection_reason")
+      ? { creative_conversation_rejection_reason: reasonToken(reason, "creative_conversation_rejection_reason") }
+      : {}),
+    ...(decodedReasonToken(reason, "creative_conversation_rejected_answer_preview")
+      ? { creative_conversation_rejected_answer_preview: decodedReasonToken(reason, "creative_conversation_rejected_answer_preview") }
+      : {}),
+    ...(reasonToken(reason, "native_response_answer_basis_mode")
+      ? { native_response_answer_basis_mode: reasonToken(reason, "native_response_answer_basis_mode") }
+      : {}),
+    ...(reasonToken(reason, "native_response_creative_decision_action")
+      ? { native_response_creative_decision_action: reasonToken(reason, "native_response_creative_decision_action") }
+      : {}),
+    ...(reasonToken(reason, "native_response_path_like_answer_detected")
+      ? { native_response_path_like_answer_detected: /true/i.test(reasonToken(reason, "native_response_path_like_answer_detected") ?? "") }
+      : {}),
+  };
+}
+
+const unsafeUserVisibleAnswerPattern =
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|conversion_h_|creative-agent-images|cmo-creative-execute|reference_assets|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
+
+function userVisibleAnswerPathLike(value: string): boolean {
+  return unsafeUserVisibleAnswerPattern.test(value);
+}
+
+function safeBlockedUserVisibleAnswer(creativeNativeTurn: boolean): string {
+  return creativeNativeTurn
+    ? "Creative response was blocked because Product detected internal artifact path text in the user-visible answer. The active Creative asset is unchanged."
+    : "CMO response was blocked because Product detected internal artifact path text in the user-visible answer.";
 }
 
 function isCreativeIdeationM1Rejection(reason: string): boolean {
@@ -4237,7 +4309,11 @@ export async function createAppChatSession(
       hermesCmoErrorReason = reason;
       delegationsMode = HERMES_CMO_PROPOSALS_ONLY;
 
-      if (chatResult.fallbackEligible && hermesCmoRoute.fallbackEnabled) {
+      const creativeWorkspaceFallbackSuppressed =
+        hermesCmoNativeCreativeRequested ||
+        /creative_(?:ideation|session|conversation|execution|response|metadata).*rejected_by_m1_validator=true|rejected_by_m1_validator=true.*answer_basis_mode=creative_/i.test(reason);
+
+      if (chatResult.fallbackEligible && hermesCmoRoute.fallbackEnabled && !creativeWorkspaceFallbackSuppressed) {
         const fallbackStartedMs = Date.now();
         const fallbackTrace = fallbackHermesCmoChatV11Metadata(chatResult.request?.request_id ?? `req_cmo_chat_v11_${messageId}`, reason);
         const hermesAttachmentRefs = await cmoAttachmentsForHermes(turnAttachments);
@@ -4352,6 +4428,60 @@ export async function createAppChatSession(
         echoCalls = hermesCmoMetadata.echoCalls;
         delegationsMode = mappedHermesFallbackResult.delegationsMode;
         productRenderSource = "fallback_after_hermes_failure";
+        usedHermesCmoChat = true;
+      } else if (creativeWorkspaceFallbackSuppressed) {
+        const conversationDiagnostics = creativeConversationRejectionDiagnostics(reason);
+        answer = safeBlockedUserVisibleAnswer(true);
+        status = "failed";
+        isDevelopmentFallback = false;
+        isRuntimeFallback = false;
+        runtimeStatus = "runtime_error";
+        runtimeMode = "configured_but_unreachable";
+        attemptedRuntimeMode = "live";
+        runtimeLabel = "Hermes CMO Creative session";
+        runtimeError = "Creative response was rejected by Product M1 validation.";
+        runtimeErrorReason = "invalid_response";
+        runtimeProvider = "hermes";
+        runtimeAgent = "creative";
+        fallbackDurationMs = undefined;
+        const suppressedCreativeRouteDecision = hermesCmoRoute.reason === "creative_execution" || hermesCmoRoute.reason === "creative_ideation" || hermesCmoRoute.reason === "creative_session"
+          ? hermesCmoRoute.reason
+          : "creative_session";
+        routeDecision = suppressedCreativeRouteDecision;
+        productRenderSource = "hermes_cmo";
+        productFallbackReason = undefined;
+        hermesCmoStatus = "interrupted";
+        hermesCmoErrorReason = reason;
+        const suppressedCreativeFallbackMetadata: HermesCmoChatMetadata = {
+          ...failedHermesCmoChatV11Metadata(chatResult.request?.request_id ?? `req_cmo_chat_v11_${messageId}`, reason),
+          ...conversationDiagnostics,
+          productRenderSource: "hermes_cmo",
+          selectedHermesEndpoint: "/agents/cmo/chat",
+          hermesEndpointKind: "agent_chat",
+          endpoint_kind: "agent_chat",
+          runtime_kind: "ai_agent",
+          requested_endpoint: "/agents/cmo/chat",
+          fallback_used: false,
+          workspace_fallback_suppressed_for_creative: true,
+          route_decision: suppressedCreativeRouteDecision,
+          creative_session_followup_detected: creativeSessionFollowupDetected,
+          creative_working_state_present: Boolean(creativeWorkingState),
+          ...(activeCreativeAssetId ? { active_creative_asset_id: activeCreativeAssetId } : {}),
+          ...(creativeAssetsCount > 0 ? { creative_assets_count: creativeAssetsCount } : {}),
+          rejected_by_m1_validator: true,
+          rejected_field: creativeM1RejectedField(reason) ?? "creative_native_response",
+          user_visible_answer_guard_triggered: true,
+          user_visible_answer_guard_reason: "creative_workspace_fallback_suppressed",
+          agentsUsed: ["cmo", "creative"],
+        };
+        hermesCmoMetadata = suppressedCreativeFallbackMetadata;
+        hermesCmoCounters = suppressedCreativeFallbackMetadata.counters;
+        forbiddenCounters = suppressedCreativeFallbackMetadata.forbiddenCounters;
+        activityEvents = suppressedCreativeFallbackMetadata.activityEvents;
+        delegationSummary = suppressedCreativeFallbackMetadata.delegationSummary;
+        agentsUsed = suppressedCreativeFallbackMetadata.agentsUsed;
+        surfCalls = suppressedCreativeFallbackMetadata.surfCalls;
+        echoCalls = suppressedCreativeFallbackMetadata.echoCalls;
         usedHermesCmoChat = true;
       } else {
         answer = [
@@ -5071,6 +5201,32 @@ export async function createAppChatSession(
   const finalActiveCreativeAssetId = creativeWorkingState?.active_asset_id ?? resolvedFinalActiveCreativeAssetId;
   const finalCreativeAssetsCount = creativeWorkingState?.assets?.length ?? 0;
   const finalCreativeSessionFromAsset = Boolean(finalActiveCreativeAssetId || finalCreativeAssetsCount > 0);
+  const finalCreativeConversationResponseReceived = hermesCmoMetadata?.creative_conversation_response_received === true;
+  const finalResponseCreativeAssetsCount = finalCreativeConversationResponseReceived ? 0 : finalCreativeAssetsCount;
+  if (userVisibleAnswerPathLike(answer)) {
+    const guardReason = "path_like_user_visible_answer";
+    answer = safeBlockedUserVisibleAnswer(hermesCmoNativeCreativeRequested);
+    status = "failed";
+    runtimeStatus = "runtime_error";
+    runtimeMode = "configured_but_unreachable";
+    runtimeError = hermesCmoNativeCreativeRequested
+      ? "Creative response was blocked because it contained internal artifact path text."
+      : "CMO response was blocked because it contained internal artifact path text.";
+    runtimeErrorReason = "invalid_response";
+    isRuntimeFallback = false;
+    fallbackDurationMs = undefined;
+    if (hermesCmoNativeCreativeRequested) {
+      productRenderSource = "hermes_cmo";
+      productFallbackReason = undefined;
+      creativeFallbackUsed = false;
+    }
+    hermesCmoMetadata = {
+      ...(hermesCmoMetadata ?? failedHermesCmoChatV11Metadata(`req_cmo_guard_${messageId}`, guardReason)),
+      user_visible_answer_guard_triggered: true,
+      user_visible_answer_guard_reason: guardReason,
+      ...(hermesCmoNativeCreativeRequested ? { fallback_used: false, workspace_fallback_suppressed_for_creative: true } : {}),
+    };
+  }
 
   const decisionLayer = buildDecisionLayer({
     workspaceId: request.workspaceId,
@@ -5103,7 +5259,7 @@ export async function createAppChatSession(
     ...(hermesCmoNativeCreativeRequested ? { workspace_fallback_suppressed_for_creative: true } : {}),
     ...(hermesCmoNativeCreativeRequested ? { fallback_used: false } : {}),
     ...(finalActiveCreativeAssetId ? { active_creative_asset_id: finalActiveCreativeAssetId, active_asset_id: finalActiveCreativeAssetId, creative_session_active_asset_id: finalActiveCreativeAssetId } : {}),
-    ...(finalCreativeAssetsCount > 0 ? { creative_assets_count: finalCreativeAssetsCount } : {}),
+    ...(finalCreativeAssetsCount > 0 || finalCreativeConversationResponseReceived ? { creative_assets_count: finalResponseCreativeAssetsCount } : {}),
     ...(activeCreativeAssetResolution.asset ? { reference_assets_count: 1 } : {}),
     ...(hermesCmoNativeCreativeRequested ? { artifact_transport_mode: "product_upload" } : {}),
     ...(creativeExecutionRequested === true ? { creativeExecutionRequested: true, creative_execution_requested: true } : {}),
@@ -5149,7 +5305,7 @@ export async function createAppChatSession(
       ...(activeCreativeAssetResolution.asset ? { active_creative_asset_resolved: true } : {}),
       ...(activeCreativeAssetResolution.source ? { active_creative_asset_resolution_source: activeCreativeAssetResolution.source } : {}),
       ...(finalActiveCreativeAssetId ? { active_creative_asset_id: finalActiveCreativeAssetId, active_asset_id: finalActiveCreativeAssetId, creative_session_active_asset_id: finalActiveCreativeAssetId } : {}),
-      ...(finalCreativeWorkingStatePresent ? { creative_assets_count: finalCreativeAssetsCount } : {}),
+      ...(finalCreativeWorkingStatePresent || finalCreativeConversationResponseReceived ? { creative_assets_count: finalResponseCreativeAssetsCount } : {}),
       ...(finalCreativeSessionFromAsset ? { creative_session_from_asset: true } : {}),
       ...(routeOverrodeToolExecuteDueToCreativeContext ? { route_overrode_tool_execute_due_to_creative_context: true } : {}),
       ...(toolExecuteSuppressedForCreativeFollowup ? { tool_execute_suppressed_for_creative_followup: true } : {}),

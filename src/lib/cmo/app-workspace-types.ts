@@ -947,6 +947,14 @@ export interface HermesCmoChatMetadata {
   creative_session_response_received?: boolean;
   creative_conversation_response_received?: boolean;
   creative_conversation_mode?: "advisory" | "review" | "clarify" | "ideation" | string;
+  creative_conversation_rejected?: boolean;
+  creative_conversation_rejection_reason?: string;
+  creative_conversation_rejected_answer_preview?: string;
+  native_response_answer_basis_mode?: string;
+  native_response_creative_decision_action?: string;
+  native_response_path_like_answer_detected?: boolean;
+  user_visible_answer_guard_triggered?: boolean;
+  user_visible_answer_guard_reason?: string;
   creative_asset_mutation?: boolean;
   creative_state_mutation?: boolean;
   creative_state_update_present?: boolean;

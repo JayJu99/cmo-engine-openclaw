@@ -3493,6 +3493,10 @@ try {
     assert.match(source, /runHermesCmoRuntime\(hermesRequest\)/);
     assert.match(source, /const hermesFallbackRequest = mapCmoChatToHermesCmoRequest\(\{/);
     assert.match(source, /const hermesFallbackResult = await runHermesCmoRuntime\(hermesFallbackRequest\)/);
+    assert.match(source, /creativeWorkspaceFallbackSuppressed/);
+    assert.match(source, /chatResult\.fallbackEligible && hermesCmoRoute\.fallbackEnabled && !creativeWorkspaceFallbackSuppressed/);
+    assert.match(source, /safeBlockedUserVisibleAnswer\(true\)/);
+    assert.match(source, /workspace_fallback_suppressed_for_creative: true/);
     assert.match(source, /answer = mappedHermesFallbackResult\.answer/);
     assert.match(source, /fallback_used: true/);
     assert.match(source, /fallback_from: fallbackTrace\.fallback_from/);
@@ -3500,6 +3504,9 @@ try {
     assert.match(source, /writeHermesCmoChatV11FallbackTrace\(chatResult\.request/);
     assert.match(source, /answer = mappedChat\.answer/);
     assert.match(source, /answer = mappedHermesResult\.answer/);
+    assert.match(source, /userVisibleAnswerPathLike\(answer\)/);
+    assert.match(source, /user_visible_answer_guard_triggered: true/);
+    assert.match(source, /user_visible_answer_guard_reason: guardReason/);
     assert.match(source, /productRenderSource = "hermes_cmo"/);
     assert.match(source, /if \(!usedHermesCmoChat\)/);
     assert.match(source, /productRenderSource = hermesCmoChatRequested \? "fallback_after_hermes_failure"/);

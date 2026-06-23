@@ -1122,6 +1122,7 @@ const startServer = async () => {
           const m44aDurableActionFixture = body.request_id === "req_m44a_durable_action_proposed";
           const m44aToolReadFixture = body.request_id === "req_m44a_tool_read";
           const m44d2ToolEndpointFixture = body.request_id === "req_m44d2_tool_endpoint";
+          const m44dToolEndpointPathAnswerFixture = body.request_id === "req_m44d_tool_endpoint_path_answer";
           const m44dToolEndpointSideEffectsFixture = body.request_id === "req_m44d_tool_endpoint_side_effects_true";
           const m44dToolEndpointCreativeSideEffectsFixture = body.request_id === "req_m44d_tool_endpoint_creative_side_effects";
           const m44dToolEndpointCreativeExecutionModeFixture = body.request_id === "req_m44d_tool_endpoint_creative_execution_mode";
@@ -1461,6 +1462,70 @@ const startServer = async () => {
                       ...activity(body, 4, "cmo.run.completed", "CMO completed the tool-capable run."),
                       sourceMode: "cmo.tool_capable",
                       status: "completed",
+                    },
+                  ],
+                }),
+                side_effects: {
+                  vault_write: false,
+                  memory_mutation: false,
+                  gbrain_mutation: false,
+                  source_auto_save: false,
+                  knowledge_promotion: false,
+                  supabase_mutation: false,
+                  session_mutation: false,
+                  raw_capture: false,
+                  repo_mutation: false,
+                  publishing: false,
+                },
+              },
+            );
+            return;
+          }
+
+          if (m44dToolEndpointPathAnswerFixture) {
+            assert.equal(url.pathname, "/agents/cmo/tool-execute");
+            writeJson(
+              response,
+              200,
+              {
+                ...cmoResponse(body, {
+                  response: {
+                    schema_version: "hermes.cmo.tool_response.v1",
+                    mode: "cmo.tool_capable",
+                    activity_summary: undefined,
+                    answer_basis: {
+                      mode: "tool_read",
+                    },
+                    structured_output: {
+                      classification: "native_conversation",
+                      response_style: "native_conversation",
+                      tool_policy: "none",
+                    },
+                    answer: {
+                      body: "[hermes_local_artifact_path_redacted]/creative/session/_crystal_egg_output.png",
+                    },
+                  },
+                  activity_events: [
+                    {
+                      ...activity(body, 1, "cmo.tool_read.completed", "CMO completed browser source read."),
+                      sourceMode: "cmo.tool_capable",
+                      status: "completed",
+                      data: {
+                        tool_family: "browser",
+                        tool_name: "browser_snapshot",
+                        tool_category: "browser",
+                        read_only: true,
+                        source_type: "url",
+                        status: "completed",
+                        success: true,
+                        workspace_id: "hold-pay",
+                        session_id: body.session_id,
+                        source_id: "source_hold_pay_faq",
+                        http_status: 200,
+                        content_type: "text/html",
+                        bytes_read: 4096,
+                        canonical_url_present: true,
+                      },
                     },
                   ],
                 }),
@@ -4825,6 +4890,12 @@ try {
       m44d2ToolEndpointResult.activity_events.some((event) => event.type === "cmo.answer.grounded" && event.data.used_live_tool_read === true),
       true,
       "tool endpoint must accept grounded live tool-read metadata",
+    );
+
+    await assert.rejects(
+      () => runHermesCmoRuntime(m44dToolEndpointRequest("req_m44d_tool_endpoint_path_answer")),
+      /Rejected field: answer_path_like/,
+      "tool_read answer with path-like artifact text must be blocked by the final answer guard",
     );
 
     await assert.rejects(
