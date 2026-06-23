@@ -270,12 +270,16 @@ const m13PollutedCmoOwnedCreativeSessionExecutionRequest = (requestId) => {
       all_context_items: [
         {
           content: "[hermes_local_artifact_path_redacted]/Content_Notes.md_Quality_missing.png_redact",
-          contentPreview: "/Users/admin/creative-agent-images/card.jpeg",
+          contentPreview: "/home/cmo/creative-agent-images/card.jpeg",
+        },
+        {
+          content: "C:\\cmo-creative-execute\\conversion_h_123\\local.webp",
+          contentPreview: "/var/tmp/cmo-creative-execute/card.png_redact",
         },
       ],
       missing_context: [
         {
-          contentPreview: "missing context points at cmo-creative-execute/output.webp",
+          contentPreview: "missing context points at /mnt/data/cmo-creative-execute/output.webp",
         },
       ],
       context_used: [
@@ -565,7 +569,7 @@ const writeJson = (response, statusCode, payload) => {
 };
 
 const outboundForbiddenValuePattern =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|conversion_h_|creative-agent-images|cmo-creative-execute|reference_assets|\.png_redact|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/(?:tmp|Users|home|var|mnt)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
 
 const collectForbiddenStringValues = (value, fields = [], pathParts = []) => {
   if (typeof value === "string") {
@@ -818,10 +822,22 @@ const startServer = async () => {
             assert.equal(body.constraints?.outbound_hermes_payload_sanitized, true);
             assert.equal(body.constraints?.outbound_hermes_payload_path_like_blocked, false);
             assert.ok(body.constraints?.outbound_sanitized_field_count >= 10);
+            assert.ok(
+              body.constraints?.outbound_sanitized_fields_preview.includes("messages.0.content"),
+              "Sanitizer diagnostics must show polluted assistant message content was sanitized",
+            );
+            assert.ok(
+              body.constraints?.outbound_sanitized_fields_preview.includes("context_pack.selected_context.0.content"),
+              "Sanitizer diagnostics must show selected context content was sanitized",
+            );
+            assert.ok(
+              body.constraints?.outbound_sanitized_fields_preview.includes("context_pack.recent_session_summary"),
+              "Sanitizer diagnostics must show recent session summary was sanitized",
+            );
             assert.equal(body.constraints?.workspace_fallback_suppressed_for_creative, true);
             assert.equal(
               body.messages[0].content,
-              "Creative asset was generated or updated. Use active asset metadata and Product reference assets for visual context.",
+              "Creative asset was generated or updated. Use active asset metadata and reference_assets for visual context.",
             );
             assert.equal(body.creative_working_state.assets[0].preview_url, null);
             assert.equal(body.creative_working_state.assets[0].render_url, null);

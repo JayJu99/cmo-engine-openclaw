@@ -1,10 +1,10 @@
 const OUTBOUND_FORBIDDEN_TEXT_PATTERN =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|conversion_h_|creative-agent-images|cmo-creative-execute|reference_assets|\.png_redact|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/(?:tmp|Users|home|var|mnt)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
 
 const TEXT_PLACEHOLDER =
   "Creative artifact text was redacted by Product before sending this turn to Hermes. Use canonical chat text and Product reference asset metadata for context.";
 const ASSISTANT_PLACEHOLDER =
-  "Creative asset was generated or updated. Use active asset metadata and Product reference assets for visual context.";
+  "Creative asset was generated or updated. Use active asset metadata and reference_assets for visual context.";
 const USER_PLACEHOLDER =
   "User message included an internal artifact reference that Product redacted before sending this turn to Hermes.";
 
@@ -17,7 +17,7 @@ const URL_FIELD_NAMES = new Set([
   "signedUrl",
 ]);
 
-const MAX_FIELD_PREVIEW_COUNT = 16;
+const MAX_FIELD_PREVIEW_COUNT = 48;
 
 type JsonPathSegment = string | number;
 
@@ -174,13 +174,19 @@ export function sanitizeOutboundHermesPayload<T>(
   const sanitizedFields: string[] = [];
   const sanitizedPayload = sanitizeValue(payload, [], undefined, sanitizedFields) as T;
   const uniqueSanitizedFields = Array.from(new Set(sanitizedFields));
-  const blockedFields = collectBlockedFields(sanitizedPayload);
-  const diagnostics: OutboundHermesPayloadSanitizerDiagnostics = {
+  const provisionalDiagnostics: OutboundHermesPayloadSanitizerDiagnostics = {
     outbound_hermes_payload_sanitized: uniqueSanitizedFields.length > 0,
-    outbound_hermes_payload_path_like_blocked: blockedFields.length > 0,
+    outbound_hermes_payload_path_like_blocked: false,
     outbound_sanitized_field_count: uniqueSanitizedFields.length,
     outbound_sanitized_fields_preview: uniqueSanitizedFields.slice(0, MAX_FIELD_PREVIEW_COUNT),
     ...(options.creativeRoute ? { workspace_fallback_suppressed_for_creative: true } : {}),
+  };
+  const provisionalPayload = addDiagnostics(sanitizedPayload, provisionalDiagnostics);
+  const blockedFields = collectBlockedFields(provisionalPayload);
+  const serializedPayloadBlocked = outboundHermesStringHasForbiddenArtifactText(JSON.stringify(provisionalPayload));
+  const diagnostics: OutboundHermesPayloadSanitizerDiagnostics = {
+    ...provisionalDiagnostics,
+    outbound_hermes_payload_path_like_blocked: blockedFields.length > 0 || serializedPayloadBlocked,
   };
 
   return {
