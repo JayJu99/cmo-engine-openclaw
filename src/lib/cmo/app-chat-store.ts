@@ -2306,6 +2306,10 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(value.creative_execution_owner === "cmo" ? { creative_execution_owner: "cmo" } : {}),
     ...(value.creative_ideation_response_received === true ? { creative_ideation_response_received: true } : {}),
     ...(value.creative_session_response_received === true ? { creative_session_response_received: true } : {}),
+    ...(value.creative_conversation_response_received === true ? { creative_conversation_response_received: true } : {}),
+    ...(stringValue(value.creative_conversation_mode) ? { creative_conversation_mode: stringValue(value.creative_conversation_mode) } : {}),
+    ...(typeof value.creative_asset_mutation === "boolean" ? { creative_asset_mutation: value.creative_asset_mutation } : {}),
+    ...(typeof value.creative_state_mutation === "boolean" ? { creative_state_mutation: value.creative_state_mutation } : {}),
     ...(typeof value.creative_state_update_present === "boolean" ? { creative_state_update_present: value.creative_state_update_present } : {}),
     ...(typeof value.creative_decision_present === "boolean" ? { creative_decision_present: value.creative_decision_present } : {}),
     ...(stringValue(value.creative_session_decision_action) ? { creative_session_decision_action: stringValue(value.creative_session_decision_action) } : {}),
@@ -2965,7 +2969,7 @@ function isTimedOutHermesError(reason: string): boolean {
 function creativeM1RejectedField(reason: string): string | undefined {
   if (
     !/rejected_by_m1_validator=true/i.test(reason) ||
-    !(/creative_metadata_present=true/i.test(reason) || /creative_ideation_response_received=true/i.test(reason) || /creative_session_response_received=true/i.test(reason) || /answer_basis_mode=creative_(?:ideation|session|refinement)/i.test(reason))
+    !(/creative_metadata_present=true/i.test(reason) || /creative_ideation_response_received=true/i.test(reason) || /creative_session_response_received=true/i.test(reason) || /creative_conversation_response_received=true/i.test(reason) || /answer_basis_mode=creative_(?:ideation|session|refinement|conversation)/i.test(reason))
   ) {
     return undefined;
   }
@@ -4674,9 +4678,10 @@ export async function createAppChatSession(
         echoCalls = hermesCmoMetadata.echoCalls;
         usedHermesCmoChat = true;
       } else if (creativeValidationRejected) {
+        const creativeConversationValidationRejected = /creative_conversation_response_received=true|answer_basis_mode=creative_conversation/i.test(reason);
         const creativeSessionValidationRejected = /creative_session_response_received=true|answer_basis_mode=creative_(?:session|refinement)/i.test(reason);
-        const validationLabel = creativeSessionValidationRejected ? "Creative session" : creativeIdeationValidationRejected ? "Creative ideation" : "Creative execution";
-        const validationRouteDecision = /creative_session_response_received=true|answer_basis_mode=creative_(?:session|refinement)/i.test(reason)
+        const validationLabel = creativeConversationValidationRejected ? "Creative conversation" : creativeSessionValidationRejected ? "Creative session" : creativeIdeationValidationRejected ? "Creative ideation" : "Creative execution";
+        const validationRouteDecision = /creative_session_response_received=true|creative_conversation_response_received=true|answer_basis_mode=creative_(?:session|refinement|conversation)/i.test(reason)
           ? "creative_session"
           : creativeIdeationValidationRejected ? "creative_ideation" : "creative_execution";
 
@@ -4699,9 +4704,9 @@ export async function createAppChatSession(
         outerTimeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
         outerTimeoutSource = "creative_execute";
         routeDecision = validationRouteDecision;
-        creativeExecutionRequested = !creativeIdeationValidationRejected && !creativeSessionValidationRejected;
-        creativeResponseReceived = !creativeIdeationValidationRejected && !creativeSessionValidationRejected;
-        creativeMetadataPresent = !creativeIdeationValidationRejected && !creativeSessionValidationRejected;
+        creativeExecutionRequested = !creativeIdeationValidationRejected && !creativeSessionValidationRejected && !creativeConversationValidationRejected;
+        creativeResponseReceived = !creativeIdeationValidationRejected && !creativeSessionValidationRejected && !creativeConversationValidationRejected;
+        creativeMetadataPresent = !creativeIdeationValidationRejected && !creativeSessionValidationRejected && !creativeConversationValidationRejected;
         creativeRejectedByM1Validator = true;
         creativeRejectedField = m1RejectedField;
         creativeFallbackUsed = false;
@@ -4722,6 +4727,8 @@ export async function createAppChatSession(
           route_decision: validationRouteDecision,
           ...(creativeIdeationValidationRejected
             ? { creative_ideation_response_received: true }
+            : creativeConversationValidationRejected
+              ? { creative_conversation_response_received: true }
             : creativeSessionValidationRejected
               ? { creative_session_response_received: true }
             : {

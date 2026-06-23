@@ -239,6 +239,55 @@ const m13CmoOwnedCreativeSessionExecutionRequest = (requestId) => ({
   },
 });
 
+const m13CreativeConversationResponse = (request, action = "advise", body = "This direction is not too soft; keep the softer tone but increase contrast in the headline and product moment.", overrides = {}) => ({
+  schema_version: "hermes.cmo.response.v1",
+  request_id: request.request_id,
+  session_id: request.session_id,
+  turn_id: request.turn_id,
+  status: "completed",
+  response_status: "completed",
+  answer_basis: {
+    mode: "creative_conversation",
+    missing_inputs: [],
+    assumptions_used: [],
+    user_can_override: true,
+    suggested_user_inputs: [],
+  },
+  clarifying_question: {
+    required: false,
+    question: null,
+    reason: null,
+    missing_inputs: [],
+  },
+  answer: {
+    format: "markdown",
+    title: "Creative advice",
+    summary: "Non-mutating Creative conversation response.",
+    decision: action,
+    body,
+  },
+  structured_output: {
+    classification: "creative_conversation",
+    response_style: "creative_conversation",
+  },
+  creative_decision: {
+    action,
+    operation: "creative.answer_about_asset",
+  },
+  creative_assets_count: 0,
+  creative_asset_mutation: false,
+  creative_state_mutation: false,
+  creative_assets: [],
+  artifacts: [],
+  delegations: [],
+  memory_suggestions: [],
+  activity_summary: {
+    events_count: 0,
+    final_state: "completed",
+  },
+  ...overrides,
+});
+
 const m44eExternalResearchRequest = (requestId, userMessage = "Hiện tại trên thị trường có bên nào làm giống Feeback mình không?") => ({
   ...m44dToolEndpointRequest(requestId),
   workspace: {
@@ -618,7 +667,8 @@ const startServer = async () => {
             body.request_id === "req_m13_creative_executed_echo_true";
           const firstCallCmoOwnedCreativeExecution =
             body.request_id === "req_m13_cmo_owned_creative_execution_live_shape" ||
-            body.request_id === "req_m13_cmo_owned_creative_reference_fetch_failed";
+            body.request_id === "req_m13_cmo_owned_creative_reference_fetch_failed" ||
+            body.request_id === "req_m13_creative_conversation_advisory";
           const firstCallCreativeNative = firstCallCreativeExecution || firstCallCmoOwnedCreativeExecution;
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
           assert.equal(body.user_message, body.intent?.user_message);
@@ -895,6 +945,15 @@ const startServer = async () => {
                 final_state: "completed",
               },
             });
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_conversation_advisory") {
+            writeJson(response, 200, m13CreativeConversationResponse(
+              body,
+              "advise",
+              "Hướng này không bị hiền quá. Nó đang an toàn và premium; để mạnh hơn, tăng contrast ở hook, thêm một điểm căng về merchant checkout, và giữ visual 21:9 sạch thay vì thêm quá nhiều chi tiết.",
+            ));
             return;
           }
 
@@ -3536,6 +3595,7 @@ try {
   let m13CreativeUploadedAssetResult;
   let m13CmoOwnedCreativeExecutionResult;
   let m13CmoOwnedCreativeReferenceFetchFailedResult;
+  let m13CreativeConversationAdvisoryResult;
   let m13CreativeExecutedCreativeResult;
   let m13CreativeFalseOnlySideEffectsResult;
 
@@ -3887,6 +3947,73 @@ try {
       ),
       false,
       "source_answer without body/text must remain rejected",
+    );
+    const creativeConversationRequest = m13CmoOwnedCreativeSessionExecutionRequest("req_m13_validate_creative_conversation");
+    const creativeConversationAdvisoryValid = validateHermesCmoRuntimeResponse(
+      m13CreativeConversationResponse(creativeConversationRequest, "advise"),
+      creativeConversationRequest,
+      { allowExecutableDelegations: false, maxDelegations: 0 },
+    );
+    assert.equal(
+      creativeConversationAdvisoryValid,
+      true,
+      "Creative conversation advisory response must validate without asset or state mutation",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        m13CreativeConversationResponse(creativeConversationRequest, "critique", "The asset is clear, but the product moment needs a stronger focal point."),
+        creativeConversationRequest,
+        { allowExecutableDelegations: false, maxDelegations: 0 },
+      ),
+      true,
+      "Creative conversation critique response must validate without mutation",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        {
+          ...m13CreativeConversationResponse(creativeConversationRequest, "ask_clarification", ""),
+          answer: null,
+          clarifying_question: {
+            required: true,
+            question: "Should the next version lean more premium or more energetic?",
+            reason: "Creative direction fork.",
+            missing_inputs: ["tone"],
+          },
+        },
+        creativeConversationRequest,
+        { allowExecutableDelegations: false, maxDelegations: 0 },
+      ),
+      true,
+      "Creative conversation clarification response must validate when a clarification question is present",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        m13CreativeConversationResponse(creativeConversationRequest, "advise", "[hermes_local_artifact_path_redacted]/creative/session/output.png"),
+        creativeConversationRequest,
+        { allowExecutableDelegations: false, maxDelegations: 0 },
+      ),
+      false,
+      "Creative conversation path-like answers must remain rejected",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        m13CreativeConversationResponse(creativeConversationRequest, "advise", "This text claims no mutation but flags one.", {
+          creative_asset_mutation: true,
+        }),
+        creativeConversationRequest,
+        { allowExecutableDelegations: false, maxDelegations: 0 },
+      ),
+      false,
+      "Creative conversation mutation flags must contradict and reject the response",
+    );
+    assert.equal(
+      validateHermesCmoRuntimeResponse(
+        m13CreativeConversationResponse(sampleRequest, "advise"),
+        sampleRequest,
+        { allowExecutableDelegations: false, maxDelegations: 0 },
+      ),
+      false,
+      "non-Creative requests must not accept creative_conversation answer_basis",
     );
 
     result = await runHermesCmoRuntime(sampleRequest);
@@ -5086,6 +5213,18 @@ try {
     assert.equal(m13CmoOwnedCreativeExecutionResult.response.artifacts[0].render_url, "https://cmo.jayju.cloud/api/signed/creative_edited_fixture");
     assert.deepEqual(m13CmoOwnedCreativeExecutionResult.activity_events.map((event) => event.type), ["creative.started", "creative.generating"]);
     assert.deepEqual(m13CmoOwnedCreativeExecutionResult.activity_events.map((event) => event.source.mode), ["creative_execution", "creative_execution"]);
+    m13CreativeConversationAdvisoryResult = await runHermesCmoRuntime(m13CmoOwnedCreativeSessionExecutionRequest("req_m13_creative_conversation_advisory"));
+    assert.equal(m13CreativeConversationAdvisoryResult.response.status, "completed");
+    assert.equal(m13CreativeConversationAdvisoryResult.response.answer_basis.mode, "creative_conversation");
+    assert.match(m13CreativeConversationAdvisoryResult.response.answer?.body ?? "", /không bị hiền quá/i);
+    assert.equal(m13CreativeConversationAdvisoryResult.response.structured_output.creative_conversation_response_received, true);
+    assert.equal(m13CreativeConversationAdvisoryResult.response.structured_output.creative_conversation_mode, "advisory");
+    assert.equal(m13CreativeConversationAdvisoryResult.response.structured_output.creative_assets_count, 0);
+    assert.equal(m13CreativeConversationAdvisoryResult.response.structured_output.creative_asset_mutation, false);
+    assert.equal(m13CreativeConversationAdvisoryResult.response.structured_output.creative_state_mutation, false);
+    assert.equal(m13CreativeConversationAdvisoryResult.response.structured_output.m1_validation_result, "accepted");
+    assert.equal(m13CreativeConversationAdvisoryResult.response.structured_output.fallback_used, false);
+    assert.equal(m13CreativeConversationAdvisoryResult.response.artifacts.length, 0);
     m13CmoOwnedCreativeReferenceFetchFailedResult = await runHermesCmoRuntime(m13CmoOwnedCreativeSessionExecutionRequest("req_m13_cmo_owned_creative_reference_fetch_failed"));
     assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.status, "failed");
     assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.answer_basis.mode, "creative_execution");

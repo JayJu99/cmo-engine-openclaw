@@ -1629,8 +1629,9 @@ function metadataFromHermes(
   const answerBasisMode = typeof answerBasis.mode === "string" ? answerBasis.mode : undefined;
   const creativeIdeationResponseReceived = answerBasisMode === "creative_ideation";
   const creativeSessionResponseReceived = answerBasisMode === "creative_session" || answerBasisMode === "creative_refinement";
+  const creativeConversationResponseReceived = answerBasisMode === "creative_conversation";
   const creativeExecutionResponseReceived = answerBasisMode === "creative_execution";
-  const creativeNativeResponseReceived = creativeIdeationResponseReceived || creativeSessionResponseReceived || creativeExecutionResponseReceived;
+  const creativeNativeResponseReceived = creativeIdeationResponseReceived || creativeSessionResponseReceived || creativeConversationResponseReceived || creativeExecutionResponseReceived;
   const creativeStateUpdatePresent =
     result.response.suggested_creative_state_update !== undefined ||
     structuredOutput.suggested_creative_state_update !== undefined ||
@@ -1649,6 +1650,17 @@ function metadataFromHermes(
       ? creativeDecisionRecord.draftId
       : undefined;
   const creativeDecisionOperation = typeof creativeDecisionRecord?.operation === "string" ? creativeDecisionRecord.operation : undefined;
+  const creativeConversationMode = typeof structuredOutput.creative_conversation_mode === "string" && structuredOutput.creative_conversation_mode.trim()
+    ? structuredOutput.creative_conversation_mode.trim()
+    : creativeConversationResponseReceived && (creativeDecisionAction === "review" || creativeDecisionAction === "critique")
+      ? "review"
+      : creativeConversationResponseReceived && creativeDecisionAction === "ask_clarification"
+        ? "clarify"
+        : creativeConversationResponseReceived && (creativeDecisionAction === "ideate" || creativeDecisionAction === "propose_prompt")
+          ? "ideation"
+          : creativeConversationResponseReceived
+            ? "advisory"
+            : undefined;
   const activityEventTypes = activityEvents.map((event) => event.type);
   const rawActivityEventTypes = Array.isArray(structuredOutput.raw_activity_event_types)
     ? structuredOutput.raw_activity_event_types.filter((item): item is string => typeof item === "string")
@@ -1661,6 +1673,9 @@ function metadataFromHermes(
     typeof structuredOutput.activity_events_allowed_for_creative_execution === "boolean"
       ? structuredOutput.activity_events_allowed_for_creative_execution
       : undefined;
+  const responseCreativeAssetsCount = typeof structuredOutput.creative_assets_count === "number" && Number.isFinite(structuredOutput.creative_assets_count)
+    ? Math.max(0, Math.floor(structuredOutput.creative_assets_count))
+    : undefined;
   const creativeIdeationCanonicalized =
     typeof structuredOutput.creative_ideation_canonicalized === "boolean"
       ? structuredOutput.creative_ideation_canonicalized
@@ -1727,6 +1742,13 @@ function metadataFromHermes(
       ? {
           ...(creativeIdeationResponseReceived ? { creative_ideation_response_received: true } : {}),
           ...(creativeSessionResponseReceived ? { creative_session_response_received: true } : {}),
+          ...(creativeConversationResponseReceived ? {
+            creative_conversation_response_received: true,
+            creative_conversation_mode: creativeConversationMode,
+            creative_asset_mutation: false,
+            creative_state_mutation: false,
+            m1_validation_result: "accepted",
+          } : {}),
           ...(creativeExecutionResponseReceived ? {
             creative_execution_response_received: true,
             creative_execution_owner: "cmo",
@@ -1744,7 +1766,11 @@ function metadataFromHermes(
             : {}),
           ...(result.request.constraints.creative_working_state_present === true ? { creative_working_state_present: true } : {}),
           ...(typeof result.request.constraints.active_creative_asset_id === "string" ? { active_creative_asset_id: result.request.constraints.active_creative_asset_id } : {}),
-          ...(typeof result.request.constraints.creative_assets_count === "number" ? { creative_assets_count: result.request.constraints.creative_assets_count } : {}),
+          ...(creativeConversationResponseReceived
+            ? { creative_assets_count: responseCreativeAssetsCount ?? 0 }
+            : typeof result.request.constraints.creative_assets_count === "number"
+              ? { creative_assets_count: result.request.constraints.creative_assets_count }
+              : {}),
           ...(typeof referenceAssetsCount === "number" ? { reference_assets_count: referenceAssetsCount } : {}),
           ...(artifactTransportMode ? { artifact_transport_mode: artifactTransportMode } : {}),
           ...(creativeDecisionAction === "execute"

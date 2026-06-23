@@ -945,6 +945,10 @@ export interface HermesCmoChatMetadata {
   creative_execution_owner?: "cmo";
   creative_ideation_response_received?: boolean;
   creative_session_response_received?: boolean;
+  creative_conversation_response_received?: boolean;
+  creative_conversation_mode?: "advisory" | "review" | "clarify" | "ideation" | string;
+  creative_asset_mutation?: boolean;
+  creative_state_mutation?: boolean;
   creative_state_update_present?: boolean;
   creative_decision_present?: boolean;
   creative_session_decision_action?: string;

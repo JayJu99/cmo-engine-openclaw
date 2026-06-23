@@ -246,6 +246,7 @@ export interface HermesCmoRuntimeAnswerBasis {
     | "creative_ideation"
     | "creative_session"
     | "creative_refinement"
+    | "creative_conversation"
     | "creative_execution"
     | "save_to_vault"
     | "tool_read"
@@ -422,6 +423,7 @@ const simpleAnswerModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "creative_ideation",
   "creative_session",
   "creative_refinement",
+  "creative_conversation",
   "creative_execution",
 ]);
 const classifications = new Set<HermesCmoClassification>([
@@ -645,10 +647,12 @@ const hasOnlyAllowedValues = <T extends string>(values: unknown, allowedValues: 
 const optionalClassificationIsAllowed = (value: unknown, options: { allowCreativeNative?: boolean } = {}) =>
   value === undefined ||
   (typeof value === "string" && classifications.has(value as HermesCmoClassification)) ||
-  options.allowCreativeNative === true && (value === "creative_ideation" || value === "creative_session" || value === "creative_refinement" || value === "creative_execution");
+  options.allowCreativeNative === true && (value === "creative_ideation" || value === "creative_session" || value === "creative_refinement" || value === "creative_conversation" || value === "creative_execution");
 
-const optionalResponseStyleIsAllowed = (value: unknown) =>
-  value === undefined || (typeof value === "string" && responseStyles.has(value));
+const optionalResponseStyleIsAllowed = (value: unknown, options: { allowCreativeNative?: boolean } = {}) =>
+  value === undefined ||
+  (typeof value === "string" && responseStyles.has(value)) ||
+  options.allowCreativeNative === true && (value === "creative_ideation" || value === "creative_session" || value === "creative_refinement" || value === "creative_conversation" || value === "creative_execution");
 
 const optionalToolPolicyIsAllowed = (value: unknown) =>
   value === undefined || (typeof value === "string" && toolPolicies.has(value));
@@ -833,6 +837,7 @@ interface HermesCmoAnswerBasisModeOptions {
   allowToolRead?: boolean;
   allowCreativeIdeation?: boolean;
   allowCreativeExecution?: boolean;
+  allowCreativeConversation?: boolean;
 }
 
 const isToolCapableResponseCandidate = (response: Record<string, unknown>): boolean =>
@@ -846,11 +851,13 @@ const answerBasisModeIsAllowed = (
   const allowToolRead = typeof options === "boolean" ? options : options.allowToolRead === true;
   const allowCreativeIdeation = typeof options === "boolean" ? false : options.allowCreativeIdeation === true;
   const allowCreativeExecution = typeof options === "boolean" ? false : options.allowCreativeExecution === true;
+  const allowCreativeConversation = typeof options === "boolean" ? false : options.allowCreativeConversation === true;
 
   return (
     answerBasisModes.has(mode as HermesCmoRuntimeAnswerBasis["mode"]) ||
     allowToolRead && mode === "tool_read" ||
     allowCreativeIdeation && (mode === "creative_ideation" || mode === "creative_session" || mode === "creative_refinement") ||
+    allowCreativeConversation && mode === "creative_conversation" ||
     allowCreativeExecution && mode === "creative_execution"
   );
 };
@@ -860,7 +867,7 @@ const answerTextFromKnownSimpleShape = (answer: unknown): string | null => {
     return null;
   }
 
-  for (const key of ["body", "text"]) {
+  for (const key of ["body", "content", "text"]) {
     const value = answer[key];
 
     if (typeof value === "string" && value.trim()) {
@@ -954,9 +961,9 @@ const normalizeHermesCmoResponseCandidate = (
   const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
   const answerBasisMode = typeof answerBasis.mode === "string" ? answerBasis.mode : undefined;
   const canNormalizeAnswerBasis = answerBasisMode !== undefined &&
-    answerBasisModeIsAllowed(answerBasisMode, { allowToolRead: toolCapableResponse, allowCreativeIdeation: true });
+    answerBasisModeIsAllowed(answerBasisMode, { allowToolRead: toolCapableResponse, allowCreativeIdeation: true, allowCreativeConversation: true });
   const clarifyingQuestion = isRecord(response.clarifying_question) ? response.clarifying_question : {};
-  const answerMode = answerModeFromResponse(response, answerBasis, { allowToolRead: toolCapableResponse, allowCreativeIdeation: true });
+  const answerMode = answerModeFromResponse(response, answerBasis, { allowToolRead: toolCapableResponse, allowCreativeIdeation: true, allowCreativeConversation: true });
 
   return {
     ...response,
@@ -1287,8 +1294,9 @@ const responseValidationFailureReason = (
   const activitySummaryFailure = activitySummaryFailureReason(activitySummary, response);
   const toolTraceSummaryRejection = safeToolTraceSummaryRejection(response.tool_trace_summary);
   const allowCreativeIdeationAnswerBasis = requestAllowsCreativeIdeationAnswerBasis(request);
+  const allowCreativeConversationAnswerBasis = requestAllowsCreativeConversationAnswerBasis(request);
   const allowCreativeExecutionAnswerBasis = requestAllowsCmoOwnedCreativeExecutionAnswerBasis(request, response);
-  const creativeNativeValidationOptions = { allowCreativeNative: allowCreativeIdeationAnswerBasis || allowCreativeExecutionAnswerBasis };
+  const creativeNativeValidationOptions = { allowCreativeNative: allowCreativeIdeationAnswerBasis || allowCreativeConversationAnswerBasis || allowCreativeExecutionAnswerBasis };
 
   if (response.direct_vault_write === true) return "direct_vault_write=true";
   if (response.direct_memory_mutation === true) return "direct_memory_mutation=true";
@@ -1308,6 +1316,7 @@ const responseValidationFailureReason = (
   if (!validateAnswerBasis(response.answer_basis, {
     allowToolRead: isToolCapableResponseCandidate(response),
     allowCreativeIdeation: allowCreativeIdeationAnswerBasis,
+    allowCreativeConversation: allowCreativeConversationAnswerBasis,
     allowCreativeExecution: allowCreativeExecutionAnswerBasis,
   })) {
     const basis = isRecord(response.answer_basis) ? response.answer_basis : {};
@@ -1325,11 +1334,13 @@ const responseValidationFailureReason = (
   if (toolTraceSummaryRejection) return `activity_summary_invalid:${toolTraceSummaryRejection}`;
   if (!optionalClassificationIsAllowed(response.classification, creativeNativeValidationOptions)) return `classification=${String(response.classification)}`;
   if (!optionalClassificationIsAllowed(structuredOutput.classification, creativeNativeValidationOptions)) return `structured_output.classification=${String(structuredOutput.classification)}`;
-  if (!optionalResponseStyleIsAllowed(response.response_style)) return `response_style=${String(response.response_style)}`;
-  if (!optionalResponseStyleIsAllowed(structuredOutput.response_style)) return `structured_output.response_style=${String(structuredOutput.response_style)}`;
+  if (!optionalResponseStyleIsAllowed(response.response_style, creativeNativeValidationOptions)) return `response_style=${String(response.response_style)}`;
+  if (!optionalResponseStyleIsAllowed(structuredOutput.response_style, creativeNativeValidationOptions)) return `structured_output.response_style=${String(structuredOutput.response_style)}`;
   if (responseUsesResearchFollowupClassificationOrStyle(response) && !requestHasResearchFollowupContext(request)) return "research_followup_context_missing";
   if (!optionalToolPolicyIsAllowed(response.tool_policy)) return `tool_policy=${String(response.tool_policy)}`;
   if (!optionalToolPolicyIsAllowed(structuredOutput.tool_policy)) return `structured_output.tool_policy=${String(structuredOutput.tool_policy)}`;
+  const creativeConversationFailure = creativeConversationValidationFailure(response, structuredOutput, request);
+  if (creativeConversationFailure) return creativeConversationFailure;
 
   if (
     response.status === "needs_user_input" &&
@@ -1456,6 +1467,116 @@ const responseHasCreativeExecutionFailure = (
     (!operation || operation.startsWith("creative.")) &&
     referenceFetchFailed
   );
+};
+
+const unsafeCreativeConversationAnswerPattern =
+  /(\[hermes_local_artifact_path_redacted\]|\/tmp\/|conversion_h_|creative-agent-images|cmo-creative-execute|(?:^|\s)(?:file:|[A-Za-z]:[\\/]))/i;
+
+const creativeConversationAnswerText = (response: Record<string, unknown>): string => {
+  const answer = isRecord(response.answer) ? response.answer : {};
+
+  return [answer.body, answer.content, answer.text, answer.summary]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join("\n");
+};
+
+const creativeConversationModeFromAction = (action: string | undefined): "advisory" | "review" | "clarify" | "ideation" => {
+  switch (action) {
+    case "review":
+    case "critique":
+      return "review";
+    case "ask_clarification":
+      return "clarify";
+    case "ideate":
+    case "propose_prompt":
+      return "ideation";
+    case "advise":
+    case "answer":
+    case "answer_about_asset":
+    case "discuss":
+    case "no_op":
+    case "noop":
+    case "none":
+    default:
+      return "advisory";
+  }
+};
+
+const boolFromCreativeConversationField = (
+  response: Record<string, unknown>,
+  structuredOutput: Record<string, unknown>,
+  key: string,
+): boolean | undefined => {
+  const value = response[key] ?? structuredOutput[key];
+
+  return typeof value === "boolean" ? value : undefined;
+};
+
+const numberFromCreativeConversationField = (
+  response: Record<string, unknown>,
+  structuredOutput: Record<string, unknown>,
+  key: string,
+): number | undefined => {
+  const value = response[key] ?? structuredOutput[key];
+
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+};
+
+const creativeConversationValidationFailure = (
+  response: Record<string, unknown>,
+  structuredOutput: Record<string, unknown>,
+  request: HermesCmoRuntimeRequest,
+): string | null => {
+  const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
+  const creativeDecision = creativeDecisionFromResponse(response, structuredOutput);
+  const action = typeof creativeDecision?.action === "string" ? creativeDecision.action : undefined;
+  const answerText = creativeConversationAnswerText(response);
+  const clarifyingQuestion = isRecord(response.clarifying_question) ? response.clarifying_question : {};
+  const clarificationQuestion = typeof clarifyingQuestion.question === "string" ? clarifyingQuestion.question.trim() : "";
+  const creativeAssetsCount = numberFromCreativeConversationField(response, structuredOutput, "creative_assets_count");
+  const creativeAssetMutation = boolFromCreativeConversationField(response, structuredOutput, "creative_asset_mutation");
+  const creativeStateMutation = boolFromCreativeConversationField(response, structuredOutput, "creative_state_mutation");
+  const creativeSummary = creativeTraceSummary(response);
+  const creativeArtifacts = creativeResponseArtifacts(response);
+
+  if (answerBasis.mode !== "creative_conversation") {
+    return null;
+  }
+
+  if (!requestAllowsCreativeConversationAnswerBasis(request)) {
+    return "creative_conversation_not_allowed_for_request";
+  }
+
+  if (response.status !== "completed") {
+    return `creative_conversation_status=${String(response.status)}`;
+  }
+
+  if (action !== undefined && !creativeConversationDecisionActions.has(action)) {
+    return `creative_conversation_action=${action}`;
+  }
+
+  if (creativeAssetMutation === true || creativeStateMutation === true || responseHasCreativeStateUpdate(response, structuredOutput)) {
+    return "creative_conversation_mutation=true";
+  }
+
+  if (
+    (creativeAssetsCount ?? 0) > 0 ||
+    creativeArtifacts.some(creativeArtifactLooksRenderable) ||
+    creativeSummary.image_metadata_present === true ||
+    (typeof creativeSummary.image_count === "number" && creativeSummary.image_count > 0)
+  ) {
+    return "creative_conversation_assets_present";
+  }
+
+  if (!answerText.trim() && !clarificationQuestion) {
+    return "creative_conversation_answer_empty";
+  }
+
+  if (unsafeCreativeConversationAnswerPattern.test(answerText) || unsafeCreativeConversationAnswerPattern.test(clarificationQuestion)) {
+    return "creative_conversation_answer_path_like";
+  }
+
+  return null;
 };
 
 const normalizeCreativeExecutionResponseCandidate = (
@@ -1982,6 +2103,15 @@ const requestAllowsCreativeIdeationAnswerBasis = (request: HermesCmoRuntimeReque
       routeDecision === "creative_session" && (requestCreativeFlagIsTrue(request, "creative_working_state_present") || requestHasCreativeWorkingState(request))
     ) &&
     requestCreativeFlagIsTrue(request, "cmo_owns_creative_decision")
+  );
+};
+
+const requestAllowsCreativeConversationAnswerBasis = (request: HermesCmoRuntimeRequest): boolean => {
+  const routeDecision = requestRouteDecision(request);
+
+  return (
+    (routeDecision === "creative_session" || routeDecision === "creative_ideation" || routeDecision === "creative_execution" || requestIsCreativeIdeation(request) || requestHasCreativeWorkingState(request)) &&
+    requestHasCmoCreativeDecisionOwner(request)
   );
 };
 
@@ -2679,8 +2809,23 @@ const creativeIdeationDecisionActions = new Set([
   "none",
 ]);
 
+const creativeConversationDecisionActions = new Set([
+  "advise",
+  "review",
+  "critique",
+  "ask_clarification",
+  "ideate",
+  "propose_prompt",
+  "answer",
+  "answer_about_asset",
+  "discuss",
+  "no_op",
+  "noop",
+  "none",
+]);
+
 const creativeIdeationAnswerBasisModes = new Set(["creative_ideation", "creative_session", "creative_refinement"]);
-const creativeNativeAnswerBasisModes = new Set(["creative_ideation", "creative_session", "creative_refinement", "creative_execution"]);
+const creativeNativeAnswerBasisModes = new Set(["creative_ideation", "creative_session", "creative_refinement", "creative_conversation", "creative_execution"]);
 
 interface HermesCreativeIdeationCanonicalization {
   response: Record<string, unknown>;
@@ -3568,8 +3713,9 @@ export const validateHermesCmoRuntimeResponse = (
   const clarifyingQuestion = responseCandidate.clarifying_question;
   const activitySummaryFailure = activitySummaryFailureReason(activitySummary, responseCandidate);
   const allowCreativeIdeationAnswerBasis = requestAllowsCreativeIdeationAnswerBasis(request);
+  const allowCreativeConversationAnswerBasis = requestAllowsCreativeConversationAnswerBasis(request);
   const allowCreativeExecutionAnswerBasis = requestAllowsCmoOwnedCreativeExecutionAnswerBasis(request, responseCandidate);
-  const creativeNativeValidationOptions = { allowCreativeNative: allowCreativeIdeationAnswerBasis || allowCreativeExecutionAnswerBasis };
+  const creativeNativeValidationOptions = { allowCreativeNative: allowCreativeIdeationAnswerBasis || allowCreativeConversationAnswerBasis || allowCreativeExecutionAnswerBasis };
 
   if (
     responseCandidate.schema_version !== "hermes.cmo.response.v1" ||
@@ -3580,6 +3726,7 @@ export const validateHermesCmoRuntimeResponse = (
     !validateAnswerBasis(answerBasis, {
       allowToolRead: isToolCapableResponseCandidate(responseCandidate),
       allowCreativeIdeation: allowCreativeIdeationAnswerBasis,
+      allowCreativeConversation: allowCreativeConversationAnswerBasis,
       allowCreativeExecution: allowCreativeExecutionAnswerBasis,
     }) ||
     !validateContextResolution(responseCandidate.context_resolution) ||
@@ -3594,12 +3741,16 @@ export const validateHermesCmoRuntimeResponse = (
     Boolean(safeToolTraceSummaryRejection(responseCandidate.tool_trace_summary)) ||
     !optionalClassificationIsAllowed(responseCandidate.classification, creativeNativeValidationOptions) ||
     !optionalClassificationIsAllowed(structuredOutput.classification, creativeNativeValidationOptions) ||
-    !optionalResponseStyleIsAllowed(responseCandidate.response_style) ||
-    !optionalResponseStyleIsAllowed(structuredOutput.response_style) ||
+    !optionalResponseStyleIsAllowed(responseCandidate.response_style, creativeNativeValidationOptions) ||
+    !optionalResponseStyleIsAllowed(structuredOutput.response_style, creativeNativeValidationOptions) ||
     responseUsesResearchFollowupClassificationOrStyle(responseCandidate) && !requestHasResearchFollowupContext(request) ||
     !optionalToolPolicyIsAllowed(responseCandidate.tool_policy) ||
     !optionalToolPolicyIsAllowed(structuredOutput.tool_policy)
   ) {
+    return false;
+  }
+
+  if (creativeConversationValidationFailure(responseCandidate, structuredOutput, request)) {
     return false;
   }
 
@@ -3797,9 +3948,21 @@ const extractLiveResponsePayload = (
   const responseStructuredOutput = isRecord(responseCandidate.structured_output) ? responseCandidate.structured_output : {};
   const responseAnswerBasis = isRecord(responseCandidate.answer_basis) ? responseCandidate.answer_basis : {};
   const creativeNativeResponseReceived = creativeNativeAnswerBasisModes.has(String(responseAnswerBasis.mode));
+  const creativeConversationResponseReceived = responseAnswerBasis.mode === "creative_conversation";
   const creativeExecutionResponseReceived = responseAnswerBasis.mode === "creative_execution";
   const creativeStateUpdatePresent = responseHasCreativeStateUpdate(responseCandidate, responseStructuredOutput);
   const creativeDecisionPresent = responseHasCreativeDecision(responseCandidate, responseStructuredOutput);
+  const creativeDecision = creativeDecisionFromResponse(responseCandidate, responseStructuredOutput);
+  const creativeDecisionAction = typeof creativeDecision?.action === "string" ? creativeDecision.action : undefined;
+  const creativeConversationMode = creativeConversationResponseReceived
+    ? creativeConversationModeFromAction(creativeDecisionAction)
+    : undefined;
+  const creativeAssetMutation = creativeConversationResponseReceived
+    ? boolFromCreativeConversationField(responseCandidate, responseStructuredOutput, "creative_asset_mutation") ?? false
+    : undefined;
+  const creativeStateMutation = creativeConversationResponseReceived
+    ? boolFromCreativeConversationField(responseCandidate, responseStructuredOutput, "creative_state_mutation") ?? false
+    : undefined;
   const activityEventTypes = activityEventTypesFrom(effectiveActivityEventsCandidate);
   const creativeIdeationActivityDiagnostics = {
     activity_event_types: activityEventTypes,
@@ -3827,11 +3990,14 @@ const extractLiveResponsePayload = (
         ...responseStructuredOutput,
         creative_ideation_response_received: responseAnswerBasis.mode === "creative_ideation",
         creative_session_response_received: responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement",
+        ...(creativeConversationResponseReceived ? { creative_conversation_response_received: true } : {}),
+        ...(creativeConversationMode ? { creative_conversation_mode: creativeConversationMode } : {}),
         creative_execution_response_received: creativeExecutionResponseReceived,
         ...(creativeExecutionResponseReceived ? { creative_execution_owner: "cmo" } : {}),
         ...(creativeExecutionResponseReceived ? { creative_long_running_turn: true } : {}),
         ...(creativeExecutionResponseReceived ? { creative_execution_requested: false } : {}),
-        ...(creativeExecutionResponseReceived ? { m1_validation_result: "accepted" } : {}),
+        ...(creativeExecutionResponseReceived || creativeConversationResponseReceived ? { m1_validation_result: "accepted" } : {}),
+        ...(creativeConversationResponseReceived ? { creative_assets_count: 0, creative_asset_mutation: creativeAssetMutation, creative_state_mutation: creativeStateMutation } : {}),
         creative_state_update_present: creativeStateUpdatePresent,
         creative_decision_present: creativeDecisionPresent,
         answer_basis_mode: String(responseAnswerBasis.mode),
@@ -3842,11 +4008,14 @@ const extractLiveResponsePayload = (
         ...(isRecord(responseCandidate.activity_summary) ? responseCandidate.activity_summary : {}),
         creative_ideation_response_received: responseAnswerBasis.mode === "creative_ideation",
         creative_session_response_received: responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement",
+        ...(creativeConversationResponseReceived ? { creative_conversation_response_received: true } : {}),
+        ...(creativeConversationMode ? { creative_conversation_mode: creativeConversationMode } : {}),
         creative_execution_response_received: creativeExecutionResponseReceived,
         ...(creativeExecutionResponseReceived ? { creative_execution_owner: "cmo" } : {}),
         ...(creativeExecutionResponseReceived ? { creative_long_running_turn: true } : {}),
         ...(creativeExecutionResponseReceived ? { creative_execution_requested: false } : {}),
-        ...(creativeExecutionResponseReceived ? { m1_validation_result: "accepted" } : {}),
+        ...(creativeExecutionResponseReceived || creativeConversationResponseReceived ? { m1_validation_result: "accepted" } : {}),
+        ...(creativeConversationResponseReceived ? { creative_assets_count: 0, creative_asset_mutation: creativeAssetMutation, creative_state_mutation: creativeStateMutation } : {}),
         creative_state_update_present: creativeStateUpdatePresent,
         creative_decision_present: creativeDecisionPresent,
         answer_basis_mode: String(responseAnswerBasis.mode),
@@ -3868,7 +4037,7 @@ const extractLiveResponsePayload = (
     const creativeNativeValidationSuffix = creativeNativeResponseReceived
       ? creativeExecutionResponseReceived
         ? ` creative_execution_response_received=true creative_execution_owner=cmo answer_basis_mode=${String(responseAnswerBasis.mode)} creative_long_running_turn=true creative_execution_requested=false creative_state_update_present=${String(creativeStateUpdatePresent)} creative_decision_present=${String(creativeDecisionPresent)} creative_execution_canonicalized=${String(creativeExecutionCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeExecutionCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_execution=${String(creativeExecutionCanonicalization.canonicalized)} rejected_activity_event_type=${creativeExecutionCanonicalization.rejectedActivityEventType ?? "none"} fallback_used=false rejected_by_m1_validator=true rejected_field=${rejectedField}.`
-        : ` creative_ideation_response_received=${String(responseAnswerBasis.mode === "creative_ideation")} creative_session_response_received=${String(responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement")} answer_basis_mode=${String(responseAnswerBasis.mode)} creative_state_update_present=${String(creativeStateUpdatePresent)} creative_decision_present=${String(creativeDecisionPresent)} creative_ideation_canonicalized=${String(creativeIdeationCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeIdeationCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_ideation=${String(creativeIdeationCanonicalization.canonicalized)} rejected_activity_event_type=${creativeIdeationCanonicalization.rejectedActivityEventType ?? "none"} fallback_used=false rejected_by_m1_validator=true rejected_field=${rejectedField}.`
+        : ` creative_ideation_response_received=${String(responseAnswerBasis.mode === "creative_ideation")} creative_session_response_received=${String(responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement")} creative_conversation_response_received=${String(creativeConversationResponseReceived)} creative_conversation_mode=${creativeConversationMode ?? "none"} answer_basis_mode=${String(responseAnswerBasis.mode)} creative_asset_mutation=${String(creativeAssetMutation ?? false)} creative_state_mutation=${String(creativeStateMutation ?? false)} creative_state_update_present=${String(creativeStateUpdatePresent)} creative_decision_present=${String(creativeDecisionPresent)} creative_ideation_canonicalized=${String(creativeIdeationCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeIdeationCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_ideation=${String(creativeIdeationCanonicalization.canonicalized)} rejected_activity_event_type=${creativeIdeationCanonicalization.rejectedActivityEventType ?? "none"} fallback_used=false rejected_by_m1_validator=true rejected_field=${rejectedField}.`
       : "";
 
     throw new Error(
@@ -3903,7 +4072,7 @@ const extractLiveResponsePayload = (
     const creativeIdeationDiagnosticSuffix = creativeNativeResponseReceived
       ? creativeExecutionResponseReceived
         ? ` creative_execution_response_received=true creative_execution_owner=cmo answer_basis_mode=${String(responseAnswerBasis.mode)} creative_long_running_turn=true creative_execution_requested=false creative_execution_canonicalized=${String(creativeExecutionCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeExecutionCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_execution=${String(creativeExecutionCanonicalization.canonicalized)} rejected_activity_event_type=${creativeExecutionCanonicalization.rejectedActivityEventType ?? failedEventType ?? "unknown"} fallback_used=false rejected_by_m1_validator=true`
-        : ` creative_ideation_response_received=${String(responseAnswerBasis.mode === "creative_ideation")} creative_session_response_received=${String(responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement")} answer_basis_mode=${String(responseAnswerBasis.mode)} creative_state_update_present=${String(creativeStateUpdatePresent)} creative_decision_present=${String(creativeDecisionPresent)} creative_ideation_canonicalized=${String(creativeIdeationCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeIdeationCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_ideation=${String(creativeIdeationCanonicalization.canonicalized)} rejected_activity_event_type=${creativeIdeationCanonicalization.rejectedActivityEventType ?? failedEventType ?? "unknown"} fallback_used=false rejected_by_m1_validator=true`
+        : ` creative_ideation_response_received=${String(responseAnswerBasis.mode === "creative_ideation")} creative_session_response_received=${String(responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement")} creative_conversation_response_received=${String(creativeConversationResponseReceived)} creative_conversation_mode=${creativeConversationMode ?? "none"} answer_basis_mode=${String(responseAnswerBasis.mode)} creative_asset_mutation=${String(creativeAssetMutation ?? false)} creative_state_mutation=${String(creativeStateMutation ?? false)} creative_state_update_present=${String(creativeStateUpdatePresent)} creative_decision_present=${String(creativeDecisionPresent)} creative_ideation_canonicalized=${String(creativeIdeationCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeIdeationCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_ideation=${String(creativeIdeationCanonicalization.canonicalized)} rejected_activity_event_type=${creativeIdeationCanonicalization.rejectedActivityEventType ?? failedEventType ?? "unknown"} fallback_used=false rejected_by_m1_validator=true`
       : "";
 
     throw new Error(`Hermes CMO Agent activity_events did not match hermes.activity.event.v1 or included forbidden delegation events. Rejected field: ${activityValidationFailureReason(failedEvent, request, effectiveActivityValidation)}.${creativeIdeationDiagnosticSuffix}`);
