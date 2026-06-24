@@ -962,6 +962,10 @@ export interface HermesCmoChatMetadata {
   creative_draft_update_allowed?: boolean;
   creative_expected_response?: "none" | "minimal_ack" | "text" | "text_prompt" | "asset" | string;
   creative_no_execute_modifier_detected?: boolean;
+  product_contract_violation?: boolean;
+  contract_violation_reason?: string;
+  request_execution_allowed?: boolean;
+  request_mutation_allowed?: boolean;
   assistant_response_suppressed_for_noop?: boolean;
   creative_conversation_rejected?: boolean;
   creative_conversation_rejection_reason?: string;

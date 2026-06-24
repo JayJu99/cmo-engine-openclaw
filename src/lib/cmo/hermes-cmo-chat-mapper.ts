@@ -213,9 +213,21 @@ function isStaleFailureAssistantContext(message: CMOChatMessage): boolean {
     message.runtimeErrorReason ||
       message.hermesCmoErrorReason ||
       message.creativeRejectedByM1Validator === true ||
+      metadata?.assistant_response_suppressed_for_noop === true ||
+      metadata?.product_contract_violation === true ||
       metadata?.creative_conversation_rejected === true ||
       metadata?.product_outbound_payload_blocked === true ||
       metadata?.rejected_by_m1_validator === true,
+  );
+}
+
+function isMachineWrapperCreativeDraftText(value: string): boolean {
+  const compact = compactText(value, 600).toLowerCase();
+
+  return /^creative image asset\b/.test(compact) && (
+    /\brefine\b/.test(compact) ||
+    /\bexisting generated asset\b/.test(compact) ||
+    /\bgenerated asset\b/.test(compact)
   );
 }
 
@@ -373,6 +385,16 @@ function creativeAssetReplayText(message: CMOChatMessage): string | null {
 
 function canonicalReplayContent(message: CMOChatMessage): string | null {
   const directContent = canonicalAssistantText(message.content);
+
+  if (message.role === "assistant") {
+    if (typeof message.content !== "string" || !message.content.trim()) {
+      return null;
+    }
+
+    if (directContent && isMachineWrapperCreativeDraftText(directContent)) {
+      return null;
+    }
+  }
 
   if (directContent) {
     return directContent;

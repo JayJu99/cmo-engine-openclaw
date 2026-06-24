@@ -1102,7 +1102,7 @@ try {
     };
     const creativeReviewRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...creativeConversationInput,
-      message: "Critique the current visual for landing-page conversion, no image edits yet.",
+      message: "Review the current visual if we use it as a campaign hero; what are the biggest marketing risks?",
     });
     assert.equal(creativeReviewRequest.intent.creative_conversation_only, true);
     assert.equal(creativeReviewRequest.intent.creative_followup_intent_class, "asset_review");
@@ -1121,6 +1121,16 @@ try {
     assert.equal(creativeReviewRequest.capabilities.creative.canUpdateDraftState, false);
     assert.equal(creativeReviewRequest.capabilities.creative.canProposeDraft, false);
     assert.equal(creativeReviewRequest.reference_assets[0].asset_id, "creative_uploaded_primary");
+
+    const creativeReviewWithUseAsRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...creativeConversationInput,
+      sessionId: "session_eggs_creative_review_use_as",
+      userMessageId: "msg_eggs_creative_review_use_as",
+      message: "Review visual nay neu dung lam landing hero: rui ro marketing lon nhat la gi?",
+    });
+    assert.equal(creativeReviewWithUseAsRequest.intent.creative_followup_intent_class, "asset_review");
+    assert.equal(creativeReviewWithUseAsRequest.intent.execution_allowed, false);
+    assert.equal(creativeReviewWithUseAsRequest.intent.mutation_allowed, false);
 
     const creativePromptOnlyRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...creativeConversationInput,
@@ -1142,7 +1152,7 @@ try {
       ...creativeConversationInput,
       sessionId: "session_eggs_creative_channel_advice",
       userMessageId: "msg_eggs_creative_channel_advice",
-      message: "How should this same visual be used differently across web, social, and community channels?",
+      message: "Cung visual nay neu dung lam landing page, X post, va Telegram community announcement thi angle nen khac nhau the nao?",
     });
     assert.equal(creativeChannelAdviceRequest.intent.creative_conversation_only, true);
     assert.equal(creativeChannelAdviceRequest.intent.creative_followup_intent_class, "channel_advisory");
@@ -3903,7 +3913,7 @@ try {
     assert.match(source, /fallback_to: fallbackTrace\.fallback_to/);
     assert.match(source, /writeHermesCmoChatV11FallbackTrace\(chatResult\.request/);
     assert.match(source, /answer = mappedChat\.answer/);
-    assert.match(source, /answer = mappedHermesResult\.answer/);
+    assert.match(source, /answer = creativeContractViolation \? PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE : mappedHermesResult\.answer/);
     assert.match(source, /userVisibleAnswerPathLike\(answer\)/);
     assert.match(source, /user_visible_answer_guard_triggered: true/);
     assert.match(source, /user_visible_answer_guard_reason: guardReason/);
@@ -4233,6 +4243,21 @@ try {
     );
     assert.match(
       appChatStoreSource,
+      /creativeContractViolationMetadata[\s\S]*hermes_returned_execution_when_execution_forbidden/,
+      "Product must detect Hermes execution responses when the request contract forbids execution",
+    );
+    assert.match(
+      appChatStoreSource,
+      /creativeContractViolation \? \[\] : creativeAssetsFromHermesPayload/,
+      "Product must not accept Creative assets when Hermes violates a non-mutating request contract",
+    );
+    assert.match(
+      appChatStoreSource,
+      /PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE/,
+      "Product must surface a Product-local Creative contract violation instead of showing generated assets",
+    );
+    assert.match(
+      appChatStoreSource,
       /productOutboundCreativeContextBlocked[\s\S]*activeCreativeAssetId \? \{ active_creative_asset_id: activeCreativeAssetId \}/,
       "Product-local outbound guard block must preserve the active Creative asset metadata",
     );
@@ -4280,6 +4305,9 @@ try {
     assert.match(mapperSource, /cmo_call_surf/);
     assert.match(mapperSource, /cmo_call_echo/);
     assert.match(mapperSource, /tool_capable_cmo/);
+    assert.match(mapperSource, /isMachineWrapperCreativeDraftText/);
+    assert.match(mapperSource, /metadata\?\.product_contract_violation === true/);
+    assert.match(mapperSource, /typeof message\.content !== "string" \|\| !message\.content\.trim\(\)/);
 
     const configSource = await readFile(path.join(cmoDir, "config.ts"), "utf8");
     assert.match(configSource, /CMO_HERMES_CMO_TOOL_CHAT_ENABLED/);

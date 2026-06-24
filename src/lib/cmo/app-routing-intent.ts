@@ -88,8 +88,12 @@ export function isPromptProposalOnlyIntent(message: string): boolean {
   const lead = leadingIntentText(message);
   const tokens = tokensFor(lead);
   const asksForPrompt = hasAny(tokens, ["prompt", "brief", "direction", "concept", "idea", "angle", "viet", "write", "rewrite", "de", "xuat", "goi", "y"]);
-  const explicitNoExecution = hasAny(tokens, ["only", "thoi", "dont", "not", "no", "chua", "dung", "khoan"]) ||
-    hasPhrase(lead, [/\bwithout\s+(?:creating|generating|rendering|editing)\b/, /\bno\s+(?:image|edit|generation|render)\b/]);
+  const explicitNoExecution = hasAny(tokens, ["only", "thoi", "dont", "not", "no", "chua", "khoan"]) ||
+    hasPhrase(lead, [
+      /\bwithout\s+(?:creating|generating|rendering|editing)\b/,
+      /\bno\s+(?:image|edit|generation|render)\b/,
+      /\bdung\s+(?:tao|chinh|sua|execute|render|generate|edit)\b/,
+    ]);
 
   return asksForPrompt && explicitNoExecution;
 }
@@ -111,7 +115,7 @@ export function isChannelUseCaseAdvisoryIntent(message: string): boolean {
   const channelTerms = ["landing", "web", "website", "social", "post", "x", "twitter", "telegram", "community", "banner", "channel", "kenh"];
   const advisoryTerms = ["use", "used", "using", "across", "angle", "emphasize", "position", "adapt", "different", "differently", "khac", "dung", "nhan", "manh", "angle"];
 
-  return hasAny(tokens, channelTerms) && hasAny(tokens, advisoryTerms) && !isExplicitCreativeMutationIntent(message);
+  return hasAny(tokens, channelTerms) && hasAny(tokens, advisoryTerms);
 }
 
 export function isCreativeConversationOnlyIntent(message: string): boolean {
@@ -130,6 +134,12 @@ export function creativeSessionFollowupIntentClass(message: string): CreativeSes
     return "prompt_proposal";
   }
 
+  if (isCreativeReviewConversationIntent(message)) {
+    const tokens = tokensFor(leadingIntentText(message));
+
+    return hasAny(tokens, ["new", "newer", "latest", "updated", "edited", "moi", "sau", "ban"]) ? "post_edit_review" : "asset_review";
+  }
+
   if (isChannelUseCaseAdvisoryIntent(message)) {
     return "channel_advisory";
   }
@@ -138,19 +148,13 @@ export function creativeSessionFollowupIntentClass(message: string): CreativeSes
     return "explicit_mutation";
   }
 
-  if (isCreativeReviewConversationIntent(message)) {
-    const tokens = tokensFor(leadingIntentText(message));
-
-    return hasAny(tokens, ["new", "newer", "latest", "updated", "edited", "moi", "sau", "ban"]) ? "post_edit_review" : "asset_review";
-  }
-
   return "asset_review";
 }
 
 export function isExplicitCreativeMutationIntent(message: string): boolean {
   const lead = leadingIntentText(message);
   const tokens = tokensFor(lead);
-  const mutationTerms = ["generate", "create", "render", "produce", "make", "edit", "change", "adjust", "resize", "reframe", "apply", "variant", "version", "tao", "chinh", "sua", "doi", "ap", "lam"];
+  const mutationTerms = ["generate", "create", "render", "produce", "make", "edit", "change", "adjust", "resize", "reframe", "apply", "variant", "version", "tao", "chinh", "sua", "doi", "ap"];
   const assetTerms = ["image", "visual", "asset", "creative", "banner", "poster", "video", "motion", "hinh", "anh", "ban", "9:16", "16:9", "4:5", "1:1"];
   const explicitNoExecution = isPromptProposalOnlyIntent(message) || hasPhrase(lead, [/\b(?:do\s*not|don't|dont|no)\s+(?:create|generate|render|edit)\b/]);
 

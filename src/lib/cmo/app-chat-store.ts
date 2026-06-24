@@ -139,6 +139,8 @@ const PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_MESSAGE =
   "Product blocked this Creative follow-up because old workspace/session context still contains redacted artifact text. Please retry after context scrub or start a clean session.";
 const PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_ERROR =
   "Product blocked Hermes CMO request because outbound payload still contained path-like Creative artifact text.";
+const PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE =
+  "Product blocked this Creative response because the turn was marked non-mutating, but Hermes returned an image execution. The previous active asset was preserved.";
 
 const isProductOutboundCreativeContextBlock = (reason: string): boolean =>
   reason.includes(PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_ERROR);
@@ -2331,6 +2333,10 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(typeof value.creative_draft_update_allowed === "boolean" ? { creative_draft_update_allowed: value.creative_draft_update_allowed } : {}),
     ...(stringValue(value.creative_expected_response) ? { creative_expected_response: stringValue(value.creative_expected_response) } : {}),
     ...(value.creative_no_execute_modifier_detected === true ? { creative_no_execute_modifier_detected: true } : {}),
+    ...(value.product_contract_violation === true ? { product_contract_violation: true } : {}),
+    ...(stringValue(value.contract_violation_reason) ? { contract_violation_reason: stringValue(value.contract_violation_reason) } : {}),
+    ...(typeof value.request_execution_allowed === "boolean" ? { request_execution_allowed: value.request_execution_allowed } : {}),
+    ...(typeof value.request_mutation_allowed === "boolean" ? { request_mutation_allowed: value.request_mutation_allowed } : {}),
     ...(value.assistant_response_suppressed_for_noop === true ? { assistant_response_suppressed_for_noop: true } : {}),
     ...(value.creative_conversation_rejected === true ? { creative_conversation_rejected: true } : {}),
     ...(stringValue(value.creative_conversation_rejection_reason) ? { creative_conversation_rejection_reason: stringValue(value.creative_conversation_rejection_reason) } : {}),
@@ -2807,6 +2813,109 @@ function isGenericAcknowledgementAnswer(value: string): boolean {
   const acknowledgementTokens = new Set(["ok", "okay", "yes", "yeah", "yep", "uh", "ua", "duoc", "roi", "ro", "hieu", "nhe", "bro", "ban", "minh"]);
 
   return tokens.length > 0 && tokens.length <= 8 && tokens.every((token) => acknowledgementTokens.has(token));
+}
+
+function booleanFromRecords(records: Array<Record<string, unknown> | undefined>, key: string): boolean | undefined {
+  for (const record of records) {
+    const value = record?.[key];
+
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function numberFromRecords(records: Array<Record<string, unknown> | undefined>, key: string): number | undefined {
+  for (const record of records) {
+    const value = record?.[key];
+
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.max(0, Math.floor(value));
+    }
+  }
+
+  return undefined;
+}
+
+function stringFromRecords(records: Array<Record<string, unknown> | undefined>, key: string): string | undefined {
+  for (const record of records) {
+    const value = stringValue(record?.[key]);
+
+    if (value) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function creativeContractViolationMetadata(result: HermesCmoRuntimeResult): Partial<HermesCmoChatMetadata> | null {
+  const request = result.request as unknown as Record<string, unknown>;
+  const response = result.response as unknown as Record<string, unknown>;
+  const structuredOutput = recordValue(result.response.structured_output) ?? {};
+  const requestRecords = [
+    recordValue(request.intent),
+    recordValue(request.input),
+    recordValue(request.constraints),
+    recordValue(request.tool_policy),
+    recordValue(request.context_pack),
+  ];
+  const requestExecutionAllowed = booleanFromRecords(requestRecords, "execution_allowed") ??
+    booleanFromRecords(requestRecords, "creative_execution_allowed");
+  const requestMutationAllowed = booleanFromRecords(requestRecords, "mutation_allowed") ??
+    booleanFromRecords(requestRecords, "creative_mutation_allowed");
+
+  if (requestExecutionAllowed !== false && requestMutationAllowed !== false) {
+    return null;
+  }
+
+  const answerBasis = recordValue(result.response.answer_basis) ?? {};
+  const creativeDecision = extractCreativeDecision(result.response);
+  const action = stringValue(creativeDecision?.action);
+  const operation = stringValue(creativeDecision?.operation);
+  const creativeAssetsCount = numberFromRecords([response, structuredOutput], "creative_assets_count") ?? 0;
+  const creativeAssetMutation = booleanFromRecords([response, structuredOutput], "creative_asset_mutation");
+  const responseExecution =
+    answerBasis.mode === "creative_execution" ||
+    action === "execute" ||
+    /^creative\.(?:edit|generate|image|video)/i.test(operation ?? "") ||
+    creativeAssetsCount > 0 ||
+    creativeAssetMutation === true ||
+    hasCreativeExecutionMetadata(result.response);
+
+  if (!responseExecution) {
+    return null;
+  }
+
+  return {
+    product_contract_violation: true,
+    contract_violation_reason: "hermes_returned_execution_when_execution_forbidden",
+    request_execution_allowed: requestExecutionAllowed ?? true,
+    request_mutation_allowed: requestMutationAllowed ?? true,
+    execution_allowed: requestExecutionAllowed,
+    mutation_allowed: requestMutationAllowed,
+    creative_execution_allowed: requestExecutionAllowed,
+    creative_mutation_allowed: requestMutationAllowed,
+    creative_followup_intent_class: stringFromRecords(requestRecords, "creative_followup_intent_class"),
+    creative_semantic_intent_class: stringFromRecords(requestRecords, "creative_semantic_intent_class"),
+    expected_response: stringFromRecords(requestRecords, "expected_response"),
+    creative_expected_response: stringFromRecords(requestRecords, "creative_expected_response"),
+    answer_basis_mode: stringValue(answerBasis.mode),
+    native_response_answer_basis_mode: stringValue(answerBasis.mode),
+    native_response_creative_decision_action: action,
+    creative_decision_operation: operation,
+    creative_assets_count: 0,
+    creative_asset_mutation: false,
+    creative_state_mutation: false,
+    fallback_used: false,
+    workspace_fallback_suppressed_for_creative: true,
+  };
 }
 
 function creativeMissingRenderableAssetWarning(): string {
@@ -3994,11 +4103,14 @@ export async function createAppChatSession(
         }
 
         const mappedHermesResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesResult));
+        const creativeContractViolation = creativeContractViolationMetadata(hermesResult);
         let completedCreativeWorkingState = applySuggestedCreativeStateUpdate(
           pendingSession.creativeWorkingState,
-          extractSuggestedCreativeStateUpdate(hermesResult.response),
+          creativeContractViolation ? undefined : extractSuggestedCreativeStateUpdate(hermesResult.response),
         );
-        const completedCreativeDecision = extractCreativeDecision(hermesResult.response) ?? pendingSession.creativeDecision;
+        const completedCreativeDecision = creativeContractViolation
+          ? pendingSession.creativeDecision
+          : extractCreativeDecision(hermesResult.response) ?? pendingSession.creativeDecision;
         const completedAt = new Date().toISOString();
         const durationMs = Date.now() - runStartedMs;
         const toolsUsed = safeCmoRunToolsUsed(mappedHermesResult.hermesCmoMetadata.agentsUsed);
@@ -4016,7 +4128,7 @@ export async function createAppChatSession(
             userQuestion: request.message,
           }),
         );
-        const completedCreativeArtifacts = creativeAssetsFromHermesPayload({
+        const completedCreativeArtifacts = creativeContractViolation ? [] : creativeAssetsFromHermesPayload({
           response: hermesResult.response,
           tenantId: requestTenantId,
           workspaceId: request.workspaceId,
@@ -4028,6 +4140,7 @@ export async function createAppChatSession(
         completedCreativeWorkingState = applyCreativeAssetStateUpdate(completedCreativeWorkingState, completedCreativeArtifacts);
         mappedHermesResult.hermesCmoMetadata = {
           ...mappedHermesResult.hermesCmoMetadata,
+          ...(creativeContractViolation ?? {}),
           ...creativeStateMetadata(completedCreativeWorkingState, completedCreativeDecision),
           ...lensReadoutMetadata({
             context: lensReadoutContext as unknown as Record<string, unknown> | null,
@@ -4038,13 +4151,14 @@ export async function createAppChatSession(
           sessionArtifacts,
           completedCreativeArtifacts,
         );
+        const completedAnswer = creativeContractViolation ? PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE : mappedHermesResult.answer;
         const completedDecisionLayer = buildDecisionLayer({
           workspaceId: request.workspaceId,
           appId: request.appId,
           sourceId: contextPackage.sourceId,
           sessionId,
           createdAt: completedAt,
-          answer: mappedHermesResult.answer,
+          answer: completedAnswer,
           runtimeAssumptions: mappedHermesResult.assumptions,
           runtimeSuggestedActions: mappedHermesResult.suggestedActions,
         });
@@ -4099,7 +4213,7 @@ export async function createAppChatSession(
           ...completionMetadata,
           messages: pendingSession.messages.map((message) => message.id === assistantId ? {
             ...message,
-            content: mappedHermesResult.answer,
+            content: completedAnswer,
             runtimeStatus: mappedHermesResult.runtimeStatus,
             runtimeMode: mappedHermesResult.runtimeMode,
             runtimeProvider: mappedHermesResult.runtimeProvider,
@@ -4607,12 +4721,15 @@ export async function createAppChatSession(
       }
 
       const mappedHermesResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesResult));
-      creativeWorkingState = applySuggestedCreativeStateUpdate(
-        creativeWorkingState,
-        extractSuggestedCreativeStateUpdate(hermesResult.response),
-      );
-      creativeDecision = extractCreativeDecision(hermesResult.response) ?? creativeDecision;
-      const creativeArtifacts = creativeAssetsFromHermesPayload({
+      const creativeContractViolation = creativeContractViolationMetadata(hermesResult);
+      if (!creativeContractViolation) {
+        creativeWorkingState = applySuggestedCreativeStateUpdate(
+          creativeWorkingState,
+          extractSuggestedCreativeStateUpdate(hermesResult.response),
+        );
+        creativeDecision = extractCreativeDecision(hermesResult.response) ?? creativeDecision;
+      }
+      const creativeArtifacts = creativeContractViolation ? [] : creativeAssetsFromHermesPayload({
         response: hermesResult.response,
         tenantId: requestTenantId,
         workspaceId: request.workspaceId,
@@ -4635,7 +4752,7 @@ export async function createAppChatSession(
         sessionArtifacts,
         creativeArtifacts,
       );
-      answer = mappedHermesResult.answer;
+      answer = creativeContractViolation ? PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE : mappedHermesResult.answer;
       if (
         hermesCmoCreativeExecutionRequested &&
         creativeMetadataPresent === true &&
@@ -4667,7 +4784,10 @@ export async function createAppChatSession(
       calledHermesCmo = true;
       hermesCmoStatus = mappedHermesResult.hermesCmoStatus;
       hermesCmoCounters = mappedHermesResult.hermesCmoCounters;
-      hermesCmoMetadata = mappedHermesResult.hermesCmoMetadata;
+      hermesCmoMetadata = {
+        ...mappedHermesResult.hermesCmoMetadata,
+        ...(creativeContractViolation ?? {}),
+      };
       hermesCmoMetadata = {
         ...hermesCmoMetadata,
         ...creativeStateMetadata(creativeWorkingState, creativeDecision),
