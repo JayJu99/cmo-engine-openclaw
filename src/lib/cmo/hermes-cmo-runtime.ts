@@ -118,6 +118,7 @@ export type HermesActivityType =
   | "creative.partial"
   | "creative.blocked"
   | "creative.failed"
+  | "creative_conversation.answer"
   | "run.completed"
   | "run.failed";
 
@@ -486,6 +487,7 @@ const activityTypes = new Set<HermesActivityType>([
   ...CMO_CREATIVE_LIFECYCLE_STATES,
   "creative.completed",
   "creative.uploaded",
+  "creative_conversation.answer",
   "run.completed",
   "run.failed",
 ]);
@@ -4043,6 +4045,62 @@ const normalizedActivityEvent = (
   return normalized;
 };
 
+type CreativeConversationActivityRepairResult = {
+  activityEventsCandidate: unknown[];
+  repaired: boolean;
+  repairReason?: "event_id_missing";
+};
+
+const maybeRepairCreativeConversationActivityEvents = (
+  activityEventsCandidate: unknown[],
+  request: HermesCmoRuntimeRequest,
+  canRepair: boolean,
+): CreativeConversationActivityRepairResult => {
+  if (!canRepair || activityEventsCandidate.length === 0) {
+    return { activityEventsCandidate, repaired: false };
+  }
+
+  let repaired = false;
+  const repairedEvents = activityEventsCandidate.map((event, index) => {
+    if (!isRecord(event) || event.type !== "creative_conversation.answer") {
+      return event;
+    }
+
+    const eventId = eventString(event.event_id ?? event.eventId);
+    if (eventId) {
+      return event;
+    }
+
+    repaired = true;
+    const source = isRecord(event.source) ? event.source : {};
+
+    return {
+      ...event,
+      schema_version: event.schema_version ?? "hermes.activity.event.v1",
+      event_id: `evt_${request.request_id}_creative_conversation_answer_${index}`,
+      request_id: event.request_id ?? event.requestId ?? request.request_id,
+      session_id: event.session_id ?? event.sessionId ?? request.session_id,
+      turn_id: event.turn_id ?? event.turnId ?? request.turn_id,
+      seq: typeof event.seq === "number" && Number.isInteger(event.seq) && event.seq >= 1 ? event.seq : index + 1,
+      created_at: event.created_at ?? event.createdAt ?? new Date().toISOString(),
+      source: {
+        agent: source.agent ?? event.sourceAgent ?? "cmo",
+        mode: source.mode ?? event.sourceMode ?? "cmo.default",
+      },
+      status: event.status ?? "completed",
+      user_visible: event.user_visible ?? event.userVisible ?? false,
+      message: event.message ?? "Creative conversation answer.",
+      data: isRecord(event.data) ? event.data : {},
+    };
+  });
+
+  return {
+    activityEventsCandidate: repaired ? repairedEvents : activityEventsCandidate,
+    repaired,
+    ...(repaired ? { repairReason: "event_id_missing" } : {}),
+  };
+};
+
 const extractLiveResponsePayload = (
   payload: unknown,
   request: HermesCmoRuntimeRequest,
@@ -4127,6 +4185,13 @@ const extractLiveResponsePayload = (
     : undefined;
   const nativeResponsePathLikeAnswerDetected = pathLikeAnswerDetected(responseCandidate);
   const nativeResponseAnswerPreview = encodedAnswerPreview(creativeConversationAnswerText(responseCandidate));
+  const creativeConversationActivityRepair = maybeRepairCreativeConversationActivityEvents(
+    effectiveActivityEventsCandidate,
+    request,
+    creativeConversationResponseReceived &&
+      creativeConversationValidationFailure(responseCandidate, responseStructuredOutput, request) === null,
+  );
+  effectiveActivityEventsCandidate = creativeConversationActivityRepair.activityEventsCandidate;
   const activityEventTypes = activityEventTypesFrom(effectiveActivityEventsCandidate);
   const creativeIdeationActivityDiagnostics = {
     activity_event_types: activityEventTypes,
@@ -4147,6 +4212,12 @@ const extractLiveResponsePayload = (
   const creativeActivityDiagnostics = creativeExecutionResponseReceived
     ? creativeExecutionActivityDiagnostics
     : creativeIdeationActivityDiagnostics;
+  const creativeConversationActivityRepairDiagnostics = creativeConversationActivityRepair.repaired
+    ? {
+        activity_event_repaired: true,
+        activity_event_repair_reason: creativeConversationActivityRepair.repairReason,
+      }
+    : {};
   const answerSourceDiagnostics = responseAnswerTraceDiagnostics(rawResponseCandidate);
   if (creativeNativeResponseReceived) {
     responseCandidate = {
@@ -4168,6 +4239,7 @@ const extractLiveResponsePayload = (
         creative_decision_present: creativeDecisionPresent,
         answer_basis_mode: String(responseAnswerBasis.mode),
         ...creativeActivityDiagnostics,
+        ...creativeConversationActivityRepairDiagnostics,
         rejected_by_m1_validator: false,
       },
       activity_summary: {
@@ -4187,6 +4259,7 @@ const extractLiveResponsePayload = (
         creative_decision_present: creativeDecisionPresent,
         answer_basis_mode: String(responseAnswerBasis.mode),
         ...creativeActivityDiagnostics,
+        ...creativeConversationActivityRepairDiagnostics,
         rejected_by_m1_validator: false,
       },
     };

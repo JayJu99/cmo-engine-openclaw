@@ -986,6 +986,10 @@ export interface HermesCmoChatMetadata {
   raw_activity_event_types?: string[];
   activity_events_allowed_for_creative_ideation?: boolean;
   activity_events_allowed_for_creative_execution?: boolean;
+  activity_event_repaired?: boolean;
+  activity_event_repair_reason?: string;
+  activity_event_ignored_for_creative_conversation?: boolean;
+  activity_event_ignore_reason?: string;
   creative_ideation_canonicalized?: boolean;
   creative_session_canonicalized?: boolean;
   creative_execution_canonicalized?: boolean;

@@ -1673,6 +1673,21 @@ function metadataFromHermes(
     typeof structuredOutput.activity_events_allowed_for_creative_execution === "boolean"
       ? structuredOutput.activity_events_allowed_for_creative_execution
       : undefined;
+  const activityEventRepaired = typeof structuredOutput.activity_event_repaired === "boolean"
+    ? structuredOutput.activity_event_repaired
+    : undefined;
+  const activityEventRepairReason =
+    typeof structuredOutput.activity_event_repair_reason === "string" && structuredOutput.activity_event_repair_reason.trim()
+      ? structuredOutput.activity_event_repair_reason.trim()
+      : undefined;
+  const activityEventIgnoredForCreativeConversation =
+    typeof structuredOutput.activity_event_ignored_for_creative_conversation === "boolean"
+      ? structuredOutput.activity_event_ignored_for_creative_conversation
+      : undefined;
+  const activityEventIgnoreReason =
+    typeof structuredOutput.activity_event_ignore_reason === "string" && structuredOutput.activity_event_ignore_reason.trim()
+      ? structuredOutput.activity_event_ignore_reason.trim()
+      : undefined;
   const responseCreativeAssetsCount = typeof structuredOutput.creative_assets_count === "number" && Number.isFinite(structuredOutput.creative_assets_count)
     ? Math.max(0, Math.floor(structuredOutput.creative_assets_count))
     : undefined;
@@ -1811,6 +1826,12 @@ function metadataFromHermes(
           ...(typeof activityEventsAllowedForCreativeExecution === "boolean"
             ? { activity_events_allowed_for_creative_execution: activityEventsAllowedForCreativeExecution }
             : {}),
+          ...(typeof activityEventRepaired === "boolean" ? { activity_event_repaired: activityEventRepaired } : {}),
+          ...(activityEventRepairReason ? { activity_event_repair_reason: activityEventRepairReason } : {}),
+          ...(typeof activityEventIgnoredForCreativeConversation === "boolean"
+            ? { activity_event_ignored_for_creative_conversation: activityEventIgnoredForCreativeConversation }
+            : {}),
+          ...(activityEventIgnoreReason ? { activity_event_ignore_reason: activityEventIgnoreReason } : {}),
           ...(typeof creativeIdeationCanonicalized === "boolean"
             ? { creative_ideation_canonicalized: creativeIdeationCanonicalized }
             : {}),

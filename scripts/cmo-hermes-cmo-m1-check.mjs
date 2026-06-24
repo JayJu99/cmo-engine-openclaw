@@ -835,6 +835,8 @@ const startServer = async () => {
             body.request_id === "req_m13_cmo_owned_creative_reference_fetch_failed" ||
             body.request_id === "req_m13_creative_conversation_advisory" ||
             body.request_id === "req_m13_creative_conversation_glow_accent" ||
+            body.request_id === "req_m13_creative_conversation_missing_event_id" ||
+            body.request_id === "req_m13_creative_conversation_path_like_missing_event_id" ||
             body.request_id === "req_m13_creative_outbound_sanitized" ||
             body.request_id === "req_m13_creative_trace_only_projection";
           const firstCallCreativeNative = firstCallCreativeExecution || firstCallCmoOwnedCreativeExecution;
@@ -876,6 +878,46 @@ const startServer = async () => {
           } else {
             assert.equal(body.artifact_transport, undefined);
           }
+          if (body.request_id === "req_m13_creative_conversation_missing_event_id") {
+            writeJson(response, 200, m13CreativeConversationResponse(
+              body,
+              "advise",
+              "Keep the clean premium feel and add one energetic CTA accent.",
+              {
+                activity_events: [
+                  {
+                    type: "creative_conversation.answer",
+                  },
+                ],
+                activity_summary: {
+                  events_count: 1,
+                  final_state: "completed",
+                },
+              },
+            ));
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_conversation_path_like_missing_event_id") {
+            writeJson(response, 200, m13CreativeConversationResponse(
+              body,
+              "advise",
+              "[hermes_local_artifact_path_redacted]/accent_teal_quanh_egg_v_CTA_area.png",
+              {
+                activity_events: [
+                  {
+                    type: "creative_conversation.answer",
+                  },
+                ],
+                activity_summary: {
+                  events_count: 1,
+                  final_state: "completed",
+                },
+              },
+            ));
+            return;
+          }
+
           if (body.request_id === "req_m13_creative_outbound_sanitized") {
             assert.deepEqual(collectForbiddenStringValues(body), []);
             assert.equal(body.constraints?.outbound_hermes_payload_sanitized, true);
@@ -5573,6 +5615,24 @@ try {
     assert.equal(glowAccentResponseTrace.diagnostic_preview_ignored_for_m1, true);
     assert.equal(glowAccentResponseTrace.user_visible_answer_source, "raw_hermes_response");
     assert.equal(glowAccentResponseTrace.response_trace_redaction_applied, false);
+    const m13CreativeConversationMissingEventIdResult = await runHermesCmoRuntime(m13CmoOwnedCreativeSessionExecutionRequest("req_m13_creative_conversation_missing_event_id"));
+    assert.equal(m13CreativeConversationMissingEventIdResult.response.status, "completed");
+    assert.equal(m13CreativeConversationMissingEventIdResult.response.answer_basis.mode, "creative_conversation");
+    assert.equal(m13CreativeConversationMissingEventIdResult.response.structured_output.m1_validation_result, "accepted");
+    assert.equal(m13CreativeConversationMissingEventIdResult.response.structured_output.rejected_by_m1_validator, false);
+    assert.equal(m13CreativeConversationMissingEventIdResult.response.structured_output.activity_event_repaired, true);
+    assert.equal(m13CreativeConversationMissingEventIdResult.response.structured_output.activity_event_repair_reason, "event_id_missing");
+    assert.equal(m13CreativeConversationMissingEventIdResult.response.structured_output.creative_conversation_response_received, true);
+    assert.equal(m13CreativeConversationMissingEventIdResult.response.structured_output.fallback_used, false);
+    assert.match(m13CreativeConversationMissingEventIdResult.response.answer?.body ?? "", /clean premium feel/i);
+    assert.equal(m13CreativeConversationMissingEventIdResult.activity_events.length, 1);
+    assert.equal(m13CreativeConversationMissingEventIdResult.activity_events[0].type, "creative_conversation.answer");
+    assert.match(m13CreativeConversationMissingEventIdResult.activity_events[0].event_id, /^evt_req_m13_creative_conversation_missing_event_id_creative_conversation_answer_0$/);
+    await assert.rejects(
+      () => runHermesCmoRuntime(m13CmoOwnedCreativeSessionExecutionRequest("req_m13_creative_conversation_path_like_missing_event_id")),
+      /Rejected field: creative_conversation_answer_path_like|Rejected field: answer_path_like/,
+      "Canonical path-like Creative conversation answer must still be rejected even when activity event_id can be repaired",
+    );
     m13CreativeOutboundSanitizedResult = await runHermesCmoRuntime(m13PollutedCmoOwnedCreativeSessionExecutionRequest("req_m13_creative_outbound_sanitized"));
     assert.equal(m13CreativeOutboundSanitizedResult.response.status, "completed");
     assert.equal(m13CreativeOutboundSanitizedResult.response.answer_basis.mode, "creative_conversation");
