@@ -86,8 +86,8 @@ requireSource(intentSource, /"poster"/, "routing intent must recognize poster re
 requireSource(intentSource, /"sticker"/, "routing intent must recognize sticker requests");
 requireSource(intentSource, /if \(creativeSessionContinuation\) return "creative_session"/, "routing intent must route active Creative session transport to execute");
 requireSource(intentSource, /if \(isCreativeDraftSessionIntent\(message\)\) return "creative_ideation"/, "routing intent must expose creative_ideation");
-forbidSource(intentSource, /CreativeSessionFollowupIntent/, "routing intent must not expose Product Creative action classification");
-forbidSource(intentSource, /classifyCreativeSessionFollowup/, "routing intent must not classify Creative follow-up actions");
+requireSource(intentSource, /CreativeSessionFollowupIntentClass/, "routing intent must expose semantic Creative follow-up classes for permission shaping");
+requireSource(intentSource, /creativeSessionFollowupIntentClass/, "routing intent must classify Creative follow-ups semantically for Product permission shaping");
 forbidSource(intentSource, /message\s*={2,3}\s*["'`]/, "routing intent must not use exact message equality");
 forbidSource(intentSource, /\.includes\(["'`](?:ok|render|draft|tao|ban)/i, "routing intent must not branch on literal example phrases");
 
@@ -356,10 +356,13 @@ requireSource(mapperSource, /creative_session_from_asset: Boolean/, "Hermes mapp
 requireSource(mapperSource, /creativeSession: true/, "Hermes mapper must mark Creative session ownership");
 requireSource(mapperSource, /cmoOwnsCreativeDecision: true/, "Hermes mapper must mark CMO decision ownership");
 requireSource(mapperSource, /creativeDecisionOwnerWhenLive: "hermes_cmo"/, "Hermes mapper must mark Creative decision owner");
-requireSource(mapperSource, /canProposeDraft: true/, "Hermes mapper capabilities");
-requireSource(mapperSource, /canUpdateDraftState: creativeConversationOnlyIntent \? false : true/, "Hermes mapper capabilities must disable draft mutation for non-mutating Creative conversations");
-requireSource(mapperSource, /canExecuteImageGeneration: creativeConversationOnlyIntent \? false : true/, "Hermes mapper capabilities must disable image generation for non-mutating Creative conversations");
+requireSource(mapperSource, /canProposeDraft: creativeDraftUpdateAllowedThisTurn/, "Hermes mapper capabilities must follow explicit draft-update permission");
+requireSource(mapperSource, /canUpdateDraftState: creativeDraftUpdateAllowedThisTurn/, "Hermes mapper capabilities must disable draft mutation for non-mutating Creative conversations");
+requireSource(mapperSource, /canExecuteImageGeneration: creativeExecutionAllowedThisTurn/, "Hermes mapper capabilities must disable image generation for non-mutating Creative conversations");
 requireSource(mapperSource, /requiresUserConfirmationBeforeExecute: true/, "Hermes mapper capabilities");
+requireSource(mapperSource, /execution_allowed: creativeExecutionAllowedThisTurn/, "Hermes mapper must send explicit execution permission for Creative follow-ups");
+requireSource(mapperSource, /draft_update_allowed: creativeDraftUpdateAllowedThisTurn/, "Hermes mapper must send explicit draft-update permission for Creative follow-ups");
+requireSource(mapperSource, /expected_response: creativeExpectedResponse/, "Hermes mapper must send expected response type for Creative follow-ups");
 requireSource(mapperSource, /creative_side_effects_allowed: creativeConversationOnlyIntent \? false : true/, "Hermes mapper must disable side effects for non-mutating Creative conversations");
 requireSource(mapperSource, /requires_user_confirmation_before_creative_execute: true/, "Hermes mapper must mirror confirmation boundary");
 requireSource(mapperSource, /product_must_not_choose_creative_execution: true/, "Hermes mapper must keep CMO as execution decision owner");
@@ -368,7 +371,7 @@ forbidSource(mapperSource, /creative_session_followup_intent/, "Hermes mapper mu
 forbidSource(mapperSource, /creativeSessionExecuteDraftCandidate/, "Hermes mapper must not derive Product execute candidates");
 forbidSource(mapperSource, /execute_decision_candidate/, "Hermes mapper must not send Product execute candidate");
 forbidSource(mapperSource, /allow_creative_execution/, "Hermes mapper must not send legacy snake allow execution flag for CMO-native sessions");
-forbidSource(mapperSource, /creative_execution_allowed/, "Hermes mapper must not send execution-boundary command for CMO-native sessions");
+requireSource(mapperSource, /creative_execution_allowed: creativeExecutionAllowedThisTurn/, "Hermes mapper must send explicit Creative execution permission without choosing execution");
 forbidSource(mapperSource, /intent: "execute_draft"/, "Hermes mapper must not send execute_draft intent");
 
 requireSource(runtimeSource, /requestHasCreativeWorkingState/, "runtime");

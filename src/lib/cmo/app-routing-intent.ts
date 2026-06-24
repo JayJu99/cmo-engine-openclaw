@@ -7,6 +7,14 @@ export interface CreativeWorkingStateIntentContext {
   assets?: unknown[];
 }
 
+export type CreativeSessionFollowupIntentClass =
+  | "ack_noop"
+  | "asset_review"
+  | "channel_advisory"
+  | "prompt_proposal"
+  | "explicit_mutation"
+  | "post_edit_review";
+
 function normalize(value: string): string {
   return value
     .toLowerCase()
@@ -111,6 +119,32 @@ export function isCreativeConversationOnlyIntent(message: string): boolean {
     isPromptProposalOnlyIntent(message) ||
     isCreativeReviewConversationIntent(message) ||
     isChannelUseCaseAdvisoryIntent(message);
+}
+
+export function creativeSessionFollowupIntentClass(message: string): CreativeSessionFollowupIntentClass {
+  if (isPureAcknowledgementIntent(message)) {
+    return "ack_noop";
+  }
+
+  if (isPromptProposalOnlyIntent(message)) {
+    return "prompt_proposal";
+  }
+
+  if (isChannelUseCaseAdvisoryIntent(message)) {
+    return "channel_advisory";
+  }
+
+  if (isExplicitCreativeMutationIntent(message)) {
+    return "explicit_mutation";
+  }
+
+  if (isCreativeReviewConversationIntent(message)) {
+    const tokens = tokensFor(leadingIntentText(message));
+
+    return hasAny(tokens, ["new", "newer", "latest", "updated", "edited", "moi", "sau", "ban"]) ? "post_edit_review" : "asset_review";
+  }
+
+  return "asset_review";
 }
 
 export function isExplicitCreativeMutationIntent(message: string): boolean {

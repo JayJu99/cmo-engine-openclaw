@@ -22,7 +22,7 @@ import type {
 } from "@/lib/cmo/hermes-cmo-runtime";
 import type { HermesCmoAttachmentRef } from "@/lib/cmo/attachments";
 import {
-  isCreativeConversationOnlyIntent,
+  creativeSessionFollowupIntentClass,
   isExplicitCreativeExecutionIntent,
   isExplicitCreativeMutationIntent,
   isPromptProposalOnlyIntent,
@@ -77,6 +77,16 @@ interface HermesCmoReplayMessage {
   content: string;
   message_id: string;
   created_at: string;
+}
+
+type CreativeFollowupExpectedResponse = "none" | "minimal_ack" | "text" | "text_prompt" | "asset";
+
+function creativeFollowupExpectedResponse(intentClass: ReturnType<typeof creativeSessionFollowupIntentClass>): CreativeFollowupExpectedResponse {
+  if (intentClass === "ack_noop") return "none";
+  if (intentClass === "prompt_proposal") return "text_prompt";
+  if (intentClass === "explicit_mutation") return "asset";
+
+  return "text";
 }
 
 type ReplayableCmoChatMessage = CMOChatMessage & { role: "user" | "assistant" };
@@ -855,16 +865,38 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const creativeSessionFollowupDetected = input.creativeSessionFollowupDetected === true;
   const creativeNativeSession = creativeWorkingStatePresent || creativeIdeationDetected || creativeSessionFollowupDetected;
   const creativeExecutionIntent = isExplicitCreativeExecutionIntent(input.message) && !creativeNativeSession;
-  const creativeConversationOnlyIntent = creativeNativeSession && isCreativeConversationOnlyIntent(input.message);
+  const creativeFollowupIntentClass = creativeNativeSession ? creativeSessionFollowupIntentClass(input.message) : undefined;
+  const creativeConversationOnlyIntent = creativeNativeSession && creativeFollowupIntentClass !== "explicit_mutation";
   const creativeAcknowledgementNoopIntent = creativeNativeSession && isPureAcknowledgementIntent(input.message);
   const creativePromptProposalOnlyIntent = creativeNativeSession && isPromptProposalOnlyIntent(input.message);
-  const creativeMutationIntent = creativeNativeSession && isExplicitCreativeMutationIntent(input.message) && !creativeConversationOnlyIntent;
+  const creativeMutationIntent = creativeNativeSession && creativeFollowupIntentClass === "explicit_mutation" && isExplicitCreativeMutationIntent(input.message);
+  const creativeExecutionAllowedThisTurn = !creativeNativeSession || creativeMutationIntent;
+  const creativeDraftUpdateAllowedThisTurn = creativeMutationIntent;
+  const creativeExpectedResponse = creativeFollowupIntentClass
+    ? creativeFollowupExpectedResponse(creativeFollowupIntentClass)
+    : undefined;
+  const creativeFollowupPermissionContract = creativeNativeSession && creativeFollowupIntentClass && creativeExpectedResponse
+    ? {
+        creative_followup_intent_class: creativeFollowupIntentClass,
+        creative_semantic_intent_class: creativeFollowupIntentClass,
+        mutation_allowed: creativeMutationIntent,
+        execution_allowed: creativeExecutionAllowedThisTurn,
+        draft_update_allowed: creativeDraftUpdateAllowedThisTurn,
+        expected_response: creativeExpectedResponse,
+        creative_mutation_allowed: creativeMutationIntent,
+        creative_execution_allowed: creativeExecutionAllowedThisTurn,
+        creative_draft_update_allowed: creativeDraftUpdateAllowedThisTurn,
+        creative_expected_response: creativeExpectedResponse,
+        ...(creativePromptProposalOnlyIntent ? { creative_no_execute_modifier_detected: true } : {}),
+      }
+    : {};
   const creativeConversationIntentMetadata = creativeConversationOnlyIntent
     ? {
         creative_conversation_only: true,
         creative_asset_mutation_allowed: false,
         creative_state_mutation_allowed: false,
         creative_mutation_permitted_this_turn: false,
+        ...creativeFollowupPermissionContract,
         ...(creativeAcknowledgementNoopIntent ? { creative_noop_acknowledgement: true } : {}),
         ...(creativePromptProposalOnlyIntent ? { creative_prompt_proposal_only: true } : {}),
       }
@@ -873,6 +905,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     ? {
         creative_mutation_requested: true,
         creative_mutation_permitted_this_turn: true,
+        ...creativeFollowupPermissionContract,
       }
     : {};
   const creativeWorkingStateCamelCase = creativeWorkingStateForHermes
@@ -882,11 +915,11 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const activeCreativeAssetResolutionSource = input.activeCreativeAssetResolutionSource ??
     (creativeReferenceAssets.length > 0 ? "creativeWorkingState" : "none");
   const creativeCapabilities = creativeNativeSession
-    ? {
+      ? {
         creative: {
-          canProposeDraft: true,
-          canUpdateDraftState: creativeConversationOnlyIntent ? false : true,
-          canExecuteImageGeneration: creativeConversationOnlyIntent ? false : true,
+          canProposeDraft: creativeDraftUpdateAllowedThisTurn,
+          canUpdateDraftState: creativeDraftUpdateAllowedThisTurn,
+          canExecuteImageGeneration: creativeExecutionAllowedThisTurn,
           requiresUserConfirmationBeforeExecute: true,
         },
       }

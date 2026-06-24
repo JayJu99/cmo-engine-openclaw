@@ -2320,6 +2320,17 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(value.creative_noop_acknowledgement === true ? { creative_noop_acknowledgement: true } : {}),
     ...(value.creative_prompt_proposal_only === true ? { creative_prompt_proposal_only: true } : {}),
     ...(value.creative_mutation_requested === true ? { creative_mutation_requested: true } : {}),
+    ...(stringValue(value.creative_followup_intent_class) ? { creative_followup_intent_class: stringValue(value.creative_followup_intent_class) } : {}),
+    ...(stringValue(value.creative_semantic_intent_class) ? { creative_semantic_intent_class: stringValue(value.creative_semantic_intent_class) } : {}),
+    ...(typeof value.mutation_allowed === "boolean" ? { mutation_allowed: value.mutation_allowed } : {}),
+    ...(typeof value.execution_allowed === "boolean" ? { execution_allowed: value.execution_allowed } : {}),
+    ...(typeof value.draft_update_allowed === "boolean" ? { draft_update_allowed: value.draft_update_allowed } : {}),
+    ...(stringValue(value.expected_response) ? { expected_response: stringValue(value.expected_response) } : {}),
+    ...(typeof value.creative_mutation_allowed === "boolean" ? { creative_mutation_allowed: value.creative_mutation_allowed } : {}),
+    ...(typeof value.creative_execution_allowed === "boolean" ? { creative_execution_allowed: value.creative_execution_allowed } : {}),
+    ...(typeof value.creative_draft_update_allowed === "boolean" ? { creative_draft_update_allowed: value.creative_draft_update_allowed } : {}),
+    ...(stringValue(value.creative_expected_response) ? { creative_expected_response: stringValue(value.creative_expected_response) } : {}),
+    ...(value.creative_no_execute_modifier_detected === true ? { creative_no_execute_modifier_detected: true } : {}),
     ...(value.assistant_response_suppressed_for_noop === true ? { assistant_response_suppressed_for_noop: true } : {}),
     ...(value.creative_conversation_rejected === true ? { creative_conversation_rejected: true } : {}),
     ...(stringValue(value.creative_conversation_rejection_reason) ? { creative_conversation_rejection_reason: stringValue(value.creative_conversation_rejection_reason) } : {}),
@@ -5332,7 +5343,7 @@ export async function createAppChatSession(
     creativeAcknowledgementNoopIntent &&
     status === "completed" &&
     turnCreativeArtifacts.length === 0 &&
-    isGenericAcknowledgementAnswer(answer);
+    (!answer.trim() || isGenericAcknowledgementAnswer(answer));
   if (suppressNoopAssistantMessage) {
     answer = "";
     hermesCmoMetadata = {

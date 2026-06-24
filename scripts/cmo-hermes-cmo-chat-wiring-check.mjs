@@ -1105,11 +1105,21 @@ try {
       message: "Critique the current visual for landing-page conversion, no image edits yet.",
     });
     assert.equal(creativeReviewRequest.intent.creative_conversation_only, true);
+    assert.equal(creativeReviewRequest.intent.creative_followup_intent_class, "asset_review");
+    assert.equal(creativeReviewRequest.intent.execution_allowed, false);
+    assert.equal(creativeReviewRequest.intent.mutation_allowed, false);
+    assert.equal(creativeReviewRequest.intent.draft_update_allowed, false);
+    assert.equal(creativeReviewRequest.intent.expected_response, "text");
+    assert.equal(creativeReviewRequest.constraints.execution_allowed, false);
+    assert.equal(creativeReviewRequest.constraints.expected_response, "text");
     assert.equal(creativeReviewRequest.constraints.creative_side_effects_allowed, false);
     assert.equal(creativeReviewRequest.constraints.creative_mutation_permitted_this_turn, false);
     assert.equal(creativeReviewRequest.tool_policy.creative_execution_may_be_requested_by_cmo, false);
+    assert.equal(creativeReviewRequest.tool_policy.execution_allowed, false);
     assert.equal(creativeReviewRequest.tool_policy.creative_side_effects_allowed, false);
     assert.equal(creativeReviewRequest.capabilities.creative.canExecuteImageGeneration, false);
+    assert.equal(creativeReviewRequest.capabilities.creative.canUpdateDraftState, false);
+    assert.equal(creativeReviewRequest.capabilities.creative.canProposeDraft, false);
     assert.equal(creativeReviewRequest.reference_assets[0].asset_id, "creative_uploaded_primary");
 
     const creativePromptOnlyRequest = mapper.mapCmoChatToHermesCmoRequest({
@@ -1119,7 +1129,14 @@ try {
       message: "Write a stronger edit prompt for this direction only, do not generate a new image.",
     });
     assert.equal(creativePromptOnlyRequest.intent.creative_prompt_proposal_only, true);
+    assert.equal(creativePromptOnlyRequest.intent.creative_followup_intent_class, "prompt_proposal");
+    assert.equal(creativePromptOnlyRequest.intent.execution_allowed, false);
+    assert.equal(creativePromptOnlyRequest.intent.draft_update_allowed, false);
+    assert.equal(creativePromptOnlyRequest.intent.expected_response, "text_prompt");
+    assert.equal(creativePromptOnlyRequest.intent.creative_no_execute_modifier_detected, true);
     assert.equal(creativePromptOnlyRequest.constraints.creative_side_effects_allowed, false);
+    assert.equal(creativePromptOnlyRequest.constraints.execution_allowed, false);
+    assert.equal(creativePromptOnlyRequest.constraints.expected_response, "text_prompt");
 
     const creativeChannelAdviceRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...creativeConversationInput,
@@ -1128,7 +1145,11 @@ try {
       message: "How should this same visual be used differently across web, social, and community channels?",
     });
     assert.equal(creativeChannelAdviceRequest.intent.creative_conversation_only, true);
+    assert.equal(creativeChannelAdviceRequest.intent.creative_followup_intent_class, "channel_advisory");
+    assert.equal(creativeChannelAdviceRequest.intent.execution_allowed, false);
+    assert.equal(creativeChannelAdviceRequest.intent.expected_response, "text");
     assert.equal(creativeChannelAdviceRequest.constraints.creative_side_effects_allowed, false);
+    assert.equal(creativeChannelAdviceRequest.constraints.execution_allowed, false);
 
     const creativeAckRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...creativeConversationInput,
@@ -1137,7 +1158,12 @@ try {
       message: "Ok, keep it as-is for now.",
     });
     assert.equal(creativeAckRequest.intent.creative_noop_acknowledgement, true);
+    assert.equal(creativeAckRequest.intent.creative_followup_intent_class, "ack_noop");
+    assert.equal(creativeAckRequest.intent.execution_allowed, false);
+    assert.equal(creativeAckRequest.intent.draft_update_allowed, false);
+    assert.equal(creativeAckRequest.intent.expected_response, "none");
     assert.equal(creativeAckRequest.constraints.creative_side_effects_allowed, false);
+    assert.equal(creativeAckRequest.constraints.execution_allowed, false);
 
     const creativeEditRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...creativeConversationInput,
@@ -1146,7 +1172,12 @@ try {
       message: "Apply that stronger reward direction to the current image.",
     });
     assert.equal(creativeEditRequest.intent.creative_mutation_requested, true);
+    assert.equal(creativeEditRequest.intent.creative_followup_intent_class, "explicit_mutation");
+    assert.equal(creativeEditRequest.intent.execution_allowed, true);
+    assert.equal(creativeEditRequest.intent.mutation_allowed, true);
+    assert.equal(creativeEditRequest.intent.expected_response, "asset");
     assert.equal(creativeEditRequest.constraints.creative_side_effects_allowed, true);
+    assert.equal(creativeEditRequest.constraints.execution_allowed, true);
     assert.equal(creativeEditRequest.tool_policy.creative_execution_may_be_requested_by_cmo, true);
     assert.equal(creativeEditRequest.capabilities.creative.canExecuteImageGeneration, true);
 

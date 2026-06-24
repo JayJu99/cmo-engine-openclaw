@@ -951,6 +951,17 @@ export interface HermesCmoChatMetadata {
   creative_noop_acknowledgement?: boolean;
   creative_prompt_proposal_only?: boolean;
   creative_mutation_requested?: boolean;
+  creative_followup_intent_class?: string;
+  creative_semantic_intent_class?: string;
+  mutation_allowed?: boolean;
+  execution_allowed?: boolean;
+  draft_update_allowed?: boolean;
+  expected_response?: "none" | "minimal_ack" | "text" | "text_prompt" | "asset" | string;
+  creative_mutation_allowed?: boolean;
+  creative_execution_allowed?: boolean;
+  creative_draft_update_allowed?: boolean;
+  creative_expected_response?: "none" | "minimal_ack" | "text" | "text_prompt" | "asset" | string;
+  creative_no_execute_modifier_detected?: boolean;
   assistant_response_suppressed_for_noop?: boolean;
   creative_conversation_rejected?: boolean;
   creative_conversation_rejection_reason?: string;
