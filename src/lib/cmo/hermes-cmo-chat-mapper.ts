@@ -1676,6 +1676,20 @@ function metadataFromHermes(
   const responseCreativeAssetsCount = typeof structuredOutput.creative_assets_count === "number" && Number.isFinite(structuredOutput.creative_assets_count)
     ? Math.max(0, Math.floor(structuredOutput.creative_assets_count))
     : undefined;
+  const rawHermesResponseAnswerPreview = typeof structuredOutput.raw_hermes_response_answer_preview === "string"
+    ? structuredOutput.raw_hermes_response_answer_preview
+    : undefined;
+  const traceResponseAnswerPreview = typeof structuredOutput.trace_response_answer_preview === "string"
+    ? structuredOutput.trace_response_answer_preview
+    : undefined;
+  const responseTraceRedactionApplied = typeof structuredOutput.response_trace_redaction_applied === "boolean"
+    ? structuredOutput.response_trace_redaction_applied
+    : undefined;
+  const m1ValidationAnswerSource = structuredOutput.m1_validation_answer_source === "raw_hermes_response" ||
+    structuredOutput.m1_validation_answer_source === "trace_response" ||
+    structuredOutput.m1_validation_answer_source === "mapped_response"
+    ? structuredOutput.m1_validation_answer_source
+    : undefined;
   const creativeIdeationCanonicalized =
     typeof structuredOutput.creative_ideation_canonicalized === "boolean"
       ? structuredOutput.creative_ideation_canonicalized
@@ -1749,6 +1763,11 @@ function metadataFromHermes(
             creative_state_mutation: false,
             m1_validation_result: "accepted",
           } : {}),
+          ...(rawHermesResponseAnswerPreview ? { raw_hermes_response_answer_preview: rawHermesResponseAnswerPreview } : {}),
+          ...(traceResponseAnswerPreview ? { trace_response_answer_preview: traceResponseAnswerPreview } : {}),
+          ...(typeof responseTraceRedactionApplied === "boolean" ? { response_trace_redaction_applied: responseTraceRedactionApplied } : {}),
+          ...(m1ValidationAnswerSource ? { m1_validation_answer_source: m1ValidationAnswerSource } : {}),
+          ...(creativeConversationResponseReceived ? { user_visible_answer_source: "raw_hermes_response" as const } : {}),
           ...(creativeExecutionResponseReceived ? {
             creative_execution_response_received: true,
             creative_execution_owner: "cmo",

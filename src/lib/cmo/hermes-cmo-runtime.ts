@@ -2524,6 +2524,35 @@ const traceDirectory = () =>
 
 const safeTraceId = (value: string) => value.replace(/[^a-z0-9_.-]+/gi, "_").slice(0, 96) || "unknown";
 
+const traceAnswerForbiddenPattern =
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|\/home\/|\/var\/|\/mnt\/|\/private\/|\/Volumes\/|(?:^|\s)file:|(?:^|\s)[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|reference_assets|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
+
+const tracePathEndsWith = (pathParts: Array<string | number>, suffix: string[]): boolean => {
+  if (pathParts.length < suffix.length) {
+    return false;
+  }
+
+  return suffix.every((part, index) => pathParts[pathParts.length - suffix.length + index] === part);
+};
+
+const isTraceUserVisibleAnswerField = (pathParts: Array<string | number>): boolean =>
+  ["body", "content", "text", "summary"].some((field) =>
+    tracePathEndsWith(pathParts, ["response", "answer", field]) ||
+    tracePathEndsWith(pathParts, ["answer", field])
+  );
+
+const traceAnswerString = (value: string, max = 1200) => {
+  const compact = value.replace(/\s+/g, " ").trim();
+
+  if (traceAnswerForbiddenPattern.test(compact)) {
+    return traceString(value, max);
+  }
+
+  const redacted = redactSensitiveText(compact, Math.max(max, 1200));
+
+  return redacted.length > max ? `${redacted.slice(0, max - 3).trimEnd()}...` : redacted;
+};
+
 const traceString = (value: string, max = 1200) => {
   const compact = value.replace(/\s+/g, " ").trim();
   const redactedLocalPath = redactedLocalArtifactPath(compact);
@@ -2532,8 +2561,12 @@ const traceString = (value: string, max = 1200) => {
   return redacted.length > max ? `${redacted.slice(0, max - 3).trimEnd()}...` : redacted;
 };
 
-const traceValue = (value: unknown, depth = 0): unknown => {
+const traceValue = (value: unknown, depth = 0, pathParts: Array<string | number> = []): unknown => {
   if (typeof value === "string") {
+    if (isTraceUserVisibleAnswerField(pathParts)) {
+      return traceAnswerString(value);
+    }
+
     return traceString(value);
   }
 
@@ -2542,7 +2575,7 @@ const traceValue = (value: unknown, depth = 0): unknown => {
   }
 
   if (Array.isArray(value)) {
-    return value.slice(0, 12).map((item) => traceValue(item, depth + 1));
+    return value.slice(0, 12).map((item, index) => traceValue(item, depth + 1, [...pathParts, index]));
   }
 
   if (depth >= 5 || !isRecord(value)) {
@@ -2555,7 +2588,7 @@ const traceValue = (value: unknown, depth = 0): unknown => {
         return [key, "[redacted]"];
       }
 
-      return [key, traceValue(item, depth + 1)];
+      return [key, traceValue(item, depth + 1, [...pathParts, key])];
     }),
   );
 };
@@ -3179,9 +3212,14 @@ const responseTraceSummary = (payload: unknown): Record<string, unknown> => {
   const answerPreview =
     typeof answerRecord.body === "string"
       ? answerRecord.body
+      : typeof answerRecord.content === "string"
+        ? answerRecord.content
       : typeof answerRecord.text === "string"
         ? answerRecord.text
+        : typeof answerRecord.summary === "string"
+          ? answerRecord.summary
         : undefined;
+  const answerDiagnostics = responseAnswerTraceDiagnostics(payload);
 
   return {
     http_payload_shape: isRecord(root.response) ? "wrapped_response" : "response",
@@ -3225,7 +3263,44 @@ const responseTraceSummary = (payload: unknown): Record<string, unknown> => {
       gbrain_mutation: response.gbrain_mutation,
     },
     creative_trace: creativeTraceSummary(payload),
-    answer_body_preview: typeof answerPreview === "string" ? traceString(answerPreview, 1000) : undefined,
+    answer_body_preview: typeof answerPreview === "string" ? traceAnswerString(answerPreview, 1000) : undefined,
+    ...answerDiagnostics,
+  };
+};
+
+const responseAnswerPreview = (payload: unknown): string | undefined => {
+  const root = isRecord(payload) ? payload : {};
+  const response = isRecord(root.response) ? root.response : root;
+  const answer = isRecord(response.answer) ? response.answer : {};
+
+  for (const value of [answer.body, answer.content, answer.text, answer.summary]) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+
+  return undefined;
+};
+
+const responseAnswerTraceDiagnostics = (payload: unknown): Record<string, unknown> => {
+  const preview = responseAnswerPreview(payload);
+
+  if (typeof preview !== "string") {
+    return {
+      m1_validation_answer_source: "raw_hermes_response",
+      user_visible_answer_source: "raw_hermes_response",
+    };
+  }
+
+  const rawPreview = traceAnswerString(preview, 1000);
+  const tracePreview = traceString(preview, 1000);
+
+  return {
+    raw_hermes_response_answer_preview: rawPreview,
+    trace_response_answer_preview: tracePreview,
+    response_trace_redaction_applied: rawPreview !== tracePreview,
+    m1_validation_answer_source: "raw_hermes_response",
+    user_visible_answer_source: "raw_hermes_response",
   };
 };
 
@@ -4034,11 +4109,13 @@ const extractLiveResponsePayload = (
   const creativeActivityDiagnostics = creativeExecutionResponseReceived
     ? creativeExecutionActivityDiagnostics
     : creativeIdeationActivityDiagnostics;
+  const answerSourceDiagnostics = responseAnswerTraceDiagnostics(rawResponseCandidate);
   if (creativeNativeResponseReceived) {
     responseCandidate = {
       ...responseCandidate,
       structured_output: {
         ...responseStructuredOutput,
+        ...answerSourceDiagnostics,
         creative_ideation_response_received: responseAnswerBasis.mode === "creative_ideation",
         creative_session_response_received: responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement",
         ...(creativeConversationResponseReceived ? { creative_conversation_response_received: true } : {}),
@@ -4057,6 +4134,7 @@ const extractLiveResponsePayload = (
       },
       activity_summary: {
         ...(isRecord(responseCandidate.activity_summary) ? responseCandidate.activity_summary : {}),
+        ...answerSourceDiagnostics,
         creative_ideation_response_received: responseAnswerBasis.mode === "creative_ideation",
         creative_session_response_received: responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement",
         ...(creativeConversationResponseReceived ? { creative_conversation_response_received: true } : {}),
@@ -4634,6 +4712,7 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       outbound_hermes_payload_guard: outboundDiagnostics,
       http_status: response.status,
       summary: responseTraceSummary(payload),
+      ...responseAnswerTraceDiagnostics(payload),
       response: payload,
     });
 

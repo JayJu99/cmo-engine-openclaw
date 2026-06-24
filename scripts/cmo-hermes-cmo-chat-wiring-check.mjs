@@ -2863,6 +2863,57 @@ try {
       "delegations must map as reviewable proposals only",
     );
 
+    const cleanCreativeAdvisoryBase = makeRuntimeResult();
+    const cleanCreativeAdvisoryMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...cleanCreativeAdvisoryBase,
+      hermesCmoRouteDecision: "creative_session",
+      creativeLongRunningTurn: true,
+      request: {
+        ...cleanCreativeAdvisoryBase.request,
+        constraints: {
+          ...cleanCreativeAdvisoryBase.request.constraints,
+          creative_session_followup_detected: true,
+          creative_working_state_present: true,
+        },
+      },
+      response: {
+        ...cleanCreativeAdvisoryBase.response,
+        answer_basis: {
+          mode: "creative_conversation",
+          missing_inputs: [],
+          assumptions_used: [],
+          user_can_override: true,
+          suggested_user_inputs: [],
+        },
+        answer: {
+          format: "markdown",
+          title: "Creative advisory",
+          summary: "",
+          decision: "KEEP",
+          body: "Nên thêm glow/accent teal quanh egg và CTA area, nhưng giữ tổng thể sạch để không làm mất cảm giác premium.",
+        },
+        structured_output: {
+          ...cleanCreativeAdvisoryBase.response.structured_output,
+          classification: "creative_conversation",
+          creative_conversation_response_received: true,
+          creative_conversation_mode: "advisory",
+          creative_assets_count: 0,
+          creative_asset_mutation: false,
+          creative_state_mutation: false,
+          m1_validation_result: "accepted",
+          raw_hermes_response_answer_preview: "Nên thêm glow/accent teal quanh egg và CTA area, nhưng giữ tổng thể sạch để không làm mất cảm giác premium.",
+          trace_response_answer_preview: "Nên thêm glow/accent teal quanh egg và CTA area, nhưng giữ tổng thể sạch để không làm mất cảm giác premium.",
+          response_trace_redaction_applied: false,
+          m1_validation_answer_source: "raw_hermes_response",
+        },
+      },
+    });
+    assert.match(cleanCreativeAdvisoryMapped.answer, /thêm glow\/accent teal quanh egg và CTA area/i);
+    assert.doesNotMatch(cleanCreativeAdvisoryMapped.answer, /\[hermes_local_artifact_path_redacted\]|accent_teal_quanh_egg_v_CTA_area/i);
+    assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.m1_validation_answer_source, "raw_hermes_response");
+    assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.user_visible_answer_source, "raw_hermes_response");
+    assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.response_trace_redaction_applied, false);
+
     const sourceTranslateBase = makeRuntimeResult();
     const sourceTranslateMapped = mapper.mapHermesCmoResponseToChatResult({
       ...sourceTranslateBase,

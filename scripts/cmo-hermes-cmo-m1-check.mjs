@@ -834,6 +834,7 @@ const startServer = async () => {
             body.request_id === "req_m13_cmo_owned_creative_execution_live_shape" ||
             body.request_id === "req_m13_cmo_owned_creative_reference_fetch_failed" ||
             body.request_id === "req_m13_creative_conversation_advisory" ||
+            body.request_id === "req_m13_creative_conversation_glow_accent" ||
             body.request_id === "req_m13_creative_outbound_sanitized" ||
             body.request_id === "req_m13_creative_trace_only_projection";
           const firstCallCreativeNative = firstCallCreativeExecution || firstCallCmoOwnedCreativeExecution;
@@ -1160,6 +1161,15 @@ const startServer = async () => {
               body,
               "advise",
               "Hướng này không bị hiền quá. Nó đang an toàn và premium; để mạnh hơn, tăng contrast ở hook, thêm một điểm căng về merchant checkout, và giữ visual 21:9 sạch thay vì thêm quá nhiều chi tiết.",
+            ));
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_conversation_glow_accent") {
+            writeJson(response, 200, m13CreativeConversationResponse(
+              body,
+              "advise",
+              "Nên thêm glow/accent teal quanh egg và CTA area, nhưng giữ tổng thể sạch để không làm mất cảm giác premium.",
             ));
             return;
           }
@@ -5525,6 +5535,33 @@ try {
     assert.equal(m13CreativeConversationAdvisoryResult.response.structured_output.m1_validation_result, "accepted");
     assert.equal(m13CreativeConversationAdvisoryResult.response.structured_output.fallback_used, false);
     assert.equal(m13CreativeConversationAdvisoryResult.response.artifacts.length, 0);
+    const m13CreativeConversationGlowAccentResult = await runHermesCmoRuntime(m13CmoOwnedCreativeSessionExecutionRequest("req_m13_creative_conversation_glow_accent"));
+    assert.equal(m13CreativeConversationGlowAccentResult.response.status, "completed");
+    assert.equal(m13CreativeConversationGlowAccentResult.response.answer_basis.mode, "creative_conversation");
+    assert.equal(m13CreativeConversationGlowAccentResult.response.structured_output.m1_validation_result, "accepted");
+    assert.equal(m13CreativeConversationGlowAccentResult.response.structured_output.m1_validation_answer_source, "raw_hermes_response");
+    assert.match(m13CreativeConversationGlowAccentResult.response.answer?.body ?? "", /thêm glow\/accent teal quanh egg và CTA area/i);
+    assert.equal(
+      /\[hermes_local_artifact_path_redacted\]|accent_teal_quanh_egg_v_CTA_area/i.test(m13CreativeConversationGlowAccentResult.response.answer?.body ?? ""),
+      false,
+      "Clean advisory answer must not be transformed into a redacted local-artifact path",
+    );
+    const glowAccentTraceFiles = await readdir(m13TraceDir);
+    const glowAccentResponseTraceName = glowAccentTraceFiles.find((fileName) =>
+      fileName.includes("session_m13_creative_conversation_glow_accent") && fileName.endsWith("_response.json")
+    );
+    assert.ok(glowAccentResponseTraceName, "Clean advisory response must write _response.json trace");
+    const glowAccentResponseTraceText = await readFile(path.join(m13TraceDir, glowAccentResponseTraceName), "utf8");
+    assert.equal(
+      /\[hermes_local_artifact_path_redacted\]|accent_teal_quanh_egg_v_CTA_area/i.test(glowAccentResponseTraceText),
+      false,
+      "Response trace must not redact safe natural-language answer text into a local-artifact path",
+    );
+    const glowAccentResponseTrace = JSON.parse(glowAccentResponseTraceText);
+    assert.match(glowAccentResponseTrace.response?.response?.answer?.body ?? glowAccentResponseTrace.response?.answer?.body ?? "", /thêm glow\/accent teal quanh egg và CTA area/i);
+    assert.equal(glowAccentResponseTrace.m1_validation_answer_source, "raw_hermes_response");
+    assert.equal(glowAccentResponseTrace.user_visible_answer_source, "raw_hermes_response");
+    assert.equal(glowAccentResponseTrace.response_trace_redaction_applied, false);
     m13CreativeOutboundSanitizedResult = await runHermesCmoRuntime(m13PollutedCmoOwnedCreativeSessionExecutionRequest("req_m13_creative_outbound_sanitized"));
     assert.equal(m13CreativeOutboundSanitizedResult.response.status, "completed");
     assert.equal(m13CreativeOutboundSanitizedResult.response.answer_basis.mode, "creative_conversation");

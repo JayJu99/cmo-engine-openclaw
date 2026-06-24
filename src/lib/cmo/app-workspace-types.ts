@@ -953,6 +953,11 @@ export interface HermesCmoChatMetadata {
   native_response_answer_basis_mode?: string;
   native_response_creative_decision_action?: string;
   native_response_path_like_answer_detected?: boolean;
+  raw_hermes_response_answer_preview?: string;
+  trace_response_answer_preview?: string;
+  response_trace_redaction_applied?: boolean;
+  m1_validation_answer_source?: "raw_hermes_response" | "trace_response" | "mapped_response";
+  user_visible_answer_source?: "raw_hermes_response" | "mapped_response";
   user_visible_answer_guard_triggered?: boolean;
   user_visible_answer_guard_reason?: string;
   product_outbound_payload_blocked?: boolean;
