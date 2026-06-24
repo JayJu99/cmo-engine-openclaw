@@ -1242,8 +1242,7 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
 
   if (
     outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked ||
-    fetchBodyBlockInspection.literals.length > 0 ||
-    traceEnvelopeBlockInspection.literals.length > 0
+    fetchBodyBlockInspection.literals.length > 0
   ) {
     const blockedDiagnostics = {
       ...traceDiagnostics,

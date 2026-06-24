@@ -77,7 +77,7 @@ import {
   normalizeCreativeWorkingState,
   sanitizeCreativeAssetStates,
 } from "@/lib/cmo/creative-draft-state";
-import { routeIntentForMessage } from "@/lib/cmo/app-routing-intent";
+import { isCreativeConversationOnlyIntent, isPureAcknowledgementIntent, routeIntentForMessage } from "@/lib/cmo/app-routing-intent";
 import { executeMixedCmoEcho, isMixedCmoEchoRequest, mixedEchoNeedsClarification, buildMixedCmoEchoRuntimeMessage, maybeHandleEchoBridge } from "@/lib/cmo/echo-bridge";
 import { buildCmoEvidenceRuntimeMessage, executeCmoSurfEvidence } from "@/lib/cmo/cmo-surf-orchestrator";
 import {
@@ -2316,6 +2316,11 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(value.creative_session_response_received === true ? { creative_session_response_received: true } : {}),
     ...(value.creative_conversation_response_received === true ? { creative_conversation_response_received: true } : {}),
     ...(stringValue(value.creative_conversation_mode) ? { creative_conversation_mode: stringValue(value.creative_conversation_mode) } : {}),
+    ...(value.creative_conversation_only === true ? { creative_conversation_only: true } : {}),
+    ...(value.creative_noop_acknowledgement === true ? { creative_noop_acknowledgement: true } : {}),
+    ...(value.creative_prompt_proposal_only === true ? { creative_prompt_proposal_only: true } : {}),
+    ...(value.creative_mutation_requested === true ? { creative_mutation_requested: true } : {}),
+    ...(value.assistant_response_suppressed_for_noop === true ? { assistant_response_suppressed_for_noop: true } : {}),
     ...(value.creative_conversation_rejected === true ? { creative_conversation_rejected: true } : {}),
     ...(stringValue(value.creative_conversation_rejection_reason) ? { creative_conversation_rejection_reason: stringValue(value.creative_conversation_rejection_reason) } : {}),
     ...(stringValue(value.creative_conversation_rejected_answer_preview) ? { creative_conversation_rejected_answer_preview: stringValue(value.creative_conversation_rejected_answer_preview) } : {}),
@@ -2372,6 +2377,12 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(typeof value.activity_events_allowed_for_creative_execution === "boolean"
       ? { activity_events_allowed_for_creative_execution: value.activity_events_allowed_for_creative_execution }
       : {}),
+    ...(typeof value.activity_event_repaired === "boolean" ? { activity_event_repaired: value.activity_event_repaired } : {}),
+    ...(stringValue(value.activity_event_repair_reason) ? { activity_event_repair_reason: stringValue(value.activity_event_repair_reason) } : {}),
+    ...(typeof value.activity_event_ignored_for_creative_conversation === "boolean"
+      ? { activity_event_ignored_for_creative_conversation: value.activity_event_ignored_for_creative_conversation }
+      : {}),
+    ...(stringValue(value.activity_event_ignore_reason) ? { activity_event_ignore_reason: stringValue(value.activity_event_ignore_reason) } : {}),
     ...(typeof value.creative_ideation_canonicalized === "boolean" ? { creative_ideation_canonicalized: value.creative_ideation_canonicalized } : {}),
     ...(typeof value.creative_session_canonicalized === "boolean" ? { creative_session_canonicalized: value.creative_session_canonicalized } : {}),
     ...(typeof value.creative_execution_canonicalized === "boolean" ? { creative_execution_canonicalized: value.creative_execution_canonicalized } : {}),
@@ -2770,6 +2781,21 @@ function isGenericCreativeSuccessWithoutAssetAnswer(value: string): boolean {
   );
 
   return !value.trim() || genericCreativeSuccessPattern.test(value);
+}
+
+function isGenericAcknowledgementAnswer(value: string): boolean {
+  const normalized = value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\u0111|\u0110/g, "d")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const tokens = normalized.match(/[a-z0-9]+/g) ?? [];
+  const acknowledgementTokens = new Set(["ok", "okay", "yes", "yeah", "yep", "uh", "ua", "duoc", "roi", "ro", "hieu", "nhe", "bro", "ban", "minh"]);
+
+  return tokens.length > 0 && tokens.length <= 8 && tokens.every((token) => acknowledgementTokens.has(token));
 }
 
 function creativeMissingRenderableAssetWarning(): string {
@@ -3637,11 +3663,13 @@ export async function createAppChatSession(
     hermesCmoRoute.reason === "creative_session";
   const creativeIdeationDetected = hermesCmoRoute.reason === "creative_ideation";
   const creativeSessionFollowupDetected = hermesCmoRoute.reason === "creative_session";
+  const creativeConversationOnlyIntent = hermesCmoRoute.reason === "creative_session" && isCreativeConversationOnlyIntent(request.message);
+  const creativeAcknowledgementNoopIntent = creativeConversationOnlyIntent && isPureAcknowledgementIntent(request.message);
   const routeOverrodeToolExecuteDueToCreativeContext = hermesCmoRoute.reason === "creative_session" && creativeWorkingStatePresent;
   const toolExecuteSuppressedForCreativeFollowup = hermesCmoRoute.endpointKind === "execute" && hermesCmoRoute.reason === "creative_session";
   const hermesCmoCreativeLongRunningTurn =
     hermesCmoRoute.reason === "creative_execution" ||
-    (hermesCmoRoute.reason === "creative_session" && (
+    (hermesCmoRoute.reason === "creative_session" && !creativeConversationOnlyIntent && (
       Boolean(activeCreativeAssetId) ||
       creativeAssetsCount > 0 ||
       Boolean(activeCreativeAssetResolution.asset) ||
@@ -5300,6 +5328,24 @@ export async function createAppChatSession(
       ...(hermesCmoNativeCreativeRequested ? { fallback_used: false, workspace_fallback_suppressed_for_creative: true } : {}),
     };
   }
+  const suppressNoopAssistantMessage =
+    creativeAcknowledgementNoopIntent &&
+    status === "completed" &&
+    turnCreativeArtifacts.length === 0 &&
+    isGenericAcknowledgementAnswer(answer);
+  if (suppressNoopAssistantMessage) {
+    answer = "";
+    hermesCmoMetadata = {
+      ...(hermesCmoMetadata ?? failedHermesCmoChatV11Metadata(`req_cmo_noop_${messageId}`, "creative_noop_acknowledgement")),
+      creative_conversation_response_received: true,
+      creative_conversation_mode: "noop",
+      creative_noop_acknowledgement: true,
+      assistant_response_suppressed_for_noop: true,
+      creative_asset_mutation: false,
+      creative_state_mutation: false,
+      fallback_used: false,
+    };
+  }
 
   const decisionLayer = buildDecisionLayer({
     workspaceId: request.workspaceId,
@@ -5495,9 +5541,9 @@ export async function createAppChatSession(
         ...(vaultUpdateDryRunResults.length ? { vaultUpdateDryRunResults } : {}),
         ...(vaultUpdateWriteResults.length ? { vaultUpdateWriteResults } : {}),
       },
-      {
+      ...(suppressNoopAssistantMessage ? [] : [{
         id: assistantId,
-        role: "assistant",
+        role: "assistant" as const,
         content: answer,
         createdAt: now,
         ...assistantSourceMetadata(userIdentity, messageId),
@@ -5548,7 +5594,7 @@ export async function createAppChatSession(
         indexedContextSourcesCount,
         ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
         ...timingMetadata,
-      },
+      }]),
     ],
   };
 

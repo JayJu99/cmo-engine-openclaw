@@ -21,7 +21,14 @@ import type {
   HermesCmoRuntimeResult,
 } from "@/lib/cmo/hermes-cmo-runtime";
 import type { HermesCmoAttachmentRef } from "@/lib/cmo/attachments";
-import { isExplicitCreativeExecutionIntent, leadingIntentText } from "./app-routing-intent";
+import {
+  isCreativeConversationOnlyIntent,
+  isExplicitCreativeExecutionIntent,
+  isExplicitCreativeMutationIntent,
+  isPromptProposalOnlyIntent,
+  isPureAcknowledgementIntent,
+  leadingIntentText,
+} from "./app-routing-intent";
 import type { CmoRuntimeTurnInput } from "@/lib/cmo/runtime";
 import {
   resolveSessionWorkingMemory,
@@ -125,7 +132,9 @@ function compactText(value: string, maxChars = 1200): string {
 function compactMultilineText(value: string, maxChars = MAX_REPLAY_MESSAGE_CHARS): string {
   const compact = value
     .replace(/\r\n/g, "\n")
-    .replace(/[ \t]+/g, " ")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/g, "").replace(/([^\s])[ \t]{2,}([^\s])/g, "$1 $2"))
+    .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
@@ -181,6 +190,23 @@ function isPendingToolRunPlaceholder(message: CMOChatMessage): boolean {
   }
 
   return /^CMO is working\.\.\.(?:\s+Researching signals\.\.\.\s+Synthesizing answer\.\.\.)?$/i.test(compactText(message.content, 220));
+}
+
+function isStaleFailureAssistantContext(message: CMOChatMessage): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+
+  const metadata = message.hermesCmoMetadata;
+
+  return Boolean(
+    message.runtimeErrorReason ||
+      message.hermesCmoErrorReason ||
+      message.creativeRejectedByM1Validator === true ||
+      metadata?.creative_conversation_rejected === true ||
+      metadata?.product_outbound_payload_blocked === true ||
+      metadata?.rejected_by_m1_validator === true,
+  );
 }
 
 function latestCreativeDraftForReplay(state: CmoCreativeWorkingState | undefined): CmoCreativeWorkingState["drafts"][number] | undefined {
@@ -351,7 +377,7 @@ function canonicalReplayContent(message: CMOChatMessage): string | null {
 
 function replayableChatHistory(history: CMOChatMessage[]): ReplayableCmoChatMessage[] {
   return history.flatMap((message): ReplayableCmoChatMessage[] => {
-    if ((message.role !== "user" && message.role !== "assistant") || isPendingToolRunPlaceholder(message)) {
+    if ((message.role !== "user" && message.role !== "assistant") || isPendingToolRunPlaceholder(message) || isStaleFailureAssistantContext(message)) {
       return [];
     }
 
@@ -829,6 +855,26 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const creativeSessionFollowupDetected = input.creativeSessionFollowupDetected === true;
   const creativeNativeSession = creativeWorkingStatePresent || creativeIdeationDetected || creativeSessionFollowupDetected;
   const creativeExecutionIntent = isExplicitCreativeExecutionIntent(input.message) && !creativeNativeSession;
+  const creativeConversationOnlyIntent = creativeNativeSession && isCreativeConversationOnlyIntent(input.message);
+  const creativeAcknowledgementNoopIntent = creativeNativeSession && isPureAcknowledgementIntent(input.message);
+  const creativePromptProposalOnlyIntent = creativeNativeSession && isPromptProposalOnlyIntent(input.message);
+  const creativeMutationIntent = creativeNativeSession && isExplicitCreativeMutationIntent(input.message) && !creativeConversationOnlyIntent;
+  const creativeConversationIntentMetadata = creativeConversationOnlyIntent
+    ? {
+        creative_conversation_only: true,
+        creative_asset_mutation_allowed: false,
+        creative_state_mutation_allowed: false,
+        creative_mutation_permitted_this_turn: false,
+        ...(creativeAcknowledgementNoopIntent ? { creative_noop_acknowledgement: true } : {}),
+        ...(creativePromptProposalOnlyIntent ? { creative_prompt_proposal_only: true } : {}),
+      }
+    : {};
+  const creativeMutationIntentMetadata = creativeMutationIntent
+    ? {
+        creative_mutation_requested: true,
+        creative_mutation_permitted_this_turn: true,
+      }
+    : {};
   const creativeWorkingStateCamelCase = creativeWorkingStateForHermes
     ? creativeWorkingStateForHermesCamelCase(creativeWorkingStateForHermes)
     : undefined;
@@ -839,8 +885,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     ? {
         creative: {
           canProposeDraft: true,
-          canUpdateDraftState: true,
-          canExecuteImageGeneration: true,
+          canUpdateDraftState: creativeConversationOnlyIntent ? false : true,
+          canExecuteImageGeneration: creativeConversationOnlyIntent ? false : true,
           requiresUserConfirmationBeforeExecute: true,
         },
       }
@@ -886,6 +932,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(creativeNativeSession ? { creative_session: true } : {}),
       ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
       ...(creativeSessionFollowupDetected ? { creative_session_followup_detected: true } : {}),
+      ...creativeConversationIntentMetadata,
+      ...creativeMutationIntentMetadata,
     },
     input: {
       input_material: inputMaterial,
@@ -904,6 +952,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creativeSession: true,
             cmoOwnsCreativeDecision: true,
             creativeDecisionOwnerWhenLive: "hermes_cmo",
+            ...creativeConversationIntentMetadata,
+            ...creativeMutationIntentMetadata,
           }
         : {}),
       ...(creativeWorkingStateForHermes ? { creative_working_state: creativeWorkingStateForHermes } : {}),
@@ -941,6 +991,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
           cmo_owns_creative_decision: true,
           creativeDecisionOwnerWhenLive: "hermes_cmo",
           creative_decision_owner_when_live: "hermes_cmo",
+          ...creativeConversationIntentMetadata,
+          ...creativeMutationIntentMetadata,
         }
       : {}),
     ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
@@ -966,6 +1018,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creativeSession: true,
             cmoOwnsCreativeDecision: true,
             creativeDecisionOwnerWhenLive: "hermes_cmo",
+            ...creativeConversationIntentMetadata,
+            ...creativeMutationIntentMetadata,
             ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
           }
         : {}),
@@ -1063,7 +1117,9 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             reference_asset_bytes_present: creativeReferenceAssets.some((asset) => typeof asset.bytes === "number"),
             creative_session_from_asset: Boolean(creativeWorkingStateForHermes.active_asset_id || (creativeWorkingStateForHermes.assets?.length ?? 0) > 0),
             creative_session_followup_detected: creativeSessionFollowupDetected,
-            creative_side_effects_allowed: true,
+            ...creativeConversationIntentMetadata,
+            ...creativeMutationIntentMetadata,
+            creative_side_effects_allowed: creativeConversationOnlyIntent ? false : true,
             requires_user_confirmation_before_creative_execute: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,
@@ -1072,7 +1128,9 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(creativeIdeationDetected
         ? {
             creative_ideation_detected: true,
-            creative_side_effects_allowed: true,
+            ...creativeConversationIntentMetadata,
+            ...creativeMutationIntentMetadata,
+            creative_side_effects_allowed: creativeConversationOnlyIntent ? false : true,
             requires_user_confirmation_before_creative_execute: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,
@@ -1133,8 +1191,10 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             reference_asset_bytes_present: creativeReferenceAssets.some((asset) => typeof asset.bytes === "number"),
             creative_session_from_asset: Boolean(creativeWorkingStateForHermes.active_asset_id || (creativeWorkingStateForHermes.assets?.length ?? 0) > 0),
             creative_session_followup_detected: creativeSessionFollowupDetected,
-            creative_execution_may_be_requested_by_cmo: true,
-            creative_side_effects_allowed: true,
+            ...creativeConversationIntentMetadata,
+            ...creativeMutationIntentMetadata,
+            creative_execution_may_be_requested_by_cmo: creativeConversationOnlyIntent ? false : true,
+            creative_side_effects_allowed: creativeConversationOnlyIntent ? false : true,
             requires_user_confirmation_before_creative_execute: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,
@@ -1143,8 +1203,10 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(creativeIdeationDetected
         ? {
             creative_ideation_detected: true,
-            creative_execution_may_be_requested_by_cmo: true,
-            creative_side_effects_allowed: true,
+            ...creativeConversationIntentMetadata,
+            ...creativeMutationIntentMetadata,
+            creative_execution_may_be_requested_by_cmo: creativeConversationOnlyIntent ? false : true,
+            creative_side_effects_allowed: creativeConversationOnlyIntent ? false : true,
             requires_user_confirmation_before_creative_execute: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,
@@ -1661,6 +1723,18 @@ function metadataFromHermes(
           : creativeConversationResponseReceived
             ? "advisory"
             : undefined;
+  const creativeConversationOnly = typeof structuredOutput.creative_conversation_only === "boolean"
+    ? structuredOutput.creative_conversation_only
+    : undefined;
+  const creativeNoopAcknowledgement = typeof structuredOutput.creative_noop_acknowledgement === "boolean"
+    ? structuredOutput.creative_noop_acknowledgement
+    : undefined;
+  const creativePromptProposalOnly = typeof structuredOutput.creative_prompt_proposal_only === "boolean"
+    ? structuredOutput.creative_prompt_proposal_only
+    : undefined;
+  const creativeMutationRequested = typeof structuredOutput.creative_mutation_requested === "boolean"
+    ? structuredOutput.creative_mutation_requested
+    : undefined;
   const activityEventTypes = activityEvents.map((event) => event.type);
   const rawActivityEventTypes = Array.isArray(structuredOutput.raw_activity_event_types)
     ? structuredOutput.raw_activity_event_types.filter((item): item is string => typeof item === "string")
@@ -1778,6 +1852,10 @@ function metadataFromHermes(
           ...(creativeConversationResponseReceived ? {
             creative_conversation_response_received: true,
             creative_conversation_mode: creativeConversationMode,
+            ...(typeof creativeConversationOnly === "boolean" ? { creative_conversation_only: creativeConversationOnly } : {}),
+            ...(typeof creativeNoopAcknowledgement === "boolean" ? { creative_noop_acknowledgement: creativeNoopAcknowledgement } : {}),
+            ...(typeof creativePromptProposalOnly === "boolean" ? { creative_prompt_proposal_only: creativePromptProposalOnly } : {}),
+            ...(typeof creativeMutationRequested === "boolean" ? { creative_mutation_requested: creativeMutationRequested } : {}),
             creative_asset_mutation: false,
             creative_state_mutation: false,
             m1_validation_result: "accepted",

@@ -357,10 +357,10 @@ requireSource(mapperSource, /creativeSession: true/, "Hermes mapper must mark Cr
 requireSource(mapperSource, /cmoOwnsCreativeDecision: true/, "Hermes mapper must mark CMO decision ownership");
 requireSource(mapperSource, /creativeDecisionOwnerWhenLive: "hermes_cmo"/, "Hermes mapper must mark Creative decision owner");
 requireSource(mapperSource, /canProposeDraft: true/, "Hermes mapper capabilities");
-requireSource(mapperSource, /canUpdateDraftState: true/, "Hermes mapper capabilities");
-requireSource(mapperSource, /canExecuteImageGeneration: true/, "Hermes mapper capabilities");
+requireSource(mapperSource, /canUpdateDraftState: creativeConversationOnlyIntent \? false : true/, "Hermes mapper capabilities must disable draft mutation for non-mutating Creative conversations");
+requireSource(mapperSource, /canExecuteImageGeneration: creativeConversationOnlyIntent \? false : true/, "Hermes mapper capabilities must disable image generation for non-mutating Creative conversations");
 requireSource(mapperSource, /requiresUserConfirmationBeforeExecute: true/, "Hermes mapper capabilities");
-requireSource(mapperSource, /creative_side_effects_allowed: true/, "Hermes mapper must mirror capability as a boundary");
+requireSource(mapperSource, /creative_side_effects_allowed: creativeConversationOnlyIntent \? false : true/, "Hermes mapper must disable side effects for non-mutating Creative conversations");
 requireSource(mapperSource, /requires_user_confirmation_before_creative_execute: true/, "Hermes mapper must mirror confirmation boundary");
 requireSource(mapperSource, /product_must_not_choose_creative_execution: true/, "Hermes mapper must keep CMO as execution decision owner");
 requireSource(mapperSource, /creative_decision_owner_when_live: "hermes_cmo"/, "Hermes mapper product boundary");

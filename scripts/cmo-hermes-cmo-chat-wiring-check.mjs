@@ -574,6 +574,53 @@ try {
         assert.equal(creativeExecution.endpointKind, "execute");
         assert.equal(creativeExecution.reason, "creative_execution");
 
+        const activeCreativeState = {
+          active_asset_id: "creative_uploaded_primary",
+          drafts: [],
+          assets: [{ asset_id: "creative_uploaded_primary" }],
+        };
+        const creativeReviewConversation = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "Critique the current visual for landing-page conversion, no image edits yet.",
+          hasCreativeWorkingState: true,
+          creativeWorkingState: activeCreativeState,
+        });
+        assert.equal(creativeReviewConversation.endpoint, "/agents/cmo/execute");
+        assert.equal(creativeReviewConversation.reason, "creative_session");
+        assert.equal(creativeReviewConversation.routeIntent, "creative_session");
+
+        const creativePromptOnly = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "Write a stronger edit prompt for this direction only, do not generate a new image.",
+          hasCreativeWorkingState: true,
+          creativeWorkingState: activeCreativeState,
+        });
+        assert.equal(creativePromptOnly.reason, "creative_session");
+
+        const creativeChannelAdvice = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "How should this same visual be used differently across web, social, and community channels?",
+          hasCreativeWorkingState: true,
+          creativeWorkingState: activeCreativeState,
+        });
+        assert.equal(creativeChannelAdvice.reason, "creative_session");
+
+        const creativeAcknowledgement = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "Ok, keep it as-is for now.",
+          hasCreativeWorkingState: true,
+          creativeWorkingState: activeCreativeState,
+        });
+        assert.equal(creativeAcknowledgement.reason, "creative_session");
+
+        const creativeExplicitEdit = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "Apply that stronger reward direction to the current image.",
+          hasCreativeWorkingState: true,
+          creativeWorkingState: activeCreativeState,
+        });
+        assert.equal(creativeExplicitEdit.reason, "creative_session");
+
         const nonCanary = router.resolveHermesCmoChatRoute({
           appId: "holdstation-mini-app",
           message: "What should CMO do next?",
@@ -1042,6 +1089,66 @@ try {
     assert.equal(creativeReferenceRequest.reference_assets[0].auth_header, "x-cmo-creative-artifact-key");
     assert.doesNotMatch(JSON.stringify(creativeReferenceRequest.reference_assets), /CMO_CREATIVE_ARTIFACT_READ_KEY|token=redacted|\/tmp|\[hermes_local_artifact_path_redacted\]/);
     assert.doesNotMatch(creativeReferenceRequest.reference_assets[0].fetch_url, /storage\/v1\/object\/sign/, "Primary fetch URL must not be a Supabase signed URL");
+
+    const creativeConversationInput = {
+      ...creativeReferenceInput,
+      creativeWorkingState: creativeReferenceRequest.creative_working_state,
+      creativeSessionFollowupDetected: true,
+      activeCreativeAssetResolutionSource: "creativeWorkingState",
+      sessionId: "session_eggs_creative_review",
+      userMessageId: "msg_eggs_creative_review",
+      createdAt: "2026-06-20T10:03:00.000Z",
+      userIdentity: { userId: "user_eggs", userEmail: "jay@example.com" },
+    };
+    const creativeReviewRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...creativeConversationInput,
+      message: "Critique the current visual for landing-page conversion, no image edits yet.",
+    });
+    assert.equal(creativeReviewRequest.intent.creative_conversation_only, true);
+    assert.equal(creativeReviewRequest.constraints.creative_side_effects_allowed, false);
+    assert.equal(creativeReviewRequest.constraints.creative_mutation_permitted_this_turn, false);
+    assert.equal(creativeReviewRequest.tool_policy.creative_execution_may_be_requested_by_cmo, false);
+    assert.equal(creativeReviewRequest.tool_policy.creative_side_effects_allowed, false);
+    assert.equal(creativeReviewRequest.capabilities.creative.canExecuteImageGeneration, false);
+    assert.equal(creativeReviewRequest.reference_assets[0].asset_id, "creative_uploaded_primary");
+
+    const creativePromptOnlyRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...creativeConversationInput,
+      sessionId: "session_eggs_creative_prompt_only",
+      userMessageId: "msg_eggs_creative_prompt_only",
+      message: "Write a stronger edit prompt for this direction only, do not generate a new image.",
+    });
+    assert.equal(creativePromptOnlyRequest.intent.creative_prompt_proposal_only, true);
+    assert.equal(creativePromptOnlyRequest.constraints.creative_side_effects_allowed, false);
+
+    const creativeChannelAdviceRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...creativeConversationInput,
+      sessionId: "session_eggs_creative_channel_advice",
+      userMessageId: "msg_eggs_creative_channel_advice",
+      message: "How should this same visual be used differently across web, social, and community channels?",
+    });
+    assert.equal(creativeChannelAdviceRequest.intent.creative_conversation_only, true);
+    assert.equal(creativeChannelAdviceRequest.constraints.creative_side_effects_allowed, false);
+
+    const creativeAckRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...creativeConversationInput,
+      sessionId: "session_eggs_creative_ack",
+      userMessageId: "msg_eggs_creative_ack",
+      message: "Ok, keep it as-is for now.",
+    });
+    assert.equal(creativeAckRequest.intent.creative_noop_acknowledgement, true);
+    assert.equal(creativeAckRequest.constraints.creative_side_effects_allowed, false);
+
+    const creativeEditRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...creativeConversationInput,
+      sessionId: "session_eggs_creative_edit",
+      userMessageId: "msg_eggs_creative_edit",
+      message: "Apply that stronger reward direction to the current image.",
+    });
+    assert.equal(creativeEditRequest.intent.creative_mutation_requested, true);
+    assert.equal(creativeEditRequest.constraints.creative_side_effects_allowed, true);
+    assert.equal(creativeEditRequest.tool_policy.creative_execution_may_be_requested_by_cmo, true);
+    assert.equal(creativeEditRequest.capabilities.creative.canExecuteImageGeneration, true);
 
     const outboundForbiddenValuePattern =
       /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
@@ -2626,6 +2733,22 @@ try {
           createdAt: "2026-06-04T08:01:00.000Z",
         },
         {
+          id: "msg_option_failed_product_guard",
+          role: "assistant",
+          content: "Creative conversation response was rejected by Product M1 validation.",
+          createdAt: "2026-06-04T08:01:05.000Z",
+          runtimeErrorReason: "invalid_response",
+          hermesCmoErrorReason: "rejected_by_m1_validator=true answer_basis_mode=creative_conversation",
+          creativeRejectedByM1Validator: true,
+          hermesCmoMetadata: {
+            runtimeMode: "hermes_cmo",
+            runtimeStatus: "live",
+            calledHermesCmo: true,
+            creative_conversation_rejected: true,
+            rejected_by_m1_validator: true,
+          },
+        },
+        {
           id: "msg_option_pending",
           role: "assistant",
           content: "CMO is working...\n\nResearching signals...\nSynthesizing answer...",
@@ -2651,7 +2774,9 @@ try {
     assert.ok(option2ReplayRequest.messages.some((message) => message.role === "assistant" && /2\. Bắt đầu dùng Hold Pay/.test(message.content)), "option 2 follow-up request must include previous assistant options");
     assert.ok(option2ReplayRequest.messages.some((message) => message.role === "user" && /Giữ ý chính của option 2/.test(message.content)), "option 2 follow-up request must include current user rewrite request");
     assert.ok(!option2ReplayRequest.messages.some((message) => /CMO is working|Researching signals|Synthesizing answer/.test(message.content)), "pending assistant placeholder must not be replayed as semantic context");
+    assert.ok(!option2ReplayRequest.messages.some((message) => /Product M1 validation|rejected_by_m1_validator/i.test(message.content)), "stale failed Product assistant messages must not be replayed as semantic context");
     assert.ok(option2ReplayRequest.context_pack.selected_context.some((item) => item?.kind === "recent_chat_message" && item?.role === "assistant" && /2\. Bắt đầu dùng Hold Pay/.test(item.content)), "selected_context must also carry prior assistant option content");
+    assert.ok(!option2ReplayRequest.context_pack.selected_context.some((item) => /Product M1 validation|rejected_by_m1_validator/i.test(item?.content ?? "")), "stale failed Product assistant messages must not be selected as context");
     const creativePromptReplay = "21:9 cinematic onboarding hero for Hold Pay merchant checkout, full-width store counter scene, clear payment moment, modern fintech palette.";
     const creativePromptFollowup = "Ok create the 21:9 image from the prompt you suggested.";
     const creativePromptReplayRequest = mapper.mapCmoChatToHermesCmoRequest({
@@ -2915,6 +3040,38 @@ try {
     assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.diagnostic_preview_ignored_for_m1, true);
     assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.user_visible_answer_source, "raw_hermes_response");
     assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.response_trace_redaction_applied, false);
+
+    const orderedMarkdownBase = makeRuntimeResult();
+    const orderedMarkdownBody = [
+      "1. First critique point",
+      "",
+      "   Keep the explanation under the first point readable.",
+      "",
+      "2. Second critique point",
+      "",
+      "   Preserve the second paragraph as markdown.",
+      "",
+      "3. Third critique point",
+      "",
+      "   Do not flatten this into a single paragraph.",
+    ].join("\n");
+    const orderedMarkdownMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...orderedMarkdownBase,
+      response: {
+        ...orderedMarkdownBase.response,
+        answer: {
+          format: "markdown",
+          title: "Creative critique",
+          summary: "",
+          decision: "REVIEW",
+          body: orderedMarkdownBody,
+        },
+      },
+    });
+    assert.equal(orderedMarkdownMapped.answer, orderedMarkdownBody);
+    assert.match(orderedMarkdownMapped.answer, /1\. First critique point\n\n   Keep/);
+    assert.match(orderedMarkdownMapped.answer, /2\. Second critique point/);
+    assert.match(orderedMarkdownMapped.answer, /3\. Third critique point/);
 
     const sourceTranslateBase = makeRuntimeResult();
     const sourceTranslateMapped = mapper.mapHermesCmoResponseToChatResult({

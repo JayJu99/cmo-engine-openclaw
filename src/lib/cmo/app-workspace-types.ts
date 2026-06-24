@@ -947,6 +947,11 @@ export interface HermesCmoChatMetadata {
   creative_session_response_received?: boolean;
   creative_conversation_response_received?: boolean;
   creative_conversation_mode?: "advisory" | "review" | "clarify" | "ideation" | string;
+  creative_conversation_only?: boolean;
+  creative_noop_acknowledgement?: boolean;
+  creative_prompt_proposal_only?: boolean;
+  creative_mutation_requested?: boolean;
+  assistant_response_suppressed_for_noop?: boolean;
   creative_conversation_rejected?: boolean;
   creative_conversation_rejection_reason?: string;
   creative_conversation_rejected_answer_preview?: string;

@@ -23,6 +23,10 @@ function hasAny(tokens: Set<string>, vocabulary: readonly string[]): boolean {
   return vocabulary.some((term) => tokens.has(term));
 }
 
+function hasPhrase(value: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(value));
+}
+
 function creativeStateHasDraft(state: CreativeWorkingStateIntentContext | undefined): boolean {
   const activeDraftId = typeof state?.active_draft_id === "string" && state.active_draft_id.trim()
     ? state.active_draft_id.trim()
@@ -44,10 +48,79 @@ export function leadingIntentText(message: string): string {
 
 export function isReviewAuditIntent(message: string): boolean {
   const tokens = tokensFor(leadingIntentText(message));
-  const reviewTerms = ["review", "audit", "check", "feedback", "analyze", "analyse", "evaluate", "danh", "gia", "gop", "y"];
+  const reviewTerms = ["review", "audit", "check", "feedback", "analyze", "analyse", "evaluate", "critique", "weak", "weakness", "danh", "gia", "gop", "y", "nhan", "xet", "yeu"];
   const planningTerms = ["plan", "program", "campaign", "ambassador", "proposal"];
 
   return hasAny(tokens, reviewTerms) && (hasAny(tokens, planningTerms) || hasAny(tokens, ["feedback", "audit", "review"]));
+}
+
+export function isPureAcknowledgementIntent(message: string): boolean {
+  const lead = leadingIntentText(message);
+  const tokens = tokensFor(lead);
+  const acknowledgementTerms = ["ok", "okay", "yes", "yep", "yeah", "uh", "ua", "duoc", "roi", "on", "tam", "giu", "vay", "thanks", "thank", "cam", "on"];
+  const mutationTerms = ["generate", "create", "render", "produce", "edit", "change", "adjust", "resize", "reframe", "apply", "make", "tao", "chinh", "sua", "doi", "resize"];
+  const questionOrReviewTerms = ["?", "review", "critique", "analyze", "analyse", "evaluate", "why", "how", "nen", "sao", "danh", "gia", "nhan", "xet", "yeu"];
+
+  if (!hasAny(tokens, acknowledgementTerms) || tokens.size > 10) {
+    return false;
+  }
+
+  if (hasAny(tokens, questionOrReviewTerms) || lead.includes("?")) {
+    return false;
+  }
+
+  if (hasAny(tokens, mutationTerms)) {
+    return hasAny(tokens, ["no", "not", "dont", "chua", "khong", "khoan", "dung", "stop"]);
+  }
+
+  return true;
+}
+
+export function isPromptProposalOnlyIntent(message: string): boolean {
+  const lead = leadingIntentText(message);
+  const tokens = tokensFor(lead);
+  const asksForPrompt = hasAny(tokens, ["prompt", "brief", "direction", "concept", "idea", "angle", "viet", "write", "rewrite", "de", "xuat", "goi", "y"]);
+  const explicitNoExecution = hasAny(tokens, ["only", "thoi", "dont", "not", "no", "chua", "dung", "khoan"]) ||
+    hasPhrase(lead, [/\bwithout\s+(?:creating|generating|rendering|editing)\b/, /\bno\s+(?:image|edit|generation|render)\b/]);
+
+  return asksForPrompt && explicitNoExecution;
+}
+
+export function isCreativeReviewConversationIntent(message: string): boolean {
+  const lead = leadingIntentText(message);
+  const tokens = tokensFor(lead);
+  const reviewTerms = ["review", "critique", "audit", "feedback", "analyze", "analyse", "evaluate", "score", "grade", "weak", "weakness", "conversion", "trust", "attention", "danh", "gia", "nhan", "xet", "yeu", "diem"];
+  const visualTerms = ["visual", "image", "asset", "creative", "hero", "landing", "banner", "post", "social", "community", "telegram", "web", "hinh", "anh"];
+  const explicitNoMutation = hasAny(tokens, ["only", "thoi", "dont", "not", "no", "chua", "khong", "khoan"]) ||
+    hasPhrase(lead, [/\bno\s+(?:edit|image|generation|render)\b/, /\bwithout\s+(?:editing|generating|creating|rendering)\b/]);
+
+  return hasAny(tokens, reviewTerms) && (hasAny(tokens, visualTerms) || explicitNoMutation);
+}
+
+export function isChannelUseCaseAdvisoryIntent(message: string): boolean {
+  const lead = leadingIntentText(message);
+  const tokens = tokensFor(lead);
+  const channelTerms = ["landing", "web", "website", "social", "post", "x", "twitter", "telegram", "community", "banner", "channel", "kenh"];
+  const advisoryTerms = ["use", "used", "using", "across", "angle", "emphasize", "position", "adapt", "different", "differently", "khac", "dung", "nhan", "manh", "angle"];
+
+  return hasAny(tokens, channelTerms) && hasAny(tokens, advisoryTerms) && !isExplicitCreativeMutationIntent(message);
+}
+
+export function isCreativeConversationOnlyIntent(message: string): boolean {
+  return isPureAcknowledgementIntent(message) ||
+    isPromptProposalOnlyIntent(message) ||
+    isCreativeReviewConversationIntent(message) ||
+    isChannelUseCaseAdvisoryIntent(message);
+}
+
+export function isExplicitCreativeMutationIntent(message: string): boolean {
+  const lead = leadingIntentText(message);
+  const tokens = tokensFor(lead);
+  const mutationTerms = ["generate", "create", "render", "produce", "make", "edit", "change", "adjust", "resize", "reframe", "apply", "variant", "version", "tao", "chinh", "sua", "doi", "ap", "lam"];
+  const assetTerms = ["image", "visual", "asset", "creative", "banner", "poster", "video", "motion", "hinh", "anh", "ban", "9:16", "16:9", "4:5", "1:1"];
+  const explicitNoExecution = isPromptProposalOnlyIntent(message) || hasPhrase(lead, [/\b(?:do\s*not|don't|dont|no)\s+(?:create|generate|render|edit)\b/]);
+
+  return !explicitNoExecution && hasAny(tokens, mutationTerms) && (hasAny(tokens, assetTerms) || hasAny(tokens, ["current", "hien", "tai"]));
 }
 
 export function isExplicitEchoExecutionIntent(message: string): boolean {
@@ -66,6 +139,7 @@ export function isExplicitCreativeExecutionIntent(message: string): boolean {
   const tokens = tokensFor(lead);
 
   if (/^(?:\/|@)creative\b/.test(lead)) return true;
+  if (isCreativeConversationOnlyIntent(message)) return false;
   if (isReviewAuditIntent(message)) return false;
 
   const concreteAssetFormat = hasAny(tokens, ["png", "webp", "jpeg", "jpg", "mp4", "webm"]) &&
@@ -80,6 +154,9 @@ export function isCreativeDraftSessionIntent(message: string): boolean {
   const tokens = tokensFor(lead);
 
   if (/^(?:\/|@)creative\b/.test(lead)) return true;
+  if (isPureAcknowledgementIntent(message)) return false;
+  if (isPromptProposalOnlyIntent(message)) return true;
+  if (isCreativeReviewConversationIntent(message) || isChannelUseCaseAdvisoryIntent(message)) return false;
   if (isReviewAuditIntent(message)) return false;
 
   const creativeAction = hasAny(tokens, [
@@ -131,7 +208,15 @@ export function isCreativeSessionTransportContinuation(
   message: string,
   creativeWorkingState?: CreativeWorkingStateIntentContext,
 ): boolean {
-  if (!creativeStateHasDraft(creativeWorkingState) || isReviewAuditIntent(message)) {
+  if (!creativeStateHasDraft(creativeWorkingState)) {
+    return false;
+  }
+
+  if (isCreativeConversationOnlyIntent(message)) {
+    return true;
+  }
+
+  if (isReviewAuditIntent(message)) {
     return false;
   }
 
