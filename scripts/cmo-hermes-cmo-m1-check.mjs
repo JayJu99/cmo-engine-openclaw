@@ -332,6 +332,12 @@ const m13CallsiteGuardBlockedCreativeSessionRequest = (requestId) => {
     context_pack: {
       ...request.context_pack,
       "[hermes_local_artifact_path_redacted]": true,
+      "file:": true,
+      selected_context: [
+        {
+          content: "trace-only pollution should expose file:///private/cmo/blocked.png",
+        },
+      ],
     },
   };
 };
@@ -5522,6 +5528,34 @@ try {
       "Call-site guard must block a payload with forbidden literals remaining after sanitizer",
     );
     assert.equal(server.calls.cmo, cmoCallsBeforeBlockedCallsiteGuard, "Call-site guard must block before fetch");
+    const blockedTraceFiles = await readdir(m13TraceDir);
+    const blockedErrorTraceName = blockedTraceFiles.find((fileName) =>
+      fileName.includes("session_m13_creative_callsite_guard_blocked") && fileName.endsWith("_error.json")
+    );
+    assert.ok(blockedErrorTraceName, "Blocked Creative request must write a Product-local error trace");
+    const blockedErrorTrace = JSON.parse(await readFile(path.join(m13TraceDir, blockedErrorTraceName), "utf8"));
+    assert.equal(blockedErrorTrace.kind, "hermes_cmo_outbound_payload_blocked");
+    assert.equal(blockedErrorTrace.outbound_hermes_payload_guard?.outbound_callsite_guard_version, "context-sanitizer-v2");
+    assert.equal(blockedErrorTrace.outbound_hermes_payload_guard?.outbound_callsite_guard_checked, true);
+    assert.equal(blockedErrorTrace.outbound_hermes_payload_guard?.outbound_callsite_guard_blocked, true);
+    assert.ok(
+      blockedErrorTrace.outbound_callsite_blocked_literals.includes("hermes_local_artifact_path_redacted"),
+      "Blocked diagnostics must name the redacted artifact token",
+    );
+    assert.ok(
+      blockedErrorTrace.outbound_callsite_blocked_sources.includes("fetch_body") ||
+      blockedErrorTrace.outbound_callsite_blocked_sources.includes("trace_envelope"),
+      "Blocked diagnostics must include the blocked source",
+    );
+    assert.ok(
+      blockedErrorTrace.outbound_callsite_blocked_paths.includes("request.context_pack.[hermes_local_artifact_path_redacted]") ||
+      blockedErrorTrace.outbound_callsite_blocked_paths.includes("context_pack.[hermes_local_artifact_path_redacted]"),
+      "Blocked diagnostics must include the polluted JSON path",
+    );
+    assert.ok(
+      blockedErrorTrace.outbound_callsite_blocked_snippets.some((snippet) => snippet.includes("hermes_local_artifact_path_redacted")),
+      "Blocked diagnostics must include a bounded sanitized snippet",
+    );
     m13CmoOwnedCreativeReferenceFetchFailedResult = await runHermesCmoRuntime(m13CmoOwnedCreativeSessionExecutionRequest("req_m13_cmo_owned_creative_reference_fetch_failed"));
     assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.status, "failed");
     assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.answer_basis.mode, "creative_execution");

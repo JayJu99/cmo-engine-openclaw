@@ -14,7 +14,8 @@ import { redactSensitiveText } from "./creative-agent";
 import { HERMES_CMO_CHAT_V11_ENDPOINT } from "./hermes-cmo-chat-router";
 import {
   OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
-  outboundHermesCallsiteBlockedLiteralLabels,
+  inspectOutboundHermesCallsiteBlock,
+  mergeOutboundHermesCallsiteBlockInspections,
   sanitizeOutboundHermesPayload,
   withOutboundHermesPayloadGuardDiagnostics,
 } from "./hermes-outbound-payload-sanitizer";
@@ -1220,16 +1221,22 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
     outbound_hermes_payload_guard: outboundDiagnostics,
     request: JSON.parse(outboundBody) as HermesCmoChatV11Request,
   });
-  const callsiteBlockedLiteralLabels = [
-    ...outboundHermesCallsiteBlockedLiteralLabels(outboundBody),
-    ...outboundHermesCallsiteBlockedLiteralLabels(JSON.stringify(traceValue(requestTraceEnvelope))),
-  ];
+  const traceEnvelopeForGuard = traceValue(requestTraceEnvelope);
+  const callsiteBlockInspection = mergeOutboundHermesCallsiteBlockInspections([
+    inspectOutboundHermesCallsiteBlock("fetch_body", outboundBody),
+    inspectOutboundHermesCallsiteBlock("fetch_body", finalOutboundRequest),
+    inspectOutboundHermesCallsiteBlock("trace_envelope", traceEnvelopeForGuard),
+  ]);
 
-  if (outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked || callsiteBlockedLiteralLabels.length > 0) {
+  if (outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked || callsiteBlockInspection.literals.length > 0) {
     const blockedDiagnostics = {
       ...outboundDiagnostics,
       outbound_hermes_payload_path_like_blocked: true,
       outbound_callsite_guard_blocked: true,
+      outbound_callsite_blocked_literals: callsiteBlockInspection.literals,
+      outbound_callsite_blocked_sources: callsiteBlockInspection.sources,
+      outbound_callsite_blocked_snippets: callsiteBlockInspection.snippets,
+      outbound_callsite_blocked_paths: callsiteBlockInspection.paths,
     };
     const blockedRequest = withOutboundHermesPayloadGuardDiagnostics(outboundSanitizer.payload, blockedDiagnostics);
     await writeHermesCmoChatV11Trace(blockedRequest, "error", {
@@ -1239,7 +1246,11 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
       fallback_eligible: false,
       outbound_hermes_payload_guard: blockedDiagnostics,
       outbound_blocked_fields_preview: outboundSanitizer.blockedFieldsPreview,
-      outbound_callsite_blocked_literal_labels: Array.from(new Set(callsiteBlockedLiteralLabels)),
+      outbound_callsite_blocked_literal_labels: callsiteBlockInspection.literals,
+      outbound_callsite_blocked_literals: callsiteBlockInspection.literals,
+      outbound_callsite_blocked_sources: callsiteBlockInspection.sources,
+      outbound_callsite_blocked_snippets: callsiteBlockInspection.snippets,
+      outbound_callsite_blocked_paths: callsiteBlockInspection.paths,
     });
 
     return {

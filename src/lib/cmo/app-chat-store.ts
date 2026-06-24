@@ -99,6 +99,7 @@ import {
   sanitizeHermesCmoChatV11Records,
   writeHermesCmoChatV11FallbackTrace,
 } from "@/lib/cmo/hermes-cmo-chat-v11";
+import { OUTBOUND_HERMES_CALLSITE_GUARD_VERSION } from "@/lib/cmo/hermes-outbound-payload-sanitizer";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import { FallbackRuntime, getRuntimeRegistry } from "@/lib/cmo/runtime";
 import {
@@ -134,6 +135,13 @@ const INDEXED_SUPPLEMENT_WARNING_CHARS = 4_000;
 const LEGACY_AUTO_CAPTURE_WRITE_REMOTE_SKIP_REASON = "skipped_legacy_auto_capture_because_vault_agent_write_remote_enabled";
 const MAX_SUGGESTED_VAULT_UPDATES_SESSION = 24;
 const MAX_VAULT_UPDATE_APPROVAL_EVENTS = 80;
+const PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_MESSAGE =
+  "Product blocked this Creative follow-up because old workspace/session context still contains redacted artifact text. Please retry after context scrub or start a clean session.";
+const PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_ERROR =
+  "Product blocked Hermes CMO request because outbound payload still contained path-like Creative artifact text.";
+
+const isProductOutboundCreativeContextBlock = (reason: string): boolean =>
+  reason.includes(PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_ERROR);
 
 function creativeAssetsFromHermesPayload(input: {
   response: unknown;
@@ -4640,6 +4648,7 @@ export async function createAppChatSession(
       usedHermesCmoChat = true;
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Hermes CMO chat runtime failed.";
+      const productOutboundCreativeContextBlocked = hermesCmoNativeCreativeRequested && isProductOutboundCreativeContextBlock(reason);
       const creativeTimeout = hermesCmoCreativeLongRunningTurn && isTimedOutHermesError(reason);
       const m1RejectedField = hermesCmoNativeCreativeRequested ? creativeM1RejectedField(reason) : undefined;
       const sideEffectRejectedType = hermesCmoNativeCreativeRequested ? parseCreativeRejectedSideEffectType(reason) : undefined;
@@ -4648,7 +4657,9 @@ export async function createAppChatSession(
       const creativeSideEffectRejected = Boolean(sideEffectRejectedType);
 
       console.warn(
-        creativeTimeout
+        productOutboundCreativeContextBlocked
+          ? "[cmo-app-chat] Product blocked Hermes CMO Creative outbound payload; no workspace fallback used."
+        : creativeTimeout
           ? "[cmo-app-chat] Hermes CMO Creative execution timed out."
           : creativeValidationRejected
             ? "[cmo-app-chat] Hermes CMO Creative metadata was rejected by M1 validation; no workspace fallback used."
@@ -4672,7 +4683,69 @@ export async function createAppChatSession(
       liveAttemptStartedAt = hermesStartedAt;
       liveAttemptDurationMs = Date.now() - hermesStartedMs;
 
-      if (creativeTimeout) {
+      if (productOutboundCreativeContextBlocked) {
+        answer = PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_MESSAGE;
+        status = "failed";
+        assumptions = [];
+        suggestedActions = [];
+        isDevelopmentFallback = false;
+        isRuntimeFallback = false;
+        runtimeStatus = "runtime_error";
+        runtimeMode = "configured_but_unreachable";
+        attemptedRuntimeMode = "live";
+        runtimeLabel = "Product Creative outbound guard";
+        runtimeError = PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_MESSAGE;
+        runtimeErrorReason = "invalid_response";
+        runtimeProvider = "product";
+        runtimeAgent = "creative";
+        fallbackDurationMs = undefined;
+        hermesRequestSent = false;
+        routeDecision = normalizeRouteDecision(hermesCmoRoute.reason);
+        const creativeRouteDecision = hermesCmoRoute.reason === "creative_session" || hermesCmoRoute.reason === "creative_ideation" || hermesCmoRoute.reason === "creative_execution"
+          ? hermesCmoRoute.reason
+          : "creative_session";
+        creativeExecutionRequested = hermesCmoCreativeExecutionRequested ? true : undefined;
+        creativeFallbackUsed = false;
+        hermesCmoStatus = "interrupted";
+        hermesCmoErrorReason = reason;
+        delegationsMode = HERMES_CMO_PROPOSALS_ONLY;
+        productRenderSource = "hermes_cmo";
+        productFallbackReason = undefined;
+        hermesCmoMetadata = {
+          ...failedHermesCmoChatV11Metadata(`req_cmo_creative_${messageId}`, reason),
+          productRenderSource: "hermes_cmo",
+          selectedHermesEndpoint: "/agents/cmo/execute",
+          hermesEndpointKind: "execute",
+          endpoint_kind: "execute",
+          runtime_kind: "ai_agent",
+          requested_endpoint: "/agents/cmo/execute",
+          fallback_used: false,
+          workspace_fallback_suppressed_for_creative: true,
+          route_decision: creativeRouteDecision,
+          creative_long_running_turn: hermesCmoCreativeLongRunningTurn,
+          product_outbound_payload_blocked: true,
+          outbound_hermes_payload_path_like_blocked: true,
+          outbound_callsite_guard_version: OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
+          outbound_callsite_guard_checked: true,
+          outbound_callsite_guard_blocked: true,
+          ...(hermesCmoCreativeExecutionRequested ? { creative_execution_requested: true } : {}),
+          ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
+          ...(creativeSessionFollowupDetected ? { creative_session_followup_detected: true, creative_working_state_present: Boolean(creativeWorkingState) } : {}),
+          ...(activeCreativeAssetId ? { active_creative_asset_id: activeCreativeAssetId } : {}),
+          ...(creativeAssetsCount > 0 ? { creative_assets_count: creativeAssetsCount } : {}),
+          ...(activeCreativeAssetResolution.asset ? { reference_assets_count: 1 } : {}),
+          artifact_transport_mode: "product_upload",
+          agentsUsed: ["cmo", "creative"],
+        };
+        hermesCmoCounters = hermesCmoMetadata!.counters;
+        forbiddenCounters = hermesCmoMetadata!.forbiddenCounters;
+        activityEvents = hermesCmoMetadata!.activityEvents;
+        delegationSummary = hermesCmoMetadata!.delegationSummary;
+        agentsUsed = hermesCmoMetadata!.agentsUsed;
+        surfCalls = hermesCmoMetadata!.surfCalls;
+        echoCalls = hermesCmoMetadata!.echoCalls;
+        usedHermesCmoChat = true;
+      } else if (creativeTimeout) {
         const creativeTimeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
         const creativeTimeoutEvent: HermesCmoActivityEventSummary = {
           eventId: `evt_${messageId}_creative_timeout`,

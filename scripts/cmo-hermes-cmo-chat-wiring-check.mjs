@@ -2090,6 +2090,8 @@ try {
               userMessageId: "msg_chat_v11_callsite_guard_blocked",
               vaultContext: {
                 "[hermes_local_artifact_path_redacted]": true,
+                "file:": true,
+                polluted_content: "trace-only pollution should expose file:///private/cmo/blocked.png",
               },
             }));
             assert.equal(blockedChatResult.ok, false);
@@ -2098,6 +2100,27 @@ try {
             assert.equal(blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_guard_version, "context-sanitizer-v2");
             assert.equal(blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_guard_checked, true);
             assert.equal(blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_guard_blocked, true);
+            assert.ok(
+              blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_literals.includes("hermes_local_artifact_path_redacted"),
+              "v1.1 blocked diagnostics must name the redacted artifact token",
+            );
+            assert.ok(
+              blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_literals.includes("file:"),
+              "v1.1 blocked diagnostics must name the trace-redactor local file token",
+            );
+            assert.ok(
+              blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_sources.includes("fetch_body") ||
+              blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_sources.includes("trace_envelope"),
+              "v1.1 blocked diagnostics must include the blocked source",
+            );
+            assert.ok(
+              blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_paths.some((fieldPath) => fieldPath.includes("vault_context")),
+              "v1.1 blocked diagnostics must include the polluted JSON path",
+            );
+            assert.ok(
+              blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_snippets.some((snippet) => snippet.includes("file:")),
+              "v1.1 blocked diagnostics must include a bounded sanitized snippet",
+            );
             assert.equal(chatV11FetchCalls, fetchCallsBeforeBlockedGuard, "v1.1 call-site guard must block before fetch");
 
             const rollingTraceResult = await chatV11.runHermesCmoChatV11(chatV11RunInput({
@@ -3952,6 +3975,26 @@ try {
     assert.match(appChatStoreSource, /sessionLocalResearchResults/);
     assert.match(appChatStoreSource, /userDisplayName/);
     assert.match(appChatStoreSource, /userSlug/);
+    assert.match(
+      appChatStoreSource,
+      /PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_MESSAGE =\s*\n\s*"Product blocked this Creative follow-up because old workspace\/session context still contains redacted artifact text\. Please retry after context scrub or start a clean session\."/,
+      "Product-local outbound guard block must use safe user-facing Creative copy",
+    );
+    assert.match(
+      appChatStoreSource,
+      /productOutboundCreativeContextBlocked[\s\S]*hermesRequestSent = false;[\s\S]*workspace_fallback_suppressed_for_creative: true/,
+      "Product-local outbound guard block must not report a Hermes request or use workspace fallback",
+    );
+    assert.match(
+      appChatStoreSource,
+      /productOutboundCreativeContextBlocked[\s\S]*runtimeLabel = "Product Creative outbound guard"[\s\S]*runtimeProvider = "product"/,
+      "Product-local outbound guard block must not be rendered as a Hermes unusable-response failure",
+    );
+    assert.match(
+      appChatStoreSource,
+      /productOutboundCreativeContextBlocked[\s\S]*activeCreativeAssetId \? \{ active_creative_asset_id: activeCreativeAssetId \}/,
+      "Product-local outbound guard block must preserve the active Creative asset metadata",
+    );
 
     const userMetadataSource = await readFile(path.join(cmoDir, "user-metadata.ts"), "utf8");
     assert.match(userMetadataSource, /normalizeCmoRuntimeUserIdentity/);

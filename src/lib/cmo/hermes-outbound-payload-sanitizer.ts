@@ -2,20 +2,20 @@ const OUTBOUND_FORBIDDEN_TEXT_PATTERN =
   /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
 export const OUTBOUND_HERMES_CALLSITE_GUARD_VERSION = "context-sanitizer-v2" as const;
 const OUTBOUND_CALLSITE_FORBIDDEN_LITERALS = [
-  "[hermes_local_artifact_path_redacted]",
-  "hermes_local_artifact_path_redacted",
-  ".png_redact",
-  "/tmp/",
-  "/Users/",
-  "/home/",
-  "/var/",
-  "/mnt/",
-  "/private/",
-  "/Volumes/",
-  "file:",
-  "conversion_h_",
-  "creative-agent-images",
-  "cmo-creative-execute",
+  { literal: "[hermes_local_artifact_path_redacted]", label: "hermes_local_artifact_path_redacted" },
+  { literal: "hermes_local_artifact_path_redacted", label: "hermes_local_artifact_path_redacted" },
+  { literal: ".png_redact", label: ".png_redact" },
+  { literal: "/tmp/", label: "/tmp/" },
+  { literal: "/Users/", label: "/Users/" },
+  { literal: "/home/", label: "/home/" },
+  { literal: "/var/", label: "/var/" },
+  { literal: "/mnt/", label: "/mnt/" },
+  { literal: "/private/", label: "/private/" },
+  { literal: "/Volumes/", label: "/Volumes/" },
+  { literal: "file:", label: "file:" },
+  { literal: "conversion_h_", label: "conversion_h_" },
+  { literal: "creative-agent-images", label: "creative-agent-images" },
+  { literal: "cmo-creative-execute", label: "cmo-creative-execute" },
 ] as const;
 
 const TEXT_PLACEHOLDER =
@@ -35,8 +35,11 @@ const URL_FIELD_NAMES = new Set([
 ]);
 
 const MAX_FIELD_PREVIEW_COUNT = 48;
+const MAX_CALLSITE_SNIPPETS = 5;
+const MAX_CALLSITE_PATHS = 20;
 
 type JsonPathSegment = string | number;
+type OutboundCallsiteBlockSource = "fetch_body" | "trace_envelope";
 
 export interface OutboundHermesPayloadSanitizerDiagnostics {
   outbound_hermes_payload_sanitized: boolean;
@@ -47,6 +50,10 @@ export interface OutboundHermesPayloadSanitizerDiagnostics {
   outbound_callsite_guard_checked?: boolean;
   outbound_callsite_guard_blocked?: boolean;
   workspace_fallback_suppressed_for_creative?: true;
+  outbound_callsite_blocked_literals?: string[];
+  outbound_callsite_blocked_sources?: OutboundCallsiteBlockSource[];
+  outbound_callsite_blocked_snippets?: string[];
+  outbound_callsite_blocked_paths?: string[];
 }
 
 export interface OutboundHermesPayloadSanitizerResult<T> {
@@ -63,7 +70,14 @@ export const outboundHermesStringHasForbiddenArtifactText = (value: string): boo
 
 export const outboundHermesCallsiteBlockedLiteralLabels = (outboundPayloadJson: string): string[] =>
   OUTBOUND_CALLSITE_FORBIDDEN_LITERALS
-    .flatMap((literal, index) => outboundPayloadJson.includes(literal) ? [`forbidden_literal_${index + 1}`] : []);
+    .flatMap(({ literal, label }) => outboundPayloadJson.includes(literal) ? [label] : []);
+
+export interface OutboundHermesCallsiteBlockInspection {
+  literals: string[];
+  sources: OutboundCallsiteBlockSource[];
+  snippets: string[];
+  paths: string[];
+}
 
 const fieldPathPreview = (path: JsonPathSegment[]): string => {
   const preview = path.map((segment) => {
@@ -80,6 +94,124 @@ const fieldPathPreview = (path: JsonPathSegment[]): string => {
 
   return preview.slice(0, 180);
 };
+
+const uniqueLimited = (values: string[], limit: number): string[] =>
+  Array.from(new Set(values)).slice(0, limit);
+
+const literalEntriesForString = (value: string): Array<{ literal: string; label: string }> =>
+  OUTBOUND_CALLSITE_FORBIDDEN_LITERALS.filter(({ literal }) => value.includes(literal));
+
+const sanitizedSnippetAroundLiteral = (value: string, literal: string): string => {
+  const index = value.indexOf(literal);
+  if (index < 0) {
+    return "";
+  }
+
+  const start = Math.max(0, index - 32);
+  const end = Math.min(value.length, index + literal.length + 32);
+  const snippet = value.slice(start, end)
+    .replace(/\s+/g, " ")
+    .replace(/[A-Za-z]:[\\/][^"',\s}]+/g, "[local_path_redacted]")
+    .replace(/file:[^"',\s}]+/gi, "file:[local_path_redacted]")
+    .replace(/\/(?:tmp|Users|home|var|mnt|private|Volumes)\/[^"',\s}]+/g, (match) => {
+      const prefix = match.match(/^\/(?:tmp|Users|home|var|mnt|private|Volumes)\//)?.[0] ?? "/local/";
+      return `${prefix}[local_path_redacted]`;
+    });
+
+  return `${start > 0 ? "..." : ""}${snippet}${end < value.length ? "..." : ""}`.slice(0, 240);
+};
+
+const collectCallsiteBlockedStringFields = (
+  value: unknown,
+  path: JsonPathSegment[],
+  result: { literals: string[]; snippets: string[]; paths: string[] },
+): void => {
+  if (typeof value === "string") {
+    const matches = literalEntriesForString(value);
+    if (!matches.length) {
+      return;
+    }
+
+    result.paths.push(fieldPathPreview(path));
+    for (const match of matches) {
+      result.literals.push(match.label);
+      if (result.snippets.length < MAX_CALLSITE_SNIPPETS) {
+        const snippet = sanitizedSnippetAroundLiteral(value, match.literal);
+        if (snippet) {
+          result.snippets.push(snippet);
+        }
+      }
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectCallsiteBlockedStringFields(item, [...path, index], result));
+    return;
+  }
+
+  if (!isRecord(value)) {
+    return;
+  }
+
+  Object.entries(value).forEach(([key, item]) => {
+    const keyMatches = literalEntriesForString(key);
+    if (keyMatches.length) {
+      result.paths.push(fieldPathPreview([...path, key]));
+      for (const match of keyMatches) {
+        result.literals.push(match.label);
+        if (result.snippets.length < MAX_CALLSITE_SNIPPETS) {
+          const snippet = sanitizedSnippetAroundLiteral(key, match.literal);
+          if (snippet) {
+            result.snippets.push(snippet);
+          }
+        }
+      }
+    }
+    collectCallsiteBlockedStringFields(item, [...path, key], result);
+  });
+};
+
+export const inspectOutboundHermesCallsiteBlock = (
+  source: OutboundCallsiteBlockSource,
+  value: unknown,
+): OutboundHermesCallsiteBlockInspection => {
+  const result: { literals: string[]; snippets: string[]; paths: string[] } = {
+    literals: [],
+    snippets: [],
+    paths: [],
+  };
+
+  if (typeof value === "string") {
+    for (const match of literalEntriesForString(value)) {
+      result.literals.push(match.label);
+      if (result.snippets.length < MAX_CALLSITE_SNIPPETS) {
+        const snippet = sanitizedSnippetAroundLiteral(value, match.literal);
+        if (snippet) {
+          result.snippets.push(snippet);
+        }
+      }
+    }
+  } else {
+    collectCallsiteBlockedStringFields(value, [], result);
+  }
+
+  return {
+    literals: uniqueLimited(result.literals, OUTBOUND_CALLSITE_FORBIDDEN_LITERALS.length),
+    sources: result.literals.length ? [source] : [],
+    snippets: uniqueLimited(result.snippets, MAX_CALLSITE_SNIPPETS),
+    paths: uniqueLimited(result.paths, MAX_CALLSITE_PATHS),
+  };
+};
+
+export const mergeOutboundHermesCallsiteBlockInspections = (
+  inspections: OutboundHermesCallsiteBlockInspection[],
+): OutboundHermesCallsiteBlockInspection => ({
+  literals: uniqueLimited(inspections.flatMap((inspection) => inspection.literals), OUTBOUND_CALLSITE_FORBIDDEN_LITERALS.length),
+  sources: Array.from(new Set(inspections.flatMap((inspection) => inspection.sources))),
+  snippets: uniqueLimited(inspections.flatMap((inspection) => inspection.snippets), MAX_CALLSITE_SNIPPETS),
+  paths: uniqueLimited(inspections.flatMap((inspection) => inspection.paths), MAX_CALLSITE_PATHS),
+});
 
 const recordRole = (record: Record<string, unknown>): string | null =>
   typeof record.role === "string" ? record.role : null;
