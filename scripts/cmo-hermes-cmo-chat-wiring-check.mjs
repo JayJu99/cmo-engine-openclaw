@@ -1044,7 +1044,7 @@ try {
     assert.doesNotMatch(creativeReferenceRequest.reference_assets[0].fetch_url, /storage\/v1\/object\/sign/, "Primary fetch URL must not be a Supabase signed URL");
 
     const outboundForbiddenValuePattern =
-      /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/(?:tmp|Users|home|var|mnt)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
+      /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
     const collectForbiddenStringValues = (value, fields = [], pathParts = []) => {
       if (typeof value === "string") {
         if (outboundForbiddenValuePattern.test(value)) {
@@ -1081,7 +1081,7 @@ try {
     ];
     pollutedCreativeRequest.context_pack.selected_context = [
       {
-        content: "[hermes_local_artifact_path_redacted]/pearl_m_t_qu_tr_ng.webp",
+        content: "file:///private/cmo/pearl_m_t_qu_tr_ng.txt",
         full_content: "/tmp/cmo-creative-execute/conversion_h_123/reference_assets/image.jpg",
       },
     ];
@@ -3924,9 +3924,9 @@ try {
 
     const hermesChatV11Source = await readFile(path.join(cmoDir, "hermes-cmo-chat-v11.ts"), "utf8");
     assert.match(hermesChatV11Source, /hermes-cmo-traces/);
-    assert.match(hermesChatV11Source, /writeHermesCmoChatV11Trace\(request, "request"/);
-    assert.match(hermesChatV11Source, /writeHermesCmoChatV11Trace\(request, "response"/);
-    assert.match(hermesChatV11Source, /writeHermesCmoChatV11Trace\(request, "error"/);
+    assert.match(hermesChatV11Source, /writeHermesCmoChatV11Trace\(finalOutboundRequest, "request"/);
+    assert.match(hermesChatV11Source, /writeHermesCmoChatV11Trace\(finalOutboundRequest, "response"/);
+    assert.match(hermesChatV11Source, /writeHermesCmoChatV11Trace\(finalOutboundRequest, "error"/);
     assert.match(hermesChatV11Source, /writeHermesCmoChatV11FallbackTrace/);
     assert.match(hermesChatV11Source, /vault_agent\.raw_activity_log_result\.v1/);
     assert.match(hermesChatV11Source, /90 Runtime\/Raw Activity\//);

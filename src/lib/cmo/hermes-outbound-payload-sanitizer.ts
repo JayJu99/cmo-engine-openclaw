@@ -1,5 +1,5 @@
 const OUTBOUND_FORBIDDEN_TEXT_PATTERN =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/(?:tmp|Users|home|var|mnt)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
 export const OUTBOUND_HERMES_CALLSITE_GUARD_VERSION = "context-sanitizer-v2" as const;
 const OUTBOUND_CALLSITE_FORBIDDEN_LITERALS = [
   "[hermes_local_artifact_path_redacted]",
@@ -10,6 +10,9 @@ const OUTBOUND_CALLSITE_FORBIDDEN_LITERALS = [
   "/home/",
   "/var/",
   "/mnt/",
+  "/private/",
+  "/Volumes/",
+  "file:",
   "conversion_h_",
   "creative-agent-images",
   "cmo-creative-execute",
@@ -60,8 +63,7 @@ export const outboundHermesStringHasForbiddenArtifactText = (value: string): boo
 
 export const outboundHermesCallsiteBlockedLiteralLabels = (outboundPayloadJson: string): string[] =>
   OUTBOUND_CALLSITE_FORBIDDEN_LITERALS
-    .filter((literal) => outboundPayloadJson.includes(literal))
-    .map((literal) => literal.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase() || "forbidden_literal");
+    .flatMap((literal, index) => outboundPayloadJson.includes(literal) ? [`forbidden_literal_${index + 1}`] : []);
 
 const fieldPathPreview = (path: JsonPathSegment[]): string => {
   const preview = path.map((segment) => {

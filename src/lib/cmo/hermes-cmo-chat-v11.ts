@@ -288,14 +288,10 @@ const hermesCmoChatV11TracePath = (request: HermesCmoChatV11Request, suffix: str
     `${hermesCmoChatV11TracePrefix(request)}_${safeTraceId(request.app_id)}_${safeTraceId(request.session_id)}_${safeTraceId(request.turn_id)}_${suffix}.json`,
   );
 
-export async function writeHermesCmoChatV11Trace(
+const hermesCmoChatV11TraceRoot = (
   request: HermesCmoChatV11Request,
-  suffix: "request" | "response" | "error" | "fallback",
   payload: Record<string, unknown>,
-): Promise<void> {
-  try {
-    const filePath = hermesCmoChatV11TracePath(request, suffix);
-    const traceRoot = {
+): Record<string, unknown> => ({
       schema_version: CHAT_REQUEST_SCHEMA,
       endpoint_kind: "agent_chat",
       runtime_kind: "ai_agent",
@@ -317,8 +313,16 @@ export async function writeHermesCmoChatV11Trace(
       suggested_vault_updates_count: 0,
       request,
       ...payload,
-    };
+});
 
+export async function writeHermesCmoChatV11Trace(
+  request: HermesCmoChatV11Request,
+  suffix: "request" | "response" | "error" | "fallback",
+  payload: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const filePath = hermesCmoChatV11TracePath(request, suffix);
+    const traceRoot = hermesCmoChatV11TraceRoot(request, payload);
     await mkdir(path.dirname(filePath), { recursive: true });
     await writeFile(filePath, `${JSON.stringify(traceValue(traceRoot), null, 2)}\n`, "utf8");
   } catch (error) {
@@ -1201,39 +1205,46 @@ async function httpFailureDetail(response: Response): Promise<{ reason: string; 
 }
 
 export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): Promise<HermesCmoChatV11Run> {
-  let request = buildHermesCmoChatV11Request(input);
+  const request = buildHermesCmoChatV11Request(input);
   const outboundSanitizer = sanitizeOutboundHermesPayload(request);
-  let outboundDiagnostics = {
+  const outboundDiagnostics = {
     ...outboundSanitizer.diagnostics,
     outbound_callsite_guard_version: OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
     outbound_callsite_guard_checked: true,
     outbound_callsite_guard_blocked: false,
   };
-  request = withOutboundHermesPayloadGuardDiagnostics(outboundSanitizer.payload, outboundDiagnostics);
-  let outboundPayloadJson = JSON.stringify(request);
-  const callsiteBlockedLiteralLabels = outboundHermesCallsiteBlockedLiteralLabels(outboundPayloadJson);
+  const finalOutboundRequest = withOutboundHermesPayloadGuardDiagnostics(outboundSanitizer.payload, outboundDiagnostics);
+  const outboundBody = JSON.stringify(finalOutboundRequest);
+  const requestTraceEnvelope = hermesCmoChatV11TraceRoot(finalOutboundRequest, {
+    event: "request",
+    outbound_hermes_payload_guard: outboundDiagnostics,
+    request: JSON.parse(outboundBody) as HermesCmoChatV11Request,
+  });
+  const callsiteBlockedLiteralLabels = [
+    ...outboundHermesCallsiteBlockedLiteralLabels(outboundBody),
+    ...outboundHermesCallsiteBlockedLiteralLabels(JSON.stringify(traceValue(requestTraceEnvelope))),
+  ];
 
   if (outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked || callsiteBlockedLiteralLabels.length > 0) {
-    outboundDiagnostics = {
+    const blockedDiagnostics = {
       ...outboundDiagnostics,
       outbound_hermes_payload_path_like_blocked: true,
       outbound_callsite_guard_blocked: true,
     };
-    request = withOutboundHermesPayloadGuardDiagnostics(outboundSanitizer.payload, outboundDiagnostics);
-    outboundPayloadJson = JSON.stringify(request);
-    await writeHermesCmoChatV11Trace(request, "error", {
+    const blockedRequest = withOutboundHermesPayloadGuardDiagnostics(outboundSanitizer.payload, blockedDiagnostics);
+    await writeHermesCmoChatV11Trace(blockedRequest, "error", {
       event: "error",
       fallback_used: false,
       fallback_reason: "Product blocked Hermes CMO chat request because outbound payload still contained path-like Creative artifact text.",
       fallback_eligible: false,
-      outbound_hermes_payload_guard: outboundDiagnostics,
+      outbound_hermes_payload_guard: blockedDiagnostics,
       outbound_blocked_fields_preview: outboundSanitizer.blockedFieldsPreview,
-      outbound_callsite_blocked_literal_labels: callsiteBlockedLiteralLabels,
+      outbound_callsite_blocked_literal_labels: Array.from(new Set(callsiteBlockedLiteralLabels)),
     });
 
     return {
       ok: false,
-      request,
+      request: blockedRequest,
       fallbackEligible: false,
       fallbackReason: "Product blocked Hermes CMO chat request because outbound payload still contained path-like Creative artifact text.",
     };
@@ -1242,32 +1253,32 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
   const baseUrl = getCmoHermesBaseUrl();
   const apiKey = getCmoHermesApiKey();
 
-  await writeHermesCmoChatV11Trace(request, "request", {
+  await writeHermesCmoChatV11Trace(finalOutboundRequest, "request", {
     event: "request",
     outbound_hermes_payload_guard: outboundDiagnostics,
-    request,
+    request: JSON.parse(outboundBody) as HermesCmoChatV11Request,
   });
 
   if (!baseUrl) {
-    await writeHermesCmoChatV11Trace(request, "error", {
+    await writeHermesCmoChatV11Trace(finalOutboundRequest, "error", {
       event: "error",
       fallback_used: false,
       fallback_reason: "CMO_HERMES_BASE_URL is not configured.",
       fallback_eligible: false,
     });
 
-    return { ok: false, request, fallbackEligible: false, fallbackReason: "CMO_HERMES_BASE_URL is not configured." };
+    return { ok: false, request: finalOutboundRequest, fallbackEligible: false, fallbackReason: "CMO_HERMES_BASE_URL is not configured." };
   }
 
   if (!apiKey) {
-    await writeHermesCmoChatV11Trace(request, "error", {
+    await writeHermesCmoChatV11Trace(finalOutboundRequest, "error", {
       event: "error",
       fallback_used: false,
       fallback_reason: "CMO_HERMES_API_KEY is not configured.",
       fallback_eligible: false,
     });
 
-    return { ok: false, request, fallbackEligible: false, fallbackReason: "CMO_HERMES_API_KEY is not configured." };
+    return { ok: false, request: finalOutboundRequest, fallbackEligible: false, fallbackReason: "CMO_HERMES_API_KEY is not configured." };
   }
 
   const controller = new AbortController();
@@ -1281,7 +1292,7 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: outboundPayloadJson,
+      body: outboundBody,
       cache: "no-store",
       signal: controller.signal,
     });
@@ -1290,7 +1301,7 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
       const failure = await httpFailureDetail(response);
       const fallbackEligible = response.status === 500;
 
-      await writeHermesCmoChatV11Trace(request, "error", {
+      await writeHermesCmoChatV11Trace(finalOutboundRequest, "error", {
         event: "error",
         http_status: response.status,
         response: failure.responseEnvelope,
@@ -1302,16 +1313,16 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
 
       return {
         ok: false,
-        request,
+        request: finalOutboundRequest,
         fallbackEligible,
         fallbackReason: failure.reason,
       };
     }
 
     const payload = await parseJson(response);
-    const normalized = normalizeHermesCmoChatV11Response(payload, request);
+    const normalized = normalizeHermesCmoChatV11Response(payload, finalOutboundRequest);
 
-    await writeHermesCmoChatV11Trace(request, "response", {
+    await writeHermesCmoChatV11Trace(finalOutboundRequest, "response", {
       event: "response",
       response: payload,
       fallback_used: false,
@@ -1333,7 +1344,7 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
     if (typeof normalized === "string") {
       const fallbackEligible = normalized === "missing_answer_content" || normalized.startsWith("malformed_response:");
 
-      await writeHermesCmoChatV11Trace(request, "error", {
+      await writeHermesCmoChatV11Trace(finalOutboundRequest, "error", {
         event: "error",
         response: payload,
         fallback_used: false,
@@ -1344,7 +1355,7 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
 
       return {
         ok: false,
-        request,
+        request: finalOutboundRequest,
         fallbackEligible,
         fallbackReason: normalized,
       };
@@ -1352,10 +1363,10 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
 
     return {
       ok: true,
-      request,
+      request: finalOutboundRequest,
       response: normalized,
       metadata: baseMetadata({
-        requestId: request.request_id,
+        requestId: finalOutboundRequest.request_id,
         responseStatus: normalized.status,
         fallbackUsed: false,
         sideEffects: normalized.side_effects,
@@ -1377,7 +1388,7 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
         : "Hermes CMO chat v1.1 request failed.";
     const fallbackEligible = fallbackReason === "timeout" || fallbackReason.startsWith("malformed_response:");
 
-    await writeHermesCmoChatV11Trace(request, "error", {
+    await writeHermesCmoChatV11Trace(finalOutboundRequest, "error", {
       event: "error",
       fallback_used: false,
       fallback_reason: fallbackReason,
@@ -1386,7 +1397,7 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
 
     return {
       ok: false,
-      request,
+      request: finalOutboundRequest,
       fallbackEligible,
       fallbackReason,
     };

@@ -262,7 +262,7 @@ const m13PollutedCmoOwnedCreativeSessionExecutionRequest = (requestId) => {
       ...request.context_pack,
       selected_context: [
         {
-          content: "[hermes_local_artifact_path_redacted]/pearl_m_t_qu_tr_ng.webp",
+          content: "file:///private/cmo/pearl_m_t_qu_tr_ng.txt",
           full_content: "/tmp/cmo-creative-execute/conversion_h_123/reference_assets/image.jpg",
         },
       ],
@@ -581,7 +581,7 @@ const writeJson = (response, statusCode, payload) => {
 };
 
 const outboundForbiddenValuePattern =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/(?:tmp|Users|home|var|mnt)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
 const outboundCallsiteForbiddenLiterals = [
   "[hermes_local_artifact_path_redacted]",
   "hermes_local_artifact_path_redacted",
@@ -591,6 +591,9 @@ const outboundCallsiteForbiddenLiterals = [
   "/home/",
   "/var/",
   "/mnt/",
+  "/private/",
+  "/Volumes/",
+  "file:",
   "conversion_h_",
   "creative-agent-images",
   "cmo-creative-execute",
