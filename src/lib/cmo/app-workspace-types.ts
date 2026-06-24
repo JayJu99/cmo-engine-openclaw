@@ -955,6 +955,15 @@ export interface HermesCmoChatMetadata {
   native_response_path_like_answer_detected?: boolean;
   user_visible_answer_guard_triggered?: boolean;
   user_visible_answer_guard_reason?: string;
+  product_outbound_payload_blocked?: boolean;
+  outbound_hermes_payload_path_like_blocked?: boolean;
+  outbound_callsite_guard_version?: string;
+  outbound_callsite_guard_checked?: boolean;
+  outbound_callsite_guard_blocked?: boolean;
+  outbound_callsite_blocked_literals?: string[];
+  outbound_callsite_blocked_sources?: string[];
+  outbound_callsite_blocked_snippets?: string[];
+  outbound_callsite_blocked_paths?: string[];
   creative_asset_mutation?: boolean;
   creative_state_mutation?: boolean;
   creative_state_update_present?: boolean;
