@@ -342,6 +342,24 @@ const m13CallsiteGuardBlockedCreativeSessionRequest = (requestId) => {
   };
 };
 
+const m13TraceOnlyDirtyCreativeSessionRequest = (requestId) => {
+  const request = m13CmoOwnedCreativeSessionExecutionRequest(requestId);
+
+  return {
+    ...request,
+    context_pack: {
+      ...request.context_pack,
+      selected_context: [
+        {
+          content: "/private",
+          full_content: "/private",
+        },
+      ],
+      recent_session_summary: "/private",
+    },
+  };
+};
+
 const m13CreativeConversationResponse = (request, action = "advise", body = "This direction is not too soft; keep the softer tone but increase contrast in the headline and product moment.", overrides = {}) => ({
   schema_version: "hermes.cmo.response.v1",
   request_id: request.request_id,
@@ -816,7 +834,8 @@ const startServer = async () => {
             body.request_id === "req_m13_cmo_owned_creative_execution_live_shape" ||
             body.request_id === "req_m13_cmo_owned_creative_reference_fetch_failed" ||
             body.request_id === "req_m13_creative_conversation_advisory" ||
-            body.request_id === "req_m13_creative_outbound_sanitized";
+            body.request_id === "req_m13_creative_outbound_sanitized" ||
+            body.request_id === "req_m13_creative_trace_only_projection";
           const firstCallCreativeNative = firstCallCreativeExecution || firstCallCmoOwnedCreativeExecution;
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
           assert.equal(body.user_message, body.intent?.user_message);
@@ -1150,6 +1169,15 @@ const startServer = async () => {
               body,
               "advise",
               "This direction remains clean and premium. Add a sharper CTA contrast and one energetic accent while preserving the current image as reference.",
+            ));
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_trace_only_projection") {
+            writeJson(response, 200, m13CreativeConversationResponse(
+              body,
+              "advise",
+              "This advisory response proves trace-only redaction did not block the clean Hermes fetch body.",
             ));
             return;
           }
@@ -5521,6 +5549,45 @@ try {
     assert.equal(outboundRequestTrace.outbound_hermes_payload_guard?.outbound_callsite_guard_blocked, false);
     assert.equal(outboundRequestTrace.request?.request_id, outboundSanitizedServerRequest.body.request_id);
     assert.equal(outboundRequestTrace.request?.outbound_hermes_payload_guard?.outbound_callsite_guard_version, "context-sanitizer-v2");
+    assert.equal(outboundRequestTrace.outbound_hermes_payload_guard?.outbound_trace_projection_applied, true);
+    assert.ok(
+      outboundRequestTrace.outbound_hermes_payload_guard?.outbound_trace_replaced_fields_preview.includes("context_pack.selected_context.0.content"),
+      "Request trace diagnostics must show selected context content was projected out of _request.json",
+    );
+    assert.equal(
+      outboundRequestTrace.request?.context_pack?.selected_context?.[0]?.content,
+      "Trace content omitted by Product outbound trace projection.",
+    );
+    const traceOnlyProjectionResult = await runHermesCmoRuntime(m13TraceOnlyDirtyCreativeSessionRequest("req_m13_creative_trace_only_projection"));
+    assert.equal(traceOnlyProjectionResult.response.status, "completed");
+    assert.equal(traceOnlyProjectionResult.response.answer_basis.mode, "creative_conversation");
+    const traceOnlyProjectionServerRequest = server.calls.cmoRequests.find((request) => request.requestId === "req_m13_creative_trace_only_projection");
+    assert.ok(traceOnlyProjectionServerRequest, "Trace-only dirty Creative request must still be sent to fake Hermes");
+    assert.equal(
+      containsOutboundCallsiteForbiddenLiteral(traceOnlyProjectionServerRequest.rawBody),
+      false,
+      "Trace-only dirty fixture must have a fetch body that passes the fetch literal guard",
+    );
+    assert.equal(traceOnlyProjectionServerRequest.body.context_pack.selected_context[0].content, "/private");
+    const traceOnlyProjectionTraceFiles = await readdir(m13TraceDir);
+    const traceOnlyProjectionRequestTraceName = traceOnlyProjectionTraceFiles.find((fileName) =>
+      fileName.includes("session_m13_creative_trace_only_projection") && fileName.endsWith("_request.json")
+    );
+    assert.ok(traceOnlyProjectionRequestTraceName, "Trace-only dirty Creative request must write a trace-safe _request.json");
+    const traceOnlyProjectionRequestTraceText = await readFile(path.join(m13TraceDir, traceOnlyProjectionRequestTraceName), "utf8");
+    assert.equal(containsOutboundCallsiteForbiddenLiteral(traceOnlyProjectionRequestTraceText), false, "Trace-safe _request.json must contain zero call-site forbidden literals");
+    assert.equal(traceOnlyProjectionRequestTraceText.includes("/private"), false, "Trace-safe _request.json must not contain the trace-redacted local path source");
+    const traceOnlyProjectionRequestTrace = JSON.parse(traceOnlyProjectionRequestTraceText);
+    assert.equal(traceOnlyProjectionRequestTrace.outbound_hermes_payload_guard?.outbound_callsite_guard_blocked, false);
+    assert.equal(traceOnlyProjectionRequestTrace.outbound_hermes_payload_guard?.outbound_trace_projection_applied, true);
+    assert.ok(
+      traceOnlyProjectionRequestTrace.outbound_hermes_payload_guard?.outbound_trace_replaced_fields_preview.includes("context_pack.selected_context.0.content"),
+      "Trace-only dirty request must report the projected selected context path",
+    );
+    assert.equal(
+      traceOnlyProjectionRequestTrace.request?.context_pack?.selected_context?.[0]?.content,
+      "Trace content omitted by Product outbound trace projection.",
+    );
     const cmoCallsBeforeBlockedCallsiteGuard = server.calls.cmo;
     await assert.rejects(
       () => runHermesCmoRuntime(m13CallsiteGuardBlockedCreativeSessionRequest("req_m13_creative_callsite_guard_blocked")),

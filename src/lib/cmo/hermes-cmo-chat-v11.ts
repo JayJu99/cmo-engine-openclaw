@@ -14,6 +14,7 @@ import { redactSensitiveText } from "./creative-agent";
 import { HERMES_CMO_CHAT_V11_ENDPOINT } from "./hermes-cmo-chat-router";
 import {
   OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
+  buildOutboundHermesTraceSafeRequest,
   inspectOutboundHermesCallsiteBlock,
   mergeOutboundHermesCallsiteBlockInspections,
   sanitizeOutboundHermesPayload,
@@ -1216,21 +1217,36 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
   };
   const finalOutboundRequest = withOutboundHermesPayloadGuardDiagnostics(outboundSanitizer.payload, outboundDiagnostics);
   const outboundBody = JSON.stringify(finalOutboundRequest);
+  const traceProjection = buildOutboundHermesTraceSafeRequest(finalOutboundRequest);
+  const traceDiagnostics = {
+    ...outboundDiagnostics,
+    ...traceProjection.diagnostics,
+  };
+  const traceSafeOutboundRequest = withOutboundHermesPayloadGuardDiagnostics(traceProjection.payload, traceDiagnostics);
+  const traceSafeOutboundBody = JSON.stringify(traceSafeOutboundRequest);
   const requestTraceEnvelope = hermesCmoChatV11TraceRoot(finalOutboundRequest, {
     event: "request",
-    outbound_hermes_payload_guard: outboundDiagnostics,
-    request: JSON.parse(outboundBody) as HermesCmoChatV11Request,
+    outbound_hermes_payload_guard: traceDiagnostics,
+    request: JSON.parse(traceSafeOutboundBody) as HermesCmoChatV11Request,
   });
   const traceEnvelopeForGuard = traceValue(requestTraceEnvelope);
-  const callsiteBlockInspection = mergeOutboundHermesCallsiteBlockInspections([
+  const fetchBodyBlockInspection = mergeOutboundHermesCallsiteBlockInspections([
     inspectOutboundHermesCallsiteBlock("fetch_body", outboundBody),
     inspectOutboundHermesCallsiteBlock("fetch_body", finalOutboundRequest),
-    inspectOutboundHermesCallsiteBlock("trace_envelope", traceEnvelopeForGuard),
+  ]);
+  const traceEnvelopeBlockInspection = inspectOutboundHermesCallsiteBlock("trace_envelope", traceEnvelopeForGuard);
+  const callsiteBlockInspection = mergeOutboundHermesCallsiteBlockInspections([
+    fetchBodyBlockInspection,
+    traceEnvelopeBlockInspection,
   ]);
 
-  if (outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked || callsiteBlockInspection.literals.length > 0) {
+  if (
+    outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked ||
+    fetchBodyBlockInspection.literals.length > 0 ||
+    traceEnvelopeBlockInspection.literals.length > 0
+  ) {
     const blockedDiagnostics = {
-      ...outboundDiagnostics,
+      ...traceDiagnostics,
       outbound_hermes_payload_path_like_blocked: true,
       outbound_callsite_guard_blocked: true,
       outbound_callsite_blocked_literals: callsiteBlockInspection.literals,
@@ -1266,8 +1282,8 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
 
   await writeHermesCmoChatV11Trace(finalOutboundRequest, "request", {
     event: "request",
-    outbound_hermes_payload_guard: outboundDiagnostics,
-    request: JSON.parse(outboundBody) as HermesCmoChatV11Request,
+    outbound_hermes_payload_guard: traceDiagnostics,
+    request: JSON.parse(traceSafeOutboundBody) as HermesCmoChatV11Request,
   });
 
   if (!baseUrl) {

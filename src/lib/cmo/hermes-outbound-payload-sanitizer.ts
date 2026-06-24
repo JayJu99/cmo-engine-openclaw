@@ -24,6 +24,8 @@ const ASSISTANT_PLACEHOLDER =
   "Creative asset was generated or updated. Use active asset metadata and reference_assets for visual context.";
 const USER_PLACEHOLDER =
   "User message included an internal artifact reference that Product redacted before sending this turn to Hermes.";
+const TRACE_CONTENT_PLACEHOLDER =
+  "Trace content omitted by Product outbound trace projection.";
 
 const URL_FIELD_NAMES = new Set([
   "preview_url",
@@ -54,12 +56,24 @@ export interface OutboundHermesPayloadSanitizerDiagnostics {
   outbound_callsite_blocked_sources?: OutboundCallsiteBlockSource[];
   outbound_callsite_blocked_snippets?: string[];
   outbound_callsite_blocked_paths?: string[];
+  outbound_trace_projection_applied?: boolean;
+  outbound_trace_replaced_field_count?: number;
+  outbound_trace_replaced_fields_preview?: string[];
 }
 
 export interface OutboundHermesPayloadSanitizerResult<T> {
   payload: T;
   diagnostics: OutboundHermesPayloadSanitizerDiagnostics;
   blockedFieldsPreview: string[];
+}
+
+export interface OutboundHermesTraceSafeProjectionResult<T> {
+  payload: T;
+  diagnostics: {
+    outbound_trace_projection_applied: boolean;
+    outbound_trace_replaced_field_count: number;
+    outbound_trace_replaced_fields_preview: string[];
+  };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -212,6 +226,117 @@ export const mergeOutboundHermesCallsiteBlockInspections = (
   snippets: uniqueLimited(inspections.flatMap((inspection) => inspection.snippets), MAX_CALLSITE_SNIPPETS),
   paths: uniqueLimited(inspections.flatMap((inspection) => inspection.paths), MAX_CALLSITE_PATHS),
 });
+
+const jsonClone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+const replaceTraceStringField = (
+  record: Record<string, unknown>,
+  key: string,
+  path: JsonPathSegment[],
+  replacedFields: string[],
+  shouldReplace: (value: string) => boolean = () => true,
+): void => {
+  const value = record[key];
+  if (typeof value !== "string" || !shouldReplace(value)) {
+    return;
+  }
+
+  record[key] = TRACE_CONTENT_PLACEHOLDER;
+  replacedFields.push(fieldPathPreview(path));
+};
+
+const replaceTraceArrayFields = (
+  value: unknown,
+  path: JsonPathSegment[],
+  fields: string[],
+  replacedFields: string[],
+): void => {
+  if (!Array.isArray(value)) {
+    return;
+  }
+
+  value.forEach((item, index) => {
+    if (!isRecord(item)) {
+      return;
+    }
+
+    for (const field of fields) {
+      replaceTraceStringField(item, field, [...path, index, field], replacedFields);
+    }
+  });
+};
+
+const replaceTraceContextFields = (
+  contextPack: unknown,
+  path: JsonPathSegment[],
+  replacedFields: string[],
+): void => {
+  if (!isRecord(contextPack)) {
+    return;
+  }
+
+  replaceTraceArrayFields(contextPack.selected_context, [...path, "selected_context"], ["content", "full_content"], replacedFields);
+  replaceTraceStringField(contextPack, "recent_session_summary", [...path, "recent_session_summary"], replacedFields);
+  replaceTraceArrayFields(contextPack.all_context_items, [...path, "all_context_items"], ["content", "contentPreview"], replacedFields);
+  replaceTraceArrayFields(contextPack.missing_context, [...path, "missing_context"], ["contentPreview"], replacedFields);
+  replaceTraceArrayFields(contextPack.context_used, [...path, "context_used"], ["contentPreview"], replacedFields);
+};
+
+const replaceTraceMessageFields = (
+  messages: unknown,
+  path: JsonPathSegment[],
+  replacedFields: string[],
+): void => {
+  if (!Array.isArray(messages)) {
+    return;
+  }
+
+  messages.forEach((message, index) => {
+    if (!isRecord(message) || message.role !== "assistant") {
+      return;
+    }
+
+    replaceTraceStringField(
+      message,
+      "content",
+      [...path, index, "content"],
+      replacedFields,
+      (value) => value === ASSISTANT_PLACEHOLDER,
+    );
+  });
+};
+
+export const buildOutboundHermesTraceSafeRequest = <T>(payload: T): OutboundHermesTraceSafeProjectionResult<T> => {
+  if (!isRecord(payload)) {
+    return {
+      payload,
+      diagnostics: {
+        outbound_trace_projection_applied: false,
+        outbound_trace_replaced_field_count: 0,
+        outbound_trace_replaced_fields_preview: [],
+      },
+    };
+  }
+
+  const projectedPayload = jsonClone(payload);
+  const replacedFields: string[] = [];
+
+  if (isRecord(projectedPayload)) {
+    replaceTraceContextFields(projectedPayload.context_pack, ["context_pack"], replacedFields);
+    replaceTraceMessageFields(projectedPayload.messages, ["messages"], replacedFields);
+  }
+
+  const uniqueReplacedFields = uniqueLimited(replacedFields, MAX_FIELD_PREVIEW_COUNT);
+
+  return {
+    payload: projectedPayload,
+    diagnostics: {
+      outbound_trace_projection_applied: uniqueReplacedFields.length > 0,
+      outbound_trace_replaced_field_count: Array.from(new Set(replacedFields)).length,
+      outbound_trace_replaced_fields_preview: uniqueReplacedFields,
+    },
+  };
+};
 
 const recordRole = (record: Record<string, unknown>): string | null =>
   typeof record.role === "string" ? record.role : null;
