@@ -2904,13 +2904,15 @@ try {
           raw_hermes_response_answer_preview: "Nên thêm glow/accent teal quanh egg và CTA area, nhưng giữ tổng thể sạch để không làm mất cảm giác premium.",
           trace_response_answer_preview: "Nên thêm glow/accent teal quanh egg và CTA area, nhưng giữ tổng thể sạch để không làm mất cảm giác premium.",
           response_trace_redaction_applied: false,
-          m1_validation_answer_source: "raw_hermes_response",
+          m1_validation_answer_source: "canonical_answer",
+          diagnostic_preview_ignored_for_m1: true,
         },
       },
     });
     assert.match(cleanCreativeAdvisoryMapped.answer, /thêm glow\/accent teal quanh egg và CTA area/i);
     assert.doesNotMatch(cleanCreativeAdvisoryMapped.answer, /\[hermes_local_artifact_path_redacted\]|accent_teal_quanh_egg_v_CTA_area/i);
-    assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.m1_validation_answer_source, "raw_hermes_response");
+    assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.m1_validation_answer_source, "canonical_answer");
+    assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.diagnostic_preview_ignored_for_m1, true);
     assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.user_visible_answer_source, "raw_hermes_response");
     assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.response_trace_redaction_applied, false);
 

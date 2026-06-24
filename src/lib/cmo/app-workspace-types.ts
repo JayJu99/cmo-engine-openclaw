@@ -956,7 +956,8 @@ export interface HermesCmoChatMetadata {
   raw_hermes_response_answer_preview?: string;
   trace_response_answer_preview?: string;
   response_trace_redaction_applied?: boolean;
-  m1_validation_answer_source?: "raw_hermes_response" | "trace_response" | "mapped_response";
+  m1_validation_answer_source?: "canonical_answer" | "raw_hermes_response" | "trace_response" | "mapped_response";
+  diagnostic_preview_ignored_for_m1?: boolean;
   user_visible_answer_source?: "raw_hermes_response" | "mapped_response";
   user_visible_answer_guard_triggered?: boolean;
   user_visible_answer_guard_reason?: string;

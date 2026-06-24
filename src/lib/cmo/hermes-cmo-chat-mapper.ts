@@ -1685,10 +1685,14 @@ function metadataFromHermes(
   const responseTraceRedactionApplied = typeof structuredOutput.response_trace_redaction_applied === "boolean"
     ? structuredOutput.response_trace_redaction_applied
     : undefined;
-  const m1ValidationAnswerSource = structuredOutput.m1_validation_answer_source === "raw_hermes_response" ||
+  const m1ValidationAnswerSource = structuredOutput.m1_validation_answer_source === "canonical_answer" ||
+    structuredOutput.m1_validation_answer_source === "raw_hermes_response" ||
     structuredOutput.m1_validation_answer_source === "trace_response" ||
     structuredOutput.m1_validation_answer_source === "mapped_response"
     ? structuredOutput.m1_validation_answer_source
+    : undefined;
+  const diagnosticPreviewIgnoredForM1 = typeof structuredOutput.diagnostic_preview_ignored_for_m1 === "boolean"
+    ? structuredOutput.diagnostic_preview_ignored_for_m1
     : undefined;
   const creativeIdeationCanonicalized =
     typeof structuredOutput.creative_ideation_canonicalized === "boolean"
@@ -1767,6 +1771,7 @@ function metadataFromHermes(
           ...(traceResponseAnswerPreview ? { trace_response_answer_preview: traceResponseAnswerPreview } : {}),
           ...(typeof responseTraceRedactionApplied === "boolean" ? { response_trace_redaction_applied: responseTraceRedactionApplied } : {}),
           ...(m1ValidationAnswerSource ? { m1_validation_answer_source: m1ValidationAnswerSource } : {}),
+          ...(typeof diagnosticPreviewIgnoredForM1 === "boolean" ? { diagnostic_preview_ignored_for_m1: diagnosticPreviewIgnoredForM1 } : {}),
           ...(creativeConversationResponseReceived ? { user_visible_answer_source: "raw_hermes_response" as const } : {}),
           ...(creativeExecutionResponseReceived ? {
             creative_execution_response_received: true,

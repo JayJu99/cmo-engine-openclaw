@@ -1296,7 +1296,7 @@ const responseValidationFailureReason = (
   request: HermesCmoRuntimeRequest,
   options: HermesCmoResponseValidationOptions,
 ): string => {
-  response = normalizeHermesCmoResponseCandidate(response);
+  response = responseCandidateForM1Validation(response) ?? response;
   const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
   const activitySummary = response.activity_summary;
   const activitySummaryFailure = activitySummaryFailureReason(activitySummary, response);
@@ -1683,6 +1683,33 @@ const normalizeCreativeExecutionResponseCandidate = (
       fallback_used: false,
     },
   };
+};
+
+const diagnosticPreviewFieldPattern =
+  /^(?:answer_body_preview|raw_hermes_response_answer_preview|trace_response_answer_preview|.*_preview|.*Preview)$/;
+
+const omitDiagnosticPreviewFields = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(omitDiagnosticPreviewFields);
+  }
+
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !diagnosticPreviewFieldPattern.test(key))
+      .map(([key, item]) => [key, omitDiagnosticPreviewFields(item)]),
+  );
+};
+
+const responseCandidateForM1Validation = (response: unknown): Record<string, unknown> | null => {
+  if (!isRecord(response)) {
+    return null;
+  }
+
+  return normalizeHermesCmoResponseCandidate(omitDiagnosticPreviewFields(response) as Record<string, unknown>);
 };
 
 const maybeNormalizeCreativeExecutionResponseCandidate = (
@@ -2563,6 +2590,11 @@ const traceString = (value: string, max = 1200) => {
 
 const traceValue = (value: unknown, depth = 0, pathParts: Array<string | number> = []): unknown => {
   if (typeof value === "string") {
+    const lastPathPart = pathParts.at(-1);
+    if (typeof lastPathPart === "string" && diagnosticPreviewFieldPattern.test(lastPathPart)) {
+      return "[trace preview omitted]";
+    }
+
     if (isTraceUserVisibleAnswerField(pathParts)) {
       return traceAnswerString(value);
     }
@@ -3287,19 +3319,22 @@ const responseAnswerTraceDiagnostics = (payload: unknown): Record<string, unknow
 
   if (typeof preview !== "string") {
     return {
-      m1_validation_answer_source: "raw_hermes_response",
+      m1_validation_answer_source: "canonical_answer",
+      diagnostic_preview_ignored_for_m1: true,
       user_visible_answer_source: "raw_hermes_response",
     };
   }
 
   const rawPreview = traceAnswerString(preview, 1000);
   const tracePreview = traceString(preview, 1000);
+  const redactionApplied = rawPreview !== tracePreview;
 
   return {
     raw_hermes_response_answer_preview: rawPreview,
-    trace_response_answer_preview: tracePreview,
-    response_trace_redaction_applied: rawPreview !== tracePreview,
-    m1_validation_answer_source: "raw_hermes_response",
+    trace_response_answer_preview: redactionApplied ? "[trace preview omitted]" : tracePreview,
+    response_trace_redaction_applied: redactionApplied,
+    m1_validation_answer_source: "canonical_answer",
+    diagnostic_preview_ignored_for_m1: true,
     user_visible_answer_source: "raw_hermes_response",
   };
 };
@@ -3813,7 +3848,10 @@ export const validateHermesCmoRuntimeResponse = (
     return false;
   }
 
-  const responseCandidate = normalizeHermesCmoResponseCandidate(response);
+  const responseCandidate = responseCandidateForM1Validation(response);
+  if (!responseCandidate) {
+    return false;
+  }
 
   if (
     responseCandidate.direct_vault_write === true ||

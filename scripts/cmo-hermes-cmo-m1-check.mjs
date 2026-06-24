@@ -1170,6 +1170,15 @@ const startServer = async () => {
               body,
               "advise",
               "Nên thêm glow/accent teal quanh egg và CTA area, nhưng giữ tổng thể sạch để không làm mất cảm giác premium.",
+              {
+                answer_body_preview: "[hermes_local_artifact_path_redacted]/accent_teal_quanh_egg_v_CTA_area._preview",
+                structured_output: {
+                  classification: "creative_conversation",
+                  response_style: "creative_conversation",
+                  raw_hermes_response_answer_preview: "[hermes_local_artifact_path_redacted]/accent_teal_quanh_egg_v_CTA_area._raw",
+                  trace_response_answer_preview: "[hermes_local_artifact_path_redacted]/accent_teal_quanh_egg_v_CTA_area._trace",
+                },
+              },
             ));
             return;
           }
@@ -5539,7 +5548,8 @@ try {
     assert.equal(m13CreativeConversationGlowAccentResult.response.status, "completed");
     assert.equal(m13CreativeConversationGlowAccentResult.response.answer_basis.mode, "creative_conversation");
     assert.equal(m13CreativeConversationGlowAccentResult.response.structured_output.m1_validation_result, "accepted");
-    assert.equal(m13CreativeConversationGlowAccentResult.response.structured_output.m1_validation_answer_source, "raw_hermes_response");
+    assert.equal(m13CreativeConversationGlowAccentResult.response.structured_output.m1_validation_answer_source, "canonical_answer");
+    assert.equal(m13CreativeConversationGlowAccentResult.response.structured_output.diagnostic_preview_ignored_for_m1, true);
     assert.match(m13CreativeConversationGlowAccentResult.response.answer?.body ?? "", /thêm glow\/accent teal quanh egg và CTA area/i);
     assert.equal(
       /\[hermes_local_artifact_path_redacted\]|accent_teal_quanh_egg_v_CTA_area/i.test(m13CreativeConversationGlowAccentResult.response.answer?.body ?? ""),
@@ -5559,7 +5569,8 @@ try {
     );
     const glowAccentResponseTrace = JSON.parse(glowAccentResponseTraceText);
     assert.match(glowAccentResponseTrace.response?.response?.answer?.body ?? glowAccentResponseTrace.response?.answer?.body ?? "", /thêm glow\/accent teal quanh egg và CTA area/i);
-    assert.equal(glowAccentResponseTrace.m1_validation_answer_source, "raw_hermes_response");
+    assert.equal(glowAccentResponseTrace.m1_validation_answer_source, "canonical_answer");
+    assert.equal(glowAccentResponseTrace.diagnostic_preview_ignored_for_m1, true);
     assert.equal(glowAccentResponseTrace.user_visible_answer_source, "raw_hermes_response");
     assert.equal(glowAccentResponseTrace.response_trace_redaction_applied, false);
     m13CreativeOutboundSanitizedResult = await runHermesCmoRuntime(m13PollutedCmoOwnedCreativeSessionExecutionRequest("req_m13_creative_outbound_sanitized"));
