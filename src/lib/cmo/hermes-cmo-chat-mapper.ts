@@ -2023,6 +2023,7 @@ function metadataFromHermes(
       ? structuredOutput.rejected_activity_event_type.trim()
       : undefined;
   const requestInput = isRecord(result.request.input) ? result.request.input : {};
+  const requestConstraints: Record<string, unknown> = isRecord(result.request.constraints) ? result.request.constraints : {};
   const requestCreativeState = isRecord(result.request.creative_working_state)
     ? result.request.creative_working_state
     : isRecord(requestInput.creative_working_state)
@@ -2114,15 +2115,15 @@ function metadataFromHermes(
           ...(creativeDecisionDraftId || requestActiveDraftId
             ? { creative_session_active_draft_id: creativeDecisionDraftId ?? requestActiveDraftId }
             : {}),
-          ...(result.request.constraints.creative_session_followup_detected === true
+          ...(requestConstraints.creative_session_followup_detected === true
             ? { creative_session_followup_detected: true }
             : {}),
-          ...(result.request.constraints.creative_working_state_present === true ? { creative_working_state_present: true } : {}),
-          ...(typeof result.request.constraints.active_creative_asset_id === "string" ? { active_creative_asset_id: result.request.constraints.active_creative_asset_id } : {}),
+          ...(requestConstraints.creative_working_state_present === true ? { creative_working_state_present: true } : {}),
+          ...(typeof requestConstraints.active_creative_asset_id === "string" ? { active_creative_asset_id: requestConstraints.active_creative_asset_id } : {}),
           ...(creativeConversationResponseReceived
             ? { creative_assets_count: responseCreativeAssetsCount ?? 0 }
-            : typeof result.request.constraints.creative_assets_count === "number"
-              ? { creative_assets_count: result.request.constraints.creative_assets_count }
+            : typeof requestConstraints.creative_assets_count === "number"
+              ? { creative_assets_count: requestConstraints.creative_assets_count }
               : {}),
           ...(typeof referenceAssetsCount === "number" ? { reference_assets_count: referenceAssetsCount } : {}),
           ...(artifactTransportMode ? { artifact_transport_mode: artifactTransportMode } : {}),

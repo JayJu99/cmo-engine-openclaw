@@ -2979,6 +2979,25 @@ function creativeContractViolationMetadata(result: HermesCmoRuntimeResult): Part
   };
 }
 
+function hermesResponseIndicatesCreativeExecution(result: HermesCmoRuntimeResult, creativeArtifacts: unknown[]): boolean {
+  const response = result.response as unknown as Record<string, unknown>;
+  const structuredOutput = recordValue(result.response.structured_output) ?? {};
+  const answerBasis = recordValue(result.response.answer_basis) ?? {};
+  const route = recordValue(response.route) ?? {};
+  const creativeDecision = extractCreativeDecision(result.response);
+  const creativeAssetsCount = numberFromRecords([response, structuredOutput], "creative_assets_count") ?? 0;
+
+  return (
+    answerBasis.mode === "creative_execution" ||
+    route.kind === "creative_execution" ||
+    route.routed_to_creative === true ||
+    creativeDecision?.action === "execute" ||
+    creativeArtifacts.length > 0 ||
+    creativeAssetsCount > 0 ||
+    hasCreativeExecutionMetadata(result.response)
+  );
+}
+
 function creativeMissingRenderableAssetWarning(): string {
   return [
     "## Creative Asset Not Ready",
@@ -4804,12 +4823,15 @@ export async function createAppChatSession(
         jobId: `creative_${messageId}`,
         createdAt: now,
       });
+      const hermesCreativeExecutionResponseReceived = hermesResponseIndicatesCreativeExecution(hermesResult, creativeArtifacts);
       turnCreativeArtifacts = creativeArtifacts;
       creativeWorkingState = applyCreativeAssetStateUpdate(creativeWorkingState, creativeArtifacts);
-      if (hermesCmoCreativeExecutionRequested) {
+      if (hermesCmoCreativeExecutionRequested || hermesCreativeExecutionResponseReceived) {
         const structuredOutput = isRecord(hermesResult.response.structured_output) ? hermesResult.response.structured_output : {};
         creativeResponseReceived = true;
-        creativeMetadataPresent = hasCreativeExecutionMetadata(hermesResult.response) || creativeArtifacts.length > 0;
+        const responseRecord = isRecord(hermesResult.response) ? hermesResult.response : {};
+        const responseCreativeAssetsCount = numberFromRecords([responseRecord, structuredOutput], "creative_assets_count") ?? 0;
+        creativeMetadataPresent = hasCreativeExecutionMetadata(hermesResult.response) || creativeArtifacts.length > 0 || responseCreativeAssetsCount > 0;
         creativeFallbackUsed = creativeMetadataPresent ? false : undefined;
         creativeSideEffectsPresent = typeof structuredOutput.side_effects_present === "boolean" ? structuredOutput.side_effects_present : undefined;
         creativeSideEffectsAllowedForCreative = typeof structuredOutput.side_effects_allowed_for_creative === "boolean" ? structuredOutput.side_effects_allowed_for_creative : undefined;
@@ -4821,7 +4843,7 @@ export async function createAppChatSession(
       );
       answer = creativeContractViolation ? PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE : mappedHermesResult.answer;
       if (
-        hermesCmoCreativeExecutionRequested &&
+        (hermesCmoCreativeExecutionRequested || hermesCreativeExecutionResponseReceived) &&
         creativeMetadataPresent === true &&
         !creativeArtifacts.length &&
         isGenericCreativeSuccessWithoutAssetAnswer(answer)

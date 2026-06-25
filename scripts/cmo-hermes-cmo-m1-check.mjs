@@ -165,6 +165,29 @@ const m13CreativeExecutionRequest = (requestId) => ({
   },
 });
 
+const m46UnifiedCmoAgentRequest = (requestId) => ({
+  ...sampleRequest,
+  request_id: requestId,
+  session_id: requestId.replace(/^req_/, "session_"),
+  turn_id: `${requestId.replace(/^req_/, "turn_")}_001`,
+  workspace: {
+    ...sampleRequest.workspace,
+    workspace_id: "eggs-vault",
+    app_id: "eggs-vault",
+    app_name: "Eggs Vault",
+  },
+  intent: {
+    mode: "cmo.default",
+    user_message: "Create the next campaign direction for Eggs Vault.",
+    explicit_command: null,
+  },
+  constraints: {
+    ...sampleRequest.constraints,
+    allowed_agents: [],
+    allowed_surf_modes: [],
+  },
+});
+
 const m13CmoOwnedCreativeSessionExecutionRequest = (requestId) => ({
   ...sampleRequest,
   request_id: requestId,
@@ -800,7 +823,7 @@ const startServer = async () => {
 
       assert.equal(request.headers.authorization, "Bearer test-m1-key");
 
-      if (url.pathname === "/agents/cmo/execute" || url.pathname === "/agents/cmo/tool-execute") {
+      if (url.pathname === "/agents/cmo/execute" || url.pathname === "/agents/cmo/tool-execute" || url.pathname === "/agents/cmo/agent") {
         calls.cmo += 1;
         const cmoCallCount = (cmoCallsByRequestId.get(body.request_id) ?? 0) + 1;
         cmoCallsByRequestId.set(body.request_id, cmoCallCount);
@@ -817,6 +840,8 @@ const startServer = async () => {
         });
 
         if (cmoCallCount === 1) {
+          const firstCallUnifiedAgent =
+            body.request_id === "req_m46_unified_agent_creative_uploaded_asset";
           const firstCallProposalsOnly =
             body.request_id === "req_m44e6_research_followup_table" ||
             body.request_id === "req_m44e6_research_followup_rank";
@@ -865,7 +890,19 @@ const startServer = async () => {
             assert.equal(body.constraints.h5_live_adapter?.creative_execution_requested, false);
             assert.equal(body.constraints.h5_live_adapter?.cmo_owns_creative_decision, true);
           }
-          if (firstCallCreativeNative) {
+          if (firstCallUnifiedAgent) {
+            assert.deepEqual(body.artifact_transport, {
+              mode: "product_upload",
+              upload_endpoint: "https://cmo.jayju.cloud/api/cmo/apps/eggs-vault/creative/artifact-ingest",
+              auth_ref: "cmo_creative_artifact_read_key",
+              auth_header: "x-cmo-creative-artifact-key",
+              workspace_id: "eggs-vault",
+              app_id: "eggs-vault",
+              request_id: body.request_id,
+              accepted_mime_types: ["image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm"],
+              max_bytes: 52428800,
+            });
+          } else if (firstCallCreativeNative) {
             assert.deepEqual(body.artifact_transport, {
               mode: "product_upload",
               upload_endpoint: "https://cmo.jayju.cloud/api/cmo/apps/hold-pay/creative/artifact-ingest",
@@ -879,6 +916,79 @@ const startServer = async () => {
             });
           } else {
             assert.equal(body.artifact_transport, undefined);
+          }
+          if (body.request_id === "req_m46_unified_agent_creative_uploaded_asset") {
+            writeJson(response, 200, {
+              schema_version: "hermes.cmo.response.v1",
+              request_id: body.request_id,
+              session_id: body.session_id,
+              turn_id: body.turn_id,
+              status: "completed",
+              route: {
+                kind: "creative_execution",
+                routed_to_creative: true,
+                intent_owner: "cmo",
+                product_route_hint_used: false,
+              },
+              intent_decision: {
+                domain: "creative_campaign_visual",
+                action: "generate_creative_asset",
+                execution_intent: "execute",
+                confidence: 0.98,
+                needs_clarification: false,
+              },
+              answer_basis: {
+                mode: "creative_execution",
+                source: "creative_agent",
+                artifact_transport_status: "uploaded",
+                missing_inputs: [],
+                assumptions_used: [],
+                user_can_override: true,
+                suggested_user_inputs: [],
+              },
+              clarifying_question: {
+                required: false,
+                question: null,
+                reason: null,
+                missing_inputs: [],
+              },
+              creative_decision: {
+                action: "execute",
+                operation: "creative.generate_image",
+              },
+              creative_assets_count: 1,
+              creative_assets: [
+                {
+                  asset_id: "creative_unified_uploaded_fixture",
+                  asset_type: "image",
+                  status: "stored",
+                  transport_status: "uploaded",
+                  render_url: "https://cmo.jayju.cloud/api/signed/creative_unified_uploaded_fixture",
+                  signed_url: "https://cmo.jayju.cloud/api/signed/creative_unified_uploaded_fixture",
+                  mime_type: "image/png",
+                  sha256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                  bytes: 512,
+                  width: 1024,
+                  height: 1024,
+                  visual_inspection: {
+                    used: true,
+                    summary: "Generated campaign visual is readable.",
+                  },
+                },
+              ],
+              artifacts: [],
+              memory_suggestions: [],
+              specialist_calls: [{ agent: "creative", status: "completed" }],
+              diagnostics: {
+                creative_visual_inspection_used: true,
+              },
+              activity_summary: {
+                events_count: 0,
+                final_state: "completed",
+              },
+              answer: "Creative execution completed and returned generated asset metadata.",
+            });
+            return;
           }
           if (body.request_id === "req_m13_creative_conversation_missing_event_id") {
             writeJson(response, 200, m13CreativeConversationResponse(
@@ -3954,6 +4064,7 @@ try {
   let m13CreativeOutboundSanitizedResult;
   let m13CreativeExecutedCreativeResult;
   let m13CreativeFalseOnlySideEffectsResult;
+  let m46UnifiedAgentCreativeUploadedResult;
 
   try {
     process.env.CMO_HERMES_EXECUTION_ENABLED = "true";
@@ -5347,6 +5458,37 @@ try {
     });
     assert.equal(m44d2NativeExecuteResult.hermesCmoAgentPath, "/agents/cmo/execute");
     assert.equal(m44d2NativeExecuteResult.hermesCmoEndpointKind, "execute");
+    const previousUnifiedEnabled = process.env.CMO_HERMES_UNIFIED_AGENT_ENABLED;
+    const previousUnifiedCanaryApps = process.env.CMO_HERMES_UNIFIED_AGENT_CANARY_APPS;
+    const previousUnifiedEndpoint = process.env.CMO_HERMES_UNIFIED_AGENT_ENDPOINT;
+    const previousUnifiedTimeout = process.env.CMO_HERMES_UNIFIED_AGENT_TIMEOUT_MS;
+    process.env.CMO_HERMES_UNIFIED_AGENT_ENABLED = "true";
+    process.env.CMO_HERMES_UNIFIED_AGENT_CANARY_APPS = "eggs-vault";
+    process.env.CMO_HERMES_UNIFIED_AGENT_ENDPOINT = "/agents/cmo/agent";
+    delete process.env.CMO_HERMES_UNIFIED_AGENT_TIMEOUT_MS;
+    try {
+      m46UnifiedAgentCreativeUploadedResult = await runHermesCmoRuntime(m46UnifiedCmoAgentRequest("req_m46_unified_agent_creative_uploaded_asset"));
+    } finally {
+      restoreEnvValue("CMO_HERMES_UNIFIED_AGENT_ENABLED", previousUnifiedEnabled);
+      restoreEnvValue("CMO_HERMES_UNIFIED_AGENT_CANARY_APPS", previousUnifiedCanaryApps);
+      restoreEnvValue("CMO_HERMES_UNIFIED_AGENT_ENDPOINT", previousUnifiedEndpoint);
+      restoreEnvValue("CMO_HERMES_UNIFIED_AGENT_TIMEOUT_MS", previousUnifiedTimeout);
+    }
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.hermesCmoAgentPath, "/agents/cmo/agent");
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.hermesCmoEndpointKind, "cmo_agent");
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.hermesCmoRouteDecision, "cmo_agent");
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.hermesCmoEndpointTimeoutMs, 420000);
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.hermesCmoEndpointTimeoutSource, "unified_agent");
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.request.artifact_transport?.mode, "product_upload");
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.response.status, "completed");
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.response.answer_basis.mode, "creative_execution");
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.response.answer?.body, "Creative execution completed and returned generated asset metadata.");
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.response.structured_output.creative_execution_response_received, true);
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.response.structured_output.creative_execution_owner, "cmo");
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.response.structured_output.m1_validation_result, "accepted");
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.response.structured_output.fallback_used, false);
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.response.creative_assets[0].transport_status, "uploaded");
+    assert.equal(m46UnifiedAgentCreativeUploadedResult.response.creative_assets[0].visual_inspection.summary, "Generated campaign visual is readable.");
     process.env.CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED = "false";
 
     await assert.rejects(

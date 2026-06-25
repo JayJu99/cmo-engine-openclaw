@@ -3578,6 +3578,42 @@ try {
     assert.equal(unifiedAgentMapped.hermesCmoMetadata.creative_decision.action, "none");
     assert.equal(unifiedAgentMapped.hermesCmoMetadata.hermes_diagnostics.endpoint_kind, "cmo_agent");
 
+    const unifiedActiveAssetReviewBase = makeRuntimeResult();
+    const unifiedActiveAssetReviewMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...unifiedActiveAssetReviewBase,
+      hermesCmoAgentPath: "/agents/cmo/agent",
+      hermesCmoEndpointKind: "cmo_agent",
+      hermesCmoEndpointTimeoutMs: 420000,
+      hermesCmoEndpointTimeoutSource: "unified_agent",
+      hermesCmoRouteDecision: "cmo_agent",
+      response: {
+        ...unifiedActiveAssetReviewBase.response,
+        route: { kind: "creative_review", routed_to_creative: true },
+        answer_basis: {
+          mode: "creative_conversation",
+          missing_inputs: [],
+          assumptions_used: [],
+          user_can_override: true,
+          suggested_user_inputs: [],
+        },
+        creative_decision: { action: "review", operation: "creative.inspect_image" },
+        creative_assets: [],
+        diagnostics: { creative_visual_inspection_used: true },
+        answer: {
+          format: "markdown",
+          title: "Active asset review",
+          summary: "",
+          decision: "REVIEW",
+          body: "The active asset is clear enough for a campaign review; strengthen the CTA contrast before generating a variant.",
+        },
+      },
+    });
+    assert.match(unifiedActiveAssetReviewMapped.answer, /active asset is clear enough/i);
+    assert.equal(unifiedActiveAssetReviewMapped.hermesCmoMetadata.endpoint_kind, "cmo_agent");
+    assert.equal(unifiedActiveAssetReviewMapped.hermesCmoMetadata.creative_decision.action, "review");
+    assert.equal(unifiedActiveAssetReviewMapped.hermesCmoMetadata.hermes_diagnostics.creative_visual_inspection_used, true);
+    assert.equal(unifiedActiveAssetReviewMapped.hermesCmoMetadata.creative_assets_count, 0);
+
     const unifiedUserVisibleBase = makeRuntimeResult();
     const unifiedUserVisibleMapped = mapper.mapHermesCmoResponseToChatResult({
       ...unifiedUserVisibleBase,
@@ -4476,6 +4512,7 @@ try {
     assert.match(source, /resolveHermesCmoChatRoute\(\{/);
     assert.match(source, /const hermesCmoChatV11Requested = hermesCmoRoute\.endpointKind === "agent_chat"/);
     assert.match(source, /const hermesCmoCreativeExecutionRequested = hermesCmoRoute\.reason === "creative_execution"/);
+    assert.match(source, /hermesCmoUnifiedAgentRequested/);
     assert.match(source, /hermesCmoRoute\.endpointKind === "tool_execute" \|\|\s*hermesCmoCreativeExecutionRequested/);
     assert.match(source, /shouldUseHermesCmoChat\(request\.appId\)/);
     assert.match(source, /runHermesCmoChatV11\(\{/);
@@ -4493,6 +4530,8 @@ try {
     assert.match(source, /writeHermesCmoChatV11FallbackTrace\(chatResult\.request/);
     assert.match(source, /answer = mappedChat\.answer/);
     assert.match(source, /answer = creativeContractViolation \? PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE : mappedHermesResult\.answer/);
+    assert.match(source, /hermesResponseIndicatesCreativeExecution\(hermesResult, creativeArtifacts\)/);
+    assert.match(source, /hermesCmoCreativeExecutionRequested \|\| hermesCreativeExecutionResponseReceived/);
     assert.match(source, /userVisibleAnswerPathLike\(answer\)/);
     assert.match(source, /user_visible_answer_guard_triggered: true/);
     assert.match(source, /user_visible_answer_guard_reason: guardReason/);

@@ -882,6 +882,10 @@ const answerBasisModeIsAllowed = (
 };
 
 const answerTextFromKnownSimpleShape = (answer: unknown): string | null => {
+  if (typeof answer === "string" && answer.trim()) {
+    return answer.trim();
+  }
+
   if (!isRecord(answer)) {
     return null;
   }
@@ -982,7 +986,7 @@ const normalizeHermesCmoResponseCandidate = (
   const canNormalizeAnswerBasis = answerBasisMode !== undefined &&
     answerBasisModeIsAllowed(answerBasisMode, { allowToolRead: toolCapableResponse, allowCreativeIdeation: true, allowCreativeConversation: true });
   const clarifyingQuestion = isRecord(response.clarifying_question) ? response.clarifying_question : {};
-  const answerMode = answerModeFromResponse(response, answerBasis, { allowToolRead: toolCapableResponse, allowCreativeIdeation: true, allowCreativeConversation: true });
+  const answerMode = answerModeFromResponse(response, answerBasis, { allowToolRead: toolCapableResponse, allowCreativeIdeation: true, allowCreativeConversation: true, allowCreativeExecution: true });
 
   return {
     ...response,
@@ -2160,7 +2164,8 @@ const requestMayLeadToCreativeExecution = (request: HermesCmoRuntimeRequest): bo
   requestIsCreativeExecution(request) ||
   requestIsCreativeIdeation(request) ||
   requestHasCreativeWorkingState(request) ||
-  requestHasCmoOwnedCreativeCapability(request);
+  requestHasCmoOwnedCreativeCapability(request) ||
+  requestRouteDecision(request) === "cmo_agent" && requestArtifactTransportMode(request) === "product_upload";
 
 const requestArtifactTransportMode = (request: HermesCmoRuntimeRequest): string | undefined => {
   const transport: Record<string, unknown> = isRecord(request.artifact_transport) ? request.artifact_transport : {};
@@ -2212,8 +2217,11 @@ const requestAllowsCreativeConversationAnswerBasis = (request: HermesCmoRuntimeR
   const routeDecision = requestRouteDecision(request);
 
   return (
-    (routeDecision === "creative_session" || routeDecision === "creative_ideation" || routeDecision === "creative_execution" || requestIsCreativeIdeation(request) || requestHasCreativeWorkingState(request) || requestHasCmoOwnedCreativeCapability(request)) &&
-    requestHasCmoCreativeDecisionOwner(request)
+    (routeDecision === "cmo_agent" && requestArtifactTransportMode(request) === "product_upload") ||
+    (
+      (routeDecision === "creative_session" || routeDecision === "creative_ideation" || routeDecision === "creative_execution" || requestIsCreativeIdeation(request) || requestHasCreativeWorkingState(request) || requestHasCmoOwnedCreativeCapability(request)) &&
+      requestHasCmoCreativeDecisionOwner(request)
+    )
   );
 };
 
@@ -2255,16 +2263,25 @@ const requestAllowsCmoOwnedCreativeExecutionAnswerBasis = (
   const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
   const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
   const hasActiveCreativeContext = requestHasActiveCreativeExecutionContext(request);
+  const unifiedAgentCreativeExecution =
+    routeDecision === "cmo_agent" &&
+    requestArtifactTransportMode(request) === "product_upload" &&
+    (responseHasCreativeExecutionResult(response, structuredOutput) || responseHasCreativeExecutionFailure(response, structuredOutput));
 
   return (
     answerBasis.mode === "creative_execution" &&
-    (routeDecision === "creative_session" || routeDecision === "creative_execution") &&
-    requestIsCreativeLongRunningTurn(request, routeDecision as HermesCmoRouteDecision) &&
-    requestHasCmoCreativeDecisionOwner(request) &&
-    (hasActiveCreativeContext || requestHasCmoOwnedCreativeCapability(request)) &&
-    (hasActiveCreativeContext || requestAllowsCreativeMutationByPolicy(request)) &&
-    requestArtifactTransportMode(request) === "product_upload" &&
-    (responseHasCreativeExecutionResult(response, structuredOutput) || responseHasCreativeExecutionFailure(response, structuredOutput))
+    (
+      unifiedAgentCreativeExecution ||
+      (
+        (routeDecision === "creative_session" || routeDecision === "creative_execution") &&
+        requestIsCreativeLongRunningTurn(request, routeDecision as HermesCmoRouteDecision) &&
+        requestHasCmoCreativeDecisionOwner(request) &&
+        (hasActiveCreativeContext || requestHasCmoOwnedCreativeCapability(request)) &&
+        (hasActiveCreativeContext || requestAllowsCreativeMutationByPolicy(request)) &&
+        requestArtifactTransportMode(request) === "product_upload" &&
+        (responseHasCreativeExecutionResult(response, structuredOutput) || responseHasCreativeExecutionFailure(response, structuredOutput))
+      )
+    )
   );
 };
 
