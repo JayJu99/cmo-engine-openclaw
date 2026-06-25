@@ -1,5 +1,5 @@
 const OUTBOUND_FORBIDDEN_TEXT_PATTERN =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|Volumes)\/|\/private(?:\/|\b)|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
 export const OUTBOUND_HERMES_CALLSITE_GUARD_VERSION = "context-sanitizer-v2" as const;
 const OUTBOUND_CALLSITE_FORBIDDEN_LITERALS = [
   { literal: "[hermes_local_artifact_path_redacted]", label: "hermes_local_artifact_path_redacted" },
@@ -10,7 +10,7 @@ const OUTBOUND_CALLSITE_FORBIDDEN_LITERALS = [
   { literal: "/home/", label: "/home/" },
   { literal: "/var/", label: "/var/" },
   { literal: "/mnt/", label: "/mnt/" },
-  { literal: "/private/", label: "/private/" },
+  { literal: "/private", label: "/private" },
   { literal: "/Volumes/", label: "/Volumes/" },
   { literal: "file:", label: "file:" },
   { literal: "conversion_h_", label: "conversion_h_" },
@@ -319,13 +319,17 @@ export const buildOutboundHermesTraceSafeRequest = <T>(payload: T): OutboundHerm
     };
   }
 
-  const projectedPayload = jsonClone(payload);
+  let projectedPayload = jsonClone(payload) as T;
   const replacedFields: string[] = [];
 
   if (isRecord(projectedPayload)) {
     replaceTraceContextFields(projectedPayload.context_pack, ["context_pack"], replacedFields);
     replaceTraceMessageFields(projectedPayload.messages, ["messages"], replacedFields);
   }
+
+  const recursivelySanitizedFields: string[] = [];
+  projectedPayload = sanitizeValue(projectedPayload, [], undefined, recursivelySanitizedFields) as T;
+  replacedFields.push(...recursivelySanitizedFields);
 
   const uniqueReplacedFields = uniqueLimited(replacedFields, MAX_FIELD_PREVIEW_COUNT);
 
@@ -360,12 +364,17 @@ const safeReplacementForString = (key: string | undefined, parent: Record<string
   return TEXT_PLACEHOLDER;
 };
 
-const sanitizeValue = (
+const safeReplacementForKey = (key: string): string =>
+  outboundHermesStringHasForbiddenArtifactText(key)
+    ? "redacted_creative_artifact_key"
+    : key;
+
+function sanitizeValue(
   value: unknown,
   path: JsonPathSegment[],
   parent: Record<string, unknown> | undefined,
   sanitizedFields: string[],
-): unknown => {
+): unknown {
   if (typeof value === "string") {
     if (!outboundHermesStringHasForbiddenArtifactText(value)) {
       return value;
@@ -385,12 +394,19 @@ const sanitizeValue = (
   }
 
   return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [
-      key,
-      sanitizeValue(item, [...path, key], value, sanitizedFields),
-    ]),
+    Object.entries(value).map(([key, item]) => {
+      const safeKey = safeReplacementForKey(key);
+      if (safeKey !== key) {
+        sanitizedFields.push(fieldPathPreview([...path, key]));
+      }
+
+      return [
+        safeKey,
+        sanitizeValue(item, [...path, safeKey], value, sanitizedFields),
+      ];
+    }),
   );
-};
+}
 
 const collectBlockedFields = (value: unknown, path: JsonPathSegment[] = [], blockedFields: string[] = []): string[] => {
   if (typeof value === "string") {

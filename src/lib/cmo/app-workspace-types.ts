@@ -936,6 +936,7 @@ export interface HermesCmoChatMetadata {
   fallback_reason?: string;
   fallback_from?: string;
   fallback_to?: string;
+  final_session_write_projection?: Record<string, unknown>;
   hermesEndpointTimeoutMs?: number;
   hermesEndpointTimeoutSource?: "default_execute" | "creative_execute" | "tool_endpoint" | "tool_timeout_override" | "unified_agent";
   timeout_source?: "default_execute" | "creative_execute" | "tool_endpoint" | "tool_timeout_override" | "unified_agent";

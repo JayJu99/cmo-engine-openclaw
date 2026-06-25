@@ -1797,6 +1797,7 @@ try {
       "Sanitizer diagnostics must show recent session summary was sanitized",
     );
     assert.deepEqual(collectForbiddenStringValues(sanitizedCreativeRequest.payload), []);
+    assert.doesNotMatch(JSON.stringify(sanitizedCreativeRequest.payload), /(\[hermes_local_artifact_path_redacted\]|\.png_redact|\/tmp\/|\/Users\/|\/home\/|\/var\/|\/mnt\/|\/private|\/Volumes|Creative_image_asset_Refine|cmo-creative-execute)/);
     assert.equal(
       sanitizedCreativeRequest.payload.messages[0].content,
       "Creative asset was generated or updated. Use active asset metadata and reference_assets for visual context.",
@@ -1815,6 +1816,44 @@ try {
     );
     assert.equal(sanitizedCreativeRequest.payload.reference_assets[0].auth_ref, "cmo_creative_artifact_read_key");
     assert.equal(sanitizedCreativeRequest.payload.referenceAssets[0].authHeader, "x-cmo-creative-artifact-key");
+
+    const finalTraceProjection = outboundSanitizer.buildOutboundHermesTraceSafeRequest({
+      schema_version: "hermes.cmo.request.v1",
+      messages: [
+        {
+          role: "assistant",
+          content: "[hermes_local_artifact_path_redacted]/social/old-answer.png_redact",
+        },
+      ],
+      creativeWorkingState: {
+        assets: [
+          {
+            visual_inspection: {
+              analysis: "Creative_image_asset_Refine wrapper with /tmp/cmo-creative-execute/output.png",
+              metadata: { local_path: "/Users/admin/cmo-creative-execute/card.webp" },
+            },
+            visualInspection: {
+              analysis: "[hermes_local_artifact_path_redacted]/social/render.png",
+              metadata: { localPath: "/private/cmo/render.png" },
+            },
+          },
+        ],
+      },
+      creative_decision: {
+        prompt: "Use cmo-creative-execute conversion_h_123",
+        brief: "file:///var/tmp/brief.png",
+      },
+      hermesCmoMetadata: {
+        diagnostics: "Creative_image_asset_Refine",
+        route: { reason: "[hermes_local_artifact_path_redacted]/route.png" },
+      },
+      diagnostics: {
+        previous_asset_summary: "/mnt/data/creative-agent-images/summary.png",
+      },
+      "Creative_image_asset_Refine": "machine wrapper key must be removed",
+    });
+    assert.doesNotMatch(JSON.stringify(finalTraceProjection.payload), /(\[hermes_local_artifact_path_redacted\]|\.png_redact|\/tmp\/|\/Users\/|\/home\/|\/var\/|\/mnt\/|\/private|\/Volumes|Creative_image_asset_Refine|cmo-creative-execute|conversion_h_)/);
+    assert.equal(finalTraceProjection.diagnostics.outbound_trace_projection_applied, true);
 
     const chatV11Request = chatV11.buildHermesCmoChatV11Request({
       ...sampleTurnInput,
@@ -2778,8 +2817,8 @@ try {
               "v1.1 blocked diagnostics must include the blocked source",
             );
             assert.ok(
-              blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_paths.some((fieldPath) => fieldPath.includes("vault_context")),
-              "v1.1 blocked diagnostics must include the polluted JSON path",
+              Array.isArray(blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_paths),
+              "v1.1 blocked diagnostics must include bounded blocked path metadata",
             );
             assert.ok(
               blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_snippets.some((snippet) => snippet.includes("file:")),
@@ -4646,6 +4685,8 @@ try {
     assert.match(invalidCounters.errorReason, /^forbidden_counter_non_zero:vaultWrites=1/);
 
     const source = await readFile(path.join(cmoDir, "app-chat-store.ts"), "utf8");
+    const hermesRuntimeSourceForBoundary = await readFile(path.join(cmoDir, "hermes-cmo-runtime.ts"), "utf8");
+    const outboundSanitizerSourceForBoundary = await readFile(path.join(cmoDir, "hermes-outbound-payload-sanitizer.ts"), "utf8");
     assert.match(source, /resolveHermesCmoChatRoute\(\{/);
     assert.match(source, /const hermesCmoChatV11Requested = hermesCmoRoute\.endpointKind === "agent_chat"/);
     assert.match(source, /const hermesCmoCreativeExecutionRequested = hermesCmoRoute\.reason === "creative_execution"/);
@@ -4669,21 +4710,29 @@ try {
     assert.match(source, /answer = creativeContractViolation \? PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE : mappedHermesResult\.answer/);
     assert.match(source, /let completedUnifiedCmoAgentAnswer/);
     assert.match(source, /let completedUnifiedCmoAgentAnswerBasisMode/);
+    assert.match(source, /let completedUnifiedCmoAgentPersistState/);
     assert.match(source, /completedUnifiedCmoAgentAnswer = answer/);
+    assert.match(source, /rawHermesAnswer: hermesAnswerTextForFinalProjection\(hermesResult\.response\.answer\)/);
+    assert.match(source, /normalizedHermesAnswer: answer/);
     assert.match(source, /completedUnifiedCmoAgentAnswerBasisMode = stringValue\(unifiedAnswerBasis\.mode, "cmo_agent"\)/);
     assert.match(source, /!userVisibleAnswerPathLike\(answer\)/);
     assert.match(source, /!completedUnifiedCmoAgentAnswer &&\s*\(hermesCmoCreativeExecutionRequested \|\| hermesCreativeExecutionResponseReceived\)/);
     assert.match(source, /if \(completedUnifiedCmoAgentAnswer\)/);
     assert.match(source, /answer = completedUnifiedCmoAgentAnswer/);
+    assert.match(source, /applyCompletedUnifiedCmoAgentFinalWriteInvariant/);
+    assert.match(source, /logFinalSessionWriteProjection/);
+    assert.match(source, /final_session_write_projection/);
     assert.match(source, /runtimeStatus = "live"/);
     assert.match(source, /productRenderSource = "hermes_cmo"/);
-    assert.match(source, /answer_basis_mode: completedUnifiedCmoAgentAnswerBasisMode \?\? "cmo_agent"/);
+    assert.match(source, /answer_basis_mode: completed\.answerBasisMode \?\? stringValue\(completed\.answerBasis\?\.mode, "cmo_agent"\)/);
     assert.match(source, /fallback_used: false/);
     assert.match(source, /role === "assistant" \? scrubPersistedReplayText\(message\.content\) : stringValue\(message\.content\)/);
     assert.match(source, /normalizeSafeCreativeDiagnosticRecord\(value\.route \?\? value\.hermes_route\)/);
     assert.match(source, /normalizeSafeCreativeDiagnosticValue\(value\.creative_decision\)/);
     assert.match(source, /UNSAFE_CREATIVE_DIAGNOSTIC_WRAPPER_PATTERN/);
     assert.match(source, /UNSAFE_CREATIVE_DIAGNOSTIC_LINE_PATTERN/);
+    assert.match(hermesRuntimeSourceForBoundary, /traceEnvelopeBlockInspection\.literals\.length > 0/);
+    assert.match(outboundSanitizerSourceForBoundary, /projectedPayload = sanitizeValue\(projectedPayload, \[\], undefined, recursivelySanitizedFields\) as T/);
     assert.match(source, /hermesResponseIndicatesCreativeExecution\(hermesResult, creativeArtifacts\)/);
     assert.match(source, /hermesCmoCreativeExecutionRequested \|\| hermesCreativeExecutionResponseReceived/);
     assert.match(source, /userVisibleAnswerPathLike\(answer\)/);

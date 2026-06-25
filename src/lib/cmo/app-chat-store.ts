@@ -2331,6 +2331,7 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ? normalizeSafeCreativeDiagnosticValue(value.specialist_calls)
     : undefined;
   const safeDiagnostics = normalizeSafeCreativeDiagnosticRecord(value.diagnostics ?? value.hermes_diagnostics);
+  const finalSessionWriteProjection = normalizeSafeCreativeDiagnosticRecord(value.final_session_write_projection);
   const creativeDecision = normalizeCreativeDecision(normalizeSafeCreativeDiagnosticValue(value.creative_decision));
   const sideEffects = value.sideEffects === false
     ? false
@@ -2364,6 +2365,7 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(stringValue(value.fallback_reason) ? { fallback_reason: stringValue(value.fallback_reason) } : {}),
     ...(stringValue(value.fallback_from) ? { fallback_from: stringValue(value.fallback_from) } : {}),
     ...(stringValue(value.fallback_to) ? { fallback_to: stringValue(value.fallback_to) } : {}),
+    ...(finalSessionWriteProjection ? { final_session_write_projection: finalSessionWriteProjection } : {}),
     ...(typeof value.hermesEndpointTimeoutMs === "number" && Number.isFinite(value.hermesEndpointTimeoutMs)
       ? { hermesEndpointTimeoutMs: Math.max(0, Math.floor(value.hermesEndpointTimeoutMs)) }
       : {}),
@@ -3327,6 +3329,194 @@ function safeBlockedUserVisibleAnswer(creativeNativeTurn: boolean): string {
     : "CMO response was blocked because Product detected internal artifact path text in the user-visible answer.";
 }
 
+interface CompletedUnifiedCmoAgentPersistState {
+  rawHermesStatus: string;
+  rawHermesAnswer: string;
+  normalizedHermesAnswer: string;
+  route?: Record<string, unknown>;
+  intentDecision?: Record<string, unknown>;
+  creativeDecision?: Record<string, unknown>;
+  answerBasis?: Record<string, unknown>;
+  answerBasisMode?: string;
+}
+
+function hermesAnswerTextForFinalProjection(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (!isRecord(value)) {
+    return "";
+  }
+
+  for (const key of ["body", "content", "text", "summary"]) {
+    const text = stringValue(value[key]);
+
+    if (text) {
+      return text;
+    }
+  }
+
+  return "";
+}
+
+function completedUnifiedCmoAgentMetadata(
+  existing: HermesCmoChatMetadata | undefined,
+  completed: CompletedUnifiedCmoAgentPersistState,
+): HermesCmoChatMetadata {
+  const metadataWithoutFallbackFields = { ...(existing ?? failedHermesCmoChatV11Metadata("req_cmo_agent_final_write", "completed_cmo_agent_final_write")) };
+  delete metadataWithoutFallbackFields.fallback_reason;
+  delete metadataWithoutFallbackFields.fallback_from;
+  delete metadataWithoutFallbackFields.fallback_to;
+
+  return {
+    ...metadataWithoutFallbackFields,
+    runtimeStatus: "live",
+    productRenderSource: "hermes_cmo",
+    route_decision: "cmo_agent",
+    answer_basis_mode: completed.answerBasisMode ?? stringValue(completed.answerBasis?.mode, "cmo_agent"),
+    fallback_used: false,
+    ...(completed.route ? { route: completed.route, hermes_route: completed.route } : {}),
+    ...(completed.intentDecision ? { intent_decision: completed.intentDecision } : {}),
+    ...(completed.creativeDecision ? { creative_decision: completed.creativeDecision } : {}),
+    ...(completed.answerBasis ? { answerBasis: completed.answerBasis, answer_basis: completed.answerBasis } : {}),
+    final_session_write_projection: {
+      session_write_invariant: "completed_cmo_agent_answer_wins",
+      raw_hermes_status: completed.rawHermesStatus,
+      raw_hermes_answer: completed.rawHermesAnswer,
+      normalized_hermes_answer: completed.normalizedHermesAnswer,
+      final_persisted_answer: completed.normalizedHermesAnswer,
+      runtimeStatus: "live",
+      productRenderSource: "hermes_cmo",
+      fallback_used: false,
+      route_kind: stringValue(completed.route?.kind),
+      answer_basis_mode: completed.answerBasisMode ?? stringValue(completed.answerBasis?.mode, "cmo_agent"),
+    },
+  };
+}
+
+function applyCompletedUnifiedCmoAgentFinalWriteInvariant(input: {
+  session: CMOChatSession;
+  userMessageId: string;
+  assistantMessageId: string;
+  completed?: CompletedUnifiedCmoAgentPersistState;
+}): CMOChatSession {
+  const completed = input.completed;
+
+  if (!completed?.normalizedHermesAnswer.trim()) {
+    return input.session;
+  }
+
+  const hermesCmoMetadata = completedUnifiedCmoAgentMetadata(input.session.hermesCmoMetadata, completed);
+  let assistantReplaced = false;
+  const messages: CMOChatMessage[] = [];
+
+  for (const message of input.session.messages) {
+    const sameAssistantTurn =
+      message.role === "assistant" &&
+      (message.id === input.assistantMessageId || message.sourceUserMessageId === input.userMessageId);
+
+    if (!sameAssistantTurn) {
+      messages.push(message);
+      continue;
+    }
+
+    if (assistantReplaced) {
+      continue;
+    }
+
+    assistantReplaced = true;
+    messages.push({
+      ...message,
+      id: input.assistantMessageId,
+      content: completed.normalizedHermesAnswer,
+      runtimeMode: "live",
+      runtimeStatus: "live",
+      runtimeProvider: "hermes",
+      runtimeAgent: "cmo",
+      runtimeErrorReason: undefined,
+      productRenderSource: "hermes_cmo",
+      productFallbackReason: undefined,
+      hermesRequestSent: true,
+      calledHermesCmo: true,
+      hermesCmoStatus: "live",
+      hermesCmoErrorReason: undefined,
+      hermesCmoMetadata,
+    });
+  }
+
+  if (!assistantReplaced) {
+    messages.push({
+      id: input.assistantMessageId,
+      role: "assistant",
+      content: completed.normalizedHermesAnswer,
+      createdAt: input.session.updatedAt,
+      sourceUserMessageId: input.userMessageId,
+      runtimeMode: "live",
+      runtimeStatus: "live",
+      runtimeProvider: "hermes",
+      runtimeAgent: "cmo",
+      productRenderSource: "hermes_cmo",
+      hermesRequestSent: true,
+      calledHermesCmo: true,
+      hermesCmoStatus: "live",
+      hermesCmoMetadata,
+    });
+  }
+
+  return {
+    ...input.session,
+    status: "completed",
+    isDevelopmentFallback: false,
+    isRuntimeFallback: false,
+    runtimeStatus: "live",
+    runtimeMode: "live",
+    attemptedRuntimeMode: "live",
+    runtimeError: undefined,
+    runtimeErrorReason: undefined,
+    productRenderSource: "hermes_cmo",
+    productFallbackReason: undefined,
+    hermesRequestSent: true,
+    calledHermesCmo: true,
+    hermesCmoStatus: "live",
+    hermesCmoErrorReason: undefined,
+    hermesCmoMetadata,
+    messages,
+  };
+}
+
+function logFinalSessionWriteProjection(input: {
+  session: CMOChatSession;
+  userMessageId: string;
+  assistantMessageId: string;
+  completed?: CompletedUnifiedCmoAgentPersistState;
+}): void {
+  if (!input.completed) {
+    return;
+  }
+
+  const assistant = input.session.messages.find((message) => message.id === input.assistantMessageId);
+  const metadata = assistant?.hermesCmoMetadata ?? input.session.hermesCmoMetadata;
+  const route = recordValue(metadata?.route ?? metadata?.hermes_route);
+  const answerBasis = recordValue(metadata?.answer_basis ?? metadata?.answerBasis);
+
+  console.info("[cmo-app-chat] final session write projection", {
+    session_id: input.session.id,
+    user_turn_id: input.userMessageId,
+    assistant_message_id: input.assistantMessageId,
+    raw_hermes_status: input.completed.rawHermesStatus,
+    raw_hermes_answer: input.completed.rawHermesAnswer,
+    normalized_hermes_answer: input.completed.normalizedHermesAnswer,
+    final_persisted_answer: assistant?.content ?? "",
+    runtimeStatus: assistant?.runtimeStatus ?? input.session.runtimeStatus,
+    productRenderSource: assistant?.productRenderSource ?? input.session.productRenderSource,
+    fallback_used: metadata?.fallback_used === true,
+    fallback_reason: metadata?.fallback_reason,
+    route_kind: route?.kind,
+    answer_basis_mode: answerBasis?.mode ?? metadata?.answer_basis_mode,
+  });
+}
+
 function isCreativeIdeationM1Rejection(reason: string): boolean {
   return (
     /rejected_by_m1_validator=true/i.test(reason) &&
@@ -4031,6 +4221,7 @@ export async function createAppChatSession(
   let productFallbackReason: string | undefined;
   let completedUnifiedCmoAgentAnswer: string | undefined;
   let completedUnifiedCmoAgentAnswerBasisMode: string | undefined;
+  let completedUnifiedCmoAgentPersistState: CompletedUnifiedCmoAgentPersistState | undefined;
   let sessionSummary = continuedSession?.sessionSummary;
   let sessionArtifacts = continuedSession?.sessionArtifacts ?? [];
   let turnCreativeArtifacts: Record<string, unknown>[] = [];
@@ -4886,15 +5077,28 @@ export async function createAppChatSession(
       );
       answer = creativeContractViolation ? PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE : mappedHermesResult.answer;
       const unifiedAnswerBasis = recordValue(hermesResult.response.answer_basis) ?? {};
+      const unifiedRoute = recordValue((hermesResult.response as unknown as Record<string, unknown>).route);
+      const unifiedRouteKind = stringValue(unifiedRoute?.kind);
       if (
         !creativeContractViolation &&
         hermesResult.hermesCmoEndpointKind === "cmo_agent" &&
         hermesResult.response.status === "completed" &&
+        (unifiedRouteKind === "cmo_agent" || unifiedRouteKind === "creative_execution") &&
         answer.trim() &&
         !userVisibleAnswerPathLike(answer)
       ) {
         completedUnifiedCmoAgentAnswer = answer;
         completedUnifiedCmoAgentAnswerBasisMode = stringValue(unifiedAnswerBasis.mode, "cmo_agent");
+        completedUnifiedCmoAgentPersistState = {
+          rawHermesStatus: hermesResult.response.status,
+          rawHermesAnswer: hermesAnswerTextForFinalProjection(hermesResult.response.answer),
+          normalizedHermesAnswer: answer,
+          ...(unifiedRoute ? { route: unifiedRoute } : {}),
+          ...(recordValue(hermesResult.response.intent_decision) ? { intentDecision: recordValue(hermesResult.response.intent_decision) } : {}),
+          ...(recordValue(hermesResult.response.creative_decision) ? { creativeDecision: recordValue(hermesResult.response.creative_decision) } : {}),
+          answerBasis: unifiedAnswerBasis,
+          answerBasisMode: completedUnifiedCmoAgentAnswerBasisMode,
+        };
       }
       if (
         !completedUnifiedCmoAgentAnswer &&
@@ -5640,20 +5844,12 @@ export async function createAppChatSession(
     hermesCmoErrorReason = undefined;
     hermesRequestSent = true;
     calledHermesCmo = true;
-    if (hermesCmoMetadata) {
-      const metadataWithoutFallbackFields = { ...hermesCmoMetadata };
-      delete metadataWithoutFallbackFields.fallback_reason;
-      delete metadataWithoutFallbackFields.fallback_from;
-      delete metadataWithoutFallbackFields.fallback_to;
-      hermesCmoMetadata = {
-        ...metadataWithoutFallbackFields,
-        runtimeStatus: "live",
-        productRenderSource: "hermes_cmo",
-        route_decision: "cmo_agent",
-        answer_basis_mode: completedUnifiedCmoAgentAnswerBasisMode ?? "cmo_agent",
-        fallback_used: false,
-      };
-    }
+    hermesCmoMetadata = completedUnifiedCmoAgentMetadata(hermesCmoMetadata, completedUnifiedCmoAgentPersistState ?? {
+      rawHermesStatus: "completed",
+      rawHermesAnswer: completedUnifiedCmoAgentAnswer,
+      normalizedHermesAnswer: completedUnifiedCmoAgentAnswer,
+      answerBasisMode: completedUnifiedCmoAgentAnswerBasisMode ?? "cmo_agent",
+    });
   }
 
   const decisionLayer = buildDecisionLayer({
@@ -5753,7 +5949,7 @@ export async function createAppChatSession(
     };
   }
 
-  const session: CMOChatSession = {
+  let session: CMOChatSession = {
     id: sessionId,
     appId: request.appId,
     appName: request.appName,
@@ -5907,6 +6103,18 @@ export async function createAppChatSession(
     ],
   };
 
+  session = applyCompletedUnifiedCmoAgentFinalWriteInvariant({
+    session,
+    userMessageId: messageId,
+    assistantMessageId: assistantId,
+    completed: completedUnifiedCmoAgentPersistState,
+  });
+  logFinalSessionWriteProjection({
+    session,
+    userMessageId: messageId,
+    assistantMessageId: assistantId,
+    completed: completedUnifiedCmoAgentPersistState,
+  });
   await writeJsonFile(sessionPath(sessionId), session);
 
   let persistedSession = session;
@@ -5956,7 +6164,8 @@ export async function createAppChatSession(
   if (status === "completed") {
     const finalTotalDurationMs = Date.now() - requestStartedMs;
     const rawCaptureError = rawCaptureErrorForAutoCapture(autoCapture);
-    persistedSession = {
+    persistedSession = applyCompletedUnifiedCmoAgentFinalWriteInvariant({
+      session: {
       ...session,
       totalDurationMs: finalTotalDurationMs,
       messages: session.messages.map((message) =>
@@ -5970,7 +6179,17 @@ export async function createAppChatSession(
       rawCapturePath: autoCapture.relativePath,
       rawCaptureStatus: rawCaptureStatusForAutoCapture(autoCapture),
       ...(rawCaptureError ? { rawCaptureError } : {}),
-    };
+      },
+      userMessageId: messageId,
+      assistantMessageId: assistantId,
+      completed: completedUnifiedCmoAgentPersistState,
+    });
+    logFinalSessionWriteProjection({
+      session: persistedSession,
+      userMessageId: messageId,
+      assistantMessageId: assistantId,
+      completed: completedUnifiedCmoAgentPersistState,
+    });
     await writeJsonFile(sessionPath(sessionId), persistedSession);
   }
   const sessionIndexResult: CmoIndexResult = durableSideEffectsSuppressed
@@ -5995,10 +6214,22 @@ export async function createAppChatSession(
 
   if (calledHermesCmo && hermesCmoMetadata) {
     persistedSession = attachHermesCmoPlatformPersistence(persistedSession, assistantId, platformPersistenceSummary);
+    persistedSession = applyCompletedUnifiedCmoAgentFinalWriteInvariant({
+      session: persistedSession,
+      userMessageId: messageId,
+      assistantMessageId: assistantId,
+      completed: completedUnifiedCmoAgentPersistState,
+    });
     hermesCmoMetadata = {
       ...hermesCmoMetadata,
       platformPersistenceSummary,
     };
+    logFinalSessionWriteProjection({
+      session: persistedSession,
+      userMessageId: messageId,
+      assistantMessageId: assistantId,
+      completed: completedUnifiedCmoAgentPersistState,
+    });
     await writeJsonFile(sessionPath(sessionId), persistedSession);
   }
 
