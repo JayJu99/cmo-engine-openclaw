@@ -22,6 +22,8 @@ function numberValue(value: unknown): number | undefined {
 const PRODUCT_CREATIVE_ASSET_ID_PATTERN = /^creative_asset_/;
 const SYNTHETIC_CREATIVE_ASSET_ID_PATTERN = /^creative_(?:creative_)?msg_/;
 const LOCAL_OR_REDACTED_ARTIFACT_PATTERN = /^(?:file:|[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|private|Volumes)\b|\[hermes_local_artifact_path_redacted\])/i;
+const UNSAFE_CREATIVE_TEXT_PATTERN =
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute|\.png_redact|^creative image asset\s+refine\b)/i;
 const RENDERABLE_CREATIVE_ASSET_STATUSES = new Set(["stored", "uploaded", "available", "completed", "success"]);
 const RENDERABLE_CREATIVE_TRANSPORT_STATUSES = new Set(["uploaded", "available"]);
 const RENDERABLE_CREATIVE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm"]);
@@ -29,6 +31,16 @@ const IMAGE_GENERATION_OPERATION_PATTERN = /(?:responses[ _-]?image[ _-]?generat
 
 function normalizeCreativeDraftKind(value: unknown): CmoCreativeDraftKind | undefined {
   return value === "image" || value === "video" ? value : undefined;
+}
+
+function safeCreativeText(value: unknown): string | undefined {
+  const text = stringValue(value);
+
+  if (!text || UNSAFE_CREATIVE_TEXT_PATTERN.test(text)) {
+    return undefined;
+  }
+
+  return text;
 }
 
 function pathForMediaInference(value: unknown): string | undefined {
@@ -257,11 +269,11 @@ export function normalizeCreativeDraft(value: unknown): CmoCreativeDraft | undef
   return {
     draft_id: draftId,
     kind,
-    ...(stringValue(value.title) ? { title: stringValue(value.title) } : {}),
-    ...(stringValue(value.brief) ? { brief: stringValue(value.brief) } : {}),
-    ...(stringValue(value.prompt) ? { prompt: stringValue(value.prompt) } : {}),
-    ...(stringValue(value.negative_prompt ?? value.negativePrompt) ? { negative_prompt: stringValue(value.negative_prompt ?? value.negativePrompt) } : {}),
-    ...(stringValue(value.format) ? { format: stringValue(value.format) } : {}),
+    ...(safeCreativeText(value.title) ? { title: safeCreativeText(value.title) } : {}),
+    ...(safeCreativeText(value.brief) ? { brief: safeCreativeText(value.brief) } : {}),
+    ...(safeCreativeText(value.prompt) ? { prompt: safeCreativeText(value.prompt) } : {}),
+    ...(safeCreativeText(value.negative_prompt ?? value.negativePrompt) ? { negative_prompt: safeCreativeText(value.negative_prompt ?? value.negativePrompt) } : {}),
+    ...(safeCreativeText(value.format) ? { format: safeCreativeText(value.format) } : {}),
     ...(stringValue(value.status) ? { status: stringValue(value.status) } : {}),
     ...(stringValue(value.created_turn_id ?? value.createdTurnId) ? { created_turn_id: stringValue(value.created_turn_id ?? value.createdTurnId) } : {}),
     ...(stringValue(value.updated_turn_id ?? value.updatedTurnId) ? { updated_turn_id: stringValue(value.updated_turn_id ?? value.updatedTurnId) } : {}),
@@ -300,8 +312,8 @@ export function normalizeCreativeAssetState(value: unknown): CmoCreativeAssetSta
     asset_id: assetId,
     kind,
     ...(stringValue(value.status) ? { status: stringValue(value.status) } : {}),
-    ...(stringValue(value.prompt ?? value.prompt_used ?? value.promptUsed) ? { prompt: stringValue(value.prompt ?? value.prompt_used ?? value.promptUsed) } : {}),
-    ...(stringValue(value.visual_summary ?? value.visualSummary ?? value.notes) ? { visual_summary: stringValue(value.visual_summary ?? value.visualSummary ?? value.notes) } : {}),
+    ...(safeCreativeText(value.prompt ?? value.prompt_used ?? value.promptUsed) ? { prompt: safeCreativeText(value.prompt ?? value.prompt_used ?? value.promptUsed) } : {}),
+    ...(safeCreativeText(value.visual_summary ?? value.visualSummary ?? value.notes) ? { visual_summary: safeCreativeText(value.visual_summary ?? value.visualSummary ?? value.notes) } : {}),
     ...(stringValue(value.model) ? { model: stringValue(value.model) } : {}),
     ...(stringValue(value.operation) ? { operation: stringValue(value.operation) } : {}),
     ...(mimeType ? { mime_type: mimeType } : {}),
@@ -498,8 +510,8 @@ export function normalizeCreativeDecision(value: unknown): CmoCreativeDecision |
     action,
     ...(stringValue(value.draft_id ?? value.draftId) ? { draft_id: stringValue(value.draft_id ?? value.draftId) } : {}),
     ...(stringValue(value.operation) ? { operation: stringValue(value.operation) } : {}),
-    ...(stringValue(value.question) ? { question: stringValue(value.question) } : {}),
-    ...(stringValue(value.reason) ? { reason: stringValue(value.reason) } : {}),
+    ...(safeCreativeText(value.question) ? { question: safeCreativeText(value.question) } : {}),
+    ...(safeCreativeText(value.reason) ? { reason: safeCreativeText(value.reason) } : {}),
   };
 }
 

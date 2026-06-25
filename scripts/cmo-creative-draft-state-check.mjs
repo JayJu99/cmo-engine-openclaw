@@ -75,7 +75,8 @@ requireSource(helperSource, /\.png"\)\) return "image\/png"/, "draft helper must
 requireSource(helperSource, /value === "present_draft"/, "draft helper must normalize Hermes present_draft decision");
 requireSource(helperSource, /value === "show_draft"/, "draft helper must normalize Hermes show_draft decision");
 requireSource(helperSource, /value === "blocked"/, "draft helper must normalize blocked decision");
-requireSource(helperSource, /reason: stringValue\(value\.reason\)/, "draft helper must preserve blocked reason");
+requireSource(helperSource, /reason: safeCreativeText\(value\.reason\)/, "draft helper must preserve only safe blocked reason text");
+requireSource(helperSource, /UNSAFE_CREATIVE_TEXT_PATTERN/, "draft helper must reject redacted or machine-wrapper Creative prompt text");
 
 requireSource(intentSource, /isCreativeDraftSessionIntent/, "routing intent");
 requireSource(intentSource, /isCreativeSessionTransportContinuation/, "routing intent must expose transport-level Creative continuation detection");

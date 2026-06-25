@@ -1171,7 +1171,7 @@ try {
     assert.equal(creativeAckRequest.intent.creative_followup_intent_class, "ack_noop");
     assert.equal(creativeAckRequest.intent.execution_allowed, false);
     assert.equal(creativeAckRequest.intent.draft_update_allowed, false);
-    assert.equal(creativeAckRequest.intent.expected_response, "none");
+    assert.equal(creativeAckRequest.intent.expected_response, "native_ack");
     assert.equal(creativeAckRequest.constraints.creative_side_effects_allowed, false);
     assert.equal(creativeAckRequest.constraints.execution_allowed, false);
 
@@ -1190,6 +1190,70 @@ try {
     assert.equal(creativeEditRequest.constraints.execution_allowed, true);
     assert.equal(creativeEditRequest.tool_policy.creative_execution_may_be_requested_by_cmo, true);
     assert.equal(creativeEditRequest.capabilities.creative.canExecuteImageGeneration, true);
+
+    const pollutedReplayRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...creativeConversationInput,
+      sessionId: "session_eggs_creative_polluted_replay",
+      userMessageId: "msg_eggs_creative_polluted_replay",
+      message: "Use the clean prompt direction now for the current image.",
+      history: [
+        ...creativeConversationInput.history,
+        {
+          id: "assistant_redacted_path",
+          role: "assistant",
+          content: "[hermes_local_artifact_path_redacted]/accent_teal_quanh_egg_v_CTA_area._x.png_redact",
+          createdAt: "2026-06-20T10:04:00.000Z",
+        },
+        {
+          id: "assistant_machine_wrapper",
+          role: "assistant",
+          content: "Creative image asset Refine the existing generated asset with brand_identity details.",
+          createdAt: "2026-06-20T10:05:00.000Z",
+        },
+        {
+          id: "assistant_clean_prompt",
+          role: "assistant",
+          content: "Prompt proposal: add a subtle teal reward glow around the crystal egg while keeping the premium clean background.",
+          createdAt: "2026-06-20T10:06:00.000Z",
+        },
+      ],
+      creativeWorkingState: {
+        ...creativeConversationInput.creativeWorkingState,
+        active_draft_id: "draft_dirty",
+        drafts: [
+          {
+            draft_id: "draft_dirty",
+            kind: "image",
+            title: "[hermes_local_artifact_path_redacted]/brand_identity_title",
+            brief: "Creative image asset Refine the existing generated asset with machine wrapper text.",
+            prompt: "[hermes_local_artifact_path_redacted]/accent_teal_prompt.png_redact",
+            negative_prompt: "/tmp/local_negative_prompt.txt",
+            format: "16:9",
+          },
+        ],
+        assets: [
+          {
+            asset_id: "creative_asset_req_h6_msg_polluted_001",
+            kind: "image",
+            mime_type: "image/png",
+            status: "stored",
+            transport_status: "uploaded",
+            storage_path: "apps/eggs/creative_asset_req_h6_msg_polluted_001.png",
+            prompt: "[hermes_local_artifact_path_redacted]/asset_prompt",
+            visual_summary: "Creative image asset Refine the existing generated asset wrapper.",
+          },
+        ],
+      },
+    });
+    const pollutedReplayJson = JSON.stringify({
+      messages: pollutedReplayRequest.messages,
+      selected_context: pollutedReplayRequest.context_pack.selected_context,
+      recent_session_summary: pollutedReplayRequest.context_pack.recent_session_summary,
+      creative_working_state: pollutedReplayRequest.creative_working_state,
+      creativeWorkingState: pollutedReplayRequest.creativeWorkingState,
+    });
+    assert.doesNotMatch(pollutedReplayJson, /\[hermes_local_artifact_path_redacted\]|\.png_redact|\/tmp\/|Creative image asset Refine/i);
+    assert.ok(pollutedReplayRequest.messages.some((message) => message.role === "assistant" && message.content.includes("Prompt proposal: add a subtle teal reward glow")));
 
     const outboundForbiddenValuePattern =
       /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;

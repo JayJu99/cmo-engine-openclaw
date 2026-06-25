@@ -79,10 +79,10 @@ interface HermesCmoReplayMessage {
   created_at: string;
 }
 
-type CreativeFollowupExpectedResponse = "none" | "minimal_ack" | "text" | "text_prompt" | "asset";
+type CreativeFollowupExpectedResponse = "native_ack" | "text" | "text_prompt" | "asset";
 
 function creativeFollowupExpectedResponse(intentClass: ReturnType<typeof creativeSessionFollowupIntentClass>): CreativeFollowupExpectedResponse {
-  if (intentClass === "ack_noop") return "none";
+  if (intentClass === "ack_noop") return "native_ack";
   if (intentClass === "prompt_proposal") return "text_prompt";
   if (intentClass === "explicit_mutation") return "asset";
 
@@ -214,6 +214,7 @@ function isStaleFailureAssistantContext(message: CMOChatMessage): boolean {
       message.hermesCmoErrorReason ||
       message.creativeRejectedByM1Validator === true ||
       metadata?.assistant_response_suppressed_for_noop === true ||
+      metadata?.creative_noop_acknowledgement === true ||
       metadata?.product_contract_violation === true ||
       metadata?.creative_conversation_rejected === true ||
       metadata?.product_outbound_payload_blocked === true ||
@@ -229,6 +230,46 @@ function isMachineWrapperCreativeDraftText(value: string): boolean {
     /\bexisting generated asset\b/.test(compact) ||
     /\bgenerated asset\b/.test(compact)
   );
+}
+
+function safeCreativeReplayText(value: unknown, maxChars = MAX_REPLAY_MESSAGE_CHARS): string | undefined {
+  const text = canonicalAssistantText(value, maxChars);
+
+  if (!text || isMachineWrapperCreativeDraftText(text)) {
+    return undefined;
+  }
+
+  return text;
+}
+
+function sanitizeCreativeWorkingStateForHermes(state: CmoCreativeWorkingState | undefined): CmoCreativeWorkingState | undefined {
+  if (!state) {
+    return undefined;
+  }
+
+  const drafts = state.drafts.map((draft) => ({
+    draft_id: draft.draft_id,
+    kind: draft.kind,
+    ...(safeCreativeReplayText(draft.title, 300) ? { title: safeCreativeReplayText(draft.title, 300) } : {}),
+    ...(safeCreativeReplayText(draft.brief, 1200) ? { brief: safeCreativeReplayText(draft.brief, 1200) } : {}),
+    ...(safeCreativeReplayText(draft.prompt, 3000) ? { prompt: safeCreativeReplayText(draft.prompt, 3000) } : {}),
+    ...(safeCreativeReplayText(draft.negative_prompt, 800) ? { negative_prompt: safeCreativeReplayText(draft.negative_prompt, 800) } : {}),
+    ...(safeCreativeReplayText(draft.format, 160) ? { format: safeCreativeReplayText(draft.format, 160) } : {}),
+    ...(draft.status ? { status: draft.status } : {}),
+    ...(draft.created_turn_id ? { created_turn_id: draft.created_turn_id } : {}),
+    ...(draft.updated_turn_id ? { updated_turn_id: draft.updated_turn_id } : {}),
+  }));
+  const assets = (state.assets ?? []).map((asset) => ({
+    ...asset,
+    ...(safeCreativeReplayText(asset.prompt, 3000) ? { prompt: safeCreativeReplayText(asset.prompt, 3000) } : { prompt: undefined }),
+    ...(safeCreativeReplayText(asset.visual_summary, 1200) ? { visual_summary: safeCreativeReplayText(asset.visual_summary, 1200) } : { visual_summary: undefined }),
+  }));
+
+  return {
+    ...state,
+    drafts,
+    assets,
+  };
 }
 
 function latestCreativeDraftForReplay(state: CmoCreativeWorkingState | undefined): CmoCreativeWorkingState["drafts"][number] | undefined {
@@ -873,14 +914,15 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const inputMaterial = {
     attachments: input.inputMaterialAttachments ?? [],
   };
-  const creativeWorkingStateForHermes = input.creativeWorkingState &&
+  const sanitizedCreativeWorkingState = sanitizeCreativeWorkingStateForHermes(input.creativeWorkingState);
+  const creativeWorkingStateForHermes = sanitizedCreativeWorkingState &&
     (
-      input.creativeWorkingState.drafts.length > 0 ||
-      (input.creativeWorkingState.assets?.length ?? 0) > 0 ||
-      input.creativeWorkingState.active_draft_id ||
-      input.creativeWorkingState.active_asset_id
+      sanitizedCreativeWorkingState.drafts.length > 0 ||
+      (sanitizedCreativeWorkingState.assets?.length ?? 0) > 0 ||
+      sanitizedCreativeWorkingState.active_draft_id ||
+      sanitizedCreativeWorkingState.active_asset_id
     )
-    ? input.creativeWorkingState
+    ? sanitizedCreativeWorkingState
     : undefined;
   const creativeWorkingStatePresent = Boolean(creativeWorkingStateForHermes);
   const creativeIdeationDetected = input.creativeIdeationDetected === true;

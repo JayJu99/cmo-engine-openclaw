@@ -956,11 +956,11 @@ export interface HermesCmoChatMetadata {
   mutation_allowed?: boolean;
   execution_allowed?: boolean;
   draft_update_allowed?: boolean;
-  expected_response?: "none" | "minimal_ack" | "text" | "text_prompt" | "asset" | string;
+  expected_response?: "native_ack" | "text" | "text_prompt" | "asset" | string;
   creative_mutation_allowed?: boolean;
   creative_execution_allowed?: boolean;
   creative_draft_update_allowed?: boolean;
-  creative_expected_response?: "none" | "minimal_ack" | "text" | "text_prompt" | "asset" | string;
+  creative_expected_response?: "native_ack" | "text" | "text_prompt" | "asset" | string;
   creative_no_execute_modifier_detected?: boolean;
   product_contract_violation?: boolean;
   contract_violation_reason?: string;

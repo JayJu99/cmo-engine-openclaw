@@ -2800,21 +2800,6 @@ function isGenericCreativeSuccessWithoutAssetAnswer(value: string): boolean {
   return !value.trim() || genericCreativeSuccessPattern.test(value);
 }
 
-function isGenericAcknowledgementAnswer(value: string): boolean {
-  const normalized = value
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\u0111|\u0110/g, "d")
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const tokens = normalized.match(/[a-z0-9]+/g) ?? [];
-  const acknowledgementTokens = new Set(["ok", "okay", "yes", "yeah", "yep", "uh", "ua", "duoc", "roi", "ro", "hieu", "nhe", "bro", "ban", "minh"]);
-
-  return tokens.length > 0 && tokens.length <= 8 && tokens.every((token) => acknowledgementTokens.has(token));
-}
-
 function booleanFromRecords(records: Array<Record<string, unknown> | undefined>, key: string): boolean | undefined {
   for (const record of records) {
     const value = record?.[key];
@@ -5463,7 +5448,7 @@ export async function createAppChatSession(
     creativeAcknowledgementNoopIntent &&
     status === "completed" &&
     turnCreativeArtifacts.length === 0 &&
-    (!answer.trim() || isGenericAcknowledgementAnswer(answer));
+    !answer.trim();
   if (suppressNoopAssistantMessage) {
     answer = "";
     hermesCmoMetadata = {
