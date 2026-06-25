@@ -537,10 +537,12 @@ requireSource(storeSource, /\.\.\.\(turnCreativeArtifacts\.length \? \{ sessionA
 forbidSource(storeSource, /\.\.\.\(sessionArtifacts\.length \? \{ sessionArtifacts \} : \{\}\),[\s\S]{0,900}contextUsedCount:/, "assistant message must not render merged session artifacts as current turn assets");
 requireSource(storeSource, /resolveActiveCreativeAsset\(continuedSession\)/, "store must resolve active Creative asset before routing");
 requireSource(storeSource, /activeCreativeAssetResolution\.asset[\s\S]*applyCreativeAssetStateUpdate/, "store must hydrate working state from resolved asset");
-requireSource(storeSource, /const hermesCmoCreativeLongRunningTurn =[\s\S]*hermesCmoRoute\.reason === "creative_execution"[\s\S]*hermesCmoRoute\.reason === "creative_session"/, "store must classify Creative execution/session turns as long-running");
+requireSource(storeSource, /const productPredictedCreativeLongRunningTurn =[\s\S]*hermesCmoRoute\.reason === "creative_execution"[\s\S]*!hermesCmoUnifiedAgentRequested && hermesCmoRoute\.reason === "creative_session"/, "store must classify Product-owned Creative execution/session turns as long-running without leaking unified advisory turns");
+requireSource(storeSource, /const hermesCmoCreativeLongRunningTurn = productPredictedCreativeLongRunningTurn;/, "store must keep predicted Creative timeout handling explicit");
 requireSource(storeSource, /const creativeTimeout = hermesCmoCreativeLongRunningTurn && isTimedOutHermesError\(reason\)/, "store must handle Creative session timeout without workspace fallback");
 requireSource(storeSource, /workspace_fallback_suppressed_for_creative: true/, "store must trace workspace fallback suppression for Creative turns");
-requireSource(storeSource, /timeoutMs = hermesCmoCreativeLongRunningTurn \? hermesResult\.hermesCmoEndpointTimeoutMs : undefined/, "store must persist Creative long-running timeout metadata on success");
+requireSource(storeSource, /timeoutMs = currentTurnCreativeLongRunningTurn \? hermesResult\.hermesCmoEndpointTimeoutMs : undefined/, "store must persist Creative long-running timeout metadata from the current Hermes response on success");
+requireSource(storeSource, /currentTurnCreativeLongRunningTurn =[\s\S]*!unifiedCurrentTurnTextAnswer && \(hermesCmoCreativeLongRunningTurn \|\| hermesCreativeExecutionResponseReceived\)/, "unified text-only advisory responses must clear Creative long-running metadata for the current turn");
 requireSource(storeSource, /creativeWorkingState,/, "store must pass creative state to router and Hermes");
 requireSource(storeSource, /activeCreativeAssetId = creativeWorkingState\?\.active_asset_id/, "store must track active Creative asset id");
 requireSource(storeSource, /activeCreativeAssetResolutionSource: activeCreativeAssetResolution\.source/, "store must pass active asset resolution source to Hermes mapper");

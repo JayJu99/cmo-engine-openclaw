@@ -847,9 +847,9 @@ try {
   assert.match(appChatStoreSource, /sourceReviewContextFromSessionLocalSource/);
   assert.match(appChatStoreSource, /resolveHermesCmoChatRoute\(\{/);
   assert.match(appChatStoreSource, /const hermesCmoChatV11Requested = hermesCmoRoute\.endpointKind === "agent_chat"/);
-  assert.match(appChatStoreSource, /const hermesCmoLegacyRequested = legacyHermesCmoChatRequested \|\| hermesCmoRoute\.endpointKind === "tool_execute"/);
+  assert.match(appChatStoreSource, /const hermesCmoLegacyRequested =[\s\S]*legacyHermesCmoChatRequested[\s\S]*hermesCmoRoute\.endpointKind === "tool_execute"/);
   assert.match(appChatStoreSource, /productRenderSource = "hermes_cmo"/);
-  assert.match(appChatStoreSource, /productRenderSource = hermesCmoChatRequested \? "fallback_after_hermes_failure"/);
+  assert.match(appChatStoreSource, /if \(!usedHermesCmoChat\) \{[\s\S]*productRenderSource = hermesCmoChatRequested \? "fallback_after_hermes_failure"/);
   assert.match(appChatStoreSource, /productFallbackReason = hermesCmoChatRequested/);
   assert.match(appChatStoreSource, /fallbackContextPackage/);
   assert.match(appChatStoreSource, /hasSourceReviewContext/);
