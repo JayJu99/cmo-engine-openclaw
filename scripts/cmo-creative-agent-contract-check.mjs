@@ -241,7 +241,10 @@ assert.match(configSource, /getCmoHermesCreativeExecuteTimeoutMs[\s\S]*300_000/,
 assert.match(runtimeSource, /creative_call_mode.*via_cmo/s, "default Creative call mode must route through CMO");
 assert.match(routeIntentSource, /creative_execution/, "Product routing intent must classify explicit Creative execution");
 assert.match(routeSource, /reason: "creative_execution"/, "Creative execution must select a non-tool-execute Hermes route");
-assert.match(mapperSource, /explicit_command: creativeExecutionIntent \? creativeExecutionMode : null/, "Creative prompts must mark Hermes intent as execution");
+assert.doesNotMatch(mapperSource, /explicit_command: creativeExecutionIntent \? creativeExecutionMode : null/, "Creative prompts must not mark Hermes intent as Product-owned execution");
+assert.match(mapperSource, /creative_decision_context/, "Creative prompts must send CMO-owned decision context");
+assert.match(mapperSource, /product_intent_hint: productIntentHint/, "Creative prompts may send non-authoritative Product hints");
+assert.match(mapperSource, /sideEffectPolicy: creativeSideEffectPolicy/, "Creative prompts must send side-effect permission separately from action decision");
 assert.match(mapperSource, /direct_user_prompt_is_sufficient_execution_input/, "Creative execution must treat the direct user prompt as sufficient input");
 assert.match(mapperSource, /missing_accepted_context_blocks_creative_execution:\s*false/, "Missing accepted context must not block explicit Creative execution");
 assert.match(mapperSource, /optional_context_gaps/, "Missing accepted project context must be optional diagnostic context for Creative execution");
@@ -271,7 +274,7 @@ assert.match(runtimeSource, /rejected_side_effect_type/, "Rejected Creative side
 assert.match(runtimeSource, /timeout_source/, "Hermes CMO trace must include the timeout source");
 assert.match(runtimeSource, /route_decision/, "Hermes CMO trace must include the route decision");
 assert.match(runtimeSource, /creative_trace/, "Hermes CMO trace must include Creative routing diagnostics");
-assert.match(runtimeSource, /writeHermesTrace\(outboundRequest, "response"[\s\S]*creative_long_running_turn: config\.creativeLongRunningTurn/, "Successful long-running Creative responses must write _response.json traces");
+assert.match(runtimeSource, /writeHermesTrace\(finalOutboundRequest, "response"[\s\S]*creative_long_running_turn: config\.creativeLongRunningTurn/, "Successful long-running Creative responses must write _response.json traces");
 assert.match(runtimeSource, /request\.created_at\.replace\(\/\[:\.\]\/g, "-"\)/, "Hermes CMO runtime request/response trace files must share the request created_at prefix");
 assert.match(chatV11Source, /chatTracePrefixes[\s\S]*hermesCmoChatV11TracePrefix\(request\)[\s\S]*_\$\{safeTraceId\(request\.app_id\)\}/, "Hermes CMO chat v1.1 request/response trace files must share a stable request prefix");
 assert.match(runtimeSource, /allowSubAgentExecution: specialistExecutionAllowed/, "Creative execution must not be blocked by Echo/Surf orchestration mode");

@@ -22,12 +22,7 @@ import type {
 } from "@/lib/cmo/hermes-cmo-runtime";
 import type { HermesCmoAttachmentRef } from "@/lib/cmo/attachments";
 import {
-  creativeSessionFollowupIntentClass,
   isExplicitCreativeExecutionIntent,
-  isExplicitCreativeMutationIntent,
-  isPromptProposalOnlyIntent,
-  isPureAcknowledgementIntent,
-  leadingIntentText,
 } from "./app-routing-intent";
 import type { CmoRuntimeTurnInput } from "@/lib/cmo/runtime";
 import {
@@ -77,16 +72,6 @@ interface HermesCmoReplayMessage {
   content: string;
   message_id: string;
   created_at: string;
-}
-
-type CreativeFollowupExpectedResponse = "native_ack" | "text" | "text_prompt" | "asset";
-
-function creativeFollowupExpectedResponse(intentClass: ReturnType<typeof creativeSessionFollowupIntentClass>): CreativeFollowupExpectedResponse {
-  if (intentClass === "ack_noop") return "native_ack";
-  if (intentClass === "prompt_proposal") return "text_prompt";
-  if (intentClass === "explicit_mutation") return "asset";
-
-  return "text";
 }
 
 type ReplayableCmoChatMessage = CMOChatMessage & { role: "user" | "assistant" };
@@ -1036,86 +1021,44 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const creativeSessionFollowupDetected = input.creativeSessionFollowupDetected === true;
   const creativeNativeSession = creativeWorkingStatePresent || creativeIdeationDetected || creativeSessionFollowupDetected;
   const creativeExecutionIntent = isExplicitCreativeExecutionIntent(input.message) && !creativeNativeSession;
-  const creativeFollowupIntentClass = creativeNativeSession ? creativeSessionFollowupIntentClass(input.message) : undefined;
-  const creativeConversationOnlyIntent = creativeNativeSession && creativeFollowupIntentClass !== "explicit_mutation";
-  const creativeAcknowledgementNoopIntent = creativeNativeSession && isPureAcknowledgementIntent(input.message);
-  const creativePromptProposalOnlyIntent = creativeNativeSession && isPromptProposalOnlyIntent(input.message);
-  const creativeMutationIntent = creativeNativeSession && creativeFollowupIntentClass === "explicit_mutation" && isExplicitCreativeMutationIntent(input.message);
-  const creativeExecutionAllowedThisTurn = creativeExecutionIntent || !creativeNativeSession || creativeMutationIntent;
-  const creativeDraftUpdateAllowedThisTurn = creativeExecutionIntent || creativeMutationIntent;
-  const creativeExpectedResponse = creativeFollowupIntentClass
-    ? creativeFollowupExpectedResponse(creativeFollowupIntentClass)
-    : undefined;
-  const creativeFollowupPermissionContract = creativeNativeSession && creativeFollowupIntentClass && creativeExpectedResponse
-    ? {
-        creative_followup_intent_class: creativeFollowupIntentClass,
-        creative_semantic_intent_class: creativeFollowupIntentClass,
-        mutation_allowed: creativeMutationIntent,
-        execution_allowed: creativeExecutionAllowedThisTurn,
-        draft_update_allowed: creativeDraftUpdateAllowedThisTurn,
-        expected_response: creativeExpectedResponse,
-        creative_mutation_allowed: creativeMutationIntent,
-        creative_execution_allowed: creativeExecutionAllowedThisTurn,
-        creative_draft_update_allowed: creativeDraftUpdateAllowedThisTurn,
-        creative_expected_response: creativeExpectedResponse,
-        ...(creativePromptProposalOnlyIntent ? { creative_no_execute_modifier_detected: true } : {}),
-      }
-    : {};
-  const creativeConversationIntentMetadata = creativeConversationOnlyIntent
-    ? {
-        creative_conversation_only: true,
-        creative_asset_mutation_allowed: false,
-        creative_state_mutation_allowed: false,
-        creative_mutation_permitted_this_turn: false,
-        ...creativeFollowupPermissionContract,
-        ...(creativeAcknowledgementNoopIntent ? { creative_noop_acknowledgement: true } : {}),
-        ...(creativePromptProposalOnlyIntent ? { creative_prompt_proposal_only: true } : {}),
-      }
-    : {};
-  const creativeMutationIntentMetadata = creativeMutationIntent
-    ? {
-        creative_mutation_requested: true,
-        creative_mutation_permitted_this_turn: true,
-        ...creativeFollowupPermissionContract,
-      }
-    : {};
-  const creativeDirectExecutionPermissionContract = creativeExecutionIntent
-    ? {
-        creative_followup_intent_class: "explicit_mutation",
-        creative_semantic_intent_class: "direct_create",
-        mutation_allowed: true,
-        execution_allowed: true,
-        draft_update_allowed: true,
-        expected_response: "asset",
-        creative_mutation_allowed: true,
-        creative_execution_allowed: true,
-        creative_draft_update_allowed: true,
-        creative_expected_response: "asset",
-        allow_creative_execution: true,
-        creative_mutation_requested: true,
-        creative_mutation_permitted_this_turn: true,
-      }
-    : {};
+  const cmoOwnedCreativeDecisionEnvelope = creativeNativeSession || creativeExecutionIntent;
+  const creativeConversationIntentMetadata = {};
+  const creativeMutationIntentMetadata = {};
   const creativeWorkingStateCamelCase = creativeWorkingStateForHermes
     ? creativeWorkingStateForHermesCamelCase(creativeWorkingStateForHermes)
     : undefined;
   const creativeReferenceAssets = creativeReferenceAssetsForHermes(creativeWorkingStateForHermes, input.request.appId);
   const activeCreativeAssetResolutionSource = input.activeCreativeAssetResolutionSource ??
     (creativeReferenceAssets.length > 0 ? "creativeWorkingState" : "none");
-  const creativeCapabilities = creativeNativeSession || creativeExecutionIntent
+  const creativeCapabilities = cmoOwnedCreativeDecisionEnvelope
       ? {
         creative: {
-          canProposeDraft: creativeDraftUpdateAllowedThisTurn,
-          canUpdateDraftState: creativeDraftUpdateAllowedThisTurn,
-          canExecuteImageGeneration: creativeExecutionAllowedThisTurn,
+          canProposeDraft: true,
+          canUpdateDraftState: true,
+          canExecuteImageGeneration: true,
+          canInspectImage: true,
           requiresUserConfirmationBeforeExecute: true,
         },
       }
     : undefined;
-  const creativeAllowedAgents: Array<"echo" | "surf" | "vault_agent" | "creative"> = creativeNativeSession || creativeExecutionIntent
+  const creativeSideEffectPolicy = cmoOwnedCreativeDecisionEnvelope
+    ? {
+        creativeMutationAllowed: true,
+        requiresExplicitUserIntentForMutation: true,
+      }
+    : undefined;
+  const productIntentHint = cmoOwnedCreativeDecisionEnvelope
+    ? {
+        possible_domain: "creative",
+        confidence: creativeNativeSession ? 0.7 : 0.72,
+        reason: creativeNativeSession
+          ? "Creative working state or asset references are present."
+          : "Creative capability may be relevant to this turn.",
+      }
+    : undefined;
+  const creativeAllowedAgents: Array<"echo" | "surf" | "vault_agent" | "creative"> = cmoOwnedCreativeDecisionEnvelope
     ? ["echo", "surf", "vault_agent", "creative"]
     : ["echo", "surf"];
-  const creativeExecutionMode = /\b(video|motion)\b/.test(leadingIntentText(input.message)) ? "creative.generate_video" : "creative.generate_image";
   const omittedCreativeMissingContext = creativeExecutionIntent
     ? input.missingContext.filter(isMissingAcceptedProjectContextRef)
     : [];
@@ -1149,8 +1092,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     intent: {
       mode: "cmo.default",
       user_message: input.message,
-      explicit_command: creativeExecutionIntent ? creativeExecutionMode : null,
-      ...creativeDirectExecutionPermissionContract,
+      ...(productIntentHint ? { product_intent_hint: productIntentHint } : {}),
       ...(creativeNativeSession ? { creative_session: true } : {}),
       ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
       ...(creativeSessionFollowupDetected ? { creative_session_followup_detected: true } : {}),
@@ -1183,17 +1125,16 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(creativeReferenceAssets.length ? { reference_assets: creativeReferenceAssets, referenceAssets: creativeReferenceAssets } : {}),
       ...(creativeExecutionIntent
         ? {
-            creative_execution_intent: {
-              requested: true,
+            creative_decision_context: {
               agent: "creative",
-              mode: creativeExecutionMode,
               direct_user_prompt_is_sufficient_execution_input: true,
               accepted_project_context_required: false,
               accepted_workspace_context_required: false,
               return_local_paths: true,
               include_metadata: true,
               require_review_before_publish: true,
-              ...creativeDirectExecutionPermissionContract,
+              cmo_owns_creative_decision: true,
+              product_must_not_choose_creative_execution: true,
               factual_claim_guardrails: [
                 "Do not invent unsupported product mechanics, rewards, APY, WLD, eligibility, or roadmap claims.",
                 "Use the user-supplied visual direction as the brief when accepted workspace context is missing.",
@@ -1224,10 +1165,11 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
           cmo_owns_creative_decision: true,
           creativeDecisionOwnerWhenLive: "hermes_cmo",
           creative_decision_owner_when_live: "hermes_cmo",
-          ...creativeDirectExecutionPermissionContract,
         }
       : {}),
     ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
+    ...(creativeSideEffectPolicy ? { sideEffectPolicy: creativeSideEffectPolicy } : {}),
+    ...(productIntentHint ? { product_intent_hint: productIntentHint } : {}),
     ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
     ...(creativeSessionFollowupDetected ? { creative_session_followup_detected: true } : {}),
     input_material: inputMaterial,
@@ -1326,10 +1268,11 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       },
       ...(creativeExecutionIntent
         ? {
-          creative_execution_requested: true,
-          creative_execution_mode: creativeExecutionMode,
-          ...creativeDirectExecutionPermissionContract,
-          accepted_project_context_required: false,
+            creative_execution_may_be_requested_by_cmo: true,
+            creative_decision_owner_when_live: "hermes_cmo",
+            product_intent_hint: productIntentHint,
+            sideEffectPolicy: creativeSideEffectPolicy,
+            accepted_project_context_required: false,
             accepted_workspace_context_required: false,
             missing_accepted_context_blocks_creative_execution: false,
           }
@@ -1352,7 +1295,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creative_session_followup_detected: creativeSessionFollowupDetected,
             ...creativeConversationIntentMetadata,
             ...creativeMutationIntentMetadata,
-            creative_side_effects_allowed: creativeConversationOnlyIntent ? false : true,
+            creative_side_effects_allowed: true,
             requires_user_confirmation_before_creative_execute: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,
@@ -1363,7 +1306,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creative_ideation_detected: true,
             ...creativeConversationIntentMetadata,
             ...creativeMutationIntentMetadata,
-            creative_side_effects_allowed: creativeConversationOnlyIntent ? false : true,
+            creative_side_effects_allowed: true,
             requires_user_confirmation_before_creative_execute: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,
@@ -1396,10 +1339,11 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
       ...(creativeExecutionIntent
         ? {
-          creative_execution_requested: true,
-          creative_execution_mode: creativeExecutionMode,
-          ...creativeDirectExecutionPermissionContract,
-          direct_user_prompt_is_sufficient_execution_input: true,
+            creative_execution_may_be_requested_by_cmo: true,
+            creative_decision_owner_when_live: "hermes_cmo",
+            product_intent_hint: productIntentHint,
+            sideEffectPolicy: creativeSideEffectPolicy,
+            direct_user_prompt_is_sufficient_execution_input: true,
             accepted_project_context_required: false,
             missing_accepted_context_blocks_creative_execution: false,
             factual_claim_guardrails: [
@@ -1427,8 +1371,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creative_session_followup_detected: creativeSessionFollowupDetected,
             ...creativeConversationIntentMetadata,
             ...creativeMutationIntentMetadata,
-            creative_execution_may_be_requested_by_cmo: creativeConversationOnlyIntent ? false : true,
-            creative_side_effects_allowed: creativeConversationOnlyIntent ? false : true,
+            creative_execution_may_be_requested_by_cmo: true,
+            creative_side_effects_allowed: true,
             requires_user_confirmation_before_creative_execute: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,
@@ -1439,8 +1383,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creative_ideation_detected: true,
             ...creativeConversationIntentMetadata,
             ...creativeMutationIntentMetadata,
-            creative_execution_may_be_requested_by_cmo: creativeConversationOnlyIntent ? false : true,
-            creative_side_effects_allowed: creativeConversationOnlyIntent ? false : true,
+            creative_execution_may_be_requested_by_cmo: true,
+            creative_side_effects_allowed: true,
             requires_user_confirmation_before_creative_execute: true,
             cmo_owns_creative_decision: true,
             product_must_not_choose_creative_execution: true,

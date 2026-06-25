@@ -610,23 +610,22 @@ try {
           createdAt: "2026-06-20T10:01:30.000Z",
           userIdentity: { userId: "user_eggs", userEmail: "jay@example.com" },
         });
-        assert.equal(directCreativeCreateRequest.intent.explicit_command, "creative.generate_image");
-        assert.equal(directCreativeCreateRequest.intent.creative_followup_intent_class, "explicit_mutation");
-        assert.equal(directCreativeCreateRequest.intent.creative_semantic_intent_class, "direct_create");
-        assert.equal(directCreativeCreateRequest.intent.execution_allowed, true);
-        assert.equal(directCreativeCreateRequest.intent.mutation_allowed, true);
-        assert.equal(directCreativeCreateRequest.intent.draft_update_allowed, true);
-        assert.equal(directCreativeCreateRequest.intent.expected_response, "asset");
-        assert.equal(directCreativeCreateRequest.intent.allow_creative_execution, true);
-        assert.equal(directCreativeCreateRequest.constraints.creative_execution_requested, true);
-        assert.equal(directCreativeCreateRequest.constraints.execution_allowed, true);
-        assert.equal(directCreativeCreateRequest.constraints.expected_response, "asset");
+        assert.equal(directCreativeCreateRequest.intent.explicit_command, undefined);
+        assert.equal(directCreativeCreateRequest.intent.creative_followup_intent_class, undefined);
+        assert.equal(directCreativeCreateRequest.intent.product_intent_hint.possible_domain, "creative");
+        assert.equal(directCreativeCreateRequest.cmoOwnsCreativeDecision, true);
+        assert.equal(directCreativeCreateRequest.creativeDecisionOwnerWhenLive, "hermes_cmo");
+        assert.equal(directCreativeCreateRequest.constraints.creative_execution_requested, undefined);
+        assert.equal(directCreativeCreateRequest.constraints.product_intent_hint.possible_domain, "creative");
+        assert.equal(directCreativeCreateRequest.sideEffectPolicy.creativeMutationAllowed, true);
+        assert.equal(directCreativeCreateRequest.sideEffectPolicy.requiresExplicitUserIntentForMutation, true);
         assert.equal(directCreativeCreateRequest.constraints.allowed_agents.includes("creative"), true);
-        assert.equal(directCreativeCreateRequest.tool_policy.creative_execution_allowed, true);
-        assert.equal(directCreativeCreateRequest.tool_policy.expected_response, "asset");
+        assert.equal(directCreativeCreateRequest.tool_policy.creative_execution_requested, undefined);
+        assert.equal(directCreativeCreateRequest.tool_policy.product_intent_hint.possible_domain, "creative");
         assert.equal(directCreativeCreateRequest.tool_policy.allowed_agents.includes("creative"), true);
         assert.equal(directCreativeCreateRequest.capabilities.creative.canExecuteImageGeneration, true);
-        assert.notEqual(directCreativeCreateRequest.intent.explicit_command, null, "fresh direct creation must not fall through to read-only/tool_read");
+        assert.equal(directCreativeCreateRequest.capabilities.creative.canInspectImage, true);
+        assert.doesNotMatch(JSON.stringify(directCreativeCreateRequest), /"creative_execution_requested":true|"explicit_command":"creative\.generate_/);
 
         const nonCreativeStrategy = router.resolveHermesCmoChatRoute({
           appId: "hold-pay",
@@ -728,17 +727,17 @@ try {
           appId: "hold-pay",
           message: "So sánh giúp mình 3 tín hiệu thị trường gần đây liên quan đến cash-in/cash-out hoặc P2P UX.",
         });
-        assert.equal(researchToolChat.endpoint, "/agents/cmo/tool-execute");
-        assert.equal(researchToolChat.endpointKind, "tool_execute");
-        assert.equal(researchToolChat.reason, "tool_chat_canary");
+        assert.equal(researchToolChat.endpoint, "/agents/cmo/chat");
+        assert.equal(researchToolChat.endpointKind, "agent_chat");
+        assert.equal(researchToolChat.reason, "v11_canary_chat");
 
         const copyToolChat = router.resolveHermesCmoChatRoute({
           appId: "hold-pay",
           message: "Viết giúp mình 3 biến thể notification ngắn để onboarding merchant cho Hold Pay.",
         });
-        assert.equal(copyToolChat.endpoint, "/agents/cmo/tool-execute");
-        assert.equal(copyToolChat.endpointKind, "tool_execute");
-        assert.equal(copyToolChat.reason, "tool_chat_canary");
+        assert.equal(copyToolChat.endpoint, "/agents/cmo/chat");
+        assert.equal(copyToolChat.endpointKind, "agent_chat");
+        assert.equal(copyToolChat.reason, "v11_canary_chat");
 
         const creativeToolCanaryBypass = router.resolveHermesCmoChatRoute({
           appId: "hold-pay",
@@ -752,9 +751,9 @@ try {
           appId: "hold-pay",
           message: "Dựa trên bối cảnh hiện tại thôi, không cần kiểm chứng thị trường mới: Hold Pay nên ưu tiên merchant payout UX hay consumer P2P UX trước?",
         });
-        assert.equal(strategyToolChat.endpoint, "/agents/cmo/tool-execute");
-        assert.equal(strategyToolChat.endpointKind, "tool_execute");
-        assert.equal(strategyToolChat.reason, "tool_chat_canary");
+        assert.equal(strategyToolChat.endpoint, "/agents/cmo/chat");
+        assert.equal(strategyToolChat.endpointKind, "agent_chat");
+        assert.equal(strategyToolChat.reason, "v11_canary_chat");
 
         const explicitSourceTool = router.resolveHermesCmoChatRoute({
           appId: "hold-pay",
@@ -796,8 +795,8 @@ try {
             appId,
             message: "So sanh giup minh 3 tin hieu thi truong gan day va rut ra uu tien chien luoc.",
           });
-          assert.equal(route.endpoint, "/agents/cmo/tool-execute", `${appId} must route to tool-capable CMO under wildcard rollout`);
-          assert.equal(route.reason, "tool_chat_canary");
+          assert.equal(route.endpoint, "/agents/cmo/chat", `${appId} must keep normal CMO decision chat on v1.1 chat under wildcard rollout`);
+          assert.equal(route.reason, "v11_canary_chat");
           allWorkspaceToolChatRoutes[appId] = route.endpoint;
         }
       },
@@ -1061,15 +1060,20 @@ try {
       createdAt: "2026-06-20T10:00:00.000Z",
       userIdentity: { userId: "user_eggs", userEmail: "jay@example.com" },
     });
-    assert.equal(eggsCreativeRequest.intent.explicit_command, "creative.generate_image");
-    assert.equal(eggsCreativeRequest.input.creative_execution_intent.direct_user_prompt_is_sufficient_execution_input, true);
-    assert.equal(eggsCreativeRequest.input.creative_execution_intent.accepted_project_context_required, false);
+    assert.equal(eggsCreativeRequest.intent.explicit_command, undefined);
+    assert.equal(eggsCreativeRequest.intent.product_intent_hint.possible_domain, "creative");
+    assert.equal(eggsCreativeRequest.input.creative_decision_context.direct_user_prompt_is_sufficient_execution_input, true);
+    assert.equal(eggsCreativeRequest.input.creative_decision_context.accepted_project_context_required, false);
+    assert.equal(eggsCreativeRequest.cmoOwnsCreativeDecision, true);
+    assert.equal(eggsCreativeRequest.sideEffectPolicy.creativeMutationAllowed, true);
     assert.equal(eggsCreativeRequest.constraints.missing_accepted_context_blocks_creative_execution, false);
     assert.equal(eggsCreativeRequest.tool_policy.missing_accepted_context_blocks_creative_execution, false);
+    assert.equal(eggsCreativeRequest.constraints.creative_execution_requested, undefined);
+    assert.equal(eggsCreativeRequest.tool_policy.creative_execution_requested, undefined);
     assert.equal(eggsCreativeRequest.context_pack.missing_context.length, 0);
     assert.equal(eggsCreativeRequest.context_pack.optional_context_gaps.length, 1);
     assert.equal(eggsCreativeRequest.context_pack.context_quality_summary.creative_execution_direct_prompt_sufficient, true);
-    assert.match(JSON.stringify(eggsCreativeRequest.input.creative_execution_intent.factual_claim_guardrails), /Do not invent unsupported product mechanics/);
+    assert.match(JSON.stringify(eggsCreativeRequest.input.creative_decision_context.factual_claim_guardrails), /Do not invent unsupported product mechanics/);
     assert.doesNotMatch(JSON.stringify(eggsCreativeRequest), /No accepted project context found at 12 Knowledge\/Workspace Lessons\/eggs-vault/);
 
     const eggsStrategyInput = JSON.parse(JSON.stringify(eggsCreativeInput));
@@ -1081,7 +1085,7 @@ try {
       createdAt: "2026-06-20T10:01:00.000Z",
       userIdentity: { userId: "user_eggs", userEmail: "jay@example.com" },
     });
-    assert.equal(eggsStrategyRequest.intent.explicit_command, null);
+    assert.equal(eggsStrategyRequest.intent.explicit_command, undefined);
     assert.match(JSON.stringify(eggsStrategyRequest), /No accepted project context found at 12 Knowledge\/Workspace Lessons\/eggs-vault/);
 
     const creativeReferenceInput = JSON.parse(JSON.stringify(sampleTurnInput));
@@ -1144,7 +1148,7 @@ try {
       creativeSessionFollowupDetected: true,
       activeCreativeAssetResolutionSource: "creativeWorkingState",
     });
-    assert.equal(creativeReferenceRequest.intent.explicit_command, null, "CMO-native creative sessions must not force explicit Creative generation");
+    assert.equal(creativeReferenceRequest.intent.explicit_command, undefined, "CMO-native creative sessions must not force explicit Creative generation");
     assert.equal(creativeReferenceRequest.creativeSession, true);
     assert.equal(creativeReferenceRequest.cmoOwnsCreativeDecision, true);
     assert.equal(creativeReferenceRequest.creativeDecisionOwnerWhenLive, "hermes_cmo");
@@ -1300,22 +1304,21 @@ try {
       ...creativeConversationInput,
       message: "Assess the current composition for trust and clarity; no edits yet.",
     });
-    assert.equal(creativeReviewRequest.intent.creative_conversation_only, true);
-    assert.equal(creativeReviewRequest.intent.creative_followup_intent_class, "asset_review");
-    assert.equal(creativeReviewRequest.intent.execution_allowed, false);
-    assert.equal(creativeReviewRequest.intent.mutation_allowed, false);
-    assert.equal(creativeReviewRequest.intent.draft_update_allowed, false);
-    assert.equal(creativeReviewRequest.intent.expected_response, "text");
-    assert.equal(creativeReviewRequest.constraints.execution_allowed, false);
-    assert.equal(creativeReviewRequest.constraints.expected_response, "text");
-    assert.equal(creativeReviewRequest.constraints.creative_side_effects_allowed, false);
-    assert.equal(creativeReviewRequest.constraints.creative_mutation_permitted_this_turn, false);
-    assert.equal(creativeReviewRequest.tool_policy.creative_execution_may_be_requested_by_cmo, false);
-    assert.equal(creativeReviewRequest.tool_policy.execution_allowed, false);
-    assert.equal(creativeReviewRequest.tool_policy.creative_side_effects_allowed, false);
-    assert.equal(creativeReviewRequest.capabilities.creative.canExecuteImageGeneration, false);
-    assert.equal(creativeReviewRequest.capabilities.creative.canUpdateDraftState, false);
-    assert.equal(creativeReviewRequest.capabilities.creative.canProposeDraft, false);
+    assert.equal(creativeReviewRequest.intent.creative_conversation_only, undefined);
+    assert.equal(creativeReviewRequest.intent.creative_followup_intent_class, undefined);
+    assert.equal(creativeReviewRequest.intent.product_intent_hint.possible_domain, "creative");
+    assert.equal(creativeReviewRequest.constraints.execution_allowed, undefined);
+    assert.equal(creativeReviewRequest.constraints.expected_response, undefined);
+    assert.equal(creativeReviewRequest.constraints.creative_side_effects_allowed, true);
+    assert.equal(creativeReviewRequest.tool_policy.creative_execution_may_be_requested_by_cmo, true);
+    assert.equal(creativeReviewRequest.tool_policy.execution_allowed, undefined);
+    assert.equal(creativeReviewRequest.tool_policy.creative_side_effects_allowed, true);
+    assert.equal(creativeReviewRequest.capabilities.creative.canExecuteImageGeneration, true);
+    assert.equal(creativeReviewRequest.capabilities.creative.canUpdateDraftState, true);
+    assert.equal(creativeReviewRequest.capabilities.creative.canProposeDraft, true);
+    assert.equal(creativeReviewRequest.capabilities.creative.canInspectImage, true);
+    assert.equal(creativeReviewRequest.sideEffectPolicy.creativeMutationAllowed, true);
+    assert.equal(creativeReviewRequest.sideEffectPolicy.requiresExplicitUserIntentForMutation, true);
     assert.equal(creativeReviewRequest.reference_assets[0].asset_id, "creative_uploaded_primary");
 
     const creativeReviewWithUseAsRequest = mapper.mapCmoChatToHermesCmoRequest({
@@ -1324,9 +1327,10 @@ try {
       userMessageId: "msg_eggs_creative_review_use_as",
       message: "Review visual nay neu dung lam landing hero: rui ro marketing lon nhat la gi?",
     });
-    assert.equal(creativeReviewWithUseAsRequest.intent.creative_followup_intent_class, "channel_advisory");
-    assert.equal(creativeReviewWithUseAsRequest.intent.execution_allowed, false);
-    assert.equal(creativeReviewWithUseAsRequest.intent.mutation_allowed, false);
+    assert.equal(creativeReviewWithUseAsRequest.intent.creative_followup_intent_class, undefined);
+    assert.equal(creativeReviewWithUseAsRequest.intent.execution_allowed, undefined);
+    assert.equal(creativeReviewWithUseAsRequest.intent.mutation_allowed, undefined);
+    assert.equal(creativeReviewWithUseAsRequest.capabilities.creative.canInspectImage, true);
 
     const creativePromptOnlyRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...creativeConversationInput,
@@ -1334,15 +1338,16 @@ try {
       userMessageId: "msg_eggs_creative_prompt_only",
       message: "Write a stronger edit prompt for this direction only, do not generate a new image.",
     });
-    assert.equal(creativePromptOnlyRequest.intent.creative_prompt_proposal_only, true);
-    assert.equal(creativePromptOnlyRequest.intent.creative_followup_intent_class, "prompt_proposal");
-    assert.equal(creativePromptOnlyRequest.intent.execution_allowed, false);
-    assert.equal(creativePromptOnlyRequest.intent.draft_update_allowed, false);
-    assert.equal(creativePromptOnlyRequest.intent.expected_response, "text_prompt");
-    assert.equal(creativePromptOnlyRequest.intent.creative_no_execute_modifier_detected, true);
-    assert.equal(creativePromptOnlyRequest.constraints.creative_side_effects_allowed, false);
-    assert.equal(creativePromptOnlyRequest.constraints.execution_allowed, false);
-    assert.equal(creativePromptOnlyRequest.constraints.expected_response, "text_prompt");
+    assert.equal(creativePromptOnlyRequest.intent.creative_prompt_proposal_only, undefined);
+    assert.equal(creativePromptOnlyRequest.intent.creative_followup_intent_class, undefined);
+    assert.equal(creativePromptOnlyRequest.intent.execution_allowed, undefined);
+    assert.equal(creativePromptOnlyRequest.intent.draft_update_allowed, undefined);
+    assert.equal(creativePromptOnlyRequest.intent.expected_response, undefined);
+    assert.equal(creativePromptOnlyRequest.intent.creative_no_execute_modifier_detected, undefined);
+    assert.equal(creativePromptOnlyRequest.constraints.creative_side_effects_allowed, true);
+    assert.equal(creativePromptOnlyRequest.constraints.execution_allowed, undefined);
+    assert.equal(creativePromptOnlyRequest.constraints.expected_response, undefined);
+    assert.equal(creativePromptOnlyRequest.sideEffectPolicy.requiresExplicitUserIntentForMutation, true);
 
     const creativeChannelAdviceRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...creativeConversationInput,
@@ -1350,12 +1355,12 @@ try {
       userMessageId: "msg_eggs_creative_channel_advice",
       message: "Cung visual nay neu dung lam landing page, X post, va Telegram community announcement thi angle nen khac nhau the nao?",
     });
-    assert.equal(creativeChannelAdviceRequest.intent.creative_conversation_only, true);
-    assert.equal(creativeChannelAdviceRequest.intent.creative_followup_intent_class, "channel_advisory");
-    assert.equal(creativeChannelAdviceRequest.intent.execution_allowed, false);
-    assert.equal(creativeChannelAdviceRequest.intent.expected_response, "text");
-    assert.equal(creativeChannelAdviceRequest.constraints.creative_side_effects_allowed, false);
-    assert.equal(creativeChannelAdviceRequest.constraints.execution_allowed, false);
+    assert.equal(creativeChannelAdviceRequest.intent.creative_conversation_only, undefined);
+    assert.equal(creativeChannelAdviceRequest.intent.creative_followup_intent_class, undefined);
+    assert.equal(creativeChannelAdviceRequest.intent.execution_allowed, undefined);
+    assert.equal(creativeChannelAdviceRequest.intent.expected_response, undefined);
+    assert.equal(creativeChannelAdviceRequest.constraints.creative_side_effects_allowed, true);
+    assert.equal(creativeChannelAdviceRequest.constraints.execution_allowed, undefined);
 
     const creativeAckRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...creativeConversationInput,
@@ -1363,13 +1368,13 @@ try {
       userMessageId: "msg_eggs_creative_ack",
       message: "Ok, keep it as-is for now.",
     });
-    assert.equal(creativeAckRequest.intent.creative_noop_acknowledgement, true);
-    assert.equal(creativeAckRequest.intent.creative_followup_intent_class, "ack_noop");
-    assert.equal(creativeAckRequest.intent.execution_allowed, false);
-    assert.equal(creativeAckRequest.intent.draft_update_allowed, false);
-    assert.equal(creativeAckRequest.intent.expected_response, "native_ack");
-    assert.equal(creativeAckRequest.constraints.creative_side_effects_allowed, false);
-    assert.equal(creativeAckRequest.constraints.execution_allowed, false);
+    assert.equal(creativeAckRequest.intent.creative_noop_acknowledgement, undefined);
+    assert.equal(creativeAckRequest.intent.creative_followup_intent_class, undefined);
+    assert.equal(creativeAckRequest.intent.execution_allowed, undefined);
+    assert.equal(creativeAckRequest.intent.draft_update_allowed, undefined);
+    assert.equal(creativeAckRequest.intent.expected_response, undefined);
+    assert.equal(creativeAckRequest.constraints.creative_side_effects_allowed, true);
+    assert.equal(creativeAckRequest.constraints.execution_allowed, undefined);
 
     const creativeEditRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...creativeConversationInput,
@@ -1377,13 +1382,13 @@ try {
       userMessageId: "msg_eggs_creative_edit",
       message: "Apply that stronger reward direction to the current image.",
     });
-    assert.equal(creativeEditRequest.intent.creative_mutation_requested, true);
-    assert.equal(creativeEditRequest.intent.creative_followup_intent_class, "explicit_mutation");
-    assert.equal(creativeEditRequest.intent.execution_allowed, true);
-    assert.equal(creativeEditRequest.intent.mutation_allowed, true);
-    assert.equal(creativeEditRequest.intent.expected_response, "asset");
+    assert.equal(creativeEditRequest.intent.creative_mutation_requested, undefined);
+    assert.equal(creativeEditRequest.intent.creative_followup_intent_class, undefined);
+    assert.equal(creativeEditRequest.intent.execution_allowed, undefined);
+    assert.equal(creativeEditRequest.intent.mutation_allowed, undefined);
+    assert.equal(creativeEditRequest.intent.expected_response, undefined);
     assert.equal(creativeEditRequest.constraints.creative_side_effects_allowed, true);
-    assert.equal(creativeEditRequest.constraints.execution_allowed, true);
+    assert.equal(creativeEditRequest.constraints.execution_allowed, undefined);
     assert.equal(creativeEditRequest.tool_policy.creative_execution_may_be_requested_by_cmo, true);
     assert.equal(creativeEditRequest.capabilities.creative.canExecuteImageGeneration, true);
 

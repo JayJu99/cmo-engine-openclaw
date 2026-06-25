@@ -135,21 +135,6 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
     };
   }
 
-  if (toolChatEnabled && toolChatCanary) {
-    return {
-      endpoint: HERMES_CMO_TOOL_EXECUTE_ENDPOINT,
-      endpointKind: "tool_execute",
-      requestedEndpoint: HERMES_CMO_TOOL_EXECUTE_ENDPOINT,
-      routeIntent,
-      v11Enabled,
-      v11Canary,
-      toolChatEnabled,
-      toolChatCanary,
-      fallbackEnabled,
-      reason: "tool_chat_canary",
-    };
-  }
-
   if (v11Enabled && v11Canary) {
     return {
       endpoint: HERMES_CMO_CHAT_V11_ENDPOINT,

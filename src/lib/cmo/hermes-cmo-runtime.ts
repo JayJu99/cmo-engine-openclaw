@@ -2015,6 +2015,50 @@ const requestIsCreativeExecution = (request: HermesCmoRuntimeRequest): boolean =
   );
 };
 
+const requestCreativeCapabilityRecord = (request: HermesCmoRuntimeRequest): Record<string, unknown> => {
+  const input = isRecord(request.input) ? request.input : {};
+  const toolPolicy = isRecord(request.tool_policy) ? request.tool_policy : {};
+  const candidates = [
+    isRecord(request.capabilities) ? request.capabilities : {},
+    isRecord(input.capabilities) ? input.capabilities : {},
+    isRecord(request.context_pack.capabilities) ? request.context_pack.capabilities : {},
+    isRecord(request.constraints.capabilities) ? request.constraints.capabilities : {},
+    isRecord(toolPolicy.capabilities) ? toolPolicy.capabilities : {},
+  ];
+
+  for (const candidate of candidates) {
+    if (isRecord(candidate.creative)) {
+      return candidate.creative;
+    }
+  }
+
+  return {};
+};
+
+const requestHasCreativeCapability = (request: HermesCmoRuntimeRequest): boolean => {
+  const creative = requestCreativeCapabilityRecord(request);
+
+  return (
+    creative.canProposeDraft === true ||
+    creative.canUpdateDraftState === true ||
+    creative.canExecuteImageGeneration === true ||
+    creative.canInspectImage === true
+  );
+};
+
+const requestAllowsCreativeMutationByPolicy = (request: HermesCmoRuntimeRequest): boolean => {
+  const input = isRecord(request.input) ? request.input : {};
+  const toolPolicy = isRecord(request.tool_policy) ? request.tool_policy : {};
+  const candidates = [
+    isRecord(request.sideEffectPolicy) ? request.sideEffectPolicy : {},
+    isRecord(input.sideEffectPolicy) ? input.sideEffectPolicy : {},
+    isRecord(request.constraints.sideEffectPolicy) ? request.constraints.sideEffectPolicy : {},
+    isRecord(toolPolicy.sideEffectPolicy) ? toolPolicy.sideEffectPolicy : {},
+  ];
+
+  return candidates.some((candidate) => candidate.creativeMutationAllowed === true);
+};
+
 const requestHasCreativeWorkingState = (request: HermesCmoRuntimeRequest): boolean => {
   const state = isRecord(request.creative_working_state)
     ? request.creative_working_state
@@ -2100,8 +2144,14 @@ const requestIsCreativeIdeation = (request: HermesCmoRuntimeRequest): boolean =>
   );
 };
 
+const requestHasCmoOwnedCreativeCapability = (request: HermesCmoRuntimeRequest): boolean =>
+  requestHasCmoCreativeDecisionOwner(request) && requestHasCreativeCapability(request);
+
 const requestMayLeadToCreativeExecution = (request: HermesCmoRuntimeRequest): boolean =>
-  requestIsCreativeExecution(request) || requestIsCreativeIdeation(request) || requestHasCreativeWorkingState(request);
+  requestIsCreativeExecution(request) ||
+  requestIsCreativeIdeation(request) ||
+  requestHasCreativeWorkingState(request) ||
+  requestHasCmoOwnedCreativeCapability(request);
 
 const requestArtifactTransportMode = (request: HermesCmoRuntimeRequest): string | undefined => {
   const transport: Record<string, unknown> = isRecord(request.artifact_transport) ? request.artifact_transport : {};
@@ -2153,7 +2203,7 @@ const requestAllowsCreativeConversationAnswerBasis = (request: HermesCmoRuntimeR
   const routeDecision = requestRouteDecision(request);
 
   return (
-    (routeDecision === "creative_session" || routeDecision === "creative_ideation" || routeDecision === "creative_execution" || requestIsCreativeIdeation(request) || requestHasCreativeWorkingState(request)) &&
+    (routeDecision === "creative_session" || routeDecision === "creative_ideation" || routeDecision === "creative_execution" || requestIsCreativeIdeation(request) || requestHasCreativeWorkingState(request) || requestHasCmoOwnedCreativeCapability(request)) &&
     requestHasCmoCreativeDecisionOwner(request)
   );
 };
@@ -2195,13 +2245,15 @@ const requestAllowsCmoOwnedCreativeExecutionAnswerBasis = (
   const routeDecision = requestRouteDecision(request);
   const structuredOutput = isRecord(response.structured_output) ? response.structured_output : {};
   const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
+  const hasActiveCreativeContext = requestHasActiveCreativeExecutionContext(request);
 
   return (
     answerBasis.mode === "creative_execution" &&
     (routeDecision === "creative_session" || routeDecision === "creative_execution") &&
     requestIsCreativeLongRunningTurn(request, routeDecision as HermesCmoRouteDecision) &&
     requestHasCmoCreativeDecisionOwner(request) &&
-    requestHasActiveCreativeExecutionContext(request) &&
+    (hasActiveCreativeContext || requestHasCmoOwnedCreativeCapability(request)) &&
+    (hasActiveCreativeContext || requestAllowsCreativeMutationByPolicy(request)) &&
     requestArtifactTransportMode(request) === "product_upload" &&
     (responseHasCreativeExecutionResult(response, structuredOutput) || responseHasCreativeExecutionFailure(response, structuredOutput))
   );
@@ -2254,7 +2306,8 @@ const requestIsCreativeLongRunningTurn = (request: HermesCmoRuntimeRequest, rout
     Boolean(requestActiveCreativeAssetId(request)) ||
     requestCreativeAssetsCount(request) > 0 ||
     requestArtifactTransportMode(request) === "product_upload" ||
-    requestHasCreativeWorkingState(request)
+    requestHasCreativeWorkingState(request) ||
+    requestHasCmoOwnedCreativeCapability(request)
   );
 };
 
@@ -2267,7 +2320,7 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: Herm
   const externalResearch = requestIsExternalResearch(request);
   const explicitCreativeExecution = requestIsCreativeExecution(request);
   const creativeIdeation = requestIsCreativeIdeation(request);
-  const creativeSession = !explicitCreativeExecution && !creativeIdeation && requestHasCreativeWorkingState(request);
+  const creativeSession = !explicitCreativeExecution && !creativeIdeation && (requestHasCreativeWorkingState(request) || requestHasCmoOwnedCreativeCapability(request));
   const creativeNativeExecuteEndpoint = explicitCreativeExecution || creativeIdeation || creativeSession;
   const routeDecision: HermesCmoRouteDecision = explicitCreativeExecution
     ? "creative_execution"
@@ -3488,12 +3541,13 @@ const buildHermesCmoLiveRequest = (
   const creativeExecutionRequested = requestIsCreativeExecution(request) && creativeViaCmoAllowed;
   const creativeIdeationDetected = requestIsCreativeIdeation(request);
   const creativeWorkingStatePresent = requestHasCreativeWorkingState(request);
-  const creativeNativeSession = creativeIdeationDetected || creativeWorkingStatePresent;
-  const creativeSideEffectsAllowed = creativeNativeSession || creativeExecutionRequested;
+  const cmoOwnedCreativeCapability = requestHasCmoOwnedCreativeCapability(request);
+  const creativeNativeSession = creativeIdeationDetected || creativeWorkingStatePresent || cmoOwnedCreativeCapability;
+  const creativeSideEffectsAllowed = creativeExecutionRequested || requestAllowsCreativeMutationByPolicy(request) || creativeIdeationDetected || creativeWorkingStatePresent;
   const creativeTurnMayExecute = creativeSideEffectsAllowed && creativeViaCmoAllowed;
   const creativeExecutionMode = creativeExecutionModeFromRequest(request);
   const creativeAgentAllowed = creativeViaCmoAllowed && creativeTurnMayExecute;
-  const creativeSessionLongRunningTurn = creativeExecutionRequested || creativeWorkingStatePresent;
+  const creativeSessionLongRunningTurn = creativeExecutionRequested || creativeWorkingStatePresent || cmoOwnedCreativeCapability;
   const creativeSessionTimeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
   const specialistExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed || creativeTurnMayExecute;
   const allowedAgentsForRequest: HermesAllowedAgent[] = [
@@ -3554,7 +3608,7 @@ const buildHermesCmoLiveRequest = (
       ...(creativeSessionLongRunningTurn ? { timeout_source: "creative_execute", outer_timeout_source: "creative_execute" } : {}),
       ...(creativeNativeSession || creativeExecutionRequested ? { workspace_fallback_suppressed_for_creative: true } : {}),
       requires_user_confirmation_before_creative_execute: creativeNativeSession,
-      cmo_owns_creative_decision: creativeIdeationDetected || creativeWorkingStatePresent || creativeExecutionRequested,
+      cmo_owns_creative_decision: creativeNativeSession || creativeExecutionRequested,
       creative_execution_mode: creativeExecutionRequested ? creativeExecutionMode : null,
       creative_direct_prompt_sufficient: creativeExecutionRequested,
       creative_accepted_context_required: creativeExecutionRequested ? false : null,
@@ -4188,8 +4242,7 @@ const extractLiveResponsePayload = (
   const creativeConversationActivityRepair = maybeRepairCreativeConversationActivityEvents(
     effectiveActivityEventsCandidate,
     request,
-    creativeConversationResponseReceived &&
-      creativeConversationValidationFailure(responseCandidate, responseStructuredOutput, request) === null,
+    creativeNativeResponseReceived,
   );
   effectiveActivityEventsCandidate = creativeConversationActivityRepair.activityEventsCandidate;
   const activityEventTypes = activityEventTypesFrom(effectiveActivityEventsCandidate);
@@ -4315,7 +4368,7 @@ const extractLiveResponsePayload = (
         : ` creative_ideation_response_received=${String(responseAnswerBasis.mode === "creative_ideation")} creative_session_response_received=${String(responseAnswerBasis.mode === "creative_session" || responseAnswerBasis.mode === "creative_refinement")} creative_conversation_response_received=${String(creativeConversationResponseReceived)} creative_conversation_mode=${creativeConversationMode ?? "none"} creative_conversation_rejected=${String(creativeConversationResponseReceived)} creative_conversation_rejection_reason=activity_event_invalid creative_conversation_rejected_answer_preview=${creativeConversationResponseReceived ? nativeResponseAnswerPreview || "empty" : "none"} native_response_answer_basis_mode=${String(responseAnswerBasis.mode)} native_response_creative_decision_action=${creativeDecisionAction ?? "none"} native_response_path_like_answer_detected=${String(nativeResponsePathLikeAnswerDetected)} answer_basis_mode=${String(responseAnswerBasis.mode)} creative_asset_mutation=${String(creativeAssetMutation ?? false)} creative_state_mutation=${String(creativeStateMutation ?? false)} creative_state_update_present=${String(creativeStateUpdatePresent)} creative_decision_present=${String(creativeDecisionPresent)} creative_ideation_canonicalized=${String(creativeIdeationCanonicalization.canonicalized)} activity_event_types=${activityEventTypes.join(",") || "none"} raw_activity_event_types=${creativeIdeationCanonicalization.rawActivityEventTypes.join(",") || "none"} activity_events_allowed_for_creative_ideation=${String(creativeIdeationCanonicalization.canonicalized)} rejected_activity_event_type=${creativeIdeationCanonicalization.rejectedActivityEventType ?? failedEventType ?? "unknown"} fallback_used=false rejected_by_m1_validator=true`
       : "";
 
-    throw new Error(`Hermes CMO Agent activity_events did not match hermes.activity.event.v1 or included forbidden delegation events. Rejected field: ${activityValidationFailureReason(failedEvent, request, effectiveActivityValidation)}.${creativeIdeationDiagnosticSuffix}`);
+    throw new Error(`Hermes CMO Agent activity_events did not match hermes.activity.event.v1 or included forbidden delegation events. Rejected field: ${activityValidationFailureReason(failedEvent, request, effectiveActivityValidation)}. request_id=${request.request_id} event_type=${isRecord(failedEvent) && typeof failedEvent.type === "string" ? failedEvent.type : "unknown"}.${creativeIdeationDiagnosticSuffix}`);
   }
 
   return {
