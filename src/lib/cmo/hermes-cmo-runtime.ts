@@ -4860,21 +4860,15 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       creative_trace: creativeRequestTraceSummary(finalOutboundRequest, config),
       request: JSON.parse(traceSafeOutboundBody) as HermesCmoRuntimeRequest,
     };
-    const traceEnvelopeForGuard = traceValue(requestTraceEnvelope);
     const fetchBodyBlockInspection = mergeOutboundHermesCallsiteBlockInspections([
       inspectOutboundHermesCallsiteBlock("fetch_body", outboundBody),
       inspectOutboundHermesCallsiteBlock("fetch_body", finalOutboundRequest),
     ]);
-    const traceEnvelopeBlockInspection = inspectOutboundHermesCallsiteBlock("trace_envelope", traceEnvelopeForGuard);
-    const callsiteBlockInspection = mergeOutboundHermesCallsiteBlockInspections([
-      fetchBodyBlockInspection,
-      traceEnvelopeBlockInspection,
-    ]);
+    const callsiteBlockInspection = fetchBodyBlockInspection;
 
     if (
       outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked ||
-      fetchBodyBlockInspection.literals.length > 0 ||
-      traceEnvelopeBlockInspection.literals.length > 0
+      fetchBodyBlockInspection.literals.length > 0
     ) {
       const blockedDiagnostics = {
         ...traceDiagnostics,
@@ -4906,7 +4900,7 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
       });
 
       throw new Error(
-        "Product blocked Hermes CMO request because outbound payload still contained path-like Creative artifact text. outbound_callsite_guard_version=context-sanitizer-v2 fallback_used=false workspace_fallback_suppressed_for_creative=true",
+        "Product blocked Hermes CMO request because the final outbound body still contained unsafe local path, secret, or artifact text after scrub. outbound_callsite_guard_version=context-sanitizer-v2 fallback_used=false workspace_fallback_suppressed_for_creative=true",
       );
     }
 
@@ -4949,7 +4943,7 @@ const callHermesCmoAgent = async (request: HermesCmoRuntimeRequest, config: Herm
     return payload;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    if (!/Product blocked Hermes CMO request because outbound payload still contained path-like Creative artifact text/.test(errorMessage)) {
+    if (!/Product blocked Hermes CMO request because the final outbound body still contained unsafe local path, secret, or artifact text after scrub/.test(errorMessage)) {
       await writeHermesTrace(traceRequestForErrors, "error", {
         kind: "hermes_cmo_error",
         endpoint_path: config.endpointPath,

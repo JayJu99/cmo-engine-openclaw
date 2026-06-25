@@ -1536,7 +1536,7 @@ try {
         {
           id: "assistant_product_block",
           role: "assistant",
-          content: "Product blocked this Creative follow-up because old workspace/session context still contains redacted artifact text.",
+          content: "Product blocked this Creative follow-up because the final outbound request still contained unsafe local artifact text after scrub.",
           createdAt: "2026-06-20T10:05:30.000Z",
           hermesCmoMetadata: {
             product_outbound_payload_blocked: true,
@@ -2787,44 +2787,26 @@ try {
             assert.equal(responseTrace.suggested_vault_updates_count, 2);
             assert.equal(responseTrace.state_contract.schema_version, "cmo.chat.state_contract.v1");
             assert.equal(responseTrace.state_contract.raw, undefined);
-            const fetchCallsBeforeBlockedGuard = chatV11FetchCalls;
-            const blockedChatResult = await chatV11.runHermesCmoChatV11(chatV11RunInput({
-              sessionId: "session_chat_v11_callsite_guard_blocked",
-              userMessageId: "msg_chat_v11_callsite_guard_blocked",
+            const fetchCallsBeforeScrubbedGuard = chatV11FetchCalls;
+            const scrubbedChatResult = await chatV11.runHermesCmoChatV11(chatV11RunInput({
+              sessionId: "session_chat_v11_callsite_guard_scrubbed",
+              userMessageId: "msg_chat_v11_callsite_guard_scrubbed",
               vaultContext: {
                 "[hermes_local_artifact_path_redacted]": true,
                 "file:": true,
                 polluted_content: "trace-only pollution should expose file:///private/cmo/blocked.png",
               },
             }));
-            assert.equal(blockedChatResult.ok, false);
-            assert.equal(blockedChatResult.fallbackEligible, false);
-            assert.match(blockedChatResult.fallbackReason, /outbound payload still contained path-like Creative artifact text/);
-            assert.equal(blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_guard_version, "context-sanitizer-v2");
-            assert.equal(blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_guard_checked, true);
-            assert.equal(blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_guard_blocked, true);
-            assert.ok(
-              blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_literals.includes("hermes_local_artifact_path_redacted"),
-              "v1.1 blocked diagnostics must name the redacted artifact token",
+            assert.equal(scrubbedChatResult.ok, true);
+            assert.equal(scrubbedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_guard_version, "context-sanitizer-v2");
+            assert.equal(scrubbedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_guard_checked, true);
+            assert.equal(scrubbedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_guard_blocked, false);
+            assert.equal(scrubbedChatResult.request.context_pack.vault_context.redacted_creative_artifact_key, true);
+            assert.equal(
+              scrubbedChatResult.request.context_pack.vault_context.polluted_content,
+              "Creative artifact text was redacted by Product before sending this turn to Hermes. Use canonical chat text and Product reference asset metadata for context.",
             );
-            assert.ok(
-              blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_literals.includes("file:"),
-              "v1.1 blocked diagnostics must name the trace-redactor local file token",
-            );
-            assert.ok(
-              blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_sources.includes("fetch_body") ||
-              blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_sources.includes("trace_envelope"),
-              "v1.1 blocked diagnostics must include the blocked source",
-            );
-            assert.ok(
-              Array.isArray(blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_paths),
-              "v1.1 blocked diagnostics must include bounded blocked path metadata",
-            );
-            assert.ok(
-              blockedChatResult.request.outbound_hermes_payload_guard.outbound_callsite_blocked_snippets.some((snippet) => snippet.includes("file:")),
-              "v1.1 blocked diagnostics must include a bounded sanitized snippet",
-            );
-            assert.equal(chatV11FetchCalls, fetchCallsBeforeBlockedGuard, "v1.1 call-site guard must block before fetch");
+            assert.equal(chatV11FetchCalls, fetchCallsBeforeScrubbedGuard + 1, "v1.1 call-site guard must scrub polluted metadata and continue to fetch");
 
             const rollingTraceResult = await chatV11.runHermesCmoChatV11(chatV11RunInput({
               sessionId: "session_trace_rolling_replay",
@@ -4811,7 +4793,8 @@ try {
     assert.match(source, /normalizeSafeCreativeDiagnosticValue\(value\.creative_decision\)/);
     assert.match(source, /UNSAFE_CREATIVE_DIAGNOSTIC_WRAPPER_PATTERN/);
     assert.match(source, /UNSAFE_CREATIVE_DIAGNOSTIC_LINE_PATTERN/);
-    assert.match(hermesRuntimeSourceForBoundary, /traceEnvelopeBlockInspection\.literals\.length > 0/);
+    assert.doesNotMatch(hermesRuntimeSourceForBoundary, /traceEnvelopeBlockInspection\.literals\.length > 0/);
+    assert.match(hermesRuntimeSourceForBoundary, /fetchBodyBlockInspection\.literals\.length > 0/);
     assert.match(outboundSanitizerSourceForBoundary, /projectedPayload = sanitizeValue\(projectedPayload, \[\], undefined, recursivelySanitizedFields\) as T/);
     assert.match(source, /!hermesCmoUnifiedAgentRequested && hermesCmoRoute\.reason === "creative_session"/);
     assert.match(source, /\.\.\.\(currentTurnCreativeLongRunningTurn \? \{ creative_long_running_turn: true \} : \{\}\)/);
@@ -5129,7 +5112,7 @@ try {
     assert.match(appChatStoreSource, /userSlug/);
     assert.match(
       appChatStoreSource,
-      /PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_MESSAGE =\s*\n\s*"Product blocked this Creative follow-up because old workspace\/session context still contains redacted artifact text\. Please retry after context scrub or start a clean session\."/,
+      /PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_MESSAGE =\s*\n\s*"Product blocked this Creative follow-up because the final outbound request still contained unsafe local artifact text after scrub\. Please retry the turn; if it repeats, start a clean session so Product can rebuild context without polluted metadata\."/,
       "Product-local outbound guard block must use safe user-facing Creative copy",
     );
     assert.match(

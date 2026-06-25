@@ -877,7 +877,8 @@ const startServer = async () => {
             body.request_id === "req_m13_creative_conversation_missing_event_id" ||
             body.request_id === "req_m13_creative_conversation_path_like_missing_event_id" ||
             body.request_id === "req_m13_creative_outbound_sanitized" ||
-            body.request_id === "req_m13_creative_trace_only_projection";
+            body.request_id === "req_m13_creative_trace_only_projection" ||
+            body.request_id === "req_m13_creative_callsite_guard_scrubbed";
           const firstCallCreativeNative = firstCallCreativeExecution || firstCallCmoOwnedCreativeExecution;
           assert.equal(body.skill_kernel?.id, "clean-cmo-skill-kernel");
           assert.equal(body.user_message, body.intent?.user_message);
@@ -1411,6 +1412,15 @@ const startServer = async () => {
               body,
               "advise",
               "This advisory response proves trace-only redaction did not block the clean Hermes fetch body.",
+            ));
+            return;
+          }
+
+          if (body.request_id === "req_m13_creative_callsite_guard_scrubbed") {
+            writeJson(response, 200, m13CreativeConversationResponse(
+              body,
+              "advise",
+              "This advisory response proves polluted context metadata was scrubbed instead of blocking the user turn.",
             ));
             return;
           }
@@ -5915,40 +5925,35 @@ try {
       traceOnlyProjectionRequestTrace.request?.context_pack?.selected_context?.[0]?.content,
       "Trace content omitted by Product outbound trace projection.",
     );
-    const cmoCallsBeforeBlockedCallsiteGuard = server.calls.cmo;
-    await assert.rejects(
-      () => runHermesCmoRuntime(m13CallsiteGuardBlockedCreativeSessionRequest("req_m13_creative_callsite_guard_blocked")),
-      /outbound_callsite_guard_version=context-sanitizer-v2/,
-      "Call-site guard must block a payload with forbidden literals remaining after sanitizer",
+    const scrubbedCallsiteGuardResult = await runHermesCmoRuntime(
+      m13CallsiteGuardBlockedCreativeSessionRequest("req_m13_creative_callsite_guard_scrubbed"),
     );
-    assert.equal(server.calls.cmo, cmoCallsBeforeBlockedCallsiteGuard, "Call-site guard must block before fetch");
-    const blockedTraceFiles = await readdir(m13TraceDir);
-    const blockedErrorTraceName = blockedTraceFiles.find((fileName) =>
-      fileName.includes("session_m13_creative_callsite_guard_blocked") && fileName.endsWith("_error.json")
+    assert.equal(scrubbedCallsiteGuardResult.response.status, "completed");
+    assert.match(scrubbedCallsiteGuardResult.response.answer?.body ?? "", /scrubbed instead of blocking/i);
+    const scrubbedCallsiteGuardServerRequest = server.calls.cmoRequests.find((request) => request.requestId === "req_m13_creative_callsite_guard_scrubbed");
+    assert.ok(scrubbedCallsiteGuardServerRequest, "Polluted context metadata must be scrubbed and sent to fake Hermes");
+    assert.equal(
+      containsOutboundCallsiteForbiddenLiteral(scrubbedCallsiteGuardServerRequest.rawBody),
+      false,
+      "Scrub-first call-site fixture must have a fetch body with zero forbidden literals",
     );
-    assert.ok(blockedErrorTraceName, "Blocked Creative request must write a Product-local error trace");
-    const blockedErrorTrace = JSON.parse(await readFile(path.join(m13TraceDir, blockedErrorTraceName), "utf8"));
-    assert.equal(blockedErrorTrace.kind, "hermes_cmo_outbound_payload_blocked");
-    assert.equal(blockedErrorTrace.outbound_hermes_payload_guard?.outbound_callsite_guard_version, "context-sanitizer-v2");
-    assert.equal(blockedErrorTrace.outbound_hermes_payload_guard?.outbound_callsite_guard_checked, true);
-    assert.equal(blockedErrorTrace.outbound_hermes_payload_guard?.outbound_callsite_guard_blocked, true);
+    assert.equal(scrubbedCallsiteGuardServerRequest.body.context_pack.redacted_creative_artifact_key, true);
+    assert.equal(scrubbedCallsiteGuardServerRequest.body.context_pack.selected_context[0].content, "Creative artifact text was redacted by Product before sending this turn to Hermes. Use canonical chat text and Product reference asset metadata for context.");
+    assert.equal(scrubbedCallsiteGuardServerRequest.body.outbound_hermes_payload_guard?.outbound_callsite_guard_blocked, false);
     assert.ok(
-      blockedErrorTrace.outbound_callsite_blocked_literals.includes("hermes_local_artifact_path_redacted"),
-      "Blocked diagnostics must name the redacted artifact token",
+      scrubbedCallsiteGuardServerRequest.body.constraints?.outbound_sanitized_fields_preview.includes("context_pack.redacted_creative_artifact_key"),
+      "Sanitized field diagnostics must name the safe replacement key, not the polluted key",
     );
-    assert.ok(
-      blockedErrorTrace.outbound_callsite_blocked_sources.includes("fetch_body") ||
-      blockedErrorTrace.outbound_callsite_blocked_sources.includes("trace_envelope"),
-      "Blocked diagnostics must include the blocked source",
+    const scrubbedTraceFiles = await readdir(m13TraceDir);
+    const scrubbedRequestTraceName = scrubbedTraceFiles.find((fileName) =>
+      fileName.includes("session_m13_creative_callsite_guard_scrubbed") && fileName.endsWith("_request.json")
     );
-    assert.ok(
-      Array.isArray(blockedErrorTrace.outbound_callsite_blocked_paths),
-      "Blocked diagnostics must include bounded blocked path metadata",
-    );
-    assert.ok(
-      blockedErrorTrace.outbound_callsite_blocked_snippets.some((snippet) => snippet.includes("hermes_local_artifact_path_redacted")),
-      "Blocked diagnostics must include a bounded sanitized snippet",
-    );
+    assert.ok(scrubbedRequestTraceName, "Scrubbed Creative request must write a trace-safe _request.json");
+    const scrubbedRequestTraceText = await readFile(path.join(m13TraceDir, scrubbedRequestTraceName), "utf8");
+    assert.equal(containsOutboundCallsiteForbiddenLiteral(scrubbedRequestTraceText), false, "Scrubbed request trace must contain zero call-site forbidden literals");
+    const scrubbedRequestTrace = JSON.parse(scrubbedRequestTraceText);
+    assert.equal(scrubbedRequestTrace.outbound_hermes_payload_guard?.outbound_callsite_guard_blocked, false);
+    assert.equal(scrubbedRequestTrace.request?.context_pack?.selected_context?.[0]?.content, "Trace content omitted by Product outbound trace projection.");
     m13CmoOwnedCreativeReferenceFetchFailedResult = await runHermesCmoRuntime(m13CmoOwnedCreativeSessionExecutionRequest("req_m13_cmo_owned_creative_reference_fetch_failed"));
     assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.status, "failed");
     assert.equal(m13CmoOwnedCreativeReferenceFetchFailedResult.response.answer_basis.mode, "creative_execution");

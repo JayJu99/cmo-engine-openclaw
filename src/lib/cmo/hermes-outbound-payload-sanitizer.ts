@@ -1,5 +1,5 @@
 const OUTBOUND_FORBIDDEN_TEXT_PATTERN =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|Volumes)\/|\/private(?:\/|\b)|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|Volumes)\/|\/private(?:\/|\b)|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$)|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9._-]{20,})/i;
 export const OUTBOUND_HERMES_CALLSITE_GUARD_VERSION = "context-sanitizer-v2" as const;
 const OUTBOUND_CALLSITE_FORBIDDEN_LITERALS = [
   { literal: "[hermes_local_artifact_path_redacted]", label: "hermes_local_artifact_path_redacted" },
@@ -104,7 +104,13 @@ const fieldPathPreview = (path: JsonPathSegment[]): string => {
       return "refAssetsCamel";
     }
 
-    return typeof segment === "number" ? String(segment) : segment;
+    if (typeof segment === "number") {
+      return String(segment);
+    }
+
+    return outboundHermesStringHasForbiddenArtifactText(segment)
+      ? "redacted_creative_artifact_key"
+      : segment;
   }).join(".");
 
   return preview.slice(0, 180);

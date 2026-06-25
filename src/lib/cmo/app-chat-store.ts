@@ -136,9 +136,9 @@ const LEGACY_AUTO_CAPTURE_WRITE_REMOTE_SKIP_REASON = "skipped_legacy_auto_captur
 const MAX_SUGGESTED_VAULT_UPDATES_SESSION = 24;
 const MAX_VAULT_UPDATE_APPROVAL_EVENTS = 80;
 const PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_MESSAGE =
-  "Product blocked this Creative follow-up because old workspace/session context still contains redacted artifact text. Please retry after context scrub or start a clean session.";
+  "Product blocked this Creative follow-up because the final outbound request still contained unsafe local artifact text after scrub. Please retry the turn; if it repeats, start a clean session so Product can rebuild context without polluted metadata.";
 const PRODUCT_OUTBOUND_CREATIVE_CONTEXT_BLOCKED_ERROR =
-  "Product blocked Hermes CMO request because outbound payload still contained path-like Creative artifact text.";
+  "Product blocked Hermes CMO request because the final outbound body still contained unsafe local path, secret, or artifact text after scrub.";
 const PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE =
   "Product blocked this Creative response because the turn was marked non-mutating, but Hermes returned an image execution. The previous active asset was preserved.";
 

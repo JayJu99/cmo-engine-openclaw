@@ -1224,21 +1224,11 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
   };
   const traceSafeOutboundRequest = withOutboundHermesPayloadGuardDiagnostics(traceProjection.payload, traceDiagnostics);
   const traceSafeOutboundBody = JSON.stringify(traceSafeOutboundRequest);
-  const requestTraceEnvelope = hermesCmoChatV11TraceRoot(finalOutboundRequest, {
-    event: "request",
-    outbound_hermes_payload_guard: traceDiagnostics,
-    request: JSON.parse(traceSafeOutboundBody) as HermesCmoChatV11Request,
-  });
-  const traceEnvelopeForGuard = traceValue(requestTraceEnvelope);
   const fetchBodyBlockInspection = mergeOutboundHermesCallsiteBlockInspections([
     inspectOutboundHermesCallsiteBlock("fetch_body", outboundBody),
     inspectOutboundHermesCallsiteBlock("fetch_body", finalOutboundRequest),
   ]);
-  const traceEnvelopeBlockInspection = inspectOutboundHermesCallsiteBlock("trace_envelope", traceEnvelopeForGuard);
-  const callsiteBlockInspection = mergeOutboundHermesCallsiteBlockInspections([
-    fetchBodyBlockInspection,
-    traceEnvelopeBlockInspection,
-  ]);
+  const callsiteBlockInspection = fetchBodyBlockInspection;
 
   if (
     outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked ||
@@ -1257,7 +1247,7 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
     await writeHermesCmoChatV11Trace(blockedRequest, "error", {
       event: "error",
       fallback_used: false,
-      fallback_reason: "Product blocked Hermes CMO chat request because outbound payload still contained path-like Creative artifact text.",
+      fallback_reason: "Product blocked Hermes CMO chat request because the final outbound body still contained unsafe local path, secret, or artifact text after scrub.",
       fallback_eligible: false,
       outbound_hermes_payload_guard: blockedDiagnostics,
       outbound_blocked_fields_preview: outboundSanitizer.blockedFieldsPreview,
@@ -1272,7 +1262,7 @@ export async function runHermesCmoChatV11(input: HermesCmoChatV11RequestInput): 
       ok: false,
       request: blockedRequest,
       fallbackEligible: false,
-      fallbackReason: "Product blocked Hermes CMO chat request because outbound payload still contained path-like Creative artifact text.",
+      fallbackReason: "Product blocked Hermes CMO chat request because the final outbound body still contained unsafe local path, secret, or artifact text after scrub.",
     };
   }
 
