@@ -1041,8 +1041,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const creativeAcknowledgementNoopIntent = creativeNativeSession && isPureAcknowledgementIntent(input.message);
   const creativePromptProposalOnlyIntent = creativeNativeSession && isPromptProposalOnlyIntent(input.message);
   const creativeMutationIntent = creativeNativeSession && creativeFollowupIntentClass === "explicit_mutation" && isExplicitCreativeMutationIntent(input.message);
-  const creativeExecutionAllowedThisTurn = !creativeNativeSession || creativeMutationIntent;
-  const creativeDraftUpdateAllowedThisTurn = creativeMutationIntent;
+  const creativeExecutionAllowedThisTurn = creativeExecutionIntent || !creativeNativeSession || creativeMutationIntent;
+  const creativeDraftUpdateAllowedThisTurn = creativeExecutionIntent || creativeMutationIntent;
   const creativeExpectedResponse = creativeFollowupIntentClass
     ? creativeFollowupExpectedResponse(creativeFollowupIntentClass)
     : undefined;
@@ -1079,13 +1079,30 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         ...creativeFollowupPermissionContract,
       }
     : {};
+  const creativeDirectExecutionPermissionContract = creativeExecutionIntent
+    ? {
+        creative_followup_intent_class: "explicit_mutation",
+        creative_semantic_intent_class: "direct_create",
+        mutation_allowed: true,
+        execution_allowed: true,
+        draft_update_allowed: true,
+        expected_response: "asset",
+        creative_mutation_allowed: true,
+        creative_execution_allowed: true,
+        creative_draft_update_allowed: true,
+        creative_expected_response: "asset",
+        allow_creative_execution: true,
+        creative_mutation_requested: true,
+        creative_mutation_permitted_this_turn: true,
+      }
+    : {};
   const creativeWorkingStateCamelCase = creativeWorkingStateForHermes
     ? creativeWorkingStateForHermesCamelCase(creativeWorkingStateForHermes)
     : undefined;
   const creativeReferenceAssets = creativeReferenceAssetsForHermes(creativeWorkingStateForHermes, input.request.appId);
   const activeCreativeAssetResolutionSource = input.activeCreativeAssetResolutionSource ??
     (creativeReferenceAssets.length > 0 ? "creativeWorkingState" : "none");
-  const creativeCapabilities = creativeNativeSession
+  const creativeCapabilities = creativeNativeSession || creativeExecutionIntent
       ? {
         creative: {
           canProposeDraft: creativeDraftUpdateAllowedThisTurn,
@@ -1095,7 +1112,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         },
       }
     : undefined;
-  const creativeAllowedAgents: Array<"echo" | "surf" | "vault_agent" | "creative"> = creativeNativeSession
+  const creativeAllowedAgents: Array<"echo" | "surf" | "vault_agent" | "creative"> = creativeNativeSession || creativeExecutionIntent
     ? ["echo", "surf", "vault_agent", "creative"]
     : ["echo", "surf"];
   const creativeExecutionMode = /\b(video|motion)\b/.test(leadingIntentText(input.message)) ? "creative.generate_video" : "creative.generate_image";
@@ -1133,6 +1150,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       mode: "cmo.default",
       user_message: input.message,
       explicit_command: creativeExecutionIntent ? creativeExecutionMode : null,
+      ...creativeDirectExecutionPermissionContract,
       ...(creativeNativeSession ? { creative_session: true } : {}),
       ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
       ...(creativeSessionFollowupDetected ? { creative_session_followup_detected: true } : {}),
@@ -1175,6 +1193,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
               return_local_paths: true,
               include_metadata: true,
               require_review_before_publish: true,
+              ...creativeDirectExecutionPermissionContract,
               factual_claim_guardrails: [
                 "Do not invent unsupported product mechanics, rewards, APY, WLD, eligibility, or roadmap claims.",
                 "Use the user-supplied visual direction as the brief when accepted workspace context is missing.",
@@ -1197,6 +1216,15 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
           creative_decision_owner_when_live: "hermes_cmo",
           ...creativeConversationIntentMetadata,
           ...creativeMutationIntentMetadata,
+        }
+      : {}),
+    ...(creativeExecutionIntent
+      ? {
+          cmoOwnsCreativeDecision: true,
+          cmo_owns_creative_decision: true,
+          creativeDecisionOwnerWhenLive: "hermes_cmo",
+          creative_decision_owner_when_live: "hermes_cmo",
+          ...creativeDirectExecutionPermissionContract,
         }
       : {}),
     ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
@@ -1298,9 +1326,10 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       },
       ...(creativeExecutionIntent
         ? {
-            creative_execution_requested: true,
-            creative_execution_mode: creativeExecutionMode,
-            accepted_project_context_required: false,
+          creative_execution_requested: true,
+          creative_execution_mode: creativeExecutionMode,
+          ...creativeDirectExecutionPermissionContract,
+          accepted_project_context_required: false,
             accepted_workspace_context_required: false,
             missing_accepted_context_blocks_creative_execution: false,
           }
@@ -1367,9 +1396,10 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
       ...(creativeExecutionIntent
         ? {
-            creative_execution_requested: true,
-            creative_execution_mode: creativeExecutionMode,
-            direct_user_prompt_is_sufficient_execution_input: true,
+          creative_execution_requested: true,
+          creative_execution_mode: creativeExecutionMode,
+          ...creativeDirectExecutionPermissionContract,
+          direct_user_prompt_is_sufficient_execution_input: true,
             accepted_project_context_required: false,
             missing_accepted_context_blocks_creative_execution: false,
             factual_claim_guardrails: [

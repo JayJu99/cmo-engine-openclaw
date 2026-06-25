@@ -80,11 +80,10 @@ requireSource(helperSource, /UNSAFE_CREATIVE_TEXT_PATTERN/, "draft helper must r
 
 requireSource(intentSource, /isCreativeDraftSessionIntent/, "routing intent");
 requireSource(intentSource, /isCreativeSessionTransportContinuation/, "routing intent must expose transport-level Creative continuation detection");
-requireSource(intentSource, /"hinh"/, "routing intent must recognize Vietnamese image requests");
-requireSource(intentSource, /"brainstorm"/, "routing intent must recognize brainstorming creative concepts");
-requireSource(intentSource, /"key"/, "routing intent must recognize key visual requests");
-requireSource(intentSource, /"poster"/, "routing intent must recognize poster requests");
-requireSource(intentSource, /"sticker"/, "routing intent must recognize sticker requests");
+requireSource(intentSource, /classifyCreativeSemanticIntent/, "routing intent must use generalized Creative semantic classification");
+requireSource(intentSource, /creationScore/, "routing intent must score user creation goals");
+requireSource(intentSource, /assetOutputScore/, "routing intent must score desired Creative output type");
+requireSource(intentSource, /negativeExecution/, "routing intent must account for no-execute modifiers");
 requireSource(intentSource, /if \(creativeSessionContinuation\) return "creative_session"/, "routing intent must route active Creative session transport to execute");
 requireSource(intentSource, /if \(isCreativeDraftSessionIntent\(message\)\) return "creative_ideation"/, "routing intent must expose creative_ideation");
 requireSource(intentSource, /CreativeSessionFollowupIntentClass/, "routing intent must expose semantic Creative follow-up classes for permission shaping");
@@ -133,15 +132,22 @@ const activeAssetCreativeState = {
 };
 
 for (const message of [
-  "Minh muon tao hinh anh trung chu de world cup",
   "Brainstorm cho minh concept anh trung World Cup",
-  "Minh muon lam key visual cho campaign",
-  "Tao prompt hinh anh trung chu de World Cup",
-  "Thiet ke banner/poster/icon/sticker cho launch",
-  "Lam hinh cho campaign World Cup",
+  "Draft prompt only for an egg-shaped sports campaign image",
+  "Phac thao y tuong hinh anh truoc, chua can render",
 ]) {
   assert.equal(intent.isCreativeDraftSessionIntent(message), true, `${message} must be detected as Creative draft session intent`);
   assert.equal(intent.routeIntentForMessage(message), "creative_ideation", `${message} must route as creative_ideation`);
+}
+
+for (const message of [
+  "Compose a launch artwork for Eggs Vault in a wide seasonal quest format",
+  "Produce a premium campaign graphic for Eggs Vault with a dark reward object and 16:9 crop",
+  "Lam mot anh quang cao Eggs Vault phong cach le hoi, ti le ngang, co vat pham thuong o trung tam",
+  "Design an illustrated promo asset for the new quest event with clean product branding",
+]) {
+  assert.equal(intent.isExplicitCreativeExecutionIntent(message), true, `${message} must be detected as direct Creative execution`);
+  assert.equal(intent.routeIntentForMessage(message), "creative_execution", `${message} must route as creative_execution`);
 }
 
 for (const message of [
@@ -157,6 +163,51 @@ for (const message of [
   assert.equal(intent.isCreativeSessionTransportContinuation(message, activeCreativeState), true, `${message} must route as Creative session transport with active state`);
   assert.equal(intent.routeIntentForMessage(message, { creativeWorkingState: activeCreativeState }), "creative_session", `${message} must route as a CMO-native Creative session`);
   assert.notEqual(intent.routeIntentForMessage(message), "creative_session", `${message} must not route as Creative session without creative state`);
+}
+
+for (const message of [
+  "Assess the current composition for trust and clarity, no changes yet",
+  "What feels confusing in this asset before we touch it?",
+  "Cho minh nhan xet bo cuc hien tai, khoan sua gi",
+]) {
+  assert.equal(intent.creativeSessionFollowupIntentClass(message), "asset_review", `${message} must classify as asset review`);
+  assert.equal(intent.routeIntentForMessage(message, { creativeWorkingState: activeAssetCreativeState }), "creative_session", `${message} must stay non-mutating Creative session`);
+}
+
+for (const message of [
+  "Map this asset across website, social feed, and community announcement use",
+  "How should the same image be positioned for web, post, and Telegram?",
+  "Nen dung hinh nay khac nhau the nao giua kenh web va cong dong?",
+]) {
+  assert.equal(intent.creativeSessionFollowupIntentClass(message), "channel_advisory", `${message} must classify as channel advisory`);
+  assert.equal(intent.routeIntentForMessage(message, { creativeWorkingState: activeAssetCreativeState }), "creative_session", `${message} must stay Creative session`);
+}
+
+for (const message of [
+  "Give me only the edit instructions for a sharper reward focal point",
+  "Write a prompt direction but do not render yet",
+  "Chi de xuat prompt chinh mau va bo cuc, khoan tao file",
+]) {
+  assert.equal(intent.creativeSessionFollowupIntentClass(message), "prompt_proposal", `${message} must classify as prompt proposal`);
+  assert.equal(intent.routeIntentForMessage(message, { creativeWorkingState: activeAssetCreativeState }), "creative_session", `${message} must stay Creative session`);
+}
+
+for (const message of [
+  "Apply the sharper reward focal point to the asset now",
+  "Make this version warmer and more premium",
+  "Chinh hinh hien tai sang hon va them nhan vat pham thuong",
+]) {
+  assert.equal(intent.creativeSessionFollowupIntentClass(message), "explicit_mutation", `${message} must classify as explicit mutation`);
+  assert.equal(intent.routeIntentForMessage(message, { creativeWorkingState: activeAssetCreativeState }), "creative_session", `${message} must execute through Creative session`);
+}
+
+for (const message of [
+  "Okay, keep it for now",
+  "Chot huong nay",
+  "Duoc roi, tam thoi giu nguyen",
+]) {
+  assert.equal(intent.creativeSessionFollowupIntentClass(message), "ack_noop", `${message} must classify as acknowledgement`);
+  assert.equal(intent.routeIntentForMessage(message, { creativeWorkingState: activeAssetCreativeState }), "creative_session", `${message} must stay Creative session`);
 }
 
 assert.equal(intent.routeIntentForMessage("Traffic tuan nay the nao?", { creativeWorkingState: activeCreativeState }), "cmo_default", "analytics requests must not be forced into Creative");
@@ -406,7 +457,7 @@ requireSource(mapperSource, /creative_decision_owner_when_live: "hermes_cmo"/, "
 forbidSource(mapperSource, /creative_session_followup_intent/, "Hermes mapper must not expose Product Creative action intent");
 forbidSource(mapperSource, /creativeSessionExecuteDraftCandidate/, "Hermes mapper must not derive Product execute candidates");
 forbidSource(mapperSource, /execute_decision_candidate/, "Hermes mapper must not send Product execute candidate");
-forbidSource(mapperSource, /allow_creative_execution/, "Hermes mapper must not send legacy snake allow execution flag for CMO-native sessions");
+requireSource(mapperSource, /creativeDirectExecutionPermissionContract[\s\S]*allow_creative_execution: true/, "Hermes mapper must allow fresh direct Creative execution");
 requireSource(mapperSource, /creative_execution_allowed: creativeExecutionAllowedThisTurn/, "Hermes mapper must send explicit Creative execution permission without choosing execution");
 forbidSource(mapperSource, /intent: "execute_draft"/, "Hermes mapper must not send execute_draft intent");
 

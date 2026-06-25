@@ -576,6 +576,64 @@ try {
         assert.equal(creativeExecution.endpointKind, "execute");
         assert.equal(creativeExecution.reason, "creative_execution");
 
+        for (const message of [
+          "Compose launch artwork for Eggs Vault with a premium reward object and wide campaign crop.",
+          "Produce a seasonal quest graphic for Eggs Vault, dark polished style, 16:9.",
+          "Lam anh quang cao Eggs Vault mua le hoi voi vat pham thuong o trung tam.",
+          "Design an illustrated promo asset for the Eggs Vault quest launch.",
+        ]) {
+          const routed = router.resolveHermesCmoChatRoute({ appId: "hold-pay", message });
+          assert.equal(routed.endpoint, "/agents/cmo/execute", `${message} must route to Creative execution endpoint`);
+          assert.equal(routed.reason, "creative_execution", `${message} must classify as direct Creative creation`);
+        }
+
+        const directCreativeCreateRequest = mapper.mapCmoChatToHermesCmoRequest({
+          ...sampleTurnInput,
+          message: "Produce a seasonal quest graphic for Eggs Vault, dark polished style, 16:9.",
+          request: {
+            ...sampleTurnInput.request,
+            workspaceId: "eggs-vault",
+            appId: "eggs-vault",
+            appName: "Eggs Vault",
+          },
+          contextPackage: {
+            ...sampleTurnInput.contextPackage,
+            workspaceId: "eggs-vault",
+            app: {
+              ...sampleTurnInput.contextPackage.app,
+              id: "eggs-vault",
+              name: "Eggs Vault",
+            },
+          },
+          sessionId: "session_eggs_direct_create",
+          userMessageId: "msg_eggs_direct_create",
+          createdAt: "2026-06-20T10:01:30.000Z",
+          userIdentity: { userId: "user_eggs", userEmail: "jay@example.com" },
+        });
+        assert.equal(directCreativeCreateRequest.intent.explicit_command, "creative.generate_image");
+        assert.equal(directCreativeCreateRequest.intent.creative_followup_intent_class, "explicit_mutation");
+        assert.equal(directCreativeCreateRequest.intent.creative_semantic_intent_class, "direct_create");
+        assert.equal(directCreativeCreateRequest.intent.execution_allowed, true);
+        assert.equal(directCreativeCreateRequest.intent.mutation_allowed, true);
+        assert.equal(directCreativeCreateRequest.intent.draft_update_allowed, true);
+        assert.equal(directCreativeCreateRequest.intent.expected_response, "asset");
+        assert.equal(directCreativeCreateRequest.intent.allow_creative_execution, true);
+        assert.equal(directCreativeCreateRequest.constraints.creative_execution_requested, true);
+        assert.equal(directCreativeCreateRequest.constraints.execution_allowed, true);
+        assert.equal(directCreativeCreateRequest.constraints.expected_response, "asset");
+        assert.equal(directCreativeCreateRequest.constraints.allowed_agents.includes("creative"), true);
+        assert.equal(directCreativeCreateRequest.tool_policy.creative_execution_allowed, true);
+        assert.equal(directCreativeCreateRequest.tool_policy.expected_response, "asset");
+        assert.equal(directCreativeCreateRequest.tool_policy.allowed_agents.includes("creative"), true);
+        assert.equal(directCreativeCreateRequest.capabilities.creative.canExecuteImageGeneration, true);
+        assert.notEqual(directCreativeCreateRequest.intent.explicit_command, null, "fresh direct creation must not fall through to read-only/tool_read");
+
+        const nonCreativeStrategy = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "What positioning should Eggs Vault prioritize for the next quest launch?",
+        });
+        assert.notEqual(nonCreativeStrategy.reason, "creative_execution", "strategy-only questions must not become Creative execution");
+
         const activeCreativeState = {
           active_asset_id: "creative_uploaded_primary",
           drafts: [],
@@ -1240,7 +1298,7 @@ try {
     };
     const creativeReviewRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...creativeConversationInput,
-      message: "Review the current visual if we use it as a campaign hero; what are the biggest marketing risks?",
+      message: "Assess the current composition for trust and clarity; no edits yet.",
     });
     assert.equal(creativeReviewRequest.intent.creative_conversation_only, true);
     assert.equal(creativeReviewRequest.intent.creative_followup_intent_class, "asset_review");
@@ -1266,7 +1324,7 @@ try {
       userMessageId: "msg_eggs_creative_review_use_as",
       message: "Review visual nay neu dung lam landing hero: rui ro marketing lon nhat la gi?",
     });
-    assert.equal(creativeReviewWithUseAsRequest.intent.creative_followup_intent_class, "asset_review");
+    assert.equal(creativeReviewWithUseAsRequest.intent.creative_followup_intent_class, "channel_advisory");
     assert.equal(creativeReviewWithUseAsRequest.intent.execution_allowed, false);
     assert.equal(creativeReviewWithUseAsRequest.intent.mutation_allowed, false);
 
