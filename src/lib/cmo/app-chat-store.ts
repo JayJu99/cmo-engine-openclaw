@@ -1737,6 +1737,10 @@ function normalizeSafeTraceSummary(value: unknown): Record<string, unknown> | un
 
 const UNSAFE_CREATIVE_DIAGNOSTIC_TEXT_PATTERN =
   /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|(?:^|\s)file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|mnt|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine)/i;
+const UNSAFE_CREATIVE_DIAGNOSTIC_WRAPPER_PATTERN =
+  /^\s*(?:\{|\[|Creative[_\s-]*image[_\s-]*asset[_\s-]*refine\s*[:={\[]|reference_assets\s*[:={\[]|conversion_h_|creative-agent-images\b|cmo-creative-execute\b)/i;
+const UNSAFE_CREATIVE_DIAGNOSTIC_LINE_PATTERN =
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|(?:^|\s)file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|mnt|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute|reference_assets)/i;
 
 function normalizeSafeCreativeDiagnosticValue(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -1787,11 +1791,28 @@ function normalizeSafeCreativeDiagnosticRecord(value: unknown): Record<string, u
 function scrubPersistedReplayText(value: unknown, fallback = ""): string {
   const text = stringValue(value, fallback);
 
-  if (!text || UNSAFE_CREATIVE_DIAGNOSTIC_TEXT_PATTERN.test(text)) {
+  if (!text) {
     return "";
   }
 
-  return text;
+  if (
+    UNSAFE_CREATIVE_DIAGNOSTIC_WRAPPER_PATTERN.test(text) &&
+    UNSAFE_CREATIVE_DIAGNOSTIC_TEXT_PATTERN.test(text)
+  ) {
+    return "";
+  }
+
+  if (!UNSAFE_CREATIVE_DIAGNOSTIC_LINE_PATTERN.test(text)) {
+    return text;
+  }
+
+  const scrubbed = text
+    .split(/\r?\n/)
+    .filter((line) => !UNSAFE_CREATIVE_DIAGNOSTIC_LINE_PATTERN.test(line))
+    .join("\n")
+    .trim();
+
+  return scrubbed;
 }
 
 function normalizeSuggestedActions(value: unknown): CMOAppChatResponse["suggestedActions"] {
@@ -4009,6 +4030,7 @@ export async function createAppChatSession(
   let productRenderSource: CmoProductRenderSource | undefined;
   let productFallbackReason: string | undefined;
   let completedUnifiedCmoAgentAnswer: string | undefined;
+  let completedUnifiedCmoAgentAnswerBasisMode: string | undefined;
   let sessionSummary = continuedSession?.sessionSummary;
   let sessionArtifacts = continuedSession?.sessionArtifacts ?? [];
   let turnCreativeArtifacts: Record<string, unknown>[] = [];
@@ -4863,24 +4885,25 @@ export async function createAppChatSession(
         creativeArtifacts,
       );
       answer = creativeContractViolation ? PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE : mappedHermesResult.answer;
+      const unifiedAnswerBasis = recordValue(hermesResult.response.answer_basis) ?? {};
       if (
+        !creativeContractViolation &&
+        hermesResult.hermesCmoEndpointKind === "cmo_agent" &&
+        hermesResult.response.status === "completed" &&
+        answer.trim() &&
+        !userVisibleAnswerPathLike(answer)
+      ) {
+        completedUnifiedCmoAgentAnswer = answer;
+        completedUnifiedCmoAgentAnswerBasisMode = stringValue(unifiedAnswerBasis.mode, "cmo_agent");
+      }
+      if (
+        !completedUnifiedCmoAgentAnswer &&
         (hermesCmoCreativeExecutionRequested || hermesCreativeExecutionResponseReceived) &&
         creativeMetadataPresent === true &&
         !creativeArtifacts.length &&
         isGenericCreativeSuccessWithoutAssetAnswer(answer)
       ) {
         answer = creativeMissingRenderableAssetWarning();
-      }
-      const hermesAnswerBasis = recordValue(hermesResult.response.answer_basis) ?? {};
-      const hermesResponseRoute = recordValue((hermesResult.response as unknown as Record<string, unknown>).route) ?? {};
-      if (
-        hermesResult.hermesCmoEndpointKind === "cmo_agent" &&
-        hermesResult.response.status === "completed" &&
-        hermesAnswerBasis.mode === "cmo_agent" &&
-        (hermesResponseRoute.kind === undefined || hermesResponseRoute.kind === "cmo_agent") &&
-        answer.trim()
-      ) {
-        completedUnifiedCmoAgentAnswer = answer;
       }
       status = "completed";
       assumptions = mappedHermesResult.assumptions;
@@ -5627,7 +5650,7 @@ export async function createAppChatSession(
         runtimeStatus: "live",
         productRenderSource: "hermes_cmo",
         route_decision: "cmo_agent",
-        answer_basis_mode: "cmo_agent",
+        answer_basis_mode: completedUnifiedCmoAgentAnswerBasisMode ?? "cmo_agent",
         fallback_used: false,
       };
     }
