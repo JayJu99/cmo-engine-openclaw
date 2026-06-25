@@ -206,6 +206,41 @@ assert.equal(generatedAssetState.assets[0].mime_type, "image/png", "explicit gen
 assert.equal(generatedAssetState.assets[0].sha256, "a".repeat(64), "explicit generation must persist Creative asset sha256");
 assert.equal(generatedAssetState.assets[0].bytes, 123456, "explicit generation must persist Creative asset bytes");
 
+const visualInspectionAssetState = draftState.applyCreativeAssetStateUpdate(undefined, [{
+  asset_id: "creative_asset_visual_qa",
+  kind: "image",
+  status: "stored",
+  mime_type: "image/png",
+  transport_status: "uploaded",
+  render_url: "https://product.example/assets/visual-qa.png",
+  sha256: "d".repeat(64),
+  bytes: 456789,
+  width: 1536,
+  height: 864,
+  format: "16:9",
+  visual_summary: "Premium black hero image with a teal reward focal point.",
+  visual_inspection: {
+    status: "success",
+    summary: "Hero composition is readable.",
+    crop_channel_fit: {
+      landing: "Safe for 16:9 landing crop.",
+      x_post: "Keep CTA outside the tight center crop.",
+      telegram: "Readable after downscale.",
+    },
+    defects: [],
+  },
+  dominant_palette: ["#020617", "#14b8a6"],
+  detected_text: ["OPEN"],
+  safe_crop_notes: { landing: "Keep the egg centered." },
+}]);
+assert.equal(visualInspectionAssetState.active_asset_id, "creative_asset_visual_qa", "visual QA asset must become active");
+assert.deepEqual(visualInspectionAssetState.assets[0].visual_inspection.crop_channel_fit.x_post, "Keep CTA outside the tight center crop.", "visual inspection must persist in Creative state");
+assert.equal(visualInspectionAssetState.assets[0].width, 1536, "visual QA asset width must persist");
+assert.equal(visualInspectionAssetState.assets[0].height, 864, "visual QA asset height must persist");
+assert.equal(visualInspectionAssetState.assets[0].format, "16:9", "visual QA asset format must persist");
+assert.deepEqual(visualInspectionAssetState.assets[0].dominant_palette, ["#020617", "#14b8a6"], "dominant palette must persist");
+assert.deepEqual(visualInspectionAssetState.assets[0].detected_text, ["OPEN"], "detected text must persist");
+
 const directGeneratedAssetWithInferredMedia = {
   asset_id: "creative_asset_req_h6_msg_a1247a0c-e1b_001",
   status: "stored",

@@ -232,14 +232,64 @@ function isMachineWrapperCreativeDraftText(value: string): boolean {
   );
 }
 
+const OUTBOUND_REPLAY_FORBIDDEN_TEXT_PATTERN =
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|(?:^|\s)file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|mnt|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute|\bcreative image asset\s+refine\b|\bredacted\s+(?:prompt|brief|content|answer)\b|(?:prompt|brief|content|answer)\s+redacted\b)/i;
+
+function hasUnsafeOutboundReplayText(value: string): boolean {
+  return OUTBOUND_REPLAY_FORBIDDEN_TEXT_PATTERN.test(compactMultilineText(value, MAX_REPLAY_MESSAGE_CHARS)) ||
+    isMachineWrapperCreativeDraftText(value);
+}
+
 function safeCreativeReplayText(value: unknown, maxChars = MAX_REPLAY_MESSAGE_CHARS): string | undefined {
+  if (typeof value === "string" && hasUnsafeOutboundReplayText(value)) {
+    return undefined;
+  }
+
   const text = canonicalAssistantText(value, maxChars);
 
-  if (!text || isMachineWrapperCreativeDraftText(text)) {
+  if (!text || hasUnsafeOutboundReplayText(text)) {
     return undefined;
   }
 
   return text;
+}
+
+function safeCreativeReplayMetadataValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const items = value
+      .map(safeCreativeReplayMetadataValue)
+      .filter((item) => item !== undefined);
+
+    return items.length ? items : undefined;
+  }
+
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
+      .map(([key, item]) => [key, safeCreativeReplayMetadataValue(item)] as const)
+      .filter(([, item]) => item !== undefined);
+
+    return entries.length ? Object.fromEntries(entries) : undefined;
+  }
+
+  if (typeof value === "string") {
+    return safeCreativeReplayText(value, 1200);
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  if (typeof value === "boolean" || value === null) {
+    return value;
+  }
+
+  return undefined;
+}
+
+function safeCreativeReplayMetadataRecord(value: unknown): Record<string, unknown> | undefined {
+  const normalized = safeCreativeReplayMetadataValue(value);
+
+  return isRecord(normalized) ? normalized : undefined;
 }
 
 function sanitizeCreativeWorkingStateForHermes(state: CmoCreativeWorkingState | undefined): CmoCreativeWorkingState | undefined {
@@ -263,6 +313,11 @@ function sanitizeCreativeWorkingStateForHermes(state: CmoCreativeWorkingState | 
     ...asset,
     ...(safeCreativeReplayText(asset.prompt, 3000) ? { prompt: safeCreativeReplayText(asset.prompt, 3000) } : { prompt: undefined }),
     ...(safeCreativeReplayText(asset.visual_summary, 1200) ? { visual_summary: safeCreativeReplayText(asset.visual_summary, 1200) } : { visual_summary: undefined }),
+    ...(safeCreativeReplayMetadataRecord(asset.visual_inspection) ? { visual_inspection: safeCreativeReplayMetadataRecord(asset.visual_inspection) } : { visual_inspection: undefined }),
+    ...(safeCreativeReplayMetadataValue(asset.dominant_palette) !== undefined ? { dominant_palette: safeCreativeReplayMetadataValue(asset.dominant_palette) } : { dominant_palette: undefined }),
+    ...(safeCreativeReplayMetadataValue(asset.detected_text) !== undefined ? { detected_text: safeCreativeReplayMetadataValue(asset.detected_text) } : { detected_text: undefined }),
+    ...(safeCreativeReplayMetadataValue(asset.safe_crop_notes) !== undefined ? { safe_crop_notes: safeCreativeReplayMetadataValue(asset.safe_crop_notes) } : { safe_crop_notes: undefined }),
+    ...(safeCreativeReplayText(asset.format, 160) ? { format: safeCreativeReplayText(asset.format, 160) } : { format: undefined }),
   }));
 
   return {
@@ -295,12 +350,17 @@ function creativeDraftReplayText(state: CmoCreativeWorkingState | undefined): st
     return null;
   }
 
+  const title = safeCreativeReplayText(draft.title, 300);
+  const brief = safeCreativeReplayText(draft.brief, 1200);
+  const prompt = safeCreativeReplayText(draft.prompt, 3000);
+  const negativePrompt = safeCreativeReplayText(draft.negative_prompt, 800);
+  const format = safeCreativeReplayText(draft.format, 160);
   const lines = [
-    canonicalAssistantText(draft.title, 300) ? `Creative draft: ${canonicalAssistantText(draft.title, 300)}` : null,
-    canonicalAssistantText(draft.brief, 1200) ? `Brief: ${canonicalAssistantText(draft.brief, 1200)}` : null,
-    canonicalAssistantText(draft.prompt, 3000) ? `Prompt: ${canonicalAssistantText(draft.prompt, 3000)}` : null,
-    canonicalAssistantText(draft.negative_prompt, 800) ? `Negative prompt: ${canonicalAssistantText(draft.negative_prompt, 800)}` : null,
-    canonicalAssistantText(draft.format, 160) ? `Format: ${canonicalAssistantText(draft.format, 160)}` : null,
+    title ? `Creative draft: ${title}` : null,
+    brief ? `Brief: ${brief}` : null,
+    prompt ? `Prompt: ${prompt}` : null,
+    negativePrompt ? `Negative prompt: ${negativePrompt}` : null,
+    format ? `Format: ${format}` : null,
   ].filter((line): line is string => Boolean(line));
 
   return lines.length ? compactMultilineText(lines.join("\n"), MAX_REPLAY_MESSAGE_CHARS) : null;
@@ -311,11 +371,11 @@ function creativeDraftRecordReplayText(value: unknown): string | null {
     return null;
   }
 
-  const title = canonicalAssistantText(value.title, 300);
-  const brief = canonicalAssistantText(value.brief, 1200);
-  const prompt = canonicalAssistantText(value.prompt, 3000);
-  const negativePrompt = canonicalAssistantText(value.negative_prompt ?? value.negativePrompt, 800);
-  const format = canonicalAssistantText(value.format, 160);
+  const title = safeCreativeReplayText(value.title, 300);
+  const brief = safeCreativeReplayText(value.brief, 1200);
+  const prompt = safeCreativeReplayText(value.prompt, 3000);
+  const negativePrompt = safeCreativeReplayText(value.negative_prompt ?? value.negativePrompt, 800);
+  const format = safeCreativeReplayText(value.format, 160);
   const lines = [
     title ? `Creative draft: ${title}` : null,
     brief ? `Brief: ${brief}` : null,
@@ -394,7 +454,7 @@ function firstCanonicalStringFromRecord(value: unknown, keys: string[], maxChars
   }
 
   for (const key of keys) {
-    const candidate = canonicalAssistantText(value[key], maxChars);
+    const candidate = safeCreativeReplayText(value[key], maxChars);
 
     if (candidate) {
       return candidate;
@@ -425,14 +485,10 @@ function creativeAssetReplayText(message: CMOChatMessage): string | null {
 }
 
 function canonicalReplayContent(message: CMOChatMessage): string | null {
-  const directContent = canonicalAssistantText(message.content);
+  const directContent = safeCreativeReplayText(message.content);
 
   if (message.role === "assistant") {
     if (typeof message.content !== "string" || !message.content.trim()) {
-      return null;
-    }
-
-    if (directContent && isMachineWrapperCreativeDraftText(directContent)) {
       return null;
     }
   }
@@ -461,15 +517,27 @@ function replayableChatHistory(history: CMOChatMessage[]): ReplayableCmoChatMess
 }
 
 function contextItemSnapshot(item: ContextItem): Record<string, unknown> {
+  const title = safeCreativeReplayText(item.title, 300);
+  const inclusionReason = safeCreativeReplayText(item.inclusionReason, 600);
+  const content = safeCreativeReplayText(item.content, 4000);
+  const contentPreview = safeCreativeReplayText(item.contentPreview, 1200);
+  const sourceLabel = safeCreativeReplayText(item.source.label, 300);
+  const sourcePath = safeCreativeReplayText(item.source.path, 600);
+
   return {
     id: item.id,
     kind: item.kind,
-    title: item.title,
-    source: item.source,
-    inclusionReason: item.inclusionReason,
+    ...(title ? { title } : {}),
+    source: {
+      sourceId: item.source.sourceId,
+      type: item.source.type,
+      ...(sourceLabel ? { label: sourceLabel } : {}),
+      ...(sourcePath ? { path: sourcePath } : {}),
+    },
+    ...(inclusionReason ? { inclusionReason } : {}),
     exists: item.exists,
-    content: item.content,
-    contentPreview: item.contentPreview,
+    ...(content ? { content } : {}),
+    ...(contentPreview ? { contentPreview } : {}),
     contextQuality: item.contextQuality,
     tokenEstimate: item.tokenEstimate,
     truncated: item.truncated,
@@ -478,16 +546,43 @@ function contextItemSnapshot(item: ContextItem): Record<string, unknown> {
 }
 
 function noteSnapshot(note: CMOContextNote): Record<string, unknown> {
+  const title = safeCreativeReplayText(note.title, 300);
+  const path = safeCreativeReplayText(note.path, 600);
+  const content = safeCreativeReplayText(note.content, 4000);
+  const qualityReason = safeCreativeReplayText(note.qualityReason, 600);
+
   return {
-    title: note.title,
-    path: note.path,
+    ...(title ? { title } : {}),
+    ...(path ? { path } : {}),
     type: note.type,
     exists: note.exists,
-    content: note.content,
+    ...(content ? { content } : {}),
     truncated: note.truncated,
     frontmatterStatus: note.frontmatterStatus,
     contextQuality: note.contextQuality,
-    qualityReason: note.qualityReason,
+    ...(qualityReason ? { qualityReason } : {}),
+  };
+}
+
+function vaultNoteRefSnapshot(note: VaultNoteRef): Record<string, unknown> {
+  const title = safeCreativeReplayText(note.title, 300);
+  const path = safeCreativeReplayText(note.path, 600);
+  const reason = safeCreativeReplayText(note.reason, 600);
+  const contentPreview = safeCreativeReplayText(note.contentPreview, 1200);
+  const qualityReason = safeCreativeReplayText(note.qualityReason, 600);
+
+  return {
+    id: note.id,
+    ...(title ? { title } : {}),
+    ...(path ? { path } : {}),
+    type: note.type,
+    ...(reason ? { reason } : {}),
+    ...(typeof note.selected === "boolean" ? { selected: note.selected } : {}),
+    ...(typeof note.exists === "boolean" ? { exists: note.exists } : {}),
+    ...(contentPreview ? { contentPreview } : {}),
+    ...(note.frontmatterStatus ? { frontmatterStatus: note.frontmatterStatus } : {}),
+    ...(note.contextQuality ? { contextQuality: note.contextQuality } : {}),
+    ...(qualityReason ? { qualityReason } : {}),
   };
 }
 
@@ -557,13 +652,23 @@ function creativeWorkingStateForHermesCamelCase(state: CmoCreativeWorkingState):
       ...(asset.status ? { status: asset.status } : {}),
       ...(asset.prompt ? { prompt: asset.prompt } : {}),
       ...(asset.visual_summary ? { visualSummary: asset.visual_summary } : {}),
+      ...(asset.visual_inspection ? { visualInspection: asset.visual_inspection } : {}),
+      ...(asset.dominant_palette !== undefined ? { dominantPalette: asset.dominant_palette } : {}),
+      ...(asset.detected_text !== undefined ? { detectedText: asset.detected_text } : {}),
+      ...(asset.safe_crop_notes !== undefined ? { safeCropNotes: asset.safe_crop_notes } : {}),
       ...(asset.model ? { model: asset.model } : {}),
       ...(asset.operation ? { operation: asset.operation } : {}),
       ...(asset.mime_type ? { mimeType: asset.mime_type } : {}),
+      ...(asset.format ? { format: asset.format } : {}),
+      ...(asset.fetch_url ? { fetchUrl: asset.fetch_url } : {}),
+      ...(asset.preview_url ? { previewUrl: asset.preview_url } : {}),
       ...(asset.render_url ? { renderUrl: asset.render_url } : {}),
       ...(asset.signed_url ? { signedUrl: asset.signed_url } : {}),
       ...(asset.sha256 ? { sha256: asset.sha256 } : {}),
       ...(typeof asset.bytes === "number" ? { bytes: asset.bytes } : {}),
+      ...(typeof asset.width === "number" ? { width: asset.width } : {}),
+      ...(typeof asset.height === "number" ? { height: asset.height } : {}),
+      ...(typeof asset.aspect_ratio === "number" ? { aspectRatio: asset.aspect_ratio } : {}),
     })),
   };
 }
@@ -601,6 +706,8 @@ function creativeReferenceAssetsForHermes(
       ...(activeAsset.mime_type ? { mime_type: activeAsset.mime_type, mimeType: activeAsset.mime_type } : {}),
       ...(activeAsset.sha256 ? { sha256: activeAsset.sha256 } : {}),
       ...(typeof activeAsset.bytes === "number" ? { bytes: activeAsset.bytes } : {}),
+      ...(typeof activeAsset.width === "number" ? { width: activeAsset.width } : {}),
+      ...(typeof activeAsset.height === "number" ? { height: activeAsset.height } : {}),
       fetch_url: creativeAssetDownloadFetchUrl(appId, activeAsset.asset_id),
       fetchUrl,
       auth_ref: CMO_CREATIVE_ARTIFACT_AUTH_REF,
@@ -1143,7 +1250,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         graphStatus: input.contextPackage.graphStatus ?? "empty",
       },
       all_context_items: allContextItemsForHermes.map(contextItemSnapshot),
-      missing_context: missingContextForHermes,
+      missing_context: missingContextForHermes.map(vaultNoteRefSnapshot),
       ...(creativeExecutionIntent
         ? {
             optional_context_gaps: omittedCreativeMissingContext.map((note) => ({
@@ -1153,7 +1260,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             })),
           }
         : {}),
-      context_used: input.contextUsed,
+      context_used: input.contextUsed.map(vaultNoteRefSnapshot),
     },
     constraints: {
       no_direct_vault_write: true,
@@ -1662,6 +1769,36 @@ function labelFromUnknown(value: unknown): string | null {
   return null;
 }
 
+const CREATIVE_B_DIAGNOSTIC_KEYS = [
+  "reference_asset_fetch_status",
+  "local_image_path_available",
+  "creative_visual_inspection_attempted",
+  "creative_visual_inspection_used",
+  "creative_visual_inspection_status",
+  "creative_visual_inspection_error",
+  "creative_answer_source",
+  "creative_visual_observations",
+  "creative_post_generation_visual_inspection_attempted",
+  "creative_post_generation_visual_inspection_used",
+  "creative_post_generation_visual_inspection_status",
+  "creative_post_generation_visual_metadata",
+] as const;
+
+function creativeBDiagnosticsFromRecords(records: Array<Record<string, unknown> | undefined>): Record<string, unknown> {
+  const diagnostics: Record<string, unknown> = {};
+
+  for (const key of CREATIVE_B_DIAGNOSTIC_KEYS) {
+    for (const record of records) {
+      if (record && record[key] !== undefined) {
+        diagnostics[key] = record[key];
+        break;
+      }
+    }
+  }
+
+  return diagnostics;
+}
+
 function suggestedActionsFromHermes(response: HermesCmoRuntimeResponse): CMOAppChatResponse["suggestedActions"] {
   const structured = isRecord(response.structured_output) ? response.structured_output : {};
   const nextSteps = Array.isArray(structured.next_steps) ? structured.next_steps : [];
@@ -1784,6 +1921,8 @@ function metadataFromHermes(
   const toolReadsCount = toolReadsCountFromResponse(result.response, activityEvents);
   const contextResolution = contextResolutionFromResponse(result.response);
   const structuredOutput: Record<string, unknown> = isRecord(result.response.structured_output) ? result.response.structured_output : {};
+  const activitySummary: Record<string, unknown> | undefined = isRecord(result.response.activity_summary) ? result.response.activity_summary : undefined;
+  const creativeBDiagnostics = creativeBDiagnosticsFromRecords([structuredOutput, result.response, activitySummary]);
   const answerBasis: Record<string, unknown> = isRecord(result.response.answer_basis) ? result.response.answer_basis : {};
   const answerBasisMode = typeof answerBasis.mode === "string" ? answerBasis.mode : undefined;
   const creativeIdeationResponseReceived = answerBasisMode === "creative_ideation";
@@ -1942,6 +2081,7 @@ function metadataFromHermes(
     fallback_used: false,
     ...(result.hermesCmoRouteDecision === "creative_execution" ? { creative_execution_requested: true } : {}),
     ...(answerBasisMode ? { answer_basis_mode: answerBasisMode } : {}),
+    ...creativeBDiagnostics,
     ...(creativeNativeResponseReceived
       ? {
           ...(creativeIdeationResponseReceived ? { creative_ideation_response_received: true } : {}),

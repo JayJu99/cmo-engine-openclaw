@@ -58,6 +58,14 @@ export interface CmoCreativeAssetArtifact {
   provider?: string;
   prompt_used?: string;
   visual_summary?: string;
+  visual_inspection?: Record<string, unknown>;
+  visualInspection?: Record<string, unknown>;
+  dominant_palette?: unknown;
+  dominantPalette?: unknown;
+  detected_text?: unknown;
+  detectedText?: unknown;
+  safe_crop_notes?: unknown;
+  safeCropNotes?: unknown;
   storage_path?: string;
   storagePath?: string;
   render_url?: string;
@@ -99,6 +107,8 @@ const SENSITIVE_TEXT_PATTERN =
   /(Bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|AKIA[0-9A-Z]{12,}|api[_-]?key\s*[:=]\s*\S+|password\s*[:=]\s*\S+|token\s*[:=]\s*\S+|cookie\s*[:=]\s*\S+|secret\s*[:=]\s*\S+)/gi;
 const AUTH_PATH_PATTERN =
   /(?:[A-Za-z]:\\Users\\[^\\\s]+\\[^\s]*?\.codex\\auth\.json|\/Users\/[^/\s]+\/[^\s]*?\.codex\/auth\.json|\/home\/[^/\s]+\/[^\s]*?\.codex\/auth\.json|\.codex[\\/][^\s]*auth\.json|auth\.json)/gi;
+const UNSAFE_CREATIVE_METADATA_TEXT_PATTERN =
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|(?:^|\s)file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|mnt|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute)/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -116,6 +126,48 @@ function stringValue(value: unknown, max = 1200): string | undefined {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
+}
+
+function safeCreativeMetadataValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const items = value
+      .map(safeCreativeMetadataValue)
+      .filter((item) => item !== undefined);
+
+    return items.length ? items : undefined;
+  }
+
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
+      .map(([key, item]) => [key, safeCreativeMetadataValue(item)] as const)
+      .filter(([, item]) => item !== undefined);
+
+    return entries.length ? Object.fromEntries(entries) : undefined;
+  }
+
+  if (typeof value === "string") {
+    if (UNSAFE_CREATIVE_METADATA_TEXT_PATTERN.test(value)) {
+      return undefined;
+    }
+
+    return stringValue(value);
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  if (typeof value === "boolean" || value === null) {
+    return value;
+  }
+
+  return undefined;
+}
+
+function safeCreativeMetadataRecord(value: unknown): Record<string, unknown> | undefined {
+  const normalized = safeCreativeMetadataValue(value);
+
+  return isRecord(normalized) ? normalized : undefined;
 }
 
 function browserPreviewUrlFrom(values: unknown[]): string | undefined {
@@ -395,6 +447,10 @@ export function normalizeCreativeResponse(
           width: value.width,
           height: value.height,
           aspect_ratio: value.aspect_ratio ?? value.aspectRatio,
+          visual_inspection: value.visual_inspection ?? value.visualInspection,
+          dominant_palette: value.dominant_palette ?? value.dominantPalette,
+          detected_text: value.detected_text ?? value.detectedText,
+          safe_crop_notes: value.safe_crop_notes ?? value.safeCropNotes,
           model: value.model,
           operation: value.operation,
         }]
@@ -428,6 +484,10 @@ export function normalizeCreativeResponse(
       status: statusFromCreativeStatus(status, hasPreview),
       transport_status: transportStatus,
     });
+    const visualInspection = safeCreativeMetadataRecord(image.visual_inspection ?? image.visualInspection ?? value.visual_inspection ?? value.visualInspection);
+    const dominantPalette = safeCreativeMetadataValue(image.dominant_palette ?? image.dominantPalette ?? value.dominant_palette ?? value.dominantPalette);
+    const detectedText = safeCreativeMetadataValue(image.detected_text ?? image.detectedText ?? value.detected_text ?? value.detectedText);
+    const safeCropNotes = safeCreativeMetadataValue(image.safe_crop_notes ?? image.safeCropNotes ?? value.safe_crop_notes ?? value.safeCropNotes);
     const assetType = normalizedAssetState?.kind ?? (image.asset_type === "video" || image.assetType === "video" || image.type === "video" ? "video" : "image");
     const mimeType = normalizedAssetState?.mime_type ?? stringValue(image.mime_type ?? image.mimeType ?? image.content_type ?? image.contentType, 120);
 
@@ -444,6 +504,10 @@ export function normalizeCreativeResponse(
       provider: stringValue(image.provider ?? value.provider, 160) ?? "codex-imagen",
       ...(promptUsed ? { prompt_used: promptUsed } : {}),
       ...(visualSummary ? { visual_summary: visualSummary } : {}),
+      ...(visualInspection ? { visual_inspection: visualInspection, visualInspection } : {}),
+      ...(dominantPalette !== undefined ? { dominant_palette: dominantPalette, dominantPalette } : {}),
+      ...(detectedText !== undefined ? { detected_text: detectedText, detectedText } : {}),
+      ...(safeCropNotes !== undefined ? { safe_crop_notes: safeCropNotes, safeCropNotes } : {}),
       ...(storagePath ? { storage_path: storagePath, storagePath } : {}),
       ...(previewUrl ? { render_url: previewUrl } : {}),
       ...(previewUrl ? { renderUrl: previewUrl } : {}),

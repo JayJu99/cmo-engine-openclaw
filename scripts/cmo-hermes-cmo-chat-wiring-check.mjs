@@ -112,6 +112,8 @@ const loadCompiledModules = async () => {
     mapper: requireFromTmp(mapperOut),
     chatV11: requireFromTmp(chatV11Out),
     outboundSanitizer: requireFromTmp(outboundSanitizerOut),
+    creativeAgent: requireFromTmp(creativeAgentOut),
+    creativeDraftState: requireFromTmp(creativeDraftStateOut),
     userMetadata: requireFromTmp(userMetadataOut),
   };
 };
@@ -475,7 +477,7 @@ const makeRuntimeResult = (overrides = {}) => {
 };
 
 try {
-  const { tmpDir, router, mapper, chatV11, outboundSanitizer, userMetadata } = await loadCompiledModules();
+  const { tmpDir, router, mapper, chatV11, outboundSanitizer, creativeAgent, creativeDraftState, userMetadata } = await loadCompiledModules();
   const rolloutWorkspaceIds = ["holdstation-mini-app", "aion", "feeback", "winance", "hold-pay", "holdstation-wallet"];
   let rollingReplaySmoke = null;
   let longSessionStressSmoke = null;
@@ -1057,6 +1059,26 @@ try {
             mime_type: "image/png",
             bytes: 123456,
             sha256: "abababababababababababababababababababababababababababababababab",
+            width: 1536,
+            height: 864,
+            format: "16:9",
+            visual_summary: "Premium black landing hero with teal reward focal point.",
+            visual_inspection: {
+              status: "success",
+              summary: "The hero image is readable and has one clear focal point.",
+              composition: "Centered product object with CTA-side negative space.",
+              palette: "Black, teal, white.",
+              text_readability: "Short labels remain legible.",
+              crop_channel_fit: {
+                landing: "Safe for 16:9 landing hero.",
+                x_post: "Keep CTA away from the right edge.",
+                telegram: "Readable in square preview.",
+              },
+              defects: [],
+            },
+            dominant_palette: ["#020617", "#14b8a6", "#f8fafc"],
+            detected_text: ["OPEN"],
+            safe_crop_notes: { landing: "Keep the product centered." },
             render_url: "https://gestlbswqvibztqcidis.supabase.co/storage/v1/object/sign/cmo-creative-assets/path.png?token=redacted",
           },
         ],
@@ -1076,6 +1098,8 @@ try {
     assert.equal(creativeReferenceRequest.reference_assets[0].mime_type, "image/png");
     assert.equal(creativeReferenceRequest.reference_assets[0].sha256, "abababababababababababababababababababababababababababababababab");
     assert.equal(creativeReferenceRequest.reference_assets[0].bytes, 123456);
+    assert.equal(creativeReferenceRequest.reference_assets[0].width, 1536);
+    assert.equal(creativeReferenceRequest.reference_assets[0].height, 864);
     assert.equal(
       creativeReferenceRequest.reference_assets[0].fetch_url,
       "https://cmo.jayju.cloud/api/cmo/apps/eggs-vault/creative/assets/creative_uploaded_primary/download",
@@ -1087,8 +1111,122 @@ try {
     assert.equal(creativeReferenceRequest.referenceAssets[0].authHeader, "x-cmo-creative-artifact-key");
     assert.equal(creativeReferenceRequest.reference_assets[0].auth_ref, "cmo_creative_artifact_read_key");
     assert.equal(creativeReferenceRequest.reference_assets[0].auth_header, "x-cmo-creative-artifact-key");
+    assert.equal(creativeReferenceRequest.creative_working_state.active_asset_id, "creative_uploaded_primary");
+    assert.equal(creativeReferenceRequest.creative_working_state.assets[0].asset_id, "creative_uploaded_primary");
+    assert.equal(creativeReferenceRequest.creative_working_state.assets[0].visual_inspection.status, "success");
+    assert.equal(creativeReferenceRequest.creative_working_state.assets[0].width, 1536);
+    assert.equal(creativeReferenceRequest.creative_working_state.assets[0].height, 864);
+    assert.equal(creativeReferenceRequest.creativeWorkingState.activeAssetId, "creative_uploaded_primary");
+    assert.equal(creativeReferenceRequest.creativeWorkingState.assets[0].visualInspection.crop_channel_fit.x_post, "Keep CTA away from the right edge.");
+    assert.equal(creativeReferenceRequest.creativeWorkingState.assets[0].width, 1536);
+    assert.equal(creativeReferenceRequest.creativeWorkingState.assets[0].height, 864);
     assert.doesNotMatch(JSON.stringify(creativeReferenceRequest.reference_assets), /CMO_CREATIVE_ARTIFACT_READ_KEY|token=redacted|\/tmp|\[hermes_local_artifact_path_redacted\]/);
     assert.doesNotMatch(creativeReferenceRequest.reference_assets[0].fetch_url, /storage\/v1\/object\/sign/, "Primary fetch URL must not be a Supabase signed URL");
+
+    const hermesPostGenerationResponse = {
+      schema_version: "hermes.cmo.response.v1",
+      status: "completed",
+      answer_basis: { mode: "creative_execution" },
+      answer: {
+        format: "markdown",
+        title: "Creative Asset",
+        summary: "Generated campaign hero.",
+        decision: "",
+        body: "Generated campaign hero.",
+      },
+      creative_assets: [
+        {
+          asset_id: "creative_asset_visual_post_qa",
+          kind: "image",
+          status: "stored",
+          mime_type: "image/png",
+          transport_status: "uploaded",
+          render_url: "https://product.example/assets/post-generation.png",
+          sha256: "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          bytes: 222333,
+          width: 1536,
+          height: 864,
+          format: "16:9",
+          visual_summary: "Generated hero with clear teal reward accent.",
+          visual_inspection: {
+            status: "success",
+            summary: "Post-generation QA found no visible defects.",
+            composition: "Single focal point with uncluttered edges.",
+            palette: "Black, teal, white.",
+            text_readability: "Readable at campaign preview size.",
+            crop_channel_fit: {
+              landing: "Fits 16:9 landing crop.",
+              x_post: "Crop around center focal point.",
+              telegram: "Square crop keeps the egg visible.",
+            },
+            defects: [],
+          },
+          dominant_palette: ["#020617", "#14b8a6"],
+          detected_text: ["OPEN"],
+          safe_crop_notes: { x_post: "Keep product away from left edge." },
+        },
+      ],
+    };
+    const postGenerationArtifacts = creativeAgent.extractCreativeAssetsFromHermesResponse(hermesPostGenerationResponse, {
+      tenantId: "tenant_eggs",
+      workspaceId: "eggs-vault",
+      appId: "eggs-vault",
+      jobId: "creative_msg_visual_post_qa",
+      createdAt: "2026-06-20T10:02:30.000Z",
+    });
+    assert.equal(postGenerationArtifacts[0].visual_inspection.status, "success", "Hermes post-generation visual inspection must stay on the returned creative asset");
+    assert.equal(postGenerationArtifacts[0].width, 1536, "Hermes post-generation width must stay on the returned creative asset");
+    assert.equal(postGenerationArtifacts[0].height, 864, "Hermes post-generation height must stay on the returned creative asset");
+    const postGenerationState = creativeDraftState.applyCreativeAssetStateUpdate(undefined, postGenerationArtifacts);
+    assert.equal(postGenerationState.assets[0].visual_inspection.summary, "Post-generation QA found no visible defects.", "Product session state must store Hermes visual inspection");
+    const postGenerationReplayRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...creativeReferenceInput,
+      sessionId: "session_eggs_creative_post_generation_replay",
+      userMessageId: "msg_eggs_creative_post_generation_replay",
+      createdAt: "2026-06-20T10:02:45.000Z",
+      userIdentity: { userId: "user_eggs", userEmail: "jay@example.com" },
+      message: "Review the generated hero for channel fit.",
+      creativeWorkingState: postGenerationState,
+      creativeSessionFollowupDetected: true,
+      activeCreativeAssetResolutionSource: "creativeWorkingState",
+    });
+    assert.equal(postGenerationReplayRequest.creative_working_state.assets[0].visual_inspection.summary, "Post-generation QA found no visible defects.", "Next Hermes request must replay visual inspection in creative_working_state");
+    assert.equal(postGenerationReplayRequest.creative_working_state.assets[0].width, 1536, "Next Hermes request must replay post-generation width");
+    assert.equal(postGenerationReplayRequest.creative_working_state.assets[0].height, 864, "Next Hermes request must replay post-generation height");
+    assert.equal(postGenerationReplayRequest.reference_assets[0].fetch_url, "https://cmo.jayju.cloud/api/cmo/apps/eggs-vault/creative/assets/creative_asset_visual_post_qa/download", "Post-generation replay must keep Product S2S fetch URL primary");
+
+    const activeAssetUrlFallbackRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...creativeReferenceInput,
+      sessionId: "session_eggs_creative_url_fallback",
+      userMessageId: "msg_eggs_creative_url_fallback",
+      createdAt: "2026-06-20T10:02:50.000Z",
+      userIdentity: { userId: "user_eggs", userEmail: "jay@example.com" },
+      message: "Review this active creative asset.",
+      creativeWorkingState: {
+        active_asset_id: "creative_asset_video_fallback",
+        drafts: [],
+        assets: [
+          {
+            asset_id: "creative_asset_video_fallback",
+            kind: "video",
+            status: "stored",
+            mime_type: "video/mp4",
+            transport_status: "uploaded",
+            fetch_url: "https://product.example/api/cmo/apps/eggs-vault/creative/assets/creative_asset_video_fallback/download",
+            render_url: "https://product.example/assets/video-fallback.mp4",
+            signed_url: "https://product.example/assets/video-fallback.mp4?token=placeholder",
+            sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            bytes: 987654,
+          },
+        ],
+      },
+      creativeSessionFollowupDetected: true,
+      activeCreativeAssetResolutionSource: "creativeWorkingState",
+    });
+    assert.equal((activeAssetUrlFallbackRequest.reference_assets ?? []).length, 0, "non-image active assets should not get source_image reference_assets");
+    assert.equal(activeAssetUrlFallbackRequest.creative_working_state.assets[0].fetch_url, "https://product.example/api/cmo/apps/eggs-vault/creative/assets/creative_asset_video_fallback/download");
+    assert.equal(activeAssetUrlFallbackRequest.creative_working_state.assets[0].render_url, "https://product.example/assets/video-fallback.mp4");
+    assert.equal(activeAssetUrlFallbackRequest.creativeWorkingState.assets[0].fetchUrl, "https://product.example/api/cmo/apps/eggs-vault/creative/assets/creative_asset_video_fallback/download");
 
     const creativeConversationInput = {
       ...creativeReferenceInput,
@@ -1191,11 +1329,56 @@ try {
     assert.equal(creativeEditRequest.tool_policy.creative_execution_may_be_requested_by_cmo, true);
     assert.equal(creativeEditRequest.capabilities.creative.canExecuteImageGeneration, true);
 
+    const outboundReplayPollutionPattern =
+      /\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|\/(?:tmp|Users|home|var|mnt|private|Volumes)\b|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|Creative image asset Refine|redacted (?:prompt|brief|content|answer)|(?:prompt|brief|content|answer) redacted/i;
     const pollutedReplayRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...creativeConversationInput,
       sessionId: "session_eggs_creative_polluted_replay",
       userMessageId: "msg_eggs_creative_polluted_replay",
       message: "Use the clean prompt direction now for the current image.",
+      contextPackage: {
+        ...creativeConversationInput.contextPackage,
+        selectedContext: [
+          {
+            ...creativeConversationInput.contextPackage.selectedContext[0],
+            content: "[hermes_local_artifact_path_redacted]/brand_identity_notes.md.png_redact",
+            qualityReason: "redacted content from a prior Creative trace",
+          },
+        ],
+        contextPack: {
+          ...creativeConversationInput.contextPackage.contextPack,
+          items: [
+            {
+              ...creativeConversationInput.contextPackage.contextPack.items[0],
+              content: "[hermes_local_artifact_path_redacted]/brand_identity_context.md.png_redact",
+              contentPreview: "Creative image asset Refine the existing generated asset with machine-wrapper context.",
+            },
+            {
+              ...creativeConversationInput.contextPackage.contextPack.items[1],
+              content: "Clean activation context should survive.",
+              contentPreview: "Clean activation context should survive.",
+            },
+          ],
+        },
+      },
+      contextUsed: [
+        {
+          ...creativeConversationInput.contextUsed[0],
+          contentPreview: "[hermes_local_artifact_path_redacted]/context_used_preview.png_redact",
+        },
+      ],
+      missingContext: [
+        {
+          id: "dirty_missing_context",
+          title: "Missing Creative Context",
+          path: "[hermes_local_artifact_path_redacted]/missing_context.md",
+          type: "vault_note",
+          exists: false,
+          contentPreview: "/home/cmo/creative-agent-images/missing_context.png_redact",
+          contextQuality: "missing",
+          qualityReason: "redacted answer from prior trace",
+        },
+      ],
       history: [
         ...creativeConversationInput.history,
         {
@@ -1209,6 +1392,34 @@ try {
           role: "assistant",
           content: "Creative image asset Refine the existing generated asset with brand_identity details.",
           createdAt: "2026-06-20T10:05:00.000Z",
+        },
+        {
+          id: "assistant_product_block",
+          role: "assistant",
+          content: "Product blocked this Creative follow-up because old workspace/session context still contains redacted artifact text.",
+          createdAt: "2026-06-20T10:05:30.000Z",
+          hermesCmoMetadata: {
+            product_outbound_payload_blocked: true,
+          },
+        },
+        {
+          id: "assistant_blank_ack",
+          role: "assistant",
+          content: " ",
+          createdAt: "2026-06-20T10:05:45.000Z",
+          hermesCmoMetadata: {
+            creative_noop_acknowledgement: true,
+          },
+        },
+        {
+          id: "assistant_dirty_decision",
+          role: "assistant",
+          content: "Review: keep the composition clean and add only one sharper reward focal point.",
+          createdAt: "2026-06-20T10:05:50.000Z",
+          creativeDecision: {
+            action: "present_draft",
+            answer: "[hermes_local_artifact_path_redacted]/redacted_answer.png_redact",
+          },
         },
         {
           id: "assistant_clean_prompt",
@@ -1249,11 +1460,93 @@ try {
       messages: pollutedReplayRequest.messages,
       selected_context: pollutedReplayRequest.context_pack.selected_context,
       recent_session_summary: pollutedReplayRequest.context_pack.recent_session_summary,
+      all_context_items: pollutedReplayRequest.context_pack.all_context_items,
+      missing_context: pollutedReplayRequest.context_pack.missing_context,
+      context_used: pollutedReplayRequest.context_pack.context_used,
       creative_working_state: pollutedReplayRequest.creative_working_state,
       creativeWorkingState: pollutedReplayRequest.creativeWorkingState,
     });
-    assert.doesNotMatch(pollutedReplayJson, /\[hermes_local_artifact_path_redacted\]|\.png_redact|\/tmp\/|Creative image asset Refine/i);
+    assert.doesNotMatch(pollutedReplayJson, outboundReplayPollutionPattern);
+    assert.doesNotMatch(JSON.stringify(pollutedReplayRequest), outboundReplayPollutionPattern);
     assert.ok(pollutedReplayRequest.messages.some((message) => message.role === "assistant" && message.content.includes("Prompt proposal: add a subtle teal reward glow")));
+    assert.ok(
+      pollutedReplayRequest.context_pack.all_context_items.some((item) => item.content === "Clean activation context should survive."),
+      "Clean context item content must remain available after dirty replay fields are removed",
+    );
+    assert.equal(pollutedReplayRequest.reference_assets[0].auth_ref, "cmo_creative_artifact_read_key");
+
+    const multiTurnCreativeHygieneRequest = mapper.mapCmoChatToHermesCmoRequest({
+      ...creativeConversationInput,
+      sessionId: "session_eggs_creative_hygiene_sequence",
+      userMessageId: "msg_eggs_creative_hygiene_sequence",
+      message: "Given the latest prompt proposal and channel advice, what should we do next?",
+      history: [
+        {
+          id: "assistant_create_asset",
+          role: "assistant",
+          content: "Creative image asset Refine the existing generated asset with /tmp/cmo-creative-execute/conversion_h_001/render.png_redact",
+          createdAt: "2026-06-20T10:00:00.000Z",
+        },
+        {
+          id: "user_review",
+          role: "user",
+          content: "Review this visual from a marketing angle.",
+          createdAt: "2026-06-20T10:01:00.000Z",
+        },
+        {
+          id: "assistant_review",
+          role: "assistant",
+          content: "Review: the clean premium direction is usable, but the reward signal needs one sharper focal accent.",
+          createdAt: "2026-06-20T10:02:00.000Z",
+        },
+        {
+          id: "user_prompt",
+          role: "user",
+          content: "Write a stronger prompt proposal only.",
+          createdAt: "2026-06-20T10:03:00.000Z",
+        },
+        {
+          id: "assistant_prompt",
+          role: "assistant",
+          content: "Prompt proposal: keep the premium black background, add a single teal reward glow, and sharpen the CTA-side contrast.",
+          createdAt: "2026-06-20T10:04:00.000Z",
+        },
+        {
+          id: "user_channel",
+          role: "user",
+          content: "How should this vary across landing, social, and community?",
+          createdAt: "2026-06-20T10:05:00.000Z",
+        },
+        {
+          id: "assistant_channel",
+          role: "assistant",
+          content: "Channel advice: landing should emphasize trust, social should emphasize the reward hook, and community should invite feedback.",
+          createdAt: "2026-06-20T10:06:00.000Z",
+        },
+        {
+          id: "assistant_contract_violation",
+          role: "assistant",
+          content: "Creative contract violation: Product blocked execution.",
+          createdAt: "2026-06-20T10:07:00.000Z",
+          hermesCmoMetadata: {
+            product_contract_violation: true,
+          },
+        },
+      ],
+    });
+    assert.doesNotMatch(JSON.stringify(multiTurnCreativeHygieneRequest), outboundReplayPollutionPattern);
+    assert.ok(
+      multiTurnCreativeHygieneRequest.messages.some((message) => message.content.includes("Prompt proposal: keep the premium black background")),
+      "Prompt proposal text should stay replayable when it is clean",
+    );
+    assert.ok(
+      multiTurnCreativeHygieneRequest.messages.some((message) => message.content.includes("Channel advice: landing should emphasize trust")),
+      "Channel advice should stay replayable when it is clean",
+    );
+    assert.ok(
+      !multiTurnCreativeHygieneRequest.messages.some((message) => /contract violation|Creative image asset/i.test(message.content)),
+      "Machine-wrapper and Product-local failure turns must not pollute future replay",
+    );
 
     const outboundForbiddenValuePattern =
       /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
@@ -3136,6 +3429,19 @@ try {
           response_trace_redaction_applied: false,
           m1_validation_answer_source: "canonical_answer",
           diagnostic_preview_ignored_for_m1: true,
+          reference_asset_fetch_status: "success",
+          local_image_path_available: false,
+          creative_visual_inspection_attempted: true,
+          creative_visual_inspection_used: true,
+          creative_visual_inspection_status: "success",
+          creative_answer_source: "visual_inspection",
+          creative_visual_observations: {
+            summary: "Active reference image has a clean premium focal point.",
+            crop_channel_fit: {
+              landing: "Safe",
+              x_post: "Tight but usable",
+            },
+          },
         },
       },
     });
@@ -3145,6 +3451,10 @@ try {
     assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.diagnostic_preview_ignored_for_m1, true);
     assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.user_visible_answer_source, "raw_hermes_response");
     assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.response_trace_redaction_applied, false);
+    assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.creative_assets_count, 0, "non-mutating visual-first review must not require returned creative_assets");
+    assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.creative_visual_inspection_used, true);
+    assert.equal(cleanCreativeAdvisoryMapped.hermesCmoMetadata.creative_visual_inspection_status, "success");
+    assert.deepEqual(cleanCreativeAdvisoryMapped.hermesCmoMetadata.creative_visual_observations.crop_channel_fit.x_post, "Tight but usable");
 
     const orderedMarkdownBase = makeRuntimeResult();
     const orderedMarkdownBody = [

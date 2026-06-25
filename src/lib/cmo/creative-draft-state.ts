@@ -19,6 +19,44 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function safeCreativeMetadataValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const items = value
+      .map(safeCreativeMetadataValue)
+      .filter((item) => item !== undefined);
+
+    return items.length ? items : undefined;
+  }
+
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
+      .map(([key, item]) => [key, safeCreativeMetadataValue(item)] as const)
+      .filter(([, item]) => item !== undefined);
+
+    return entries.length ? Object.fromEntries(entries) : undefined;
+  }
+
+  if (typeof value === "string") {
+    return safeCreativeText(value);
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  if (typeof value === "boolean" || value === null) {
+    return value;
+  }
+
+  return undefined;
+}
+
+function safeCreativeMetadataRecord(value: unknown): Record<string, unknown> | undefined {
+  const normalized = safeCreativeMetadataValue(value);
+
+  return isRecord(normalized) ? normalized : undefined;
+}
+
 const PRODUCT_CREATIVE_ASSET_ID_PATTERN = /^creative_asset_/;
 const SYNTHETIC_CREATIVE_ASSET_ID_PATTERN = /^creative_(?:creative_)?msg_/;
 const LOCAL_OR_REDACTED_ARTIFACT_PATTERN = /^(?:file:|[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|private|Volumes)\b|\[hermes_local_artifact_path_redacted\])/i;
@@ -94,6 +132,8 @@ function inferCreativeMimeType(value: Record<string, unknown>): string | undefin
     value.storagePath,
     value.render_url,
     value.renderUrl,
+    value.fetch_url,
+    value.fetchUrl,
     value.signed_url,
     value.signedUrl,
     value.preview_url,
@@ -145,7 +185,7 @@ function inferCreativeAssetKind(input: { rawKind?: unknown; mimeType?: string; o
 }
 
 function normalizedAssetPreviewIdentity(asset: CmoCreativeAssetState): string | undefined {
-  const value = stringValue(asset.signed_url ?? asset.render_url ?? asset.preview_url ?? asset.storage_path ?? asset.sha256);
+  const value = stringValue(asset.fetch_url ?? asset.signed_url ?? asset.render_url ?? asset.preview_url ?? asset.storage_path ?? asset.sha256);
 
   if (!value) {
     return undefined;
@@ -236,7 +276,7 @@ export function isProductBackedRenderableCreativeAsset(value: unknown): boolean 
     return false;
   }
 
-  const pathValues = [asset.storage_path, asset.render_url, asset.preview_url, asset.signed_url].filter((item): item is string => Boolean(item));
+  const pathValues = [asset.storage_path, asset.render_url, asset.preview_url, asset.signed_url, asset.fetch_url].filter((item): item is string => Boolean(item));
 
   if (pathValues.some((item) => LOCAL_OR_REDACTED_ARTIFACT_PATTERN.test(item))) {
     return false;
@@ -293,6 +333,7 @@ export function normalizeCreativeAssetState(value: unknown): CmoCreativeAssetSta
     operation: value.operation,
   }) ?? "image";
   const storagePath = stringValue(value.storage_path ?? value.storagePath);
+  const fetchUrl = stringValue(value.fetch_url ?? value.fetchUrl);
   const previewUrl = stringValue(value.preview_url ?? value.previewUrl);
   const renderUrl = stringValue(value.render_url ?? value.renderUrl ?? value.preview_url ?? value.previewUrl ?? value.url);
   const signedUrl = stringValue(value.signed_url ?? value.signedUrl);
@@ -302,7 +343,7 @@ export function normalizeCreativeAssetState(value: unknown): CmoCreativeAssetSta
       transportStatus && RENDERABLE_CREATIVE_TRANSPORT_STATUSES.has(transportStatus) ||
       storagePath && !LOCAL_OR_REDACTED_ARTIFACT_PATTERN.test(storagePath),
   );
-  const previewAvailable = Boolean(previewUrl || renderUrl || signedUrl || storagePath);
+  const previewAvailable = Boolean(fetchUrl || previewUrl || renderUrl || signedUrl || storagePath);
 
   if (!assetId) {
     return undefined;
@@ -314,13 +355,19 @@ export function normalizeCreativeAssetState(value: unknown): CmoCreativeAssetSta
     ...(stringValue(value.status) ? { status: stringValue(value.status) } : {}),
     ...(safeCreativeText(value.prompt ?? value.prompt_used ?? value.promptUsed) ? { prompt: safeCreativeText(value.prompt ?? value.prompt_used ?? value.promptUsed) } : {}),
     ...(safeCreativeText(value.visual_summary ?? value.visualSummary ?? value.notes) ? { visual_summary: safeCreativeText(value.visual_summary ?? value.visualSummary ?? value.notes) } : {}),
+    ...(safeCreativeMetadataRecord(value.visual_inspection ?? value.visualInspection) ? { visual_inspection: safeCreativeMetadataRecord(value.visual_inspection ?? value.visualInspection) } : {}),
+    ...(safeCreativeMetadataValue(value.dominant_palette ?? value.dominantPalette) !== undefined ? { dominant_palette: safeCreativeMetadataValue(value.dominant_palette ?? value.dominantPalette) } : {}),
+    ...(safeCreativeMetadataValue(value.detected_text ?? value.detectedText) !== undefined ? { detected_text: safeCreativeMetadataValue(value.detected_text ?? value.detectedText) } : {}),
+    ...(safeCreativeMetadataValue(value.safe_crop_notes ?? value.safeCropNotes) !== undefined ? { safe_crop_notes: safeCreativeMetadataValue(value.safe_crop_notes ?? value.safeCropNotes) } : {}),
     ...(stringValue(value.model) ? { model: stringValue(value.model) } : {}),
     ...(stringValue(value.operation) ? { operation: stringValue(value.operation) } : {}),
     ...(mimeType ? { mime_type: mimeType } : {}),
     ...(normalizeCreativeDraftKind(value.asset_type ?? value.assetType) ? { asset_type: normalizeCreativeDraftKind(value.asset_type ?? value.assetType) } : {}),
+    ...(safeCreativeText(value.format) ? { format: safeCreativeText(value.format) } : {}),
     ...(productBacked ? { product_backed: true } : {}),
     ...(storagePath ? { storage_path: storagePath, storage_backed: true } : {}),
     ...(previewAvailable ? { preview_available: true, download_available: true } : {}),
+    ...(fetchUrl && /^https?:\/\//i.test(fetchUrl) ? { fetch_url: fetchUrl } : {}),
     ...(previewUrl ? { preview_url: previewUrl } : {}),
     ...(renderUrl ? { render_url: renderUrl } : {}),
     ...(signedUrl ? { signed_url: signedUrl } : {}),

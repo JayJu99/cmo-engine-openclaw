@@ -1734,6 +1734,49 @@ function normalizeSafeTraceSummary(value: unknown): Record<string, unknown> | un
   return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
+const UNSAFE_CREATIVE_DIAGNOSTIC_TEXT_PATTERN =
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|(?:^|\s)file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|mnt|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute)/i;
+
+function normalizeSafeCreativeDiagnosticValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, 40)
+      .map(normalizeSafeCreativeDiagnosticValue)
+      .filter((item) => item !== undefined);
+
+    return items.length ? items : undefined;
+  }
+
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
+      .filter(([key]) => /^[a-zA-Z0-9_.-]{1,80}$/.test(key))
+      .map(([key, item]) => [key, normalizeSafeCreativeDiagnosticValue(item)] as const)
+      .filter(([, item]) => item !== undefined);
+
+    return entries.length ? Object.fromEntries(entries) : undefined;
+  }
+
+  if (typeof value === "string") {
+    const text = stringValue(value);
+
+    if (!text || UNSAFE_CREATIVE_DIAGNOSTIC_TEXT_PATTERN.test(text)) {
+      return undefined;
+    }
+
+    return text.length > 1200 ? `${text.slice(0, 1197).trimEnd()}...` : text;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  if (typeof value === "boolean" || value === null) {
+    return value;
+  }
+
+  return undefined;
+}
+
 function normalizeSuggestedActions(value: unknown): CMOAppChatResponse["suggestedActions"] {
   if (!Array.isArray(value)) {
     return [];
@@ -2348,6 +2391,28 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(stringValue(value.user_visible_answer_guard_reason) ? { user_visible_answer_guard_reason: stringValue(value.user_visible_answer_guard_reason) } : {}),
     ...(typeof value.creative_asset_mutation === "boolean" ? { creative_asset_mutation: value.creative_asset_mutation } : {}),
     ...(typeof value.creative_state_mutation === "boolean" ? { creative_state_mutation: value.creative_state_mutation } : {}),
+    ...(stringValue(value.reference_asset_fetch_status) ? { reference_asset_fetch_status: stringValue(value.reference_asset_fetch_status) } : {}),
+    ...(typeof value.local_image_path_available === "boolean" ? { local_image_path_available: value.local_image_path_available } : {}),
+    ...(typeof value.creative_visual_inspection_attempted === "boolean" ? { creative_visual_inspection_attempted: value.creative_visual_inspection_attempted } : {}),
+    ...(typeof value.creative_visual_inspection_used === "boolean" ? { creative_visual_inspection_used: value.creative_visual_inspection_used } : {}),
+    ...(stringValue(value.creative_visual_inspection_status) ? { creative_visual_inspection_status: stringValue(value.creative_visual_inspection_status) } : {}),
+    ...(stringValue(value.creative_visual_inspection_error) ? { creative_visual_inspection_error: stringValue(value.creative_visual_inspection_error) } : {}),
+    ...(stringValue(value.creative_answer_source) ? { creative_answer_source: stringValue(value.creative_answer_source) } : {}),
+    ...(normalizeSafeCreativeDiagnosticValue(value.creative_visual_observations) !== undefined
+      ? { creative_visual_observations: normalizeSafeCreativeDiagnosticValue(value.creative_visual_observations) }
+      : {}),
+    ...(typeof value.creative_post_generation_visual_inspection_attempted === "boolean"
+      ? { creative_post_generation_visual_inspection_attempted: value.creative_post_generation_visual_inspection_attempted }
+      : {}),
+    ...(typeof value.creative_post_generation_visual_inspection_used === "boolean"
+      ? { creative_post_generation_visual_inspection_used: value.creative_post_generation_visual_inspection_used }
+      : {}),
+    ...(stringValue(value.creative_post_generation_visual_inspection_status)
+      ? { creative_post_generation_visual_inspection_status: stringValue(value.creative_post_generation_visual_inspection_status) }
+      : {}),
+    ...(normalizeSafeCreativeDiagnosticValue(value.creative_post_generation_visual_metadata) !== undefined
+      ? { creative_post_generation_visual_metadata: normalizeSafeCreativeDiagnosticValue(value.creative_post_generation_visual_metadata) }
+      : {}),
     ...(typeof value.creative_state_update_present === "boolean" ? { creative_state_update_present: value.creative_state_update_present } : {}),
     ...(typeof value.creative_decision_present === "boolean" ? { creative_decision_present: value.creative_decision_present } : {}),
     ...(stringValue(value.creative_session_decision_action) ? { creative_session_decision_action: stringValue(value.creative_session_decision_action) } : {}),
