@@ -108,7 +108,7 @@ const SENSITIVE_TEXT_PATTERN =
 const AUTH_PATH_PATTERN =
   /(?:[A-Za-z]:\\Users\\[^\\\s]+\\[^\s]*?\.codex\\auth\.json|\/Users\/[^/\s]+\/[^\s]*?\.codex\/auth\.json|\/home\/[^/\s]+\/[^\s]*?\.codex\/auth\.json|\.codex[\\/][^\s]*auth\.json|auth\.json)/gi;
 const UNSAFE_CREATIVE_METADATA_TEXT_PATTERN =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|(?:^|\s)file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|mnt|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute)/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|(?:^|\s)file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|mnt|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine)/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

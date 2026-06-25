@@ -1470,7 +1470,7 @@ try {
     assert.equal(creativeEditRequest.capabilities.creative.canExecuteImageGeneration, true);
 
     const outboundReplayPollutionPattern =
-      /\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|\/(?:tmp|Users|home|var|mnt|private|Volumes)\b|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|Creative image asset Refine|redacted (?:prompt|brief|content|answer)|(?:prompt|brief|content|answer) redacted/i;
+      /\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|\/(?:tmp|Users|home|var|mnt|private|Volumes)\b|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|Creative[_\s-]*image[_\s-]*asset[_\s-]*Refine|redacted (?:prompt|brief|content|answer)|(?:prompt|brief|content|answer) redacted/i;
     const pollutedReplayRequest = mapper.mapCmoChatToHermesCmoRequest({
       ...creativeConversationInput,
       sessionId: "session_eggs_creative_polluted_replay",
@@ -1530,7 +1530,7 @@ try {
         {
           id: "assistant_machine_wrapper",
           role: "assistant",
-          content: "Creative image asset Refine the existing generated asset with brand_identity details.",
+          content: "Creative_image_asset_Refine the existing generated asset with brand_identity details.",
           createdAt: "2026-06-20T10:05:00.000Z",
         },
         {
@@ -1592,6 +1592,15 @@ try {
             storage_path: "apps/eggs/creative_asset_req_h6_msg_polluted_001.png",
             prompt: "[hermes_local_artifact_path_redacted]/asset_prompt",
             visual_summary: "Creative image asset Refine the existing generated asset wrapper.",
+            visual_inspection: {
+              status: "success",
+              analysis: "[hermes_local_artifact_path_redacted]/visual_inspection_analysis.png_redact",
+              summary: "Clean visual inspection summary should survive.",
+              metadata: {
+                local_path: "/tmp/cmo-creative-execute/Creative_image_asset_Refine/output.png",
+                crop_note: "Keep the focal point centered.",
+              },
+            },
           },
         ],
       },
@@ -1613,6 +1622,16 @@ try {
       pollutedReplayRequest.context_pack.all_context_items.some((item) => item.content === "Clean activation context should survive."),
       "Clean context item content must remain available after dirty replay fields are removed",
     );
+    assert.equal(
+      pollutedReplayRequest.creative_working_state.assets[0].visual_inspection.summary,
+      "Clean visual inspection summary should survive.",
+    );
+    assert.equal(
+      pollutedReplayRequest.creative_working_state.assets[0].visual_inspection.metadata.crop_note,
+      "Keep the focal point centered.",
+    );
+    assert.equal(pollutedReplayRequest.creative_working_state.assets[0].visual_inspection.analysis, undefined);
+    assert.equal(pollutedReplayRequest.creative_working_state.assets[0].visual_inspection.metadata.local_path, undefined);
     assert.equal(pollutedReplayRequest.reference_assets[0].auth_ref, "cmo_creative_artifact_read_key");
 
     const multiTurnCreativeHygieneRequest = mapper.mapCmoChatToHermesCmoRequest({
@@ -1689,7 +1708,7 @@ try {
     );
 
     const outboundForbiddenValuePattern =
-      /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
+      /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|Creative[_\s-]*image[_\s-]*asset[_\s-]*Refine|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
     const collectForbiddenStringValues = (value, fields = [], pathParts = []) => {
       if (typeof value === "string") {
         if (outboundForbiddenValuePattern.test(value)) {
@@ -3577,6 +3596,124 @@ try {
     assert.equal(unifiedAgentMapped.hermesCmoMetadata.specialist_calls[0].agent, "creative");
     assert.equal(unifiedAgentMapped.hermesCmoMetadata.creative_decision.action, "none");
     assert.equal(unifiedAgentMapped.hermesCmoMetadata.hermes_diagnostics.endpoint_kind, "cmo_agent");
+
+    const unifiedTextOnlyBase = makeRuntimeResult();
+    const unifiedTextOnlyMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...unifiedTextOnlyBase,
+      hermesCmoAgentPath: "/agents/cmo/agent",
+      hermesCmoEndpointKind: "cmo_agent",
+      hermesCmoEndpointTimeoutMs: 420000,
+      hermesCmoEndpointTimeoutSource: "unified_agent",
+      hermesCmoRouteDecision: "cmo_agent",
+      request: {
+        ...unifiedTextOnlyBase.request,
+        artifact_transport: {
+          mode: "product_upload",
+          upload_endpoint: "https://cmo.jayju.cloud/api/cmo/apps/eggs-vault/creative/artifact-ingest",
+          auth_ref: "cmo_creative_artifact_read_key",
+          auth_header: "x-cmo-creative-artifact-key",
+          workspace_id: "eggs-vault",
+          app_id: "eggs-vault",
+          request_id: "req_h6_msg_001",
+          accepted_mime_types: ["image/png"],
+          max_bytes: 52428800,
+        },
+      },
+      response: {
+        ...unifiedTextOnlyBase.response,
+        route: { kind: "cmo_agent", intent_owner: "cmo", routed_to_creative: false },
+        intent_decision: { domain: "creative_marketing_review", action: "answer_directly" },
+        answer_basis: {
+          mode: "cmo_agent",
+          missing_inputs: [],
+          assumptions_used: [],
+          user_can_override: true,
+          suggested_user_inputs: [],
+        },
+        creative_decision: { action: "answer_directly" },
+        creative_assets_count: 0,
+        creative_assets: [],
+        answer: "Hermes unified text-only review wins over workspace fallback.",
+      },
+    });
+    assert.equal(unifiedTextOnlyMapped.answer, "Hermes unified text-only review wins over workspace fallback.");
+    assert.equal(unifiedTextOnlyMapped.runtimeStatus, "live");
+    assert.equal(unifiedTextOnlyMapped.runtimeMode, "live");
+    assert.equal(unifiedTextOnlyMapped.isRuntimeFallback, false);
+    assert.equal(unifiedTextOnlyMapped.hermesCmoMetadata.productRenderSource, "hermes_cmo");
+    assert.equal(unifiedTextOnlyMapped.hermesCmoMetadata.fallback_used, false);
+    assert.equal(unifiedTextOnlyMapped.hermesCmoMetadata.endpoint_kind, "cmo_agent");
+    assert.equal(unifiedTextOnlyMapped.hermesCmoMetadata.answer_basis_mode, "cmo_agent");
+    assert.equal(unifiedTextOnlyMapped.hermesCmoMetadata.creative_assets_count, undefined);
+    assert.doesNotMatch(unifiedTextOnlyMapped.answer, /workspace has no accepted source context/i);
+
+    const unifiedTextAfterAssetMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...unifiedTextOnlyBase,
+      hermesCmoAgentPath: "/agents/cmo/agent",
+      hermesCmoEndpointKind: "cmo_agent",
+      hermesCmoEndpointTimeoutMs: 420000,
+      hermesCmoEndpointTimeoutSource: "unified_agent",
+      hermesCmoRouteDecision: "cmo_agent",
+      request: {
+        ...unifiedTextOnlyBase.request,
+        creative_working_state: {
+          active_asset_id: "creative_asset_prior_crop",
+          drafts: [],
+          assets: [
+            {
+              asset_id: "creative_asset_prior_generate",
+              kind: "image",
+              status: "stored",
+              visual_summary: "Initial generated asset.",
+            },
+            {
+              asset_id: "creative_asset_prior_crop",
+              kind: "image",
+              status: "stored",
+              visual_summary: "Cropped generated asset.",
+            },
+          ],
+        },
+        artifact_transport: {
+          mode: "product_upload",
+          upload_endpoint: "https://cmo.jayju.cloud/api/cmo/apps/eggs-vault/creative/artifact-ingest",
+          auth_ref: "cmo_creative_artifact_read_key",
+          auth_header: "x-cmo-creative-artifact-key",
+          workspace_id: "eggs-vault",
+          app_id: "eggs-vault",
+          request_id: "req_h6_msg_001",
+          accepted_mime_types: ["image/png"],
+          max_bytes: 52428800,
+        },
+      },
+      response: {
+        ...unifiedTextOnlyBase.response,
+        route: { kind: "cmo_agent", intent_owner: "cmo" },
+        answer_basis: {
+          mode: "cmo_agent",
+          missing_inputs: [],
+          assumptions_used: [],
+          user_can_override: true,
+          suggested_user_inputs: [],
+        },
+        creative_decision: { action: "answer_directly" },
+        creative_assets_count: 0,
+        creative_assets: [],
+        answer: {
+          format: "markdown",
+          title: "Marketing review",
+          summary: "Summary should lose to body.",
+          decision: "",
+          body: "Post-asset marketing review renders without expecting another asset.",
+          content: "Content fallback should not replace body.",
+        },
+      },
+    });
+    assert.equal(unifiedTextAfterAssetMapped.answer, "Post-asset marketing review renders without expecting another asset.");
+    assert.equal(unifiedTextAfterAssetMapped.hermesCmoMetadata.productRenderSource, "hermes_cmo");
+    assert.equal(unifiedTextAfterAssetMapped.hermesCmoMetadata.fallback_used, false);
+    assert.equal(unifiedTextAfterAssetMapped.hermesCmoMetadata.creative_assets_count, undefined);
+    assert.doesNotMatch(unifiedTextAfterAssetMapped.answer, /Creative Asset Not Ready|workspace has no accepted source context/i);
 
     const unifiedActiveAssetReviewBase = makeRuntimeResult();
     const unifiedActiveAssetReviewMapped = mapper.mapHermesCmoResponseToChatResult({

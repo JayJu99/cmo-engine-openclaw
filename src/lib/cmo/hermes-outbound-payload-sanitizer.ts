@@ -1,5 +1,5 @@
 const OUTBOUND_FORBIDDEN_TEXT_PATTERN =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
 export const OUTBOUND_HERMES_CALLSITE_GUARD_VERSION = "context-sanitizer-v2" as const;
 const OUTBOUND_CALLSITE_FORBIDDEN_LITERALS = [
   { literal: "[hermes_local_artifact_path_redacted]", label: "hermes_local_artifact_path_redacted" },
@@ -16,6 +16,7 @@ const OUTBOUND_CALLSITE_FORBIDDEN_LITERALS = [
   { literal: "conversion_h_", label: "conversion_h_" },
   { literal: "creative-agent-images", label: "creative-agent-images" },
   { literal: "cmo-creative-execute", label: "cmo-creative-execute" },
+  { literal: "Creative_image_asset_Refine", label: "Creative_image_asset_Refine" },
 ] as const;
 
 const TEXT_PLACEHOLDER =

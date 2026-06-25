@@ -266,6 +266,7 @@ export interface HermesCmoRuntimeAnswerBasis {
     | "creative_refinement"
     | "creative_conversation"
     | "creative_execution"
+    | "cmo_agent"
     | "save_to_vault"
     | "tool_read"
     | "attachment_read";
@@ -419,6 +420,7 @@ const answerBasisModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "session_source_artifact",
   "insufficient_context",
   "clarification",
+  "cmo_agent",
   "save_to_vault",
   "attachment_read",
 ]);
@@ -443,6 +445,7 @@ const simpleAnswerModes = new Set<HermesCmoRuntimeAnswerBasis["mode"]>([
   "creative_refinement",
   "creative_conversation",
   "creative_execution",
+  "cmo_agent",
 ]);
 const classifications = new Set<HermesCmoClassification>([
   "native_conversation",
@@ -881,6 +884,13 @@ const answerBasisModeIsAllowed = (
   );
 };
 
+const answerBasisCanBeNormalized = (
+  mode: string | undefined,
+  options: HermesCmoAnswerBasisModeOptions | boolean = {},
+): boolean =>
+  mode !== undefined &&
+  answerBasisModeIsAllowed(mode, options);
+
 const answerTextFromKnownSimpleShape = (answer: unknown): string | null => {
   if (typeof answer === "string" && answer.trim()) {
     return answer.trim();
@@ -983,8 +993,12 @@ const normalizeHermesCmoResponseCandidate = (
   const schemaVersion = originalSchemaVersion === "hermes.cmo.tool_response.v1" ? "hermes.cmo.response.v1" : originalSchemaVersion;
   const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
   const answerBasisMode = typeof answerBasis.mode === "string" ? answerBasis.mode : undefined;
-  const canNormalizeAnswerBasis = answerBasisMode !== undefined &&
-    answerBasisModeIsAllowed(answerBasisMode, { allowToolRead: toolCapableResponse, allowCreativeIdeation: true, allowCreativeConversation: true });
+  const canNormalizeAnswerBasis = answerBasisCanBeNormalized(answerBasisMode, {
+    allowToolRead: toolCapableResponse,
+    allowCreativeIdeation: true,
+    allowCreativeConversation: true,
+    allowCreativeExecution: true,
+  });
   const clarifyingQuestion = isRecord(response.clarifying_question) ? response.clarifying_question : {};
   const answerMode = answerModeFromResponse(response, answerBasis, { allowToolRead: toolCapableResponse, allowCreativeIdeation: true, allowCreativeConversation: true, allowCreativeExecution: true });
 
@@ -1494,7 +1508,7 @@ const responseHasCreativeExecutionFailure = (
 };
 
 const unsafeCreativeConversationAnswerPattern =
-  /(\[hermes_local_artifact_path_redacted\]|\/tmp\/|conversion_h_|creative-agent-images|cmo-creative-execute|(?:^|\s)(?:file:|[A-Za-z]:[\\/]))/i;
+  /(\[hermes_local_artifact_path_redacted\]|\/tmp\/|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|(?:^|\s)(?:file:|[A-Za-z]:[\\/]))/i;
 
 const creativeConversationAnswerText = (response: Record<string, unknown>): string => {
   const answer = isRecord(response.answer) ? response.answer : {};
@@ -2658,7 +2672,7 @@ const traceDirectory = () =>
 const safeTraceId = (value: string) => value.replace(/[^a-z0-9_.-]+/gi, "_").slice(0, 96) || "unknown";
 
 const traceAnswerForbiddenPattern =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|\/home\/|\/var\/|\/mnt\/|\/private\/|\/Volumes\/|(?:^|\s)file:|(?:^|\s)[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|reference_assets|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|\/home\/|\/var\/|\/mnt\/|\/private\/|\/Volumes\/|(?:^|\s)file:|(?:^|\s)[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|reference_assets|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
 
 const tracePathEndsWith = (pathParts: Array<string | number>, suffix: string[]): boolean => {
   if (pathParts.length < suffix.length) {
@@ -3793,7 +3807,7 @@ const validateHermesCmoRuntimeAnswer = (answer: unknown): answer is HermesCmoRun
 };
 
 const unsafeUserVisibleAnswerPattern =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|conversion_h_|creative-agent-images|cmo-creative-execute|reference_assets|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|\/home\/|\/var\/|\/mnt\/|\/private\/|\/Volumes\/|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|reference_assets|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
 
 const answerHasUnsafeUserVisibleArtifactText = (answer: unknown): boolean => {
   if (typeof answer === "string") {

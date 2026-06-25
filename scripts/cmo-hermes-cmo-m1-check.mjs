@@ -317,6 +317,12 @@ const m13PollutedCmoOwnedCreativeSessionExecutionRequest = (requestId) => {
           preview_url: "[hermes_local_artifact_path_redacted]/preview.png_redact",
           render_url: "[hermes_local_artifact_path_redacted]/render.png",
           signed_url: "/tmp/cmo-creative-execute/signed.png",
+          visual_inspection: {
+            analysis: "[hermes_local_artifact_path_redacted]/visual_inspection_analysis.png_redact",
+            metadata: {
+              local_path: "/tmp/cmo-creative-execute/Creative_image_asset_Refine/output.png",
+            },
+          },
         })),
       },
     },
@@ -337,6 +343,12 @@ const m13PollutedCmoOwnedCreativeSessionExecutionRequest = (requestId) => {
         preview_url: "[hermes_local_artifact_path_redacted]/preview.png_redact",
         render_url: "[hermes_local_artifact_path_redacted]/render.png",
         signed_url: "/tmp/cmo-creative-execute/signed.png",
+        visual_inspection: {
+          analysis: "[hermes_local_artifact_path_redacted]/visual_inspection_analysis.png_redact",
+          metadata: {
+            local_path: "/tmp/cmo-creative-execute/Creative_image_asset_Refine/output.png",
+          },
+        },
       })),
     },
     reference_assets: request.reference_assets.map((asset) => ({
@@ -628,7 +640,7 @@ const writeJson = (response, statusCode, payload) => {
 };
 
 const outboundForbiddenValuePattern =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|Creative[_\s-]*image[_\s-]*asset[_\s-]*Refine|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$))/i;
 const outboundCallsiteForbiddenLiterals = [
   "[hermes_local_artifact_path_redacted]",
   "hermes_local_artifact_path_redacted",
@@ -644,6 +656,7 @@ const outboundCallsiteForbiddenLiterals = [
   "conversion_h_",
   "creative-agent-images",
   "cmo-creative-execute",
+  "Creative_image_asset_Refine",
 ];
 
 const collectForbiddenStringValues = (value, fields = [], pathParts = []) => {
@@ -841,7 +854,8 @@ const startServer = async () => {
 
         if (cmoCallCount === 1) {
           const firstCallUnifiedAgent =
-            body.request_id === "req_m46_unified_agent_creative_uploaded_asset";
+            body.request_id === "req_m46_unified_agent_creative_uploaded_asset" ||
+            body.request_id === "req_m46_unified_agent_text_review";
           const firstCallProposalsOnly =
             body.request_id === "req_m44e6_research_followup_table" ||
             body.request_id === "req_m44e6_research_followup_rank";
@@ -987,6 +1001,52 @@ const startServer = async () => {
                 final_state: "completed",
               },
               answer: "Creative execution completed and returned generated asset metadata.",
+            });
+            return;
+          }
+          if (body.request_id === "req_m46_unified_agent_text_review") {
+            writeJson(response, 200, {
+              schema_version: "hermes.cmo.response.v1",
+              request_id: body.request_id,
+              session_id: body.session_id,
+              turn_id: body.turn_id,
+              status: "completed",
+              route: {
+                kind: "cmo_agent",
+                intent_owner: "cmo",
+                routed_to_creative: false,
+              },
+              intent_decision: {
+                domain: "creative_marketing_review",
+                action: "answer_directly",
+                confidence: 0.96,
+                needs_clarification: false,
+              },
+              answer_basis: {
+                mode: "cmo_agent",
+                missing_inputs: [],
+                assumptions_used: [],
+                user_can_override: true,
+                suggested_user_inputs: [],
+              },
+              clarifying_question: {
+                required: false,
+                question: null,
+                reason: null,
+                missing_inputs: [],
+              },
+              creative_decision: {
+                action: "answer_directly",
+              },
+              creative_assets_count: 0,
+              creative_assets: [],
+              artifacts: [],
+              memory_suggestions: [],
+              activity_summary: {
+                events_count: 0,
+                final_state: "completed",
+              },
+              answer: "Hermes unified CMO marketing review should render as the final answer.",
             });
             return;
           }
@@ -5466,8 +5526,10 @@ try {
     process.env.CMO_HERMES_UNIFIED_AGENT_CANARY_APPS = "eggs-vault";
     process.env.CMO_HERMES_UNIFIED_AGENT_ENDPOINT = "/agents/cmo/agent";
     delete process.env.CMO_HERMES_UNIFIED_AGENT_TIMEOUT_MS;
+    let m46UnifiedAgentTextReviewResult;
     try {
       m46UnifiedAgentCreativeUploadedResult = await runHermesCmoRuntime(m46UnifiedCmoAgentRequest("req_m46_unified_agent_creative_uploaded_asset"));
+      m46UnifiedAgentTextReviewResult = await runHermesCmoRuntime(m46UnifiedCmoAgentRequest("req_m46_unified_agent_text_review"));
     } finally {
       restoreEnvValue("CMO_HERMES_UNIFIED_AGENT_ENABLED", previousUnifiedEnabled);
       restoreEnvValue("CMO_HERMES_UNIFIED_AGENT_CANARY_APPS", previousUnifiedCanaryApps);
@@ -5489,6 +5551,16 @@ try {
     assert.equal(m46UnifiedAgentCreativeUploadedResult.response.structured_output.fallback_used, false);
     assert.equal(m46UnifiedAgentCreativeUploadedResult.response.creative_assets[0].transport_status, "uploaded");
     assert.equal(m46UnifiedAgentCreativeUploadedResult.response.creative_assets[0].visual_inspection.summary, "Generated campaign visual is readable.");
+    assert.equal(m46UnifiedAgentTextReviewResult.hermesCmoAgentPath, "/agents/cmo/agent");
+    assert.equal(m46UnifiedAgentTextReviewResult.hermesCmoEndpointKind, "cmo_agent");
+    assert.equal(m46UnifiedAgentTextReviewResult.hermesCmoRouteDecision, "cmo_agent");
+    assert.equal(m46UnifiedAgentTextReviewResult.response.status, "completed");
+    assert.equal(m46UnifiedAgentTextReviewResult.response.route.kind, "cmo_agent");
+    assert.equal(m46UnifiedAgentTextReviewResult.response.answer_basis.mode, "cmo_agent");
+    assert.equal(m46UnifiedAgentTextReviewResult.response.creative_assets_count, 0);
+    assert.deepEqual(m46UnifiedAgentTextReviewResult.response.creative_assets, []);
+    assert.equal(m46UnifiedAgentTextReviewResult.response.answer?.body, "Hermes unified CMO marketing review should render as the final answer.");
+    assert.equal(m46UnifiedAgentTextReviewResult.response.structured_output, null);
     process.env.CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED = "false";
 
     await assert.rejects(

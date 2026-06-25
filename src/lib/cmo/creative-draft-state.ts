@@ -61,7 +61,7 @@ const PRODUCT_CREATIVE_ASSET_ID_PATTERN = /^creative_asset_/;
 const SYNTHETIC_CREATIVE_ASSET_ID_PATTERN = /^creative_(?:creative_)?msg_/;
 const LOCAL_OR_REDACTED_ARTIFACT_PATTERN = /^(?:file:|[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|private|Volumes)\b|\[hermes_local_artifact_path_redacted\])/i;
 const UNSAFE_CREATIVE_TEXT_PATTERN =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute|\.png_redact|^creative image asset\s+refine\b)/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|\.png_redact)/i;
 const RENDERABLE_CREATIVE_ASSET_STATUSES = new Set(["stored", "uploaded", "available", "completed", "success"]);
 const RENDERABLE_CREATIVE_TRANSPORT_STATUSES = new Set(["uploaded", "available"]);
 const RENDERABLE_CREATIVE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm"]);

@@ -1736,7 +1736,7 @@ function normalizeSafeTraceSummary(value: unknown): Record<string, unknown> | un
 }
 
 const UNSAFE_CREATIVE_DIAGNOSTIC_TEXT_PATTERN =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|(?:^|\s)file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|mnt|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute)/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|(?:^|\s)file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|mnt|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine)/i;
 
 function normalizeSafeCreativeDiagnosticValue(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -3274,7 +3274,7 @@ function creativeConversationRejectionDiagnostics(reason: string): Partial<Herme
 }
 
 const unsafeUserVisibleAnswerPattern =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|conversion_h_|creative-agent-images|cmo-creative-execute|reference_assets|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\/tmp\/|\/Users\/|\/home\/|\/var\/|\/mnt\/|\/private\/|\/Volumes\/|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|reference_assets|\.(?:png|jpe?g|webp|mp4|webm)\b)/i;
 
 function userVisibleAnswerPathLike(value: string): boolean {
   return unsafeUserVisibleAnswerPattern.test(value);

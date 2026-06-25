@@ -210,7 +210,7 @@ function isStaleFailureAssistantContext(message: CMOChatMessage): boolean {
 function isMachineWrapperCreativeDraftText(value: string): boolean {
   const compact = compactText(value, 600).toLowerCase();
 
-  return /^creative image asset\b/.test(compact) && (
+  return /^creative[_\s-]*image[_\s-]*asset\b/.test(compact) && (
     /\brefine\b/.test(compact) ||
     /\bexisting generated asset\b/.test(compact) ||
     /\bgenerated asset\b/.test(compact)
@@ -218,7 +218,7 @@ function isMachineWrapperCreativeDraftText(value: string): boolean {
 }
 
 const OUTBOUND_REPLAY_FORBIDDEN_TEXT_PATTERN =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|(?:^|\s)file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|mnt|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute|\bcreative image asset\s+refine\b|\bredacted\s+(?:prompt|brief|content|answer)\b|(?:prompt|brief|content|answer)\s+redacted\b)/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|\.png_redact|(?:^|\s)file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\/(?:tmp|var|Users|home|mnt|private|Volumes)\b|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|\bredacted\s+(?:prompt|brief|content|answer)\b|(?:prompt|brief|content|answer)\s+redacted\b)/i;
 
 function hasUnsafeOutboundReplayText(value: string): boolean {
   return OUTBOUND_REPLAY_FORBIDDEN_TEXT_PATTERN.test(compactMultilineText(value, MAX_REPLAY_MESSAGE_CHARS)) ||
@@ -1694,6 +1694,10 @@ function userVisibleAnswerFromHermes(response: HermesCmoRuntimeResponse): string
 
 function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmoRuntimeResult): string {
   const userVisibleAnswer = userVisibleAnswerFromHermes(response);
+
+  if (typeof response.answer === "string") {
+    return canonicalAssistantText(response.answer) ?? userVisibleAnswer ?? "";
+  }
 
   if (!response.answer) {
     if (userVisibleAnswer) {
