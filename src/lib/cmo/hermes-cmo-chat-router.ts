@@ -4,17 +4,21 @@ import {
   getCmoHermesCmoCanaryApps,
   getCmoHermesCmoChatV11CanaryApps,
   getCmoHermesCmoToolChatCanaryApps,
+  getCmoHermesUnifiedAgentCanaryApps,
+  getCmoHermesUnifiedAgentEndpoint,
   isCmoHermesCmoChatEnabled,
   isCmoHermesCmoChatV11Enabled,
   isCmoHermesCmoChatV11FallbackEnabled,
   isCmoHermesCmoToolChatEnabled,
+  isCmoHermesUnifiedAgentEnabled,
 } from "@/lib/cmo/config";
 
 export const HERMES_CMO_EXECUTE_ENDPOINT = "/agents/cmo/execute" as const;
 export const HERMES_CMO_TOOL_EXECUTE_ENDPOINT = "/agents/cmo/tool-execute" as const;
 export const HERMES_CMO_CHAT_V11_ENDPOINT = "/agents/cmo/chat" as const;
+export const HERMES_CMO_UNIFIED_AGENT_ENDPOINT = "/agents/cmo/agent" as const;
 
-export type HermesCmoRouteEndpointKind = "execute" | "tool_execute" | "agent_chat";
+export type HermesCmoRouteEndpointKind = "execute" | "tool_execute" | "agent_chat" | "cmo_agent";
 
 export interface HermesCmoChatRouteInput {
   appId: string;
@@ -26,16 +30,18 @@ export interface HermesCmoChatRouteInput {
 }
 
 export interface HermesCmoChatRouteResolution {
-  endpoint: typeof HERMES_CMO_EXECUTE_ENDPOINT | typeof HERMES_CMO_TOOL_EXECUTE_ENDPOINT | typeof HERMES_CMO_CHAT_V11_ENDPOINT;
+  endpoint: string;
   endpointKind: HermesCmoRouteEndpointKind;
   requestedEndpoint: string;
   routeIntent: CmoRouteIntent;
+  unifiedAgentEnabled: boolean;
+  unifiedAgentCanary: boolean;
   v11Enabled: boolean;
   v11Canary: boolean;
   toolChatEnabled: boolean;
   toolChatCanary: boolean;
   fallbackEnabled: boolean;
-  reason: "forced_fallback" | "creative_execution" | "creative_ideation" | "creative_session" | "source_or_tool_task" | "tool_chat_canary" | "v11_canary_chat" | "v11_disabled_or_non_canary";
+  reason: "unified_agent_canary" | "forced_fallback" | "creative_execution" | "creative_ideation" | "creative_session" | "source_or_tool_task" | "tool_chat_canary" | "v11_canary_chat" | "v11_disabled_or_non_canary";
 }
 
 function appIsCanary(appId: string, canaryApps: string[]): boolean {
@@ -65,15 +71,40 @@ export function shouldUseHermesCmoToolChat(appId: string): boolean {
   return isCmoHermesCmoToolChatEnabled() && appIsCanary(appId, getCmoHermesCmoToolChatCanaryApps());
 }
 
+export function shouldUseHermesUnifiedAgent(appId: string): boolean {
+  return isCmoHermesUnifiedAgentEnabled() && appIsCanary(appId, getCmoHermesUnifiedAgentCanaryApps());
+}
+
 export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): HermesCmoChatRouteResolution {
   const creativeWorkingState = input.creativeWorkingState ?? (input.hasCreativeWorkingState === true ? { drafts: [] } : undefined);
   const routeIntent = routeIntentForMessage(input.message, { creativeWorkingState });
   const creativeSessionContinuation = isCreativeSessionTransportContinuation(input.message, creativeWorkingState);
+  const unifiedAgentEnabled = isCmoHermesUnifiedAgentEnabled();
+  const unifiedAgentCanary = appIsCanary(input.appId, getCmoHermesUnifiedAgentCanaryApps());
   const v11Enabled = isCmoHermesCmoChatV11Enabled();
   const v11Canary = appIsCanary(input.appId, getCmoHermesCmoChatV11CanaryApps());
   const toolChatEnabled = isCmoHermesCmoToolChatEnabled();
   const toolChatCanary = appIsCanary(input.appId, getCmoHermesCmoToolChatCanaryApps());
   const fallbackEnabled = isCmoHermesCmoChatV11FallbackEnabled();
+
+  if (unifiedAgentEnabled && unifiedAgentCanary) {
+    const endpoint = getCmoHermesUnifiedAgentEndpoint();
+
+    return {
+      endpoint,
+      endpointKind: "cmo_agent",
+      requestedEndpoint: endpoint,
+      routeIntent,
+      unifiedAgentEnabled,
+      unifiedAgentCanary,
+      v11Enabled,
+      v11Canary,
+      toolChatEnabled,
+      toolChatCanary,
+      fallbackEnabled,
+      reason: "unified_agent_canary",
+    };
+  }
 
   if (input.forceFallback) {
     return {
@@ -81,6 +112,8 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
       endpointKind: "execute",
       requestedEndpoint: HERMES_CMO_EXECUTE_ENDPOINT,
       routeIntent,
+      unifiedAgentEnabled,
+      unifiedAgentCanary,
       v11Enabled,
       v11Canary,
       toolChatEnabled,
@@ -96,6 +129,8 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
       endpointKind: "execute",
       requestedEndpoint: HERMES_CMO_EXECUTE_ENDPOINT,
       routeIntent,
+      unifiedAgentEnabled,
+      unifiedAgentCanary,
       v11Enabled,
       v11Canary,
       toolChatEnabled,
@@ -111,6 +146,8 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
       endpointKind: "execute",
       requestedEndpoint: HERMES_CMO_EXECUTE_ENDPOINT,
       routeIntent,
+      unifiedAgentEnabled,
+      unifiedAgentCanary,
       v11Enabled,
       v11Canary,
       toolChatEnabled,
@@ -126,6 +163,8 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
       endpointKind: "tool_execute",
       requestedEndpoint: HERMES_CMO_TOOL_EXECUTE_ENDPOINT,
       routeIntent,
+      unifiedAgentEnabled,
+      unifiedAgentCanary,
       v11Enabled,
       v11Canary,
       toolChatEnabled,
@@ -141,6 +180,8 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
       endpointKind: "agent_chat",
       requestedEndpoint: HERMES_CMO_CHAT_V11_ENDPOINT,
       routeIntent,
+      unifiedAgentEnabled,
+      unifiedAgentCanary,
       v11Enabled,
       v11Canary,
       toolChatEnabled,
@@ -155,6 +196,8 @@ export function resolveHermesCmoChatRoute(input: HermesCmoChatRouteInput): Herme
     endpointKind: "execute",
     requestedEndpoint: HERMES_CMO_EXECUTE_ENDPOINT,
     routeIntent,
+    unifiedAgentEnabled,
+    unifiedAgentCanary,
     v11Enabled,
     v11Canary,
     toolChatEnabled,

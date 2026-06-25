@@ -618,7 +618,7 @@ export type CmoProductRenderSource =
   | "direct_bridge"
   | "local_session_command";
 export type CmoOuterTimeoutSource = "default_app_turn" | "creative_execute";
-export type CmoRouteDecision = "app_turn" | "creative_execution" | "creative_ideation" | "creative_session" | "execute" | "tool_execute";
+export type CmoRouteDecision = "app_turn" | "creative_execution" | "creative_ideation" | "creative_session" | "execute" | "tool_execute" | "cmo_agent";
 export type CmoStrategyMode = "DIAGNOSE" | "FOCUS" | "PRIORITIZE" | "REVIEW" | "RESET";
 export type CmoDecisionLabel = "KEEP" | "CUT" | "TEST" | "SCALE" | "WAIT";
 export type HermesCmoAgentUsed = "cmo" | "echo" | "surf" | "creative";
@@ -928,8 +928,8 @@ export interface HermesCmoChatMetadata {
   hermesRequestSent?: true;
   productRenderSource?: "hermes_cmo" | "fallback_after_hermes_failure";
   selectedHermesEndpoint?: string;
-  hermesEndpointKind?: "execute" | "tool_execute" | "agent_chat";
-  endpoint_kind?: "execute" | "tool_execute" | "agent_chat";
+  hermesEndpointKind?: "execute" | "tool_execute" | "agent_chat" | "cmo_agent";
+  endpoint_kind?: "execute" | "tool_execute" | "agent_chat" | "cmo_agent";
   runtime_kind?: "ai_agent";
   requested_endpoint?: string;
   fallback_used?: boolean;
@@ -937,10 +937,16 @@ export interface HermesCmoChatMetadata {
   fallback_from?: string;
   fallback_to?: string;
   hermesEndpointTimeoutMs?: number;
-  hermesEndpointTimeoutSource?: "default_execute" | "creative_execute" | "tool_endpoint" | "tool_timeout_override";
-  timeout_source?: "default_execute" | "creative_execute" | "tool_endpoint" | "tool_timeout_override";
+  hermesEndpointTimeoutSource?: "default_execute" | "creative_execute" | "tool_endpoint" | "tool_timeout_override" | "unified_agent";
+  timeout_source?: "default_execute" | "creative_execute" | "tool_endpoint" | "tool_timeout_override" | "unified_agent";
   outer_timeout_source?: CmoOuterTimeoutSource;
-  route_decision?: "execute" | "creative_execution" | "creative_ideation" | "creative_session" | "tool_execute";
+  route_decision?: "execute" | "creative_execution" | "creative_ideation" | "creative_session" | "tool_execute" | "cmo_agent";
+  route?: unknown;
+  intent_decision?: unknown;
+  specialist_calls?: unknown[];
+  diagnostics?: Record<string, unknown>;
+  hermes_route?: unknown;
+  hermes_diagnostics?: Record<string, unknown>;
   creative_long_running_turn?: boolean;
   creative_timeout_ms?: number;
   workspace_fallback_suppressed_for_creative?: boolean;
@@ -1060,7 +1066,7 @@ export interface HermesCmoChatMetadata {
   s2s_artifact_download_auth_valid?: boolean;
   s2s_artifact_download_http_status?: number;
   artifact_transport_mode?: string;
-  creative_decision?: CmoCreativeDecision;
+  creative_decision?: CmoCreativeDecision | Record<string, unknown>;
   rejected_by_m1_validator?: boolean;
   rejected_field?: string;
   m1_validation_result?: "accepted";

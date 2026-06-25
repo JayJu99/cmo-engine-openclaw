@@ -1686,8 +1686,20 @@ function creativeNarrativeFromHermes(response: HermesCmoRuntimeResponse, result?
   return assetNarrative ?? "";
 }
 
+function userVisibleAnswerFromHermes(response: HermesCmoRuntimeResponse): string | null {
+  const userVisible = isRecord(response.user_visible) ? response.user_visible : null;
+
+  return canonicalAssistantText(userVisible?.answer);
+}
+
 function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmoRuntimeResult): string {
+  const userVisibleAnswer = userVisibleAnswerFromHermes(response);
+
   if (!response.answer) {
+    if (userVisibleAnswer) {
+      return userVisibleAnswer;
+    }
+
     const creativeDraftNarrative = creativeDraftNarrativeFromHermesValue(response) ?? creativeDraftNarrativeFromHermesValue(result?.response);
 
     if (creativeDraftNarrative) {
@@ -1715,10 +1727,11 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
 
   const answer = response.answer;
   const body = canonicalAssistantText(answer.body);
+  const content = canonicalAssistantText(answer.content);
   const summary = canonicalAssistantText(answer.summary);
   const creativeDraftNarrative = creativeDraftNarrativeFromHermesValue(response) ?? creativeDraftNarrativeFromHermesValue(result?.response);
 
-  return body ?? summary ?? creativeDraftNarrative ?? (
+  return body ?? content ?? userVisibleAnswer ?? summary ?? creativeDraftNarrative ?? (
     hasCreativeExecutionMetadata(response) || hasCreativeExecutionMetadata(result?.response)
       ? creativeNarrativeFromHermes(response, result)
       : ""
@@ -2030,6 +2043,11 @@ function metadataFromHermes(
       ? result.request.referenceAssets.length
       : undefined;
   const attachmentTraceSummary = isRecord(result.response.attachment_trace_summary) ? result.response.attachment_trace_summary : undefined;
+  const responseRoute = result.response.route;
+  const responseIntentDecision = result.response.intent_decision;
+  const responseSpecialistCalls = Array.isArray(result.response.specialist_calls) ? result.response.specialist_calls : undefined;
+  const responseCreativeDecision = result.response.creative_decision ?? structuredOutput.creative_decision;
+  const responseDiagnostics = isRecord(result.response.diagnostics) ? result.response.diagnostics : undefined;
   const cmoCallSurfUsed = toolsUsed.includes("cmo_call_surf") || executedCounts.surfCalls > 0;
   const cmoCallEchoUsed = toolsUsed.includes("cmo_call_echo") || executedCounts.echoCalls > 0;
 
@@ -2047,6 +2065,13 @@ function metadataFromHermes(
     hermesEndpointTimeoutMs: result.hermesCmoEndpointTimeoutMs,
     hermesEndpointTimeoutSource: result.hermesCmoEndpointTimeoutSource,
     route_decision: result.hermesCmoRouteDecision,
+    ...(responseRoute !== undefined ? { route: responseRoute, hermes_route: responseRoute } : {}),
+    ...(responseIntentDecision !== undefined ? { intent_decision: responseIntentDecision } : {}),
+    ...(responseSpecialistCalls ? { specialist_calls: responseSpecialistCalls } : {}),
+    ...(isRecord(responseCreativeDecision) ? { creative_decision: responseCreativeDecision } : {}),
+    ...(responseDiagnostics ? { diagnostics: responseDiagnostics, hermes_diagnostics: responseDiagnostics } : {}),
+    artifact_transport_attempted: artifactTransportAttempted,
+    ...(artifactTransportMode ? { artifact_transport_mode: artifactTransportMode } : {}),
     creative_long_running_turn: result.creativeLongRunningTurn,
     ...(result.creativeLongRunningTurn ? { creative_timeout_ms: result.hermesCmoEndpointTimeoutMs } : {}),
     ...(result.creativeLongRunningTurn ? { timeout_source: result.hermesCmoEndpointTimeoutSource } : {}),

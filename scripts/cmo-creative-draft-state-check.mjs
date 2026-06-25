@@ -470,7 +470,7 @@ requireSource(runtimeSource, /requestMayLeadToCreativeExecution/, "runtime");
 requireSource(runtimeSource, /const cmoOwnedCreativeCapability = requestHasCmoOwnedCreativeCapability\(request\)/, "runtime must recognize CMO-owned Creative capability envelope");
 requireSource(runtimeSource, /const creativeNativeSession = creativeIdeationDetected \|\| creativeWorkingStatePresent \|\| cmoOwnedCreativeCapability;/, "runtime must treat Creative state and CMO-owned capability as native session");
 requireSource(runtimeSource, /requestAllowsCreativeMutationByPolicy\(request\)/, "runtime must read side-effect policy for fresh CMO-owned Creative turns");
-requireSource(runtimeSource, /artifact_transport: creativeArtifactTransportForRequest\(request\)/, "runtime must include M13B artifact transport");
+requireSource(runtimeSource, /artifactTransportAllowed[\s\S]{0,160}artifact_transport: creativeArtifactTransportForRequest\(request\)/, "runtime must include Product artifact transport for Creative and unified CMO agent requests");
 requireSource(runtimeSource, /requestIsCreativeLongRunningTurn/, "runtime must classify Creative long-running turns centrally");
 requireSource(runtimeSource, /decision !== "creative_session"[\s\S]*return false/, "runtime long-running classifier must scope session checks to Creative sessions");
 requireSource(runtimeSource, /requestReferenceAssets\(request\)\.length > 0/, "runtime must use Creative timeout for session turns with reference assets");
@@ -549,7 +549,7 @@ requireSource(storeSource, /routeOverrodeToolExecuteDueToCreativeContext/, "stor
 requireSource(storeSource, /toolExecuteSuppressedForCreativeFollowup/, "store must trace tool-execute suppression");
 requireSource(storeSource, /hermesCmoRoute\.reason === "creative_ideation"/, "store must treat creative ideation as CMO-native creative");
 requireSource(storeSource, /hermesCmoRoute\.reason === "creative_session"/, "store must treat creative session as CMO-native creative");
-requireSource(storeSource, /creativeWorkingStateForHermes = hermesCmoNativeCreativeRequested \? creativeWorkingState : undefined/, "store must only send creative state on native creative turns");
+requireSource(storeSource, /creativeWorkingStateForHermes =[\s\S]{0,120}hermesCmoNativeCreativeRequested \|\| hermesCmoUnifiedAgentRequested \? creativeWorkingState : undefined/, "store must send creative state on native Creative or unified CMO agent turns");
 requireSource(storeSource, /creativeSessionFollowupDetected,/, "store must pass Creative session transport flag to Hermes");
 requireSource(storeSource, /creativeWorkingState: creativeWorkingStateForHermes/, "store must pass creativeWorkingState to Hermes mapper only on creative turns");
 requireSource(storeSource, /applySuggestedCreativeStateUpdate\([\s\S]*extractSuggestedCreativeStateUpdate\(hermesResult\.response\)/, "store must apply Hermes suggested state update");

@@ -235,6 +235,10 @@ assert.match(configSource, /CMO_HERMES_CREATIVE_CALL_MODE/, "Creative call mode 
 assert.match(configSource, /CMO_HERMES_CREATIVE_PROFILE/, "Creative profile config is required");
 assert.match(configSource, /CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS/, "Creative execute timeout config is required");
 assert.match(configSource, /getCmoCreativeArtifactReadKey/, "Creative artifact read key must be server config only");
+assert.match(configSource, /CMO_HERMES_UNIFIED_AGENT_ENABLED/, "Unified CMO agent feature flag must be configurable");
+assert.match(configSource, /CMO_HERMES_UNIFIED_AGENT_CANARY_APPS/, "Unified CMO agent canary apps must be configurable");
+assert.match(configSource, /CMO_HERMES_UNIFIED_AGENT_ENDPOINT/, "Unified CMO agent endpoint must be configurable");
+assert.match(configSource, /CMO_HERMES_UNIFIED_AGENT_TIMEOUT_MS/, "Unified CMO agent timeout must be configurable");
 assert.match(envExampleSource, /CMO_CREATIVE_ARTIFACT_READ_KEY=/, "Creative artifact read key must be documented in env example");
 assert.match(envExampleSource, /x-cmo-creative-artifact-key/, "Artifact read env docs must document the internal auth header");
 assert.match(configSource, /getCmoHermesCreativeExecuteTimeoutMs[\s\S]*300_000/, "Creative execute timeout must default to 300000ms");
@@ -250,11 +254,14 @@ assert.match(mapperSource, /missing_accepted_context_blocks_creative_execution:\
 assert.match(mapperSource, /optional_context_gaps/, "Missing accepted project context must be optional diagnostic context for Creative execution");
 assert.match(mapperSource, /Do not invent unsupported product mechanics/, "Creative execution must preserve factual-claim guardrails");
 assert.match(storeSource, /hermesCmoCreativeExecutionRequested/, "Creative execution route must trigger Hermes live runtime");
-assert.match(runtimeSource, /!creativeNativeExecuteEndpoint && \(toolChatCanaryEnabled/, "Creative execution must not be routed to the read-only tool endpoint");
+assert.match(runtimeSource, /!unifiedAgentEnabled[\s\S]{0,80}!creativeNativeExecuteEndpoint[\s\S]{0,120}toolChatCanaryEnabled/, "Creative execution must not be routed to the read-only tool endpoint");
 assert.match(runtimeSource, /creativeLongRunningTurn[\s\S]*getCmoHermesCreativeExecuteTimeoutMs\(\)/, "Creative execution/session must use the Creative-specific timeout");
 assert.match(runtimeSource, /creative\.generate_video/, "Creative video execution mode must be accepted");
 assert.match(runtimeSource, /creative_missing_accepted_context_blocks_execution:\s*creativeExecutionRequested \? false : null/, "Runtime Creative envelope must not require accepted context");
 assert.match(runtimeSource, /artifact_transport/, "Creative execution payload must include Product-owned artifact transport");
+assert.match(runtimeSource, /auth_ref: CMO_CREATIVE_ARTIFACT_AUTH_REF/, "Artifact transport must include symbolic artifact auth_ref");
+assert.match(runtimeSource, /auth_header: CMO_CREATIVE_ARTIFACT_AUTH_HEADER/, "Artifact transport must include symbolic artifact auth_header");
+assert.match(runtimeSource, /requestUsesUnifiedCmoAgentEndpoint/, "Unified CMO agent requests must receive Product artifact transport before Hermes chooses Creative");
 assert.match(runtimeSource, /mode: "product_upload"/, "Creative artifact transport must request Product upload mode");
 assert.match(runtimeSource, /upload_endpoint: `\$\{productPublicOrigin\(\)\}\/api\/cmo\/apps\/\$\{encodeURIComponent\(appId\)\}\/creative\/artifact-ingest`/, "Creative artifact transport must target Product ingest route");
 assert.match(runtimeSource, /accepted_mime_types: \[\.\.\.CMO_CREATIVE_ARTIFACT_MIME_TYPES\]/, "Creative artifact transport must declare accepted media types");

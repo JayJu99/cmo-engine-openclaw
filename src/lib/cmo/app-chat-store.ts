@@ -1619,7 +1619,8 @@ function normalizeRouteDecision(value: unknown): CMOChatSession["routeDecision"]
     value === "creative_ideation" ||
     value === "creative_session" ||
     value === "execute" ||
-    value === "tool_execute"
+    value === "tool_execute" ||
+    value === "cmo_agent"
     ? value
     : undefined;
 }
@@ -2308,10 +2309,10 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
       ? { productRenderSource: value.productRenderSource }
       : {}),
     ...(stringValue(value.selectedHermesEndpoint) ? { selectedHermesEndpoint: stringValue(value.selectedHermesEndpoint) } : {}),
-    ...(value.hermesEndpointKind === "execute" || value.hermesEndpointKind === "tool_execute" || value.hermesEndpointKind === "agent_chat"
+    ...(value.hermesEndpointKind === "execute" || value.hermesEndpointKind === "tool_execute" || value.hermesEndpointKind === "agent_chat" || value.hermesEndpointKind === "cmo_agent"
       ? { hermesEndpointKind: value.hermesEndpointKind }
       : {}),
-    ...(value.endpoint_kind === "execute" || value.endpoint_kind === "tool_execute" || value.endpoint_kind === "agent_chat"
+    ...(value.endpoint_kind === "execute" || value.endpoint_kind === "tool_execute" || value.endpoint_kind === "agent_chat" || value.endpoint_kind === "cmo_agent"
       ? { endpoint_kind: value.endpoint_kind }
       : {}),
     ...(value.runtime_kind === "ai_agent" ? { runtime_kind: "ai_agent" } : {}),
@@ -2326,13 +2327,15 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(value.hermesEndpointTimeoutSource === "default_execute" ||
     value.hermesEndpointTimeoutSource === "creative_execute" ||
     value.hermesEndpointTimeoutSource === "tool_endpoint" ||
-    value.hermesEndpointTimeoutSource === "tool_timeout_override"
+    value.hermesEndpointTimeoutSource === "tool_timeout_override" ||
+    value.hermesEndpointTimeoutSource === "unified_agent"
       ? { hermesEndpointTimeoutSource: value.hermesEndpointTimeoutSource }
       : {}),
     ...(value.timeout_source === "default_execute" ||
     value.timeout_source === "creative_execute" ||
     value.timeout_source === "tool_endpoint" ||
-    value.timeout_source === "tool_timeout_override"
+    value.timeout_source === "tool_timeout_override" ||
+    value.timeout_source === "unified_agent"
       ? { timeout_source: value.timeout_source }
       : {}),
     ...(value.outer_timeout_source === "default_app_turn" || value.outer_timeout_source === "creative_execute"
@@ -2342,9 +2345,17 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     value.route_decision === "creative_execution" ||
     value.route_decision === "creative_ideation" ||
     value.route_decision === "creative_session" ||
-    value.route_decision === "tool_execute"
+    value.route_decision === "tool_execute" ||
+    value.route_decision === "cmo_agent"
       ? { route_decision: value.route_decision }
       : {}),
+    ...(value.route !== undefined ? { route: value.route, hermes_route: value.route } : {}),
+    ...(value.hermes_route !== undefined ? { hermes_route: value.hermes_route } : {}),
+    ...(value.intent_decision !== undefined ? { intent_decision: value.intent_decision } : {}),
+    ...(Array.isArray(value.specialist_calls) ? { specialist_calls: value.specialist_calls } : {}),
+    ...(isRecord(value.creative_decision) ? { creative_decision: value.creative_decision } : {}),
+    ...(isRecord(value.diagnostics) ? { diagnostics: value.diagnostics } : {}),
+    ...(isRecord(value.hermes_diagnostics) ? { hermes_diagnostics: value.hermes_diagnostics } : {}),
     ...(typeof value.creative_long_running_turn === "boolean" ? { creative_long_running_turn: value.creative_long_running_turn } : {}),
     ...(typeof value.creative_timeout_ms === "number" && Number.isFinite(value.creative_timeout_ms)
       ? { creative_timeout_ms: Math.max(0, Math.floor(value.creative_timeout_ms)) }
@@ -3807,7 +3818,10 @@ export async function createAppChatSession(
     creativeWorkingState,
   });
   const legacyHermesCmoChatRequested = !request.forceFallback && shouldUseHermesCmoChat(request.appId);
-  const preliminaryHermesCmoChatRequested = legacyHermesCmoChatRequested || preliminaryHermesCmoRoute.endpointKind === "agent_chat";
+  const preliminaryHermesCmoChatRequested =
+    legacyHermesCmoChatRequested ||
+    preliminaryHermesCmoRoute.endpointKind === "agent_chat" ||
+    preliminaryHermesCmoRoute.endpointKind === "cmo_agent";
   const sourceAnswerContext = await buildSourceAnswerContext({
     source: activeSessionLocalSource,
     query: request.message,
@@ -3826,6 +3840,7 @@ export async function createAppChatSession(
     creativeWorkingState,
   });
   const hermesCmoChatV11Requested = hermesCmoRoute.endpointKind === "agent_chat";
+  const hermesCmoUnifiedAgentRequested = hermesCmoRoute.endpointKind === "cmo_agent";
   const hermesCmoCreativeExecutionRequested = hermesCmoRoute.reason === "creative_execution";
   const hermesCmoNativeCreativeRequested =
     hermesCmoRoute.reason === "creative_execution" ||
@@ -3845,9 +3860,11 @@ export async function createAppChatSession(
       Boolean(activeCreativeAssetResolution.asset) ||
       creativeWorkingStatePresent
     ));
-  const creativeWorkingStateForHermes = hermesCmoNativeCreativeRequested ? creativeWorkingState : undefined;
+  const creativeWorkingStateForHermes =
+    hermesCmoNativeCreativeRequested || hermesCmoUnifiedAgentRequested ? creativeWorkingState : undefined;
   const hermesCmoLegacyRequested =
     legacyHermesCmoChatRequested ||
+    hermesCmoUnifiedAgentRequested ||
     hermesCmoRoute.endpointKind === "tool_execute" ||
     hermesCmoCreativeExecutionRequested ||
     hermesCmoRoute.reason === "creative_ideation" ||

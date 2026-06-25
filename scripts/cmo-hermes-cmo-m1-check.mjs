@@ -869,6 +869,8 @@ const startServer = async () => {
             assert.deepEqual(body.artifact_transport, {
               mode: "product_upload",
               upload_endpoint: "https://cmo.jayju.cloud/api/cmo/apps/hold-pay/creative/artifact-ingest",
+              auth_ref: "cmo_creative_artifact_read_key",
+              auth_header: "x-cmo-creative-artifact-key",
               workspace_id: "hold-pay",
               app_id: "hold-pay",
               request_id: body.request_id,

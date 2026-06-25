@@ -150,6 +150,22 @@ export function getCmoHermesCmoAsyncToolRunTimeoutMs(): number {
   return positiveIntEnv("CMO_HERMES_CMO_ASYNC_TOOL_RUN_TIMEOUT_MS", 300_000);
 }
 
+export function isCmoHermesUnifiedAgentEnabled(): boolean {
+  return booleanEnv("CMO_HERMES_UNIFIED_AGENT_ENABLED", false);
+}
+
+export function getCmoHermesUnifiedAgentCanaryApps(): string[] {
+  return commaSeparatedEnv("CMO_HERMES_UNIFIED_AGENT_CANARY_APPS");
+}
+
+export function getCmoHermesUnifiedAgentEndpoint(): string {
+  return (process.env.CMO_HERMES_UNIFIED_AGENT_ENDPOINT?.trim() || "/agents/cmo/agent").replace(/\/+$/g, "") || "/agents/cmo/agent";
+}
+
+export function getCmoHermesUnifiedAgentTimeoutMs(): number {
+  return positiveIntEnv("CMO_HERMES_UNIFIED_AGENT_TIMEOUT_MS", 420_000);
+}
+
 export function getCmoHermesCreativeExecuteTimeoutMs(): number {
   return positiveIntEnv("CMO_HERMES_CREATIVE_EXECUTE_TIMEOUT_MS", 300_000);
 }

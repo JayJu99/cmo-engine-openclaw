@@ -6,6 +6,9 @@ import {
   getCmoHermesCmoToolEndpoint,
   getCmoHermesCmoToolChatCanaryApps,
   getCmoHermesCmoToolTimeoutMs,
+  getCmoHermesUnifiedAgentCanaryApps,
+  getCmoHermesUnifiedAgentEndpoint,
+  getCmoHermesUnifiedAgentTimeoutMs,
   getCmoHermesCreativeCallMode,
   getCmoHermesCreativeExecuteTimeoutMs,
   getCmoHermesCreativeProfile,
@@ -13,6 +16,7 @@ import {
   isCmoHermesCmoToolChatEnabled,
   isCmoHermesCmoToolExecuteEnabled,
   isCmoHermesCreativeEnabled,
+  isCmoHermesUnifiedAgentEnabled,
 } from "./config";
 import { CMO_CREATIVE_LIFECYCLE_STATES, hasCreativeExecutionMetadata, redactSensitiveText, redactedLocalArtifactPath } from "./creative-agent";
 import {
@@ -46,7 +50,10 @@ export const H5_LIVE_ADAPTER_BOUNDARY =
 
 const HERMES_CMO_AGENT_PATH = "/agents/cmo/execute" as const;
 const HERMES_CMO_TOOL_AGENT_DEFAULT_PATH = "/agents/cmo/tool-execute" as const;
+const HERMES_CMO_UNIFIED_AGENT_DEFAULT_PATH = "/agents/cmo/agent" as const;
 const CMO_DEFAULT_PUBLIC_APP_URL = "https://cmo.jayju.cloud" as const;
+const CMO_CREATIVE_ARTIFACT_AUTH_REF = "cmo_creative_artifact_read_key" as const;
+const CMO_CREATIVE_ARTIFACT_AUTH_HEADER = "x-cmo-creative-artifact-key" as const;
 const CMO_CREATIVE_ARTIFACT_MAX_BYTES = 50 * 1024 * 1024;
 const CMO_CREATIVE_ARTIFACT_MIME_TYPES = [
   "image/png",
@@ -179,6 +186,8 @@ export interface HermesCmoRuntimeRequest {
   artifact_transport?: {
     mode: "product_upload";
     upload_endpoint: string;
+    auth_ref: typeof CMO_CREATIVE_ARTIFACT_AUTH_REF;
+    auth_header: typeof CMO_CREATIVE_ARTIFACT_AUTH_HEADER;
     workspace_id: string;
     app_id: string;
     request_id: string;
@@ -310,7 +319,7 @@ export interface HermesCmoRuntimeResult {
   runtimeMode: HermesCmoRuntimeMode;
   calledHermesCmo: true;
   hermesCmoAgentPath: string;
-  hermesCmoEndpointKind: "execute" | "tool_execute";
+  hermesCmoEndpointKind: "execute" | "tool_execute" | "cmo_agent";
   hermesCmoEndpointTimeoutMs: number;
   hermesCmoEndpointTimeoutSource: HermesCmoTimeoutSource;
   hermesCmoRouteDecision: HermesCmoRouteDecision;
@@ -338,7 +347,7 @@ interface HermesCmoAgentConfig {
   endpoint: string;
   apiKey: string;
   endpointPath: string;
-  endpointKind: "execute" | "tool_execute";
+  endpointKind: "execute" | "tool_execute" | "cmo_agent";
   timeoutMs: number;
   timeoutSource: HermesCmoTimeoutSource;
   routeDecision: HermesCmoRouteDecision;
@@ -350,8 +359,8 @@ interface HermesCmoRuntimeOptions {
   toolTimeoutMs?: number;
 }
 
-type HermesCmoTimeoutSource = "default_execute" | "creative_execute" | "tool_endpoint" | "tool_timeout_override";
-type HermesCmoRouteDecision = "execute" | "creative_execution" | "creative_ideation" | "creative_session" | "tool_execute";
+type HermesCmoTimeoutSource = "default_execute" | "creative_execute" | "tool_endpoint" | "tool_timeout_override" | "unified_agent";
+type HermesCmoRouteDecision = "execute" | "creative_execution" | "creative_ideation" | "creative_session" | "tool_execute" | "cmo_agent";
 
 interface HermesCmoLivePayload {
   response: HermesCmoRuntimeResponse;
@@ -2277,6 +2286,8 @@ const creativeArtifactTransportForRequest = (request: HermesCmoRuntimeRequest): 
   return {
     mode: "product_upload",
     upload_endpoint: `${productPublicOrigin()}/api/cmo/apps/${encodeURIComponent(appId)}/creative/artifact-ingest`,
+    auth_ref: CMO_CREATIVE_ARTIFACT_AUTH_REF,
+    auth_header: CMO_CREATIVE_ARTIFACT_AUTH_HEADER,
     workspace_id: request.workspace.workspace_id,
     app_id: appId,
     request_id: request.request_id,
@@ -2311,9 +2322,15 @@ const requestIsCreativeLongRunningTurn = (request: HermesCmoRuntimeRequest, rout
   );
 };
 
+const requestUsesUnifiedCmoAgentEndpoint = (request: HermesCmoRuntimeRequest): boolean =>
+  isCmoHermesUnifiedAgentEnabled() &&
+  appIsConfiguredCanary(request.workspace.app_id, getCmoHermesUnifiedAgentCanaryApps());
+
 const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: HermesCmoRuntimeOptions = {}): HermesCmoAgentConfig => {
   const baseUrl = process.env.CMO_HERMES_BASE_URL?.trim().replace(/\/+$/g, "") ?? "";
   const apiKey = process.env.CMO_HERMES_API_KEY?.trim() ?? "";
+  const unifiedAgentEnabled = requestUsesUnifiedCmoAgentEndpoint(request);
+  const configuredUnifiedAgentEndpoint = getCmoHermesUnifiedAgentEndpoint() || HERMES_CMO_UNIFIED_AGENT_DEFAULT_PATH;
   const toolEndpointEnabled = isCmoHermesCmoToolExecuteEnabled();
   const toolChatCanaryEnabled = isCmoHermesCmoToolChatEnabled() &&
     appIsConfiguredCanary(request.workspace.app_id, getCmoHermesCmoToolChatCanaryApps());
@@ -2330,23 +2347,40 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: Herm
         ? "creative_session"
         : "execute";
   const creativeLongRunningTurn = requestIsCreativeLongRunningTurn(request, routeDecision);
-  const useToolEndpoint = !creativeNativeExecuteEndpoint && (toolChatCanaryEnabled || (toolEndpointEnabled && (externalResearch || requestIsSourceBackedOrSeeking(request))));
+  const useToolEndpoint = !unifiedAgentEnabled &&
+    !creativeNativeExecuteEndpoint &&
+    (toolChatCanaryEnabled || (toolEndpointEnabled && (externalResearch || requestIsSourceBackedOrSeeking(request))));
   const configuredToolEndpoint = getCmoHermesCmoToolEndpoint();
-  const endpointPath = useToolEndpoint ? endpointPathFromConfig(configuredToolEndpoint) : HERMES_CMO_AGENT_PATH;
+  const selectedEndpointConfig = unifiedAgentEnabled
+    ? configuredUnifiedAgentEndpoint
+    : useToolEndpoint
+      ? configuredToolEndpoint
+      : HERMES_CMO_AGENT_PATH;
+  const endpointPath = unifiedAgentEnabled
+    ? endpointPathFromConfig(configuredUnifiedAgentEndpoint)
+    : useToolEndpoint
+      ? endpointPathFromConfig(configuredToolEndpoint)
+      : HERMES_CMO_AGENT_PATH;
   const toolTimeoutOverride = positiveTimeoutOverride(options.toolTimeoutMs);
-  const timeoutMs = useToolEndpoint
+  const timeoutMs = unifiedAgentEnabled
+    ? getCmoHermesUnifiedAgentTimeoutMs()
+    : useToolEndpoint
     ? toolTimeoutOverride ?? getCmoHermesCmoToolTimeoutMs()
     : creativeLongRunningTurn
       ? getCmoHermesCreativeExecuteTimeoutMs()
       : hermesTimeoutMs();
-  const timeoutSource: HermesCmoTimeoutSource = useToolEndpoint
+  const timeoutSource: HermesCmoTimeoutSource = unifiedAgentEnabled
+    ? "unified_agent"
+    : useToolEndpoint
     ? toolTimeoutOverride !== undefined
       ? "tool_timeout_override"
       : "tool_endpoint"
     : creativeLongRunningTurn
       ? "creative_execute"
       : "default_execute";
-  const selectedRouteDecision: HermesCmoRouteDecision = useToolEndpoint
+  const selectedRouteDecision: HermesCmoRouteDecision = unifiedAgentEnabled
+    ? "cmo_agent"
+    : useToolEndpoint
     ? "tool_execute"
     : routeDecision;
 
@@ -2354,7 +2388,7 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: Herm
     throw new Error("CMO_HERMES_EXECUTION_ENABLED must be true for the live-only Hermes CMO runtime.");
   }
 
-  if (!baseUrl && !/^https?:\/\//i.test(configuredToolEndpoint)) {
+  if (!baseUrl && !/^https?:\/\//i.test(selectedEndpointConfig)) {
     throw new Error("CMO_HERMES_BASE_URL is required for the live-only Hermes CMO runtime.");
   }
 
@@ -2363,9 +2397,9 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: Herm
   }
 
   return {
-    endpoint: endpointUrl(baseUrl, useToolEndpoint ? configuredToolEndpoint : HERMES_CMO_AGENT_PATH),
+    endpoint: endpointUrl(baseUrl, selectedEndpointConfig),
     endpointPath,
-    endpointKind: useToolEndpoint ? "tool_execute" : "execute",
+    endpointKind: unifiedAgentEnabled ? "cmo_agent" : useToolEndpoint ? "tool_execute" : "execute",
     apiKey,
     timeoutMs,
     timeoutSource,
@@ -3550,6 +3584,7 @@ const buildHermesCmoLiveRequest = (
   const creativeSessionLongRunningTurn = creativeExecutionRequested || creativeWorkingStatePresent || cmoOwnedCreativeCapability;
   const creativeSessionTimeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
   const specialistExecutionAllowed = boundedDelegationAllowed || echoRetryAllowed || creativeTurnMayExecute;
+  const artifactTransportAllowed = creativeAgentAllowed || requestUsesUnifiedCmoAgentEndpoint(request);
   const allowedAgentsForRequest: HermesAllowedAgent[] = [
     ...(boundedDelegationAllowed ? ["echo", "surf"] as const : echoRetryAllowed ? ["echo"] as const : []),
     ...(creativeAgentAllowed ? ["creative"] as const : []),
@@ -3572,7 +3607,7 @@ const buildHermesCmoLiveRequest = (
 
   return {
     ...request,
-    ...(creativeAgentAllowed ? { artifact_transport: creativeArtifactTransportForRequest(request) } : {}),
+    ...(artifactTransportAllowed ? { artifact_transport: creativeArtifactTransportForRequest(request) } : {}),
     user_message: userMessage,
     message: userMessage,
     input: {

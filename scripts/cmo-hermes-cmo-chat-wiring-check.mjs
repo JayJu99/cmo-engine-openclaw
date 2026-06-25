@@ -108,6 +108,7 @@ const loadCompiledModules = async () => {
 
   return {
     tmpDir,
+    config: requireFromTmp(configOut),
     router: requireFromTmp(routerOut),
     mapper: requireFromTmp(mapperOut),
     chatV11: requireFromTmp(chatV11Out),
@@ -477,7 +478,7 @@ const makeRuntimeResult = (overrides = {}) => {
 };
 
 try {
-  const { tmpDir, router, mapper, chatV11, outboundSanitizer, creativeAgent, creativeDraftState, userMetadata } = await loadCompiledModules();
+  const { tmpDir, config, router, mapper, chatV11, outboundSanitizer, creativeAgent, creativeDraftState, userMetadata } = await loadCompiledModules();
   const rolloutWorkspaceIds = ["holdstation-mini-app", "aion", "feeback", "winance", "hold-pay", "holdstation-wallet"];
   let rollingReplaySmoke = null;
   let longSessionStressSmoke = null;
@@ -777,6 +778,82 @@ try {
         });
         assert.equal(nonCanary.endpoint, "/agents/cmo/execute");
         assert.equal(nonCanary.reason, "v11_disabled_or_non_canary");
+      },
+    );
+
+    await withEnv(
+      {
+        CMO_HERMES_UNIFIED_AGENT_ENABLED: undefined,
+        CMO_HERMES_UNIFIED_AGENT_CANARY_APPS: undefined,
+        CMO_HERMES_UNIFIED_AGENT_ENDPOINT: undefined,
+        CMO_HERMES_UNIFIED_AGENT_TIMEOUT_MS: undefined,
+      },
+      async () => {
+        assert.equal(config.isCmoHermesUnifiedAgentEnabled(), false, "unified CMO agent must be disabled by default");
+        assert.deepEqual(config.getCmoHermesUnifiedAgentCanaryApps(), [], "unified CMO agent canary apps must default empty");
+        assert.equal(config.getCmoHermesUnifiedAgentEndpoint(), "/agents/cmo/agent", "unified CMO agent endpoint default must be /agents/cmo/agent");
+        assert.equal(config.getCmoHermesUnifiedAgentTimeoutMs(), 420000, "unified CMO agent timeout default must be 420000ms");
+      },
+    );
+
+    await withEnv(
+      {
+        CMO_HERMES_UNIFIED_AGENT_ENABLED: "true",
+        CMO_HERMES_UNIFIED_AGENT_CANARY_APPS: "eggs-vault",
+        CMO_HERMES_UNIFIED_AGENT_ENDPOINT: "/agents/cmo/agent",
+        CMO_HERMES_CMO_CHAT_V11_ENABLED: "true",
+        CMO_HERMES_CMO_CHAT_V11_CANARY_APPS: "eggs-vault,hold-pay",
+        CMO_HERMES_CMO_TOOL_CHAT_ENABLED: "true",
+        CMO_HERMES_CMO_TOOL_CHAT_CANARY_APPS: "eggs-vault",
+        CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED: "true",
+      },
+      async () => {
+        assert.equal(router.shouldUseHermesUnifiedAgent("eggs-vault"), true, "Eggs Vault must enter the unified CMO agent canary");
+        assert.equal(router.shouldUseHermesUnifiedAgent("hold-pay"), false, "non-canary apps must stay on legacy routing");
+
+        for (const routeCase of [
+          {
+            label: "normal strategy",
+            input: { appId: "eggs-vault", message: "What positioning should Eggs Vault prioritize next?" },
+          },
+          {
+            label: "source/tool task",
+            input: { appId: "eggs-vault", message: "Use the active source artifact to answer this.", hasSourceOrToolTask: true },
+          },
+          {
+            label: "creative generation",
+            input: { appId: "eggs-vault", message: "Generate a seasonal campaign image for Eggs Vault." },
+          },
+          {
+            label: "active asset review",
+            input: {
+              appId: "eggs-vault",
+              message: "Review the active visual and tell me what to improve.",
+              hasCreativeWorkingState: true,
+              creativeWorkingState: {
+                active_asset_id: "asset_unified_review",
+                drafts: [],
+                assets: [{ asset_id: "asset_unified_review", kind: "image" }],
+              },
+            },
+          },
+          {
+            label: "force fallback",
+            input: { appId: "eggs-vault", message: "Force fallback should not override unified canary.", forceFallback: true },
+          },
+        ]) {
+          const route = router.resolveHermesCmoChatRoute(routeCase.input);
+          assert.equal(route.endpoint, "/agents/cmo/agent", `${routeCase.label} must route to the unified CMO agent endpoint`);
+          assert.equal(route.endpointKind, "cmo_agent", `${routeCase.label} must use cmo_agent endpoint kind`);
+          assert.equal(route.reason, "unified_agent_canary", `${routeCase.label} must bypass legacy route arbitration`);
+        }
+
+        const holdPayLegacy = router.resolveHermesCmoChatRoute({
+          appId: "hold-pay",
+          message: "What should CMO do next for Hold Pay?",
+        });
+        assert.equal(holdPayLegacy.endpoint, "/agents/cmo/chat", "non-canary app must keep legacy v1.1 chat route unchanged");
+        assert.equal(holdPayLegacy.endpointKind, "agent_chat");
       },
     );
 
@@ -3448,6 +3525,71 @@ try {
       mapped.suggestedActions.some((action) => action.label.includes("proposed surf delegation")),
       "delegations must map as reviewable proposals only",
     );
+
+    const unifiedAgentBase = makeRuntimeResult();
+    const unifiedAgentMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...unifiedAgentBase,
+      hermesCmoAgentPath: "/agents/cmo/agent",
+      hermesCmoEndpointKind: "cmo_agent",
+      hermesCmoEndpointTimeoutMs: 420000,
+      hermesCmoEndpointTimeoutSource: "unified_agent",
+      hermesCmoRouteDecision: "cmo_agent",
+      request: {
+        ...unifiedAgentBase.request,
+        artifact_transport: {
+          mode: "product_upload",
+          upload_endpoint: "https://cmo.jayju.cloud/api/cmo/apps/eggs-vault/creative/artifact-ingest",
+          auth_ref: "cmo_creative_artifact_read_key",
+          auth_header: "x-cmo-creative-artifact-key",
+          workspace_id: "eggs-vault",
+          app_id: "eggs-vault",
+          request_id: "req_h6_msg_001",
+          accepted_mime_types: ["image/png"],
+          max_bytes: 52428800,
+        },
+      },
+      response: {
+        ...unifiedAgentBase.response,
+        route: { selected: "strategy", reason: "unified_fixture" },
+        intent_decision: { intent: "strategy" },
+        specialist_calls: [{ agent: "creative", mode: "review", status: "not_needed" }],
+        creative_decision: { action: "none", reason: "text answer only" },
+        diagnostics: { endpoint_kind: "cmo_agent" },
+        answer: {
+          format: "markdown",
+          title: "Unified agent answer",
+          summary: "Summary should not render while content exists.",
+          decision: "KEEP",
+          body: "",
+          content: "Unified CMO Agent content answer.",
+        },
+      },
+    });
+    assert.equal(unifiedAgentMapped.answer, "Unified CMO Agent content answer.");
+    assert.equal(unifiedAgentMapped.hermesCmoMetadata.selectedHermesEndpoint, "/agents/cmo/agent");
+    assert.equal(unifiedAgentMapped.hermesCmoMetadata.endpoint_kind, "cmo_agent");
+    assert.equal(unifiedAgentMapped.hermesCmoMetadata.route_decision, "cmo_agent");
+    assert.equal(unifiedAgentMapped.hermesCmoMetadata.hermesEndpointTimeoutSource, "unified_agent");
+    assert.equal(unifiedAgentMapped.hermesCmoMetadata.artifact_transport_attempted, true);
+    assert.equal(unifiedAgentMapped.hermesCmoMetadata.artifact_transport_mode, "product_upload");
+    assert.equal(unifiedAgentMapped.hermesCmoMetadata.hermes_route.selected, "strategy");
+    assert.equal(unifiedAgentMapped.hermesCmoMetadata.intent_decision.intent, "strategy");
+    assert.equal(unifiedAgentMapped.hermesCmoMetadata.specialist_calls[0].agent, "creative");
+    assert.equal(unifiedAgentMapped.hermesCmoMetadata.creative_decision.action, "none");
+    assert.equal(unifiedAgentMapped.hermesCmoMetadata.hermes_diagnostics.endpoint_kind, "cmo_agent");
+
+    const unifiedUserVisibleBase = makeRuntimeResult();
+    const unifiedUserVisibleMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...unifiedUserVisibleBase,
+      response: {
+        ...unifiedUserVisibleBase.response,
+        answer: null,
+        user_visible: {
+          answer: "Unified user visible fallback answer.",
+        },
+      },
+    });
+    assert.equal(unifiedUserVisibleMapped.answer, "Unified user visible fallback answer.");
 
     const cleanCreativeAdvisoryBase = makeRuntimeResult();
     const cleanCreativeAdvisoryMapped = mapper.mapHermesCmoResponseToChatResult({
