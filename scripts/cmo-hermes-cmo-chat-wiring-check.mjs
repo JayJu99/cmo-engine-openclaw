@@ -3754,6 +3754,75 @@ try {
     assert.equal(unifiedTextAfterAssetMapped.hermesCmoMetadata.creative_assets_count, undefined);
     assert.doesNotMatch(unifiedTextAfterAssetMapped.answer, /Creative Asset Not Ready|workspace has no accepted source context/i);
 
+    const unifiedSecondAssetAdvisoryBase = makeRuntimeResult();
+    const unifiedSecondAssetAdvisoryMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...unifiedSecondAssetAdvisoryBase,
+      hermesCmoAgentPath: "/agents/cmo/agent",
+      hermesCmoEndpointKind: "cmo_agent",
+      hermesCmoEndpointTimeoutMs: 420000,
+      hermesCmoEndpointTimeoutSource: "unified_agent",
+      hermesCmoRouteDecision: "cmo_agent",
+      request: {
+        ...unifiedSecondAssetAdvisoryBase.request,
+        creative_working_state: {
+          active_asset_id: "creative_asset_second_variant",
+          drafts: [],
+          assets: [
+            {
+              asset_id: "creative_asset_first_generation",
+              kind: "image",
+              status: "stored",
+              visual_summary: "First generated marketing asset.",
+            },
+            {
+              asset_id: "creative_asset_second_variant",
+              kind: "image",
+              status: "stored",
+              visual_summary: "Second generated 1:1 variant.",
+            },
+          ],
+        },
+        artifact_transport: {
+          mode: "product_upload",
+          upload_endpoint: "https://cmo.jayju.cloud/api/cmo/apps/eggs-vault/creative/artifact-ingest",
+          auth_ref: "cmo_creative_artifact_read_key",
+          auth_header: "x-cmo-creative-artifact-key",
+          workspace_id: "eggs-vault",
+          app_id: "eggs-vault",
+          request_id: "req_h6_msg_002",
+          accepted_mime_types: ["image/png"],
+          max_bytes: 52428800,
+        },
+      },
+      response: {
+        ...unifiedSecondAssetAdvisoryBase.response,
+        status: "completed",
+        route: { kind: "cmo_agent", intent_owner: "cmo", routed_to_creative: false },
+        intent_decision: { domain: "creative_marketing_review", action: "answer_directly" },
+        answer_basis: {
+          mode: "cmo_agent",
+          missing_inputs: [],
+          assumptions_used: [],
+          user_can_override: true,
+          suggested_user_inputs: [],
+        },
+        creative_decision: { action: "answer_directly" },
+        creative_assets_count: 0,
+        creative_assets: [],
+        answer: "The second generated asset is usable for marketing review; add one clear CTA only if the crop still leaves safe space.",
+      },
+    });
+    assert.equal(
+      unifiedSecondAssetAdvisoryMapped.answer,
+      "The second generated asset is usable for marketing review; add one clear CTA only if the crop still leaves safe space.",
+    );
+    assert.equal(unifiedSecondAssetAdvisoryMapped.runtimeStatus, "live");
+    assert.equal(unifiedSecondAssetAdvisoryMapped.isRuntimeFallback, false);
+    assert.equal(unifiedSecondAssetAdvisoryMapped.hermesCmoMetadata.productRenderSource, "hermes_cmo");
+    assert.equal(unifiedSecondAssetAdvisoryMapped.hermesCmoMetadata.fallback_used, false);
+    assert.equal(unifiedSecondAssetAdvisoryMapped.hermesCmoMetadata.creative_assets_count, undefined);
+    assert.doesNotMatch(unifiedSecondAssetAdvisoryMapped.answer, /Creative Asset Not Ready|Creative execution timed out|Retry this run|Using reference image/i);
+
     const unifiedActiveAssetReviewBase = makeRuntimeResult();
     const unifiedActiveAssetReviewMapped = mapper.mapHermesCmoResponseToChatResult({
       ...unifiedActiveAssetReviewBase,
@@ -4716,9 +4785,17 @@ try {
     assert.match(source, /normalizedHermesAnswer: answer/);
     assert.match(source, /completedUnifiedCmoAgentAnswerBasisMode = stringValue\(unifiedAnswerBasis\.mode, "cmo_agent"\)/);
     assert.match(source, /!userVisibleAnswerPathLike\(answer\)/);
-    assert.match(source, /!completedUnifiedCmoAgentAnswer &&\s*\(hermesCmoCreativeExecutionRequested \|\| hermesCreativeExecutionResponseReceived\)/);
+    assert.match(source, /function hermesUnifiedCmoAgentCurrentTurnTextAnswer/);
+    assert.match(source, /const unifiedCurrentTurnTextAnswer = !creativeContractViolation && hermesUnifiedCmoAgentCurrentTurnTextAnswer/);
+    assert.match(source, /!unifiedCurrentTurnTextAnswer && hermesResponseIndicatesCreativeExecution\(hermesResult, creativeArtifacts\)/);
+    assert.match(source, /!unifiedCurrentTurnTextAnswer && hermesCmoCreativeExecutionRequested/);
+    assert.match(source, /currentTurnCreativeLongRunningTurn =\s*\n\s*!unifiedCurrentTurnTextAnswer && \(hermesCmoCreativeLongRunningTurn \|\| hermesCreativeExecutionResponseReceived\)/);
+    assert.match(source, /!completedUnifiedCmoAgentAnswer &&\s*\(currentTurnCreativeExecutionRequested \|\| hermesCreativeExecutionResponseReceived\)/);
     assert.match(source, /if \(completedUnifiedCmoAgentAnswer\)/);
     assert.match(source, /answer = completedUnifiedCmoAgentAnswer/);
+    assert.match(source, /timeoutMs = undefined/);
+    assert.match(source, /outerTimeoutSource = undefined/);
+    assert.match(source, /currentTurnCreativeLongRunningTurn = false/);
     assert.match(source, /applyCompletedUnifiedCmoAgentFinalWriteInvariant/);
     assert.match(source, /logFinalSessionWriteProjection/);
     assert.match(source, /final_session_write_projection/);
@@ -4726,6 +4803,9 @@ try {
     assert.match(source, /productRenderSource = "hermes_cmo"/);
     assert.match(source, /answer_basis_mode: completed\.answerBasisMode \?\? stringValue\(completed\.answerBasis\?\.mode, "cmo_agent"\)/);
     assert.match(source, /fallback_used: false/);
+    assert.match(source, /"creative_timeout_ms"/);
+    assert.match(source, /"creative_long_running_turn"/);
+    assert.match(source, /"creative_execution_requested"/);
     assert.match(source, /role === "assistant" \? scrubPersistedReplayText\(message\.content\) : stringValue\(message\.content\)/);
     assert.match(source, /normalizeSafeCreativeDiagnosticRecord\(value\.route \?\? value\.hermes_route\)/);
     assert.match(source, /normalizeSafeCreativeDiagnosticValue\(value\.creative_decision\)/);
@@ -4733,8 +4813,8 @@ try {
     assert.match(source, /UNSAFE_CREATIVE_DIAGNOSTIC_LINE_PATTERN/);
     assert.match(hermesRuntimeSourceForBoundary, /traceEnvelopeBlockInspection\.literals\.length > 0/);
     assert.match(outboundSanitizerSourceForBoundary, /projectedPayload = sanitizeValue\(projectedPayload, \[\], undefined, recursivelySanitizedFields\) as T/);
-    assert.match(source, /hermesResponseIndicatesCreativeExecution\(hermesResult, creativeArtifacts\)/);
-    assert.match(source, /hermesCmoCreativeExecutionRequested \|\| hermesCreativeExecutionResponseReceived/);
+    assert.match(source, /!hermesCmoUnifiedAgentRequested && hermesCmoRoute\.reason === "creative_session"/);
+    assert.match(source, /\.\.\.\(currentTurnCreativeLongRunningTurn \? \{ creative_long_running_turn: true \} : \{\}\)/);
     assert.match(source, /userVisibleAnswerPathLike\(answer\)/);
     assert.match(source, /user_visible_answer_guard_triggered: true/);
     assert.match(source, /user_visible_answer_guard_reason: guardReason/);
