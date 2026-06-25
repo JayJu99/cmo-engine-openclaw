@@ -1778,6 +1778,22 @@ function normalizeSafeCreativeDiagnosticValue(value: unknown): unknown {
   return undefined;
 }
 
+function normalizeSafeCreativeDiagnosticRecord(value: unknown): Record<string, unknown> | undefined {
+  const normalized = normalizeSafeCreativeDiagnosticValue(value);
+
+  return isRecord(normalized) ? normalized : undefined;
+}
+
+function scrubPersistedReplayText(value: unknown, fallback = ""): string {
+  const text = stringValue(value, fallback);
+
+  if (!text || UNSAFE_CREATIVE_DIAGNOSTIC_TEXT_PATTERN.test(text)) {
+    return "";
+  }
+
+  return text;
+}
+
 function normalizeSuggestedActions(value: unknown): CMOAppChatResponse["suggestedActions"] {
   if (!Array.isArray(value)) {
     return [];
@@ -2288,7 +2304,13 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
   const platformPersistenceSummary = normalizeHermesCmoPlatformPersistenceSummary(value.platformPersistenceSummary);
   const contractWarnings = normalizeContractWarnings(value.contract_warnings);
   const stateContract = normalizeStateContractMetadata(value.state_contract);
-  const creativeDecision = normalizeCreativeDecision(value.creative_decision);
+  const safeRoute = normalizeSafeCreativeDiagnosticRecord(value.route ?? value.hermes_route);
+  const safeIntentDecision = normalizeSafeCreativeDiagnosticRecord(value.intent_decision);
+  const safeSpecialistCalls = Array.isArray(value.specialist_calls)
+    ? normalizeSafeCreativeDiagnosticValue(value.specialist_calls)
+    : undefined;
+  const safeDiagnostics = normalizeSafeCreativeDiagnosticRecord(value.diagnostics ?? value.hermes_diagnostics);
+  const creativeDecision = normalizeCreativeDecision(normalizeSafeCreativeDiagnosticValue(value.creative_decision));
   const sideEffects = value.sideEffects === false
     ? false
     : isRecord(value.sideEffects) && Object.values(value.sideEffects).every((item) => item === false)
@@ -2349,13 +2371,11 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     value.route_decision === "cmo_agent"
       ? { route_decision: value.route_decision }
       : {}),
-    ...(value.route !== undefined ? { route: value.route, hermes_route: value.route } : {}),
-    ...(value.hermes_route !== undefined ? { hermes_route: value.hermes_route } : {}),
-    ...(value.intent_decision !== undefined ? { intent_decision: value.intent_decision } : {}),
-    ...(Array.isArray(value.specialist_calls) ? { specialist_calls: value.specialist_calls } : {}),
-    ...(isRecord(value.creative_decision) ? { creative_decision: value.creative_decision } : {}),
-    ...(isRecord(value.diagnostics) ? { diagnostics: value.diagnostics } : {}),
-    ...(isRecord(value.hermes_diagnostics) ? { hermes_diagnostics: value.hermes_diagnostics } : {}),
+    ...(safeRoute ? { route: safeRoute, hermes_route: safeRoute } : {}),
+    ...(safeIntentDecision ? { intent_decision: safeIntentDecision } : {}),
+    ...(Array.isArray(safeSpecialistCalls) ? { specialist_calls: safeSpecialistCalls.filter(isRecord) } : {}),
+    ...(creativeDecision ? { creative_decision: creativeDecision } : {}),
+    ...(safeDiagnostics ? { diagnostics: safeDiagnostics, hermes_diagnostics: safeDiagnostics } : {}),
     ...(typeof value.creative_long_running_turn === "boolean" ? { creative_long_running_turn: value.creative_long_running_turn } : {}),
     ...(typeof value.creative_timeout_ms === "number" && Number.isFinite(value.creative_timeout_ms)
       ? { creative_timeout_ms: Math.max(0, Math.floor(value.creative_timeout_ms)) }
@@ -3408,7 +3428,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
           return {
             id: stringValue(message.id, `message_${index + 1}`),
             role,
-            content: stringValue(message.content),
+            content: role === "assistant" ? scrubPersistedReplayText(message.content) : stringValue(message.content),
             createdAt: stringValue(message.createdAt, new Date(0).toISOString()),
             authMode: normalizeAuthMode(message.authMode),
             userId: normalizeOptionalString(message.userId),
@@ -3988,6 +4008,7 @@ export async function createAppChatSession(
   let hermesRequestSent = false;
   let productRenderSource: CmoProductRenderSource | undefined;
   let productFallbackReason: string | undefined;
+  let completedUnifiedCmoAgentAnswer: string | undefined;
   let sessionSummary = continuedSession?.sessionSummary;
   let sessionArtifacts = continuedSession?.sessionArtifacts ?? [];
   let turnCreativeArtifacts: Record<string, unknown>[] = [];
@@ -4850,6 +4871,17 @@ export async function createAppChatSession(
       ) {
         answer = creativeMissingRenderableAssetWarning();
       }
+      const hermesAnswerBasis = recordValue(hermesResult.response.answer_basis) ?? {};
+      const hermesResponseRoute = recordValue((hermesResult.response as unknown as Record<string, unknown>).route) ?? {};
+      if (
+        hermesResult.hermesCmoEndpointKind === "cmo_agent" &&
+        hermesResult.response.status === "completed" &&
+        hermesAnswerBasis.mode === "cmo_agent" &&
+        (hermesResponseRoute.kind === undefined || hermesResponseRoute.kind === "cmo_agent") &&
+        answer.trim()
+      ) {
+        completedUnifiedCmoAgentAnswer = answer;
+      }
       status = "completed";
       assumptions = mappedHermesResult.assumptions;
       suggestedActions = mappedHermesResult.suggestedActions;
@@ -5565,6 +5597,40 @@ export async function createAppChatSession(
       creative_state_mutation: false,
       fallback_used: false,
     };
+  }
+
+  if (completedUnifiedCmoAgentAnswer) {
+    answer = completedUnifiedCmoAgentAnswer;
+    status = "completed";
+    isDevelopmentFallback = false;
+    isRuntimeFallback = false;
+    runtimeStatus = "live";
+    runtimeMode = "live";
+    attemptedRuntimeMode = "live";
+    runtimeError = "";
+    runtimeErrorReason = undefined;
+    fallbackDurationMs = undefined;
+    productRenderSource = "hermes_cmo";
+    productFallbackReason = undefined;
+    routeDecision = "cmo_agent";
+    hermesCmoStatus = "live";
+    hermesCmoErrorReason = undefined;
+    hermesRequestSent = true;
+    calledHermesCmo = true;
+    if (hermesCmoMetadata) {
+      const metadataWithoutFallbackFields = { ...hermesCmoMetadata };
+      delete metadataWithoutFallbackFields.fallback_reason;
+      delete metadataWithoutFallbackFields.fallback_from;
+      delete metadataWithoutFallbackFields.fallback_to;
+      hermesCmoMetadata = {
+        ...metadataWithoutFallbackFields,
+        runtimeStatus: "live",
+        productRenderSource: "hermes_cmo",
+        route_decision: "cmo_agent",
+        answer_basis_mode: "cmo_agent",
+        fallback_used: false,
+      };
+    }
   }
 
   const decisionLayer = buildDecisionLayer({

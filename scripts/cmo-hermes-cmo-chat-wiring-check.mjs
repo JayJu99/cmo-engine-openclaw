@@ -4667,6 +4667,17 @@ try {
     assert.match(source, /writeHermesCmoChatV11FallbackTrace\(chatResult\.request/);
     assert.match(source, /answer = mappedChat\.answer/);
     assert.match(source, /answer = creativeContractViolation \? PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE : mappedHermesResult\.answer/);
+    assert.match(source, /let completedUnifiedCmoAgentAnswer/);
+    assert.match(source, /completedUnifiedCmoAgentAnswer = answer/);
+    assert.match(source, /if \(completedUnifiedCmoAgentAnswer\)/);
+    assert.match(source, /answer = completedUnifiedCmoAgentAnswer/);
+    assert.match(source, /runtimeStatus = "live"/);
+    assert.match(source, /productRenderSource = "hermes_cmo"/);
+    assert.match(source, /answer_basis_mode: "cmo_agent"/);
+    assert.match(source, /fallback_used: false/);
+    assert.match(source, /role === "assistant" \? scrubPersistedReplayText\(message\.content\) : stringValue\(message\.content\)/);
+    assert.match(source, /normalizeSafeCreativeDiagnosticRecord\(value\.route \?\? value\.hermes_route\)/);
+    assert.match(source, /normalizeSafeCreativeDiagnosticValue\(value\.creative_decision\)/);
     assert.match(source, /hermesResponseIndicatesCreativeExecution\(hermesResult, creativeArtifacts\)/);
     assert.match(source, /hermesCmoCreativeExecutionRequested \|\| hermesCreativeExecutionResponseReceived/);
     assert.match(source, /userVisibleAnswerPathLike\(answer\)/);
