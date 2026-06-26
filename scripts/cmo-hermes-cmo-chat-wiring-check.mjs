@@ -3668,6 +3668,41 @@ try {
     assert.equal(unifiedTextOnlyMapped.hermesCmoMetadata.creative_assets_count, undefined);
     assert.doesNotMatch(unifiedTextOnlyMapped.answer, /workspace has no accepted source context/i);
 
+    const vietnameseGreetingAnswer = "Xin chào bro. Mình đang ở CMO mode cho Eggs Vault. Hiện workspace chưa có context đã xác nhận, nên mình có thể giúp theo 3 hướng nhanh: định vị sản phẩm, chiến dịch/content, hoặc tạo visual asset như hero/banner.";
+    const unifiedVietnameseGreetingMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...unifiedTextOnlyBase,
+      hermesCmoAgentPath: "/agents/cmo/agent",
+      hermesCmoEndpointKind: "cmo_agent",
+      hermesCmoEndpointTimeoutMs: 420000,
+      hermesCmoEndpointTimeoutSource: "unified_agent",
+      hermesCmoRouteDecision: "cmo_agent",
+      response: {
+        ...unifiedTextOnlyBase.response,
+        status: "completed",
+        route: { kind: "cmo_agent", intent_owner: "cmo", routed_to_creative: false },
+        intent_decision: { domain: "general_greeting", action: "answer_directly" },
+        answer_basis: {
+          mode: "cmo_agent",
+          missing_inputs: ["accepted_workspace_context"],
+          assumptions_used: [],
+          user_can_override: true,
+          suggested_user_inputs: [],
+        },
+        creative_decision: { action: "answer_directly" },
+        creative_assets_count: 0,
+        creative_assets: [],
+        answer: vietnameseGreetingAnswer,
+      },
+    });
+    assert.equal(unifiedVietnameseGreetingMapped.answer, vietnameseGreetingAnswer);
+    assert.equal(unifiedVietnameseGreetingMapped.runtimeStatus, "live");
+    assert.equal(unifiedVietnameseGreetingMapped.runtimeMode, "live");
+    assert.equal(unifiedVietnameseGreetingMapped.isRuntimeFallback, false);
+    assert.equal(unifiedVietnameseGreetingMapped.hermesCmoMetadata.productRenderSource, "hermes_cmo");
+    assert.equal(unifiedVietnameseGreetingMapped.hermesCmoMetadata.fallback_used, false);
+    assert.equal(unifiedVietnameseGreetingMapped.hermesCmoMetadata.intent_decision.domain, "general_greeting");
+    assert.doesNotMatch(unifiedVietnameseGreetingMapped.answer, /Hi Jay|I'm ready for Eggs Vault|accepted workspace sources/i);
+
     const unifiedTextAfterAssetMapped = mapper.mapHermesCmoResponseToChatResult({
       ...unifiedTextOnlyBase,
       hermesCmoAgentPath: "/agents/cmo/agent",
@@ -3840,6 +3875,45 @@ try {
     assert.equal(unifiedActiveAssetReviewMapped.hermesCmoMetadata.creative_decision.action, "review");
     assert.equal(unifiedActiveAssetReviewMapped.hermesCmoMetadata.hermes_diagnostics.creative_visual_inspection_used, true);
     assert.equal(unifiedActiveAssetReviewMapped.hermesCmoMetadata.creative_assets_count, 0);
+
+    const unifiedCreativeExecutionMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...unifiedActiveAssetReviewBase,
+      hermesCmoAgentPath: "/agents/cmo/agent",
+      hermesCmoEndpointKind: "cmo_agent",
+      hermesCmoEndpointTimeoutMs: 420000,
+      hermesCmoEndpointTimeoutSource: "unified_agent",
+      hermesCmoRouteDecision: "cmo_agent",
+      response: {
+        ...unifiedActiveAssetReviewBase.response,
+        status: "completed",
+        route: { kind: "creative_execution", intent_owner: "cmo", routed_to_creative: true },
+        answer_basis: {
+          mode: "cmo_agent",
+          missing_inputs: [],
+          assumptions_used: [],
+          user_can_override: true,
+          suggested_user_inputs: [],
+        },
+        creative_decision: { action: "generate", operation: "creative.generate_image" },
+        creative_assets_count: 1,
+        creative_assets: [
+          {
+            asset_id: "creative_asset_unified_exact",
+            kind: "image",
+            status: "stored",
+            transport_status: "uploaded",
+            render_url: "https://cmo.jayju.cloud/api/cmo/apps/eggs-vault/creative/assets/creative_asset_unified_exact/preview",
+          },
+        ],
+        answer: "Đã tạo xong bản visual mới cho chiến dịch Eggs Vault.",
+      },
+    });
+    assert.equal(unifiedCreativeExecutionMapped.answer, "Đã tạo xong bản visual mới cho chiến dịch Eggs Vault.");
+    assert.equal(unifiedCreativeExecutionMapped.runtimeStatus, "live");
+    assert.equal(unifiedCreativeExecutionMapped.isRuntimeFallback, false);
+    assert.equal(unifiedCreativeExecutionMapped.hermesCmoMetadata.productRenderSource, "hermes_cmo");
+    assert.equal(unifiedCreativeExecutionMapped.hermesCmoMetadata.fallback_used, false);
+    assert.equal(unifiedCreativeExecutionMapped.hermesCmoMetadata.hermes_route.kind, "creative_execution");
 
     const unifiedUserVisibleBase = makeRuntimeResult();
     const unifiedUserVisibleMapped = mapper.mapHermesCmoResponseToChatResult({
@@ -4810,6 +4884,9 @@ try {
     assert.match(source, /if \(!usedHermesCmoChat\)/);
     assert.match(source, /if \(completedUnifiedCmoAgentPersistState\) \{[\s\S]*productRenderSource = "hermes_cmo"[\s\S]*usedHermesCmoChat = true;[\s\S]*\} else if \(productOutboundCreativeContextBlocked\)/);
     assert.match(source, /if \(!usedHermesCmoChat\) \{[\s\S]*productRenderSource = hermesCmoChatRequested \? "fallback_after_hermes_failure"/);
+    assert.match(source, /const completedUnifiedCmoAgentFinalAssistant = completedUnifiedCmoAgentPersistState[\s\S]*persistedSession\.messages\.find/);
+    assert.match(source, /if \(completedUnifiedCmoAgentPersistState\?\.normalizedHermesAnswer\.trim\(\)\) \{[\s\S]*answer = completedUnifiedCmoAgentPersistState\.normalizedHermesAnswer[\s\S]*runtimeStatus = "live"[\s\S]*productRenderSource = "hermes_cmo"/);
+    assert.match(source, /const responseTimingMetadata = completedUnifiedCmoAgentPersistState\?\.normalizedHermesAnswer\.trim\(\)[\s\S]*fallback_used: false/);
     assert.match(source, /productFallbackReason = hermesCmoChatRequested/);
     assert.match(source, /durableSideEffectsSuppressed = hermesCmoChatV11Attempted/);
     assert.match(source, /skipped_hermes_cmo_chat_v11_no_auto_save/);

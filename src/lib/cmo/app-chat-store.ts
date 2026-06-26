@@ -3566,9 +3566,11 @@ function applyCompletedUnifiedCmoAgentFinalWriteInvariant(input: {
       runtimeProvider: "hermes",
       runtimeAgent: "cmo",
       runtimeErrorReason: undefined,
+      fallbackDurationMs: undefined,
       timeoutMs: undefined,
       outerTimeoutMs: undefined,
       outerTimeoutSource: undefined,
+      routeDecision: "cmo_agent",
       productRenderSource: "hermes_cmo",
       productFallbackReason: undefined,
       hermesRequestSent: true,
@@ -3594,9 +3596,11 @@ function applyCompletedUnifiedCmoAgentFinalWriteInvariant(input: {
       runtimeStatus: "live",
       runtimeProvider: "hermes",
       runtimeAgent: "cmo",
+      fallbackDurationMs: undefined,
       timeoutMs: undefined,
       outerTimeoutMs: undefined,
       outerTimeoutSource: undefined,
+      routeDecision: "cmo_agent",
       productRenderSource: "hermes_cmo",
       hermesRequestSent: true,
       calledHermesCmo: true,
@@ -3615,9 +3619,11 @@ function applyCompletedUnifiedCmoAgentFinalWriteInvariant(input: {
     attemptedRuntimeMode: "live",
     runtimeError: undefined,
     runtimeErrorReason: undefined,
+    fallbackDurationMs: undefined,
     timeoutMs: undefined,
     outerTimeoutMs: undefined,
     outerTimeoutSource: undefined,
+    routeDecision: "cmo_agent",
     productRenderSource: "hermes_cmo",
     productFallbackReason: undefined,
     hermesRequestSent: true,
@@ -6461,6 +6467,73 @@ export async function createAppChatSession(
     await writeJsonFile(sessionPath(sessionId), persistedSession);
   }
 
+  const completedUnifiedCmoAgentFinalAssistant = completedUnifiedCmoAgentPersistState
+    ? persistedSession.messages.find((message) => message.id === assistantId)
+    : undefined;
+  if (completedUnifiedCmoAgentPersistState?.normalizedHermesAnswer.trim()) {
+    answer = completedUnifiedCmoAgentPersistState.normalizedHermesAnswer;
+    status = "completed";
+    isDevelopmentFallback = false;
+    isRuntimeFallback = false;
+    runtimeStatus = "live";
+    runtimeMode = "live";
+    attemptedRuntimeMode = "live";
+    runtimeError = "";
+    runtimeErrorReason = undefined;
+    runtimeProvider = "hermes";
+    runtimeAgent = "cmo";
+    fallbackDurationMs = undefined;
+    timeoutMs = undefined;
+    outerTimeoutMs = undefined;
+    outerTimeoutSource = undefined;
+    routeDecision = "cmo_agent";
+    productRenderSource = "hermes_cmo";
+    productFallbackReason = undefined;
+    hermesRequestSent = true;
+    calledHermesCmo = true;
+    hermesCmoStatus = "live";
+    hermesCmoErrorReason = undefined;
+    currentTurnCreativeLongRunningTurn = false;
+    creativeExecutionRequested = undefined;
+    creativeResponseReceived = undefined;
+    creativeMetadataPresent = undefined;
+    creativeFallbackUsed = undefined;
+    hermesCmoMetadata = completedUnifiedCmoAgentFinalAssistant?.hermesCmoMetadata
+      ?? persistedSession.hermesCmoMetadata
+      ?? completedUnifiedCmoAgentMetadata(hermesCmoMetadata, completedUnifiedCmoAgentPersistState);
+    hermesCmoCounters = completedUnifiedCmoAgentFinalAssistant?.hermesCmoCounters ?? persistedSession.hermesCmoCounters ?? hermesCmoCounters;
+    forbiddenCounters = completedUnifiedCmoAgentFinalAssistant?.forbiddenCounters ?? persistedSession.forbiddenCounters ?? forbiddenCounters;
+    activityEvents = completedUnifiedCmoAgentFinalAssistant?.activityEvents ?? persistedSession.activityEvents ?? activityEvents;
+    delegationSummary = completedUnifiedCmoAgentFinalAssistant?.delegationSummary ?? persistedSession.delegationSummary ?? delegationSummary;
+    agentsUsed = completedUnifiedCmoAgentFinalAssistant?.agentsUsed ?? persistedSession.agentsUsed ?? agentsUsed;
+    surfCalls = completedUnifiedCmoAgentFinalAssistant?.surfCalls ?? persistedSession.surfCalls ?? surfCalls;
+    echoCalls = completedUnifiedCmoAgentFinalAssistant?.echoCalls ?? persistedSession.echoCalls ?? echoCalls;
+  }
+  const responseTimingMetadata = completedUnifiedCmoAgentPersistState?.normalizedHermesAnswer.trim()
+    ? (() => {
+        const metadata = { ...timingMetadata } as Record<string, unknown>;
+        for (const key of [
+          "timeoutMs",
+          "outerTimeoutMs",
+          "outer_timeout_ms",
+          "outerTimeoutSource",
+          "outer_timeout_source",
+          "creative_long_running_turn",
+          "creative_timeout_ms",
+          "timeout_source",
+        ]) {
+          delete metadata[key];
+        }
+
+        return {
+          ...metadata,
+        routeDecision: "cmo_agent" as const,
+        route_decision: "cmo_agent" as const,
+        fallback_used: false,
+        };
+      })()
+    : timingMetadata;
+
   return {
     messageId: assistantId,
     sessionId,
@@ -6523,7 +6596,7 @@ export async function createAppChatSession(
     indexedContextStatus,
     indexedContextSourcesCount,
     ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
-    ...timingMetadata,
+    ...responseTimingMetadata,
     totalDurationMs: persistedSession.totalDurationMs ?? timingMetadata.totalDurationMs,
     decisionLayer,
     rawCapturePath: persistedSession.rawCapturePath,
