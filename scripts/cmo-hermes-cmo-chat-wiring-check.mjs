@@ -4927,6 +4927,10 @@ try {
     assert.match(source, /user_visible_answer_guard_triggered: true/);
     assert.match(source, /user_visible_answer_guard_reason: guardReason/);
     assert.match(source, /productRenderSource = "hermes_cmo"/);
+    assert.match(source, /const returnCompletedUnifiedCmoAgentTurn = async/);
+    assert.match(source, /return await returnCompletedUnifiedCmoAgentTurn\(\{[\s\S]*completed: earlyCompletedUnifiedCmoAgentPersistState[\s\S]*\}\);[\s\S]*const counterValidation = validateHermesCmoChatCounters\(hermesResult\)/);
+    assert.match(source, /return await returnCompletedUnifiedCmoAgentTurn\(\{[\s\S]*liveAttemptDurationMs: Date\.now\(\) - hermesStartedMs/);
+    assert.match(source, /else if \(hermesCmoUnifiedAgentRequested\) \{[\s\S]*CMO Agent did not return a usable answer[\s\S]*productRenderSource = "hermes_cmo"[\s\S]*usedHermesCmoChat = true;/);
     assert.match(source, /if \(!usedHermesCmoChat\)/);
     assert.match(source, /if \(completedUnifiedCmoAgentPersistState\) \{[\s\S]*productRenderSource = "hermes_cmo"[\s\S]*usedHermesCmoChat = true;[\s\S]*\} else if \(productOutboundCreativeContextBlocked\)/);
     assert.match(source, /if \(!usedHermesCmoChat\) \{[\s\S]*productRenderSource = hermesCmoChatRequested \? "fallback_after_hermes_failure"/);

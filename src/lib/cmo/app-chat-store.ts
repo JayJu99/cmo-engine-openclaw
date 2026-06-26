@@ -4386,6 +4386,265 @@ export async function createAppChatSession(
   const vaultUpdateDryRunResults = continuedSession?.vaultUpdateDryRunResults ?? [];
   const vaultUpdateWriteResults = continuedSession?.vaultUpdateWriteResults ?? [];
 
+  const returnCompletedUnifiedCmoAgentTurn = async (input: {
+    completed: CompletedUnifiedCmoAgentPersistState;
+    creativeArtifacts: Record<string, unknown>[];
+    nextCreativeWorkingState?: CmoCreativeWorkingState;
+    nextCreativeDecision?: CmoCreativeDecision;
+    nextSessionArtifacts: Record<string, unknown>[];
+    nextSessionLocalResearchResults: CmoSessionLocalResearchResult[];
+    liveAttemptStartedAt?: string;
+    liveAttemptDurationMs?: number;
+  }): Promise<CMOAppChatResponse> => {
+    const completedAnswer = input.completed.normalizedHermesAnswer;
+    const completedMetadata = completedUnifiedCmoAgentMetadata(undefined, input.completed);
+    const completedStatus: CMOChatSession["status"] = "completed";
+    const completedRuntimeStatus: CMORuntimeStatus = "live";
+    const completedRuntimeMode: CmoRuntimeMode = "live";
+    const completedRuntimeLabel = "Hermes CMO Agent";
+    const completedRuntimeProvider = "hermes";
+    const completedRuntimeAgent = "cmo";
+    const completedProductRenderSource: CmoProductRenderSource = "hermes_cmo";
+    const completedRouteDecision: CMOChatSession["routeDecision"] = "cmo_agent";
+    const completedDecisionLayer = buildDecisionLayer({
+      workspaceId: request.workspaceId,
+      appId: request.appId,
+      sourceId: contextPackage.sourceId,
+      sessionId,
+      createdAt: now,
+      answer: completedAnswer,
+      runtimeAssumptions: [],
+      runtimeSuggestedActions: [],
+    });
+    const completedTotalDurationMs = Date.now() - requestStartedMs;
+    const completedTimingMetadata = {
+      requestReceivedAt,
+      ...(typeof timing.authDurationMs === "number" ? { authDurationMs: Math.max(0, Math.floor(timing.authDurationMs)) } : {}),
+      sessionResolutionDurationMs,
+      contextPackBuildDurationMs,
+      indexedContextBuildDurationMs,
+      ...(input.liveAttemptStartedAt ? { liveAttemptStartedAt: input.liveAttemptStartedAt } : {}),
+      ...(typeof input.liveAttemptDurationMs === "number" ? { liveAttemptDurationMs: input.liveAttemptDurationMs } : {}),
+      totalDurationMs: completedTotalDurationMs,
+      routeDecision: completedRouteDecision,
+      route_decision: completedRouteDecision,
+      fallback_used: false,
+      contextSourceCount,
+      contextCharLength,
+      indexedSupplementCharLength,
+    };
+    const completedCreativeWorkingState = normalizeCreativeWorkingState(input.nextCreativeWorkingState);
+    const completedCreativeDecision = normalizeCreativeDecision(input.nextCreativeDecision);
+    const completedSession: CMOChatSession = {
+      id: sessionId,
+      appId: request.appId,
+      appName: request.appName,
+      topic: continuedSession?.topic || request.topic || request.message.slice(0, 96),
+      authMode: continuedSession?.authMode ?? userIdentity.authMode,
+      userId: continuedSession?.userId ?? userIdentity.userId,
+      userEmail: continuedSession?.userEmail ?? userIdentity.userEmail,
+      userDisplayName: continuedSession?.userDisplayName ?? userIdentity.userDisplayName,
+      userSlug: continuedSession?.userSlug ?? userIdentity.userSlug,
+      organizationId: continuedSession?.organizationId ?? userIdentity.organizationId,
+      createdByUserId: continuedSession?.createdByUserId ?? userIdentity.createdByUserId,
+      createdByEmail: continuedSession?.createdByEmail ?? userIdentity.createdByEmail,
+      status: completedStatus,
+      createdAt: continuedSession?.createdAt ?? now,
+      updatedAt: now,
+      contextUsed,
+      missingContext,
+      assumptions: [],
+      suggestedActions: [],
+      isDevelopmentFallback: false,
+      isRuntimeFallback: false,
+      runtimeStatus: completedRuntimeStatus,
+      runtimeMode: completedRuntimeMode,
+      attemptedRuntimeMode: "live",
+      runtimeLabel: completedRuntimeLabel,
+      runtimeProvider: completedRuntimeProvider,
+      runtimeAgent: completedRuntimeAgent,
+      productRenderSource: completedProductRenderSource,
+      hermesRequestSent: true,
+      calledHermesCmo: true,
+      hermesCmoStatus: "live",
+      hermesCmoCounters: completedMetadata.counters,
+      hermesCmoMetadata: completedMetadata,
+      activityEvents: completedMetadata.activityEvents,
+      delegationSummary: completedMetadata.delegationSummary,
+      agentsUsed: completedMetadata.agentsUsed,
+      surfCalls: completedMetadata.surfCalls,
+      echoCalls: completedMetadata.echoCalls,
+      forbiddenCounters: completedMetadata.forbiddenCounters,
+      delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+      runtimeContext,
+      ...(completedCreativeWorkingState ? { creativeWorkingState: completedCreativeWorkingState } : {}),
+      ...(completedCreativeDecision ? { creativeDecision: completedCreativeDecision } : {}),
+      ...(sourceReviewContext ? { sourceReviewContext } : {}),
+      ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
+      sessionLocalSources,
+      sessionLocalResearchResults: input.nextSessionLocalResearchResults,
+      ...(sessionAttachments.length ? { attachments: sessionAttachments } : {}),
+      ...(activeSourceId ? { activeSourceId } : {}),
+      ...(sessionSummary ? { sessionSummary } : {}),
+      ...(input.creativeArtifacts.length ? { creativeAssets: input.creativeArtifacts, creative_assets: input.creativeArtifacts } : {}),
+      ...(input.nextSessionArtifacts.length ? { sessionArtifacts: input.nextSessionArtifacts } : {}),
+      ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
+      ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
+      ...(vaultUpdateDryRunResults.length ? { vaultUpdateDryRunResults } : {}),
+      ...(vaultUpdateWriteResults.length ? { vaultUpdateWriteResults } : {}),
+      contextDiagnostics,
+      contextQualitySummary,
+      graphHints,
+      graphHintCount,
+      graphStatus,
+      indexedContextStatus,
+      indexedContextSourcesCount,
+      ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
+      ...completedTimingMetadata,
+      decisionLayer: completedDecisionLayer,
+      messages: [
+        ...(continuedSession?.messages ?? []),
+        {
+          id: messageId,
+          role: "user",
+          content: request.message,
+          createdAt: now,
+          ...messageUserMetadata(userIdentity),
+          runtimeContext,
+          ...(completedCreativeWorkingState ? { creativeWorkingState: completedCreativeWorkingState } : {}),
+          ...(completedCreativeDecision ? { creativeDecision: completedCreativeDecision } : {}),
+          ...(sourceReviewContext ? { sourceReviewContext } : {}),
+          ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
+          sessionLocalResearchResults: input.nextSessionLocalResearchResults,
+          ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
+          ...(sessionSummary ? { sessionSummary } : {}),
+          ...(input.nextSessionArtifacts.length ? { sessionArtifacts: input.nextSessionArtifacts } : {}),
+          ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
+          ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
+          ...(vaultUpdateDryRunResults.length ? { vaultUpdateDryRunResults } : {}),
+          ...(vaultUpdateWriteResults.length ? { vaultUpdateWriteResults } : {}),
+        },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: completedAnswer,
+          createdAt: now,
+          ...assistantSourceMetadata(userIdentity, messageId),
+          runtimeMode: completedRuntimeMode,
+          runtimeStatus: completedRuntimeStatus,
+          runtimeProvider: completedRuntimeProvider,
+          runtimeAgent: completedRuntimeAgent,
+          productRenderSource: completedProductRenderSource,
+          hermesRequestSent: true,
+          calledHermesCmo: true,
+          hermesCmoStatus: "live",
+          hermesCmoCounters: completedMetadata.counters,
+          hermesCmoMetadata: completedMetadata,
+          activityEvents: completedMetadata.activityEvents,
+          delegationSummary: completedMetadata.delegationSummary,
+          agentsUsed: completedMetadata.agentsUsed,
+          surfCalls: completedMetadata.surfCalls,
+          echoCalls: completedMetadata.echoCalls,
+          forbiddenCounters: completedMetadata.forbiddenCounters,
+          delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+          runtimeContext,
+          ...(completedCreativeWorkingState ? { creativeWorkingState: completedCreativeWorkingState } : {}),
+          ...(completedCreativeDecision ? { creativeDecision: completedCreativeDecision } : {}),
+          ...(sourceReviewContext ? { sourceReviewContext } : {}),
+          ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
+          sessionLocalSources,
+          sessionLocalResearchResults: input.nextSessionLocalResearchResults,
+          ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
+          ...(activeSourceId ? { activeSourceId } : {}),
+          ...(sessionSummary ? { sessionSummary } : {}),
+          ...(input.creativeArtifacts.length ? { creativeAssets: input.creativeArtifacts, creative_assets: input.creativeArtifacts } : {}),
+          ...(input.creativeArtifacts.length ? { sessionArtifacts: input.creativeArtifacts } : {}),
+          ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
+          ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
+          ...(vaultUpdateDryRunResults.length ? { vaultUpdateDryRunResults } : {}),
+          ...(vaultUpdateWriteResults.length ? { vaultUpdateWriteResults } : {}),
+          contextUsedCount: contextUsed.length,
+          graphHintCount,
+          indexedContextStatus,
+          indexedContextSourcesCount,
+          ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
+          ...completedTimingMetadata,
+        },
+      ],
+    };
+    const finalCompletedSession = applyCompletedUnifiedCmoAgentFinalWriteInvariant({
+      session: completedSession,
+      userMessageId: messageId,
+      assistantMessageId: assistantId,
+      completed: input.completed,
+    });
+
+    logFinalSessionWriteProjection({
+      session: finalCompletedSession,
+      userMessageId: messageId,
+      assistantMessageId: assistantId,
+      completed: input.completed,
+    });
+    await writeJsonFile(sessionPath(sessionId), finalCompletedSession);
+
+    return {
+      messageId: assistantId,
+      sessionId,
+      status: completedStatus,
+      answer: completedAnswer,
+      assumptions: [],
+      suggestedActions: [],
+      contextUsed,
+      missingContext,
+      isDevelopmentFallback: false,
+      isRuntimeFallback: false,
+      runtimeStatus: completedRuntimeStatus,
+      runtimeMode: completedRuntimeMode,
+      attemptedRuntimeMode: "live",
+      runtimeLabel: completedRuntimeLabel,
+      runtimeProvider: completedRuntimeProvider,
+      runtimeAgent: completedRuntimeAgent,
+      productRenderSource: completedProductRenderSource,
+      hermesRequestSent: true,
+      calledHermesCmo: true,
+      hermesCmoStatus: "live",
+      hermesCmoCounters: completedMetadata.counters,
+      hermesCmoMetadata: completedMetadata,
+      activityEvents: completedMetadata.activityEvents,
+      delegationSummary: completedMetadata.delegationSummary,
+      agentsUsed: completedMetadata.agentsUsed,
+      surfCalls: completedMetadata.surfCalls,
+      echoCalls: completedMetadata.echoCalls,
+      forbiddenCounters: completedMetadata.forbiddenCounters,
+      delegationsMode: HERMES_CMO_PROPOSALS_ONLY,
+      runtimeContext,
+      ...(completedCreativeWorkingState ? { creativeWorkingState: completedCreativeWorkingState } : {}),
+      ...(completedCreativeDecision ? { creativeDecision: completedCreativeDecision } : {}),
+      ...(sourceReviewContext ? { sourceReviewContext } : {}),
+      ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
+      sessionLocalSources,
+      sessionLocalResearchResults: input.nextSessionLocalResearchResults,
+      ...(activeSourceId ? { activeSourceId } : {}),
+      ...(sessionSummary ? { sessionSummary } : {}),
+      ...(input.creativeArtifacts.length ? { creativeAssets: input.creativeArtifacts, creative_assets: input.creativeArtifacts } : {}),
+      ...(input.nextSessionArtifacts.length ? { sessionArtifacts: input.nextSessionArtifacts } : {}),
+      ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
+      ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),
+      ...(vaultUpdateDryRunResults.length ? { vaultUpdateDryRunResults } : {}),
+      ...(vaultUpdateWriteResults.length ? { vaultUpdateWriteResults } : {}),
+      contextDiagnostics,
+      contextQualitySummary,
+      graphHints,
+      graphHintCount,
+      graphStatus,
+      indexedContextStatus,
+      indexedContextSourcesCount,
+      ...(indexedContextFallbackReason ? { indexedContextFallbackReason } : {}),
+      ...completedTimingMetadata,
+      decisionLayer: completedDecisionLayer,
+    };
+  };
+
   if (shouldStartAsyncHermesCmoToolRun(hermesCmoRoute.endpointKind)) {
     const asyncToolRunTimeoutMs = getCmoHermesCmoAsyncToolRunTimeoutMs();
     const pendingAnswer = pendingToolRunAnswer();
@@ -5210,24 +5469,29 @@ export async function createAppChatSession(
           })
         : undefined;
       if (earlyCompletedUnifiedCmoAgentPersistState) {
-        completedUnifiedCmoAgentAnswer = earlyCompletedUnifiedCmoAgentPersistState.normalizedHermesAnswer;
-        completedUnifiedCmoAgentAnswerBasisMode = earlyCompletedUnifiedCmoAgentPersistState.answerBasisMode;
-        completedUnifiedCmoAgentPersistState = earlyCompletedUnifiedCmoAgentPersistState;
-        answer = earlyCompletedUnifiedCmoAgentPersistState.normalizedHermesAnswer;
-        status = "completed";
-        isDevelopmentFallback = false;
-        isRuntimeFallback = false;
-        runtimeStatus = "live";
-        runtimeMode = "live";
-        attemptedRuntimeMode = "live";
-        runtimeError = "";
-        runtimeErrorReason = undefined;
-        productRenderSource = "hermes_cmo";
-        productFallbackReason = undefined;
-        calledHermesCmo = true;
-        hermesRequestSent = true;
-        hermesCmoStatus = "live";
-        usedHermesCmoChat = true;
+        const unifiedCreativeDecision = extractCreativeDecision(hermesResult.response) ?? creativeDecision;
+        const unifiedCreativeWorkingState = applyCreativeAssetStateUpdate(
+          applySuggestedCreativeStateUpdate(
+            creativeWorkingState,
+            extractSuggestedCreativeStateUpdate(hermesResult.response),
+          ),
+          creativeArtifacts,
+        );
+        const unifiedSessionArtifacts = mergeHermesCmoChatV11Artifacts(
+          sessionArtifacts,
+          creativeArtifacts,
+        );
+
+        return await returnCompletedUnifiedCmoAgentTurn({
+          completed: earlyCompletedUnifiedCmoAgentPersistState,
+          creativeArtifacts,
+          nextCreativeWorkingState: unifiedCreativeWorkingState,
+          nextCreativeDecision: unifiedCreativeDecision,
+          nextSessionArtifacts: unifiedSessionArtifacts,
+          nextSessionLocalResearchResults: sessionLocalResearchResults,
+          liveAttemptStartedAt: hermesStartedAt,
+          liveAttemptDurationMs: Date.now() - hermesStartedMs,
+        });
       }
       const counterValidation = validateHermesCmoChatCounters(hermesResult);
 
@@ -5747,6 +6011,52 @@ export async function createAppChatSession(
         agentsUsed = hermesCmoMetadata!.agentsUsed;
         surfCalls = hermesCmoMetadata!.surfCalls;
         echoCalls = hermesCmoMetadata!.echoCalls;
+        usedHermesCmoChat = true;
+      } else if (hermesCmoUnifiedAgentRequested) {
+        answer = [
+          "CMO Agent did not return a usable answer for this turn.",
+          "Retry this turn. Product did not use workspace fallback or rewrite the CMO Agent response.",
+          `Diagnostic: ${reason}`,
+        ].join("\n");
+        status = "failed";
+        assumptions = [];
+        suggestedActions = [];
+        isDevelopmentFallback = false;
+        isRuntimeFallback = false;
+        runtimeStatus = "runtime_error";
+        runtimeMode = "configured_but_unreachable";
+        attemptedRuntimeMode = "live";
+        runtimeLabel = "Hermes CMO Agent";
+        runtimeError = reason;
+        runtimeErrorReason = isTimedOutHermesError(reason) ? "timeout" : reason === "missing_answer_content" ? "empty_answer" : "invalid_response";
+        runtimeProvider = "hermes";
+        runtimeAgent = "cmo";
+        fallbackDurationMs = undefined;
+        routeDecision = "cmo_agent";
+        hermesCmoStatus = "interrupted";
+        hermesCmoErrorReason = reason;
+        delegationsMode = HERMES_CMO_PROPOSALS_ONLY;
+        productRenderSource = "hermes_cmo";
+        productFallbackReason = undefined;
+        const unifiedFailureMetadata: HermesCmoChatMetadata = {
+          ...failedHermesCmoChatV11Metadata(`req_cmo_agent_${messageId}`, reason),
+          productRenderSource: "hermes_cmo",
+          selectedHermesEndpoint: "/agents/cmo/agent",
+          hermesEndpointKind: "cmo_agent",
+          endpoint_kind: "cmo_agent",
+          runtime_kind: "ai_agent",
+          requested_endpoint: "/agents/cmo/agent",
+          fallback_used: false,
+          route_decision: "cmo_agent",
+        };
+        hermesCmoMetadata = unifiedFailureMetadata;
+        hermesCmoCounters = hermesCmoMetadata.counters;
+        forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
+        activityEvents = hermesCmoMetadata.activityEvents;
+        delegationSummary = hermesCmoMetadata.delegationSummary;
+        agentsUsed = hermesCmoMetadata.agentsUsed;
+        surfCalls = hermesCmoMetadata.surfCalls;
+        echoCalls = hermesCmoMetadata.echoCalls;
         usedHermesCmoChat = true;
       } else {
         hermesCmoStatus = reason.startsWith("forbidden_counter_non_zero:") || reason.startsWith("invalid_counters_schema:")
