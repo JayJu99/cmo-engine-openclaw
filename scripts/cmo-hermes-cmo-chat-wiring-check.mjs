@@ -3703,6 +3703,52 @@ try {
     assert.equal(unifiedVietnameseGreetingMapped.hermesCmoMetadata.intent_decision.domain, "general_greeting");
     assert.doesNotMatch(unifiedVietnameseGreetingMapped.answer, /Hi Jay|I'm ready for Eggs Vault|accepted workspace sources/i);
 
+    const liveTraceGreetingAnswer = "Alo Jay, mình đây. Eggs Vault hiện vẫn chưa có context nền được xác nhận, nên nếu muốn làm chiến lược/content/visual cho đúng hướng thì gửi mình một trong 3 thứ: mục tiêu hiện tại, target user, hoặc brief cụ thể. Nếu muốn tiếp tục hero visual “seasonal quest launch” trước đó, mình có thể dựng brief creative hoàn chỉnh ngay.";
+    const liveTraceGreetingBase = makeRuntimeResult();
+    const unifiedGeneralCmoChatMapped = mapper.mapHermesCmoResponseToChatResult({
+      ...liveTraceGreetingBase,
+      activity_events: undefined,
+      delegationSummary: undefined,
+      hermesCmoAgentPath: "/agents/cmo/agent",
+      hermesCmoEndpointKind: "cmo_agent",
+      hermesCmoEndpointTimeoutMs: 420000,
+      hermesCmoEndpointTimeoutSource: "unified_agent",
+      hermesCmoRouteDecision: "cmo_agent",
+      response: {
+        ...liveTraceGreetingBase.response,
+        status: "completed",
+        route: { kind: "cmo_agent", intent_owner: "cmo", product_route_hint_used: false },
+        intent_decision: {
+          user_goal: "Chào/mở phiên làm việc với CMO cho Eggs Vault.",
+          domain: "general_cmo_chat",
+          action: "answer_directly",
+          execution_intent: "no_side_effect",
+          confidence: 0.93,
+          needs_clarification: false,
+        },
+        answer_basis: {
+          mode: "cmo_agent",
+          source: "cmo_agent_runtime",
+          intent_owner: "cmo",
+          product_route_hint_used: false,
+        },
+        creative_decision: {
+          action: "none",
+          reason: "User chưa yêu cầu tạo asset cụ thể trong lượt này.",
+        },
+        creative_assets: [],
+        answer: liveTraceGreetingAnswer,
+      },
+    });
+    assert.equal(unifiedGeneralCmoChatMapped.answer, liveTraceGreetingAnswer);
+    assert.equal(unifiedGeneralCmoChatMapped.runtimeStatus, "live");
+    assert.equal(unifiedGeneralCmoChatMapped.runtimeMode, "live");
+    assert.equal(unifiedGeneralCmoChatMapped.isRuntimeFallback, false);
+    assert.equal(unifiedGeneralCmoChatMapped.hermesCmoMetadata.productRenderSource, "hermes_cmo");
+    assert.equal(unifiedGeneralCmoChatMapped.hermesCmoMetadata.fallback_used, false);
+    assert.equal(unifiedGeneralCmoChatMapped.hermesCmoMetadata.intent_decision.domain, "general_cmo_chat");
+    assert.doesNotMatch(unifiedGeneralCmoChatMapped.answer, /I can help with Eggs Vault|workspace has no accepted source context|fallback_after_hermes_failure/i);
+
     const unifiedTextAfterAssetMapped = mapper.mapHermesCmoResponseToChatResult({
       ...unifiedTextOnlyBase,
       hermesCmoAgentPath: "/agents/cmo/agent",

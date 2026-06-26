@@ -15,7 +15,6 @@ import type {
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
 import type {
-  HermesCmoRuntimeActivityEvent,
   HermesCmoRuntimeRequest,
   HermesCmoRuntimeResponse,
   HermesCmoRuntimeResult,
@@ -102,6 +101,14 @@ export interface HermesCmoMappedChatResult {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function arrayValue<T = unknown>(value: unknown): T[] {
+  return Array.isArray(value) ? value as T[] : [];
+}
+
+function hermesAgentUsedValue(value: unknown): HermesCmoAgentUsed | undefined {
+  return value === "cmo" || value === "echo" || value === "surf" || value === "creative" ? value : undefined;
 }
 
 function hasCreativeExecutionMetadata(value: unknown): boolean {
@@ -1597,7 +1604,8 @@ function assumptionText(value: string | Record<string, unknown>): string {
 
 function classificationFromResponse(response: HermesCmoRuntimeResponse): string {
   const structured = isRecord(response.structured_output) ? response.structured_output : {};
-  const value = response.classification ?? structured.classification ?? response.answer_basis.mode;
+  const answerBasis: Record<string, unknown> = isRecord(response.answer_basis) ? response.answer_basis : {};
+  const value = response.classification ?? structured.classification ?? answerBasis.mode;
 
   return typeof value === "string" ? value : "";
 }
@@ -1645,7 +1653,7 @@ function echoOutputText(value: unknown): string | null {
 }
 
 function sourceTransformAnswerFromDelegations(result: HermesCmoRuntimeResult): string | null {
-  const completedSourceTransform = result.delegationSummary.find((delegation) =>
+  const completedSourceTransform = arrayValue<Record<string, unknown>>(result.delegationSummary).find((delegation) =>
     delegation.targetAgent === "echo" &&
     delegation.status === "completed" &&
     (delegation.mode === "echo.source_translate" || delegation.mode === "echo.default") &&
@@ -1714,7 +1722,8 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
       return creativeNarrativeFromHermes(response, result);
     }
 
-    const question = response.clarifying_question.question?.trim() ?? "";
+    const clarifyingQuestion: Record<string, unknown> = isRecord(response.clarifying_question) ? response.clarifying_question : {};
+    const question = typeof clarifyingQuestion.question === "string" ? clarifyingQuestion.question.trim() : "";
 
     return question ? ["## Need Clarification", "", question].join("\n") : "";
   }
@@ -1795,14 +1804,14 @@ function suggestedActionsFromHermes(response: HermesCmoRuntimeResponse): CMOAppC
   const nextSteps = Array.isArray(structured.next_steps) ? structured.next_steps : [];
   const recommendations = Array.isArray(structured.recommendations) ? structured.recommendations : [];
   const actionLabels = [...nextSteps, ...recommendations].map(labelFromUnknown).filter((label): label is string => Boolean(label));
-  const delegationLabels = response.delegations
+  const delegationLabels = arrayValue<Record<string, unknown>>(response.delegations)
     .map((delegation) => {
       const target = isRecord(delegation.target) && typeof delegation.target.agent === "string" ? delegation.target.agent : "specialist";
       const objective = typeof delegation.objective === "string" ? delegation.objective : "proposed delegation";
 
       return `Review proposed ${target} delegation: ${objective}`;
     });
-  const memorySuggestionLabels = response.memory_suggestions
+  const memorySuggestionLabels = arrayValue(response.memory_suggestions)
     .map((suggestion) => labelFromUnknown(suggestion) ?? "Review Hermes CMO memory suggestion");
 
   const actions = [...actionLabels, ...delegationLabels, ...memorySuggestionLabels]
@@ -1823,7 +1832,7 @@ function suggestedActionsFromHermes(response: HermesCmoRuntimeResponse): CMOAppC
 }
 
 function delegationSummaryFromHermes(result: HermesCmoRuntimeResult): HermesCmoDelegationSummaryItem[] {
-  return result.delegationSummary.map((delegation) => ({
+  return arrayValue<HermesCmoDelegationSummaryItem>(result.delegationSummary).map((delegation) => ({
     delegationId: delegation.delegationId,
     targetAgent: delegation.targetAgent,
     mode: delegation.mode,
@@ -1880,16 +1889,20 @@ function activityEventsFromHermes(
 ): HermesCmoActivityEventSummary[] {
   const executedMatches = executedDelegationMatchKeys(delegationSummary);
 
-  return result.activity_events
-    .map((event: HermesCmoRuntimeActivityEvent) => ({
-      eventId: event.event_id,
-      type: event.type,
-      status: event.status,
-      message: event.message,
-      userVisible: event.user_visible,
-      sourceAgent: event.source.agent,
-      sourceMode: event.source.mode,
-    }))
+  return arrayValue<Record<string, unknown>>(result.activity_events)
+    .map((event) => {
+      const source = isRecord(event.source) ? event.source : {};
+
+      return {
+        eventId: typeof event.event_id === "string" ? event.event_id : "",
+        type: typeof event.type === "string" ? event.type : "",
+        status: typeof event.status === "string" ? event.status : "",
+        message: typeof event.message === "string" ? event.message : "",
+        userVisible: event.user_visible === true,
+        sourceAgent: hermesAgentUsedValue(source.agent) ?? "cmo",
+        sourceMode: typeof source.mode === "string" ? source.mode as HermesCmoActivityEventSummary["sourceMode"] : "cmo.default",
+      };
+    })
     .filter((event) => {
       if (event.sourceAgent !== "surf" && event.sourceAgent !== "echo") {
         return true;
@@ -2242,7 +2255,9 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
 
   return sanitizeHermesCmoMappedChatResult({
     answer: answerFromHermes(result.response, result),
-    assumptions: result.response.answer_basis.assumptions_used.map(assumptionText),
+    assumptions: isRecord(result.response.answer_basis) && Array.isArray(result.response.answer_basis.assumptions_used)
+      ? result.response.answer_basis.assumptions_used.map(assumptionText)
+      : [],
     suggestedActions: suggestedActionsFromHermes(result.response),
     runtimeStatus: "live",
     runtimeMode: "live",
