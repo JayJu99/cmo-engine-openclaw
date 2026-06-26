@@ -853,6 +853,7 @@ const HERMES_ORIGINAL_MODE = "__hermes_original_mode";
 
 interface HermesCmoResponseNormalizeOptions {
   activityEventsCandidate?: unknown[];
+  allowUnifiedCmoAgentTelemetryDefaults?: boolean;
 }
 
 interface HermesCmoAnswerBasisModeOptions {
@@ -983,6 +984,66 @@ const normalizeToolResponseActivitySummary = (
   };
 };
 
+const unifiedCmoAgentUsableAnswerText = (response: Record<string, unknown>): string => {
+  const answer = response.answer;
+
+  if (typeof answer === "string") {
+    return answer.trim();
+  }
+
+  if (isRecord(answer)) {
+    for (const key of ["body", "content", "text", "summary"]) {
+      const value = answer[key];
+
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+  }
+
+  const userVisible = isRecord(response.user_visible) ? response.user_visible : {};
+  const userVisibleAnswer = userVisible.answer;
+
+  return typeof userVisibleAnswer === "string" ? userVisibleAnswer.trim() : "";
+};
+
+const isUnifiedCmoAgentCompletedUsableResponse = (response: Record<string, unknown>): boolean => {
+  const route = isRecord(response.route) ? response.route : {};
+  const answerBasis = isRecord(response.answer_basis) ? response.answer_basis : {};
+  const routeKind = typeof route.kind === "string" ? route.kind : "";
+  const answerBasisMode = typeof answerBasis.mode === "string" ? answerBasis.mode : "";
+
+  return (
+    response.status === "completed" &&
+    (routeKind === "cmo_agent" || routeKind === "creative_execution") &&
+    (answerBasisMode === "cmo_agent" || routeKind === "creative_execution") &&
+    unifiedCmoAgentUsableAnswerText(response).length > 0 &&
+    !answerHasUnsafeUserVisibleArtifactText(response.answer)
+  );
+};
+
+const normalizeUnifiedCmoAgentActivitySummary = (
+  response: Record<string, unknown>,
+  activityEventsCandidate: unknown[] | undefined,
+): Record<string, unknown> => {
+  const existing = isRecord(response.activity_summary) ? response.activity_summary : {};
+  const eventsCount = Array.isArray(activityEventsCandidate)
+    ? activityEventsCandidate.length
+    : typeof existing.events_count === "number" && Number.isInteger(existing.events_count) && existing.events_count >= 0
+      ? existing.events_count
+      : 0;
+
+  return {
+    ...existing,
+    events_count: eventsCount,
+    final_state: typeof existing.final_state === "string" && existing.final_state.trim()
+      ? existing.final_state
+      : response.status === "completed" ? "completed" : String(response.status ?? "completed"),
+    events: Array.isArray(existing.events) ? existing.events : [],
+    unified_cmo_agent_telemetry_defaulted: !isRecord(response.activity_summary) || existing.events_count === undefined,
+  };
+};
+
 const normalizeHermesCmoResponseCandidate = (
   response: Record<string, unknown>,
   options: HermesCmoResponseNormalizeOptions = {},
@@ -1002,7 +1063,7 @@ const normalizeHermesCmoResponseCandidate = (
   const clarifyingQuestion = isRecord(response.clarifying_question) ? response.clarifying_question : {};
   const answerMode = answerModeFromResponse(response, answerBasis, { allowToolRead: toolCapableResponse, allowCreativeIdeation: true, allowCreativeConversation: true, allowCreativeExecution: true });
 
-  return {
+  const normalizedResponse = {
     ...response,
     schema_version: schemaVersion,
     [HERMES_ORIGINAL_SCHEMA_VERSION]: originalSchemaVersion,
@@ -1031,6 +1092,16 @@ const normalizeHermesCmoResponseCandidate = (
     artifacts: response.artifacts === undefined ? [] : response.artifacts,
     memory_suggestions: response.memory_suggestions === undefined ? [] : response.memory_suggestions,
   };
+  const defaultUnifiedTelemetry =
+    options.allowUnifiedCmoAgentTelemetryDefaults === true &&
+    isUnifiedCmoAgentCompletedUsableResponse(normalizedResponse);
+
+  return defaultUnifiedTelemetry
+    ? {
+        ...normalizedResponse,
+        activity_summary: normalizeUnifiedCmoAgentActivitySummary(normalizedResponse, options.activityEventsCandidate),
+      }
+    : normalizedResponse;
 };
 
 const safeSideEffects = (value: unknown): false | Record<string, false> | null => {
@@ -4267,7 +4338,10 @@ const extractLiveResponsePayload = (
       );
   rawValidationCandidate = creativeIdeationCanonicalization.response;
   effectiveActivityEventsCandidate = creativeIdeationCanonicalization.activityEventsCandidate;
-  let responseCandidate = normalizeHermesCmoResponseCandidate(rawValidationCandidate, { activityEventsCandidate: effectiveActivityEventsCandidate });
+  let responseCandidate = normalizeHermesCmoResponseCandidate(rawValidationCandidate, {
+    activityEventsCandidate: effectiveActivityEventsCandidate,
+    allowUnifiedCmoAgentTelemetryDefaults: requestRouteDecision(request) === "cmo_agent",
+  });
   if (requestMayLeadToCreativeExecution(request) && (sideEffectsValidation.present || sideEffectsValidation.rejectedType)) {
     responseCandidate = {
       ...responseCandidate,

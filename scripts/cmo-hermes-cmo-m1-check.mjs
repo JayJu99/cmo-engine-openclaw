@@ -855,7 +855,8 @@ const startServer = async () => {
         if (cmoCallCount === 1) {
           const firstCallUnifiedAgent =
             body.request_id === "req_m46_unified_agent_creative_uploaded_asset" ||
-            body.request_id === "req_m46_unified_agent_text_review";
+            body.request_id === "req_m46_unified_agent_text_review" ||
+            body.request_id === "req_m46_unified_agent_text_no_activity_summary";
           const firstCallProposalsOnly =
             body.request_id === "req_m44e6_research_followup_table" ||
             body.request_id === "req_m44e6_research_followup_rank";
@@ -1048,6 +1049,41 @@ const startServer = async () => {
                 final_state: "completed",
               },
               answer: "Hermes unified CMO marketing review should render as the final answer.",
+            });
+            return;
+          }
+          if (body.request_id === "req_m46_unified_agent_text_no_activity_summary") {
+            writeJson(response, 200, {
+              schema_version: "hermes.cmo.response.v1",
+              request_id: body.request_id,
+              session_id: body.session_id,
+              turn_id: body.turn_id,
+              status: "completed",
+              route: {
+                kind: "cmo_agent",
+                intent_owner: "cmo",
+                product_route_hint_used: false,
+              },
+              intent_decision: {
+                user_goal: "Chào/mở phiên làm việc với CMO cho Eggs Vault.",
+                domain: "general_cmo_chat",
+                action: "answer_directly",
+                execution_intent: "no_side_effect",
+                confidence: 0.93,
+                needs_clarification: false,
+              },
+              answer_basis: {
+                mode: "cmo_agent",
+                source: "cmo_agent_runtime",
+                intent_owner: "cmo",
+                product_route_hint_used: false,
+              },
+              creative_decision: {
+                action: "none",
+                reason: "User chưa yêu cầu tạo asset cụ thể trong lượt này.",
+              },
+              creative_assets: [],
+              answer: "Có bro, mình đây. Eggs Vault đang ở CMO Agent mode và câu này phải pass dù thiếu legacy activity_summary.",
             });
             return;
           }
@@ -5537,9 +5573,11 @@ try {
     process.env.CMO_HERMES_UNIFIED_AGENT_ENDPOINT = "/agents/cmo/agent";
     delete process.env.CMO_HERMES_UNIFIED_AGENT_TIMEOUT_MS;
     let m46UnifiedAgentTextReviewResult;
+    let m46UnifiedAgentTextNoActivitySummaryResult;
     try {
       m46UnifiedAgentCreativeUploadedResult = await runHermesCmoRuntime(m46UnifiedCmoAgentRequest("req_m46_unified_agent_creative_uploaded_asset"));
       m46UnifiedAgentTextReviewResult = await runHermesCmoRuntime(m46UnifiedCmoAgentRequest("req_m46_unified_agent_text_review"));
+      m46UnifiedAgentTextNoActivitySummaryResult = await runHermesCmoRuntime(m46UnifiedCmoAgentRequest("req_m46_unified_agent_text_no_activity_summary"));
     } finally {
       restoreEnvValue("CMO_HERMES_UNIFIED_AGENT_ENABLED", previousUnifiedEnabled);
       restoreEnvValue("CMO_HERMES_UNIFIED_AGENT_CANARY_APPS", previousUnifiedCanaryApps);
@@ -5571,6 +5609,18 @@ try {
     assert.deepEqual(m46UnifiedAgentTextReviewResult.response.creative_assets, []);
     assert.equal(m46UnifiedAgentTextReviewResult.response.answer?.body, "Hermes unified CMO marketing review should render as the final answer.");
     assert.equal(m46UnifiedAgentTextReviewResult.response.structured_output, null);
+    assert.equal(m46UnifiedAgentTextNoActivitySummaryResult.hermesCmoAgentPath, "/agents/cmo/agent");
+    assert.equal(m46UnifiedAgentTextNoActivitySummaryResult.hermesCmoEndpointKind, "cmo_agent");
+    assert.equal(m46UnifiedAgentTextNoActivitySummaryResult.response.status, "completed");
+    assert.equal(m46UnifiedAgentTextNoActivitySummaryResult.response.route.kind, "cmo_agent");
+    assert.equal(m46UnifiedAgentTextNoActivitySummaryResult.response.answer_basis.mode, "cmo_agent");
+    assert.equal(
+      m46UnifiedAgentTextNoActivitySummaryResult.response.answer?.body,
+      "Có bro, mình đây. Eggs Vault đang ở CMO Agent mode và câu này phải pass dù thiếu legacy activity_summary.",
+    );
+    assert.equal(m46UnifiedAgentTextNoActivitySummaryResult.response.activity_summary.events_count, 0);
+    assert.equal(m46UnifiedAgentTextNoActivitySummaryResult.response.activity_summary.final_state, "completed");
+    assert.equal(m46UnifiedAgentTextNoActivitySummaryResult.response.activity_summary.unified_cmo_agent_telemetry_defaulted, true);
     process.env.CMO_HERMES_CMO_TOOL_EXECUTE_ENABLED = "false";
 
     await assert.rejects(

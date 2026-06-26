@@ -5191,6 +5191,10 @@ try {
     assert.match(hermesRuntimeSource, /used_live_tool_read/);
     assert.match(hermesRuntimeSource, /normalizeToolResponseActivitySummary/);
     assert.match(hermesRuntimeSource, /activity_summary_invalid:missing_activity_events/);
+    assert.match(hermesRuntimeSource, /allowUnifiedCmoAgentTelemetryDefaults/);
+    assert.match(hermesRuntimeSource, /normalizeUnifiedCmoAgentActivitySummary/);
+    assert.match(hermesRuntimeSource, /requestRouteDecision\(request\) === "cmo_agent"/);
+    assert.match(hermesRuntimeSource, /unified_cmo_agent_telemetry_defaulted/);
     assert.match(hermesRuntimeSource, /unsafe_tool_trace_summary/);
     assert.match(hermesRuntimeSource, /allowToolCapableCmoSource/);
     assert.match(hermesRuntimeSource, /source_invalid:mode=/);
