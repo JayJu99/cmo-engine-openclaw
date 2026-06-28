@@ -659,6 +659,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             agent: "video",
             backend: "higgsfield",
             operation: "generate_video",
+            prompt,
             model: {
               uiId: model.id,
               provider_model_id: model.providerModelId,
@@ -690,7 +691,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
     return () => {
       cancelled = true;
     };
-  }, [model, duration, aspectRatio, resolution, bitrate]);
+  }, [model, prompt, duration, aspectRatio, resolution, bitrate]);
 
   useEffect(() => {
     let cancelled = false;

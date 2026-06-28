@@ -16,15 +16,19 @@ export type HermesVideoAgentErrorCode =
   | "video_agent_execution_failed";
 
 export interface HermesVideoCostRequest {
+  prompt?: string;
   operation: "generate_video";
-  model?: string;
-  provider_model_id: string;
+  model: {
+    ui_id: string;
+    provider_model_id: string;
+  };
   settings: {
     duration_seconds: number;
     aspect_ratio: string;
     resolution: string;
     bitrate: string;
     variants: number;
+    mode?: string;
   };
   context?: Record<string, unknown>;
 }
@@ -32,7 +36,6 @@ export interface HermesVideoCostRequest {
 export interface HermesVideoExecuteRequest extends HermesVideoCostRequest {
   job_id: string;
   prompt: string;
-  model_ui_id: string;
   artifact_transport: {
     mode: "product_upload";
     upload_endpoint: null;
@@ -45,12 +48,16 @@ export interface HermesVideoExecuteResult {
   provider_job_id?: string | null;
   provider_status?: string;
   estimated_credits?: number;
+  estimatedCredits?: number;
+  backend?: string;
+  model?: string;
   render_url?: string | null;
   thumbnail_url?: string | null;
   duration_seconds?: number;
   aspect_ratio?: string;
   resolution?: string;
   error?: Record<string, unknown> | null;
+  diagnostics?: Record<string, unknown>;
   raw?: Record<string, unknown>;
 }
 
@@ -85,6 +92,28 @@ function stringArray(value: unknown): string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function hermesVideoErrorDiagnostics(error: unknown, input: {
+  targetPath: string;
+  hermesDispatched?: boolean;
+}): Record<string, unknown> {
+  if (error instanceof CmoAdapterError) {
+    return {
+      code: error.code,
+      message: error.message,
+      http_status: error.status,
+      target_path: input.targetPath,
+      ...(input.hermesDispatched !== undefined ? { hermes_dispatched: input.hermesDispatched } : {}),
+    };
+  }
+
+  return {
+    code: "video_agent_execution_failed",
+    message: error instanceof Error ? error.message : "Studio video request failed.",
+    target_path: input.targetPath,
+    ...(input.hermesDispatched !== undefined ? { hermes_dispatched: input.hermesDispatched } : {}),
+  };
 }
 
 function hermesConfig(): HermesConfig | null {
@@ -313,14 +342,25 @@ export async function estimateVideoCost(request: HermesVideoCostRequest): Promis
     method: "POST",
     body: JSON.stringify(request),
   });
-  const credits = numberValue(body.credits ?? body.estimated_credits);
+  const estimateFlag = body.estimateAvailable ?? body.estimate_available;
+  const credits = numberValue(body.credits ?? body.estimatedCredits ?? body.estimated_credits);
   const label = stringValue(body.label) ?? (credits !== undefined ? `~${credits} credits` : undefined);
+  const estimateAvailable = estimateFlag === false ? false : estimateFlag === true || credits !== undefined;
+
+  if (estimateFlag !== true && estimateFlag !== false && credits === undefined) {
+    throw new CmoAdapterError("Hermes Video Agent cost response is invalid.", 502, "video_agent_invalid_response");
+  }
 
   return {
-    estimateAvailable: body.estimateAvailable === true || body.estimate_available === true || credits !== undefined,
-    ...(credits !== undefined ? { credits } : {}),
-    ...(label ? { label } : {}),
+    estimateAvailable,
     mode: "hermes",
+    ...(credits !== undefined ? { credits } : {}),
+    ...(credits !== undefined ? { estimatedCredits: credits } : {}),
+    ...(label ? { label } : {}),
+    ...(stringValue(body.backend) ? { backend: stringValue(body.backend) } : {}),
+    ...(stringValue(body.model) ? { model: stringValue(body.model) } : {}),
+    ...(!estimateAvailable && stringValue(body.reason ?? body.message ?? body.error) ? { reason: stringValue(body.reason ?? body.message ?? body.error) } : {}),
+    ...(!estimateAvailable && stringValue(body.code) ? { code: stringValue(body.code) } : {}),
   };
 }
 
@@ -330,10 +370,14 @@ export async function executeVideoJob(request: HermesVideoExecuteRequest): Promi
     body: JSON.stringify(request),
   }, { execute: true });
 
-  const renderUrl = safeUrl(body.render_url ?? body.renderUrl ?? body.video_url ?? body.videoUrl);
-  const thumbnailUrl = safeUrl(body.thumbnail_url ?? body.thumbnailUrl ?? body.preview_url ?? body.previewUrl);
+  const video = isRecord(body.video) ? body.video : {};
+  const cost = isRecord(body.cost) ? body.cost : {};
+  const diagnostics = isRecord(body.diagnostics) ? redactSensitive(body.diagnostics) as Record<string, unknown> : {};
+  const renderUrl = safeUrl(video.render_url ?? video.renderUrl ?? body.render_url ?? body.renderUrl ?? body.video_url ?? body.videoUrl);
+  const thumbnailUrl = safeUrl(video.thumbnail_url ?? video.thumbnailUrl ?? video.preview_url ?? video.previewUrl ?? body.thumbnail_url ?? body.thumbnailUrl ?? body.preview_url ?? body.previewUrl);
   const status = stringValue(body.status ?? body.provider_status) ?? "completed";
   const normalizedStatus = status === "failed" ? "failed" : status === "running" ? "running" : status === "queued" ? "queued" : "completed";
+  const estimatedCredits = numberValue(cost.estimated_credits ?? cost.estimatedCredits ?? cost.credits ?? body.estimated_credits ?? body.estimatedCredits ?? body.credits);
 
   if (normalizedStatus === "completed" && !renderUrl) {
     throw new CmoAdapterError("Hermes Video Agent completed without a safe render URL.", 502, "video_agent_invalid_response");
@@ -341,15 +385,19 @@ export async function executeVideoJob(request: HermesVideoExecuteRequest): Promi
 
   return {
     status: normalizedStatus,
-    provider_job_id: stringValue(body.provider_job_id ?? body.providerJobId ?? body.job_id ?? body.id) ?? null,
+    provider_job_id: stringValue(diagnostics.higgsfield_job_id ?? diagnostics.provider_job_id ?? body.provider_job_id ?? body.providerJobId ?? body.job_id ?? body.id) ?? null,
     provider_status: status,
-    estimated_credits: numberValue(body.estimated_credits ?? body.credits),
+    estimated_credits: estimatedCredits,
+    estimatedCredits,
+    backend: stringValue(body.backend),
+    model: stringValue(body.model),
     render_url: renderUrl,
     thumbnail_url: thumbnailUrl,
-    duration_seconds: numberValue(body.duration_seconds ?? body.durationSeconds),
-    aspect_ratio: stringValue(body.aspect_ratio ?? body.aspectRatio),
-    resolution: stringValue(body.resolution),
+    duration_seconds: numberValue(video.duration_seconds ?? video.durationSeconds ?? body.duration_seconds ?? body.durationSeconds),
+    aspect_ratio: stringValue(video.aspect_ratio ?? video.aspectRatio ?? body.aspect_ratio ?? body.aspectRatio),
+    resolution: stringValue(video.resolution ?? body.resolution),
     error: isRecord(body.error) ? redactSensitive(body.error) as Record<string, unknown> : null,
+    diagnostics,
     raw: redactSensitive(body) as Record<string, unknown>,
   };
 }

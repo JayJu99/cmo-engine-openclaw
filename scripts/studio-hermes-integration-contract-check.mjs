@@ -71,6 +71,12 @@ assert(client.includes('uiId === "seedance_2_0" ? uiId : undefined'), "Hermes mo
 assert(client.includes("duration.min_seconds") && client.includes("duration.max_seconds") && client.includes("duration.default_seconds"), "Hermes models normalization must read nested duration fields.");
 assert(client.includes("resolutions") && client.includes("default_resolution"), "Hermes models normalization must read resolution fields.");
 assert(client.includes("real_video_supported"), "Hermes models normalization must mark real-video support.");
+assert(client.includes("estimate_available") && client.includes("estimated_credits"), "Hermes cost normalization must accept snake_case estimate fields.");
+assert(client.includes("estimatedCredits") && client.includes("`~${credits} credits`"), "Hermes cost normalization must return Product estimatedCredits and label.");
+assert(client.includes("body.reason") && client.includes("body.code"), "Hermes cost normalization must preserve unavailable reason/code.");
+assert(client.includes("body.video") && client.includes("body.cost") && client.includes("body.diagnostics"), "Hermes execute normalization must read nested video/cost/diagnostics.");
+assert(client.includes("diagnostics.higgsfield_job_id"), "Hermes execute normalization must use diagnostics.higgsfield_job_id as provider job id.");
+assert(client.includes("hermesVideoErrorDiagnostics"), "Hermes client must expose safe error diagnostics.");
 
 assert(statusRoute.includes("getVideoAgentStatus") && statusRoute.includes("getHermesVideoAgentSetupState"), "Status route must proxy safe status and setup state.");
 assert(statusRoute.includes("realVideoEnabled") && statusRoute.includes("CMO_STUDIO_REAL_VIDEO_ENABLED"), "Status route must expose safe real-video enabled state.");
@@ -80,6 +86,10 @@ assert(!statusRoute.includes("CMO_HERMES_VIDEO_AGENT_API_KEY") && !modelsRoute.i
 assert(costRoute.includes("estimateVideoCost"), "Cost route must proxy Hermes cost.");
 assert(costRoute.includes("CMO_STUDIO_REAL_VIDEO_ENABLED"), "Cost route must be gated by real-video env.");
 assert(costRoute.includes("video_agent_model_unavailable"), "Cost route must reject unsupported real models.");
+assert(costRoute.includes("prompt: stringValue(body.prompt)"), "Cost route must forward prompt to Hermes cost.");
+assert(costRoute.includes("ui_id: providerModelId") && costRoute.includes("provider_model_id: providerModelId"), "Cost route must send Hermes model object.");
+assert(costRoute.includes('mode: "fast"'), "Cost route must add fast mode for seedance_2_0 720p.");
+assert(costRoute.includes("diagnostics: hermesVideoErrorDiagnostics"), "Cost route must return safe invalid/unreachable diagnostics.");
 
 assert(jobsRoute.includes("dispatchStudioJob"), "Jobs route must dispatch after creating Product job.");
 assert(jobsRoute.includes("!result.idempotent"), "Jobs route must not duplicate-dispatch idempotent retries.");
@@ -87,8 +97,12 @@ assert(dispatcher.includes("CMO_STUDIO_REAL_VIDEO_ENABLED"), "Dispatcher must be
 assert(dispatcher.includes("executeVideoJob"), "Dispatcher must call Hermes execute server-side.");
 assert(dispatcher.includes("markStudioJobRunning") && dispatcher.includes("completeStudioJob") && dispatcher.includes("failStudioJob"), "Dispatcher must update queued/running/completed/failed Product jobs.");
 assert(dispatcher.includes('providerModelId === "seedance_2_0"'), "Dispatcher v1 must only allow seedance_2_0 real execution.");
+assert(dispatcher.includes("ui_id: providerModelId") && dispatcher.includes("provider_model_id: providerModelId"), "Dispatcher must send Hermes execute model object.");
+assert(dispatcher.includes('mode: "fast"'), "Dispatcher must add fast mode for seedance_2_0 720p.");
 assert(dispatcher.includes('mode: "product_upload"') && dispatcher.includes("upload_endpoint: null"), "Dispatcher must send product_upload transport without Product-owned upload yet.");
 assert(dispatcher.includes("remote_result") && dispatcher.includes("artifact_transport_status") && dispatcher.includes("not_uploaded"), "Dispatcher must persist remote result metadata without uploading assets.");
+assert(dispatcher.includes("estimatedCredits") && dispatcher.includes("render_url") && dispatcher.includes("thumbnail_url"), "Dispatcher must persist Hermes credits and remote URLs.");
+assert(dispatcher.includes("hermesVideoErrorDiagnostics"), "Dispatcher must preserve safe Hermes error diagnostics.");
 assert(!dispatcher.includes("/agents/studio") && !dispatcher.includes("/agents/cmo"), "Dispatcher must not use generic studio or CMO agent routes.");
 
 assert(jobService.includes("variants: number"), "Job settings must carry variants.");
@@ -103,6 +117,7 @@ assert(studioView.includes('REAL_STUDIO_VIDEO_PROVIDER_MODEL_ID = "seedance_2_0"
 assert(studioView.includes("setModelId(realDefaultModel.id)"), "Studio UI must default to Seedance 2.0 when Hermes real mode is connected.");
 assert(studioView.includes("Selected model is not available for real Studio video generation."), "Studio UI must show the unsupported real model Generate guard.");
 assert(studioView.includes("Boolean(generateBlockedReason)"), "Studio UI must disable Generate when a real model is unavailable.");
+assert(studioView.includes("prompt,") && studioView.includes('operation: "generate_video"'), "Studio UI cost request must include prompt and operation.");
 assert(!studioView.includes("CMO_HERMES") && !studioView.includes("/agents/video") && !studioView.includes("API_SERVER_KEY"), "Browser UI must not call Hermes directly or expose secrets.");
 assert(!existsSync(join(root, "src/app/apps/[appId]/studio")) && !existsSync(join(root, "src/app/api/cmo/apps/[appId]/studio")), "App-scoped Studio route must not exist.");
 

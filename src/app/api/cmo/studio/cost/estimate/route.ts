@@ -1,6 +1,7 @@
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import {
   estimateVideoCost,
+  hermesVideoErrorDiagnostics,
   isHermesVideoAgentConfigured,
   type HermesVideoCostRequest,
 } from "@/lib/cmo/studio/hermes-video-client";
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
 
 function modelIdFromBody(body: Record<string, unknown>): string | undefined {
   if (isRecord(body.model)) {
-    return stringValue(body.model.uiId ?? body.model.ui_id ?? body.model.product_model_id ?? body.model.provider_model_id ?? body.model.id);
+    return stringValue(body.model.uiId ?? body.model.ui_id ?? body.model.product_model_id ?? body.model.providerModelId ?? body.model.provider_model_id ?? body.model.id);
   }
 
   return stringValue(body.modelId ?? body.model_id);
@@ -42,17 +43,22 @@ function hermesCostRequest(body: Record<string, unknown>): HermesVideoCostReques
   }
 
   const settings = settingsFromBody(body);
+  const providerModelId = model.providerModelId;
 
   return {
+    prompt: stringValue(body.prompt),
     operation: "generate_video",
-    model: model.providerModelId,
-    provider_model_id: model.providerModelId,
+    model: {
+      ui_id: providerModelId,
+      provider_model_id: providerModelId,
+    },
     settings: {
       duration_seconds: settings.durationSeconds,
       aspect_ratio: settings.aspectRatio,
       resolution: settings.resolution,
       bitrate: settings.bitrate,
       variants: settings.variants,
+      ...(providerModelId === "seedance_2_0" && settings.resolution === "720p" ? { mode: "fast" } : {}),
     },
     context: {
       source: "studio",
@@ -101,8 +107,13 @@ export async function POST(request: Request) {
         if (error instanceof CmoAdapterError) {
           return Response.json({
             estimateAvailable: false,
+            mode: "hermes",
             reason: error.message,
             code: error.code,
+            diagnostics: hermesVideoErrorDiagnostics(error, {
+              targetPath: "/agents/video/cost",
+              hermesDispatched: true,
+            }),
           });
         }
 

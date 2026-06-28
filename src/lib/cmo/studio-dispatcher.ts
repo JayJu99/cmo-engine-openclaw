@@ -3,6 +3,7 @@ import "server-only";
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import {
   executeVideoJob,
+  hermesVideoErrorDiagnostics,
   isHermesVideoAgentConfigured,
   type HermesVideoExecuteRequest,
 } from "@/lib/cmo/studio/hermes-video-client";
@@ -29,25 +30,11 @@ function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function errorPayload(error: unknown): Record<string, unknown> {
-  if (error instanceof CmoAdapterError) {
-    return {
-      code: error.code,
-      message: error.message,
-    };
-  }
-
-  if (error instanceof Error) {
-    return {
-      code: "video_agent_execution_failed",
-      message: error.message,
-    };
-  }
-
-  return {
-    code: "video_agent_execution_failed",
-    message: "Studio video dispatch failed.",
-  };
+function errorPayload(error: unknown, hermesDispatched: boolean): Record<string, unknown> {
+  return hermesVideoErrorDiagnostics(error, {
+    targetPath: "/agents/video/execute",
+    hermesDispatched,
+  });
 }
 
 function realVideoProviderModelId(job: StudioJobRecord): string {
@@ -71,15 +58,17 @@ function hermesExecuteRequest(job: StudioJobRecord): HermesVideoExecuteRequest {
     job_id: job.id,
     prompt: job.prompt,
     operation: "generate_video",
-    model: providerModelId,
-    model_ui_id: stringValue(job.model_json.product_model_id) ?? providerModelId,
-    provider_model_id: providerModelId,
+    model: {
+      ui_id: providerModelId,
+      provider_model_id: providerModelId,
+    },
     settings: {
       duration_seconds: job.settings_json.durationSeconds,
       aspect_ratio: job.settings_json.aspectRatio as StudioAspectRatio,
       resolution: job.settings_json.resolution as StudioResolution,
       bitrate: job.settings_json.bitrate as StudioBitrate,
       variants: job.settings_json.variants ?? 1,
+      ...(providerModelId === "seedance_2_0" && job.settings_json.resolution === "720p" ? { mode: "fast" } : {}),
     },
     context: {
       ...job.context_json,
@@ -105,6 +94,7 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
   }
 
   let runningJob = job;
+  let hermesDispatched = false;
 
   try {
     runningJob = await markStudioJobRunning({
@@ -120,6 +110,7 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
       throw new CmoAdapterError("Hermes Video Agent is not configured.", 503, "video_agent_not_configured");
     }
 
+    hermesDispatched = true;
     const executeResult = await executeVideoJob(hermesExecuteRequest(runningJob));
 
     if (executeResult.status === "queued" || executeResult.status === "running") {
@@ -144,6 +135,7 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
           runner: "hermes_video_agent",
           hermes_dispatched: true,
           artifact_transport_status: "not_uploaded",
+          ...(executeResult.diagnostics ?? {}),
           hermes_response: executeResult.raw ?? {},
         },
       });
@@ -161,13 +153,18 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
       providerJobId: executeResult.provider_job_id,
       providerStatus: executeResult.provider_status,
       cost: {
-        ...(executeResult.estimated_credits !== undefined ? { credits: executeResult.estimated_credits, label: `~${executeResult.estimated_credits} credits` } : {}),
+        ...(executeResult.estimated_credits !== undefined ? { credits: executeResult.estimated_credits, estimatedCredits: executeResult.estimated_credits, label: `~${executeResult.estimated_credits} credits` } : {}),
+        ...(executeResult.backend ? { backend: executeResult.backend } : {}),
+        ...(executeResult.model ? { model: executeResult.model } : {}),
         mode: "hermes",
       },
       diagnostics: {
         runner: "hermes_video_agent",
         hermes_dispatched: true,
-        artifact_transport_status: "not_uploaded",
+        artifact_transport_status: stringValue(executeResult.diagnostics?.artifact_transport_status) ?? "not_uploaded",
+        ...(executeResult.render_url ? { render_url: executeResult.render_url } : {}),
+        ...(executeResult.thumbnail_url ? { thumbnail_url: executeResult.thumbnail_url } : {}),
+        ...(executeResult.diagnostics ?? {}),
         remote_result: {
           render_url: executeResult.render_url,
           thumbnail_url: executeResult.thumbnail_url,
@@ -189,10 +186,13 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
     await failStudioJob({
       job: runningJob,
       providerStatus: error instanceof CmoAdapterError ? error.code : "video_agent_execution_failed",
-      error: errorPayload(error),
+      error: errorPayload(error, hermesDispatched),
       diagnostics: {
         runner: "hermes_video_agent",
-        hermes_dispatched: false,
+        ...hermesVideoErrorDiagnostics(error, {
+          targetPath: "/agents/video/execute",
+          hermesDispatched,
+        }),
       },
     }).catch(() => undefined);
 
