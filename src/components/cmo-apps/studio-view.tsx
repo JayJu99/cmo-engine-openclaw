@@ -31,6 +31,7 @@ interface StudioJob {
   prompt: string;
   model_json: {
     product_model_id?: string;
+    provider_model_id?: string;
     name?: string;
   };
   settings_json: {
@@ -38,18 +39,29 @@ interface StudioJob {
     durationSeconds?: number;
     resolution?: StudioResolution;
     bitrate?: StudioBitrate;
+    variants?: number;
   };
   cost_json?: {
     label?: string;
     credits?: number;
     estimateAvailable?: boolean;
+    mode?: "mock" | "hermes";
   };
   diagnostics_json?: {
     mock_output?: {
       asset_id?: string;
       placeholder?: boolean;
     };
+    remote_result?: {
+      render_url?: string | null;
+      thumbnail_url?: string | null;
+      duration_seconds?: number;
+      aspect_ratio?: string;
+      resolution?: string;
+    };
+    artifact_transport_status?: string;
   };
+  provider_status?: string | null;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
@@ -59,6 +71,19 @@ interface CostEstimate {
   estimateAvailable: boolean;
   credits?: number;
   label?: string;
+  mode?: "mock" | "hermes";
+  reason?: string;
+}
+
+interface StudioVideoAgentStatus {
+  configured: boolean;
+  connected: boolean;
+  setupRequired?: boolean;
+  cli_available?: boolean | null;
+  authenticated?: boolean | null;
+  backend?: string;
+  message?: string;
+  code?: string;
 }
 
 function Field({ label, children, helper }: { label: string; children: ReactNode; helper?: string }) {
@@ -123,17 +148,27 @@ function costEstimateFromBody(body: Record<string, unknown>): CostEstimate {
     estimateAvailable: body.estimateAvailable === true,
     ...(typeof body.credits === "number" ? { credits: body.credits } : {}),
     ...(typeof body.label === "string" ? { label: body.label } : {}),
+    ...(body.mode === "mock" || body.mode === "hermes" ? { mode: body.mode } : {}),
+    ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
   };
 }
 
-function ModelHeroCard({ model }: { model: StudioVideoModel }) {
+function ModelHeroCard({
+  model,
+  agentConnected,
+  realAvailable,
+}: {
+  model: StudioVideoModel;
+  agentConnected: boolean;
+  realAvailable: boolean;
+}) {
   return (
     <div className="relative overflow-hidden rounded-lg border border-violet-200 bg-[linear-gradient(135deg,#ffffff_0%,#f5f3ff_54%,#eef2ff_100%)] p-4 shadow-sm">
       <div className="absolute right-4 top-4 grid size-12 place-items-center rounded-lg border border-white/80 bg-white/70 text-violet-700 shadow-sm">
         <icons.Sparkles className="size-5" />
       </div>
       <div className="max-w-[78%]">
-        <div className="text-[11px] font-black uppercase text-violet-700">Desired video model</div>
+        <div className="text-[11px] font-black uppercase text-violet-700">{agentConnected ? "Hermes video model" : "Desired video model"}</div>
         <div className="mt-2 text-2xl font-black leading-tight text-slate-950">{model.name}</div>
         <div className="mt-2 text-sm font-semibold text-slate-600">
           Up to {model.maxResolution} · {model.minDurationSeconds}s-{model.maxDurationSeconds}s
@@ -147,6 +182,7 @@ function ModelHeroCard({ model }: { model: StudioVideoModel }) {
           </Badge>
         ))}
         <Badge variant="slate">Mock catalog</Badge>
+        {realAvailable ? <Badge variant="green">Real enabled</Badge> : agentConnected ? <Badge variant="orange">Unavailable in v1</Badge> : null}
       </div>
     </div>
   );
@@ -209,24 +245,29 @@ function HistoryPanel({
 function CanvasPreview({
   aspectRatio,
   activeJob,
+  agentConnected,
 }: {
   aspectRatio: StudioAspectRatio;
   activeJob: StudioJob | null;
+  agentConnected: boolean;
 }) {
   const status = activeJob?.status ?? "draft";
   const complete = status === "completed";
   const running = status === "queued" || status === "running";
+  const remoteResult = activeJob?.diagnostics_json?.remote_result;
+  const renderUrl = typeof remoteResult?.render_url === "string" ? remoteResult.render_url : null;
+  const thumbnailUrl = typeof remoteResult?.thumbnail_url === "string" ? remoteResult.thumbnail_url : undefined;
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <CardTitle>Canvas</CardTitle>
-          <CardDescription className="mt-1">Product mock preview for the active Studio job.</CardDescription>
+          <CardDescription className="mt-1">Product preview for the active Studio job.</CardDescription>
         </div>
         <div className="flex flex-wrap gap-2">
           <Badge variant="slate">Product API</Badge>
-          <Badge variant="blue">Mock video runner</Badge>
+          <Badge variant={agentConnected ? "green" : "blue"}>{agentConnected ? "Hermes Video Agent" : "Mock video runner"}</Badge>
         </div>
       </div>
 
@@ -244,14 +285,24 @@ function CanvasPreview({
           <div className="absolute left-5 top-5 flex flex-wrap gap-2">
             <Badge variant="blue">Video</Badge>
             <Badge variant={statusBadgeVariant(status)}>{status === "draft" ? "empty" : status}</Badge>
+            {renderUrl ? <Badge variant="green">Remote Higgsfield result</Badge> : null}
           </div>
-          <div className="absolute inset-0 grid place-items-center p-8 text-center">
+          {renderUrl ? (
+            <video
+              src={renderUrl}
+              poster={thumbnailUrl}
+              controls
+              playsInline
+              className="absolute inset-0 h-full w-full bg-slate-950 object-contain"
+            />
+          ) : null}
+          <div className={cn("absolute inset-0 grid place-items-center p-8 text-center", renderUrl && "pointer-events-none hidden")}>
             {activeJob ? (
               <div className="max-w-md">
                 <div className={cn("mx-auto grid size-16 place-items-center rounded-full shadow-sm", complete ? "bg-emerald-500 text-white" : "bg-white text-violet-700")}>
                   {complete ? <icons.Check className="size-7" /> : <icons.Sparkles className={cn("size-7", running && "animate-pulse")} />}
                 </div>
-                <div className="mt-5 text-xl font-black text-slate-950">{complete ? "Mock video ready" : "Studio job in progress"}</div>
+                <div className="mt-5 text-xl font-black text-slate-950">{complete ? "Video result ready" : "Studio job in progress"}</div>
                 <div className="mt-2 text-sm font-semibold leading-6 text-slate-600">{shortPrompt(activeJob.prompt)}</div>
                 <div className="mt-4 flex flex-wrap justify-center gap-2">
                   <Badge variant="slate">{jobModelName(activeJob)}</Badge>
@@ -285,6 +336,8 @@ function CanvasPreview({
 
 function StudioConsole({
   imageModeEnabled,
+  videoAgentStatus,
+  modelRealAvailable,
   prompt,
   model,
   aspectRatio,
@@ -303,6 +356,8 @@ function StudioConsole({
   onGenerate,
 }: {
   imageModeEnabled: boolean;
+  videoAgentStatus: StudioVideoAgentStatus | null;
+  modelRealAvailable: boolean;
   prompt: string;
   model: StudioVideoModel;
   aspectRatio: StudioAspectRatio;
@@ -323,6 +378,7 @@ function StudioConsole({
   const generateLabel = costEstimate?.estimateAvailable && costEstimate.label
     ? `Generate · ${costEstimate.label}`
     : "Generate";
+  const agentConnected = videoAgentStatus?.connected === true;
 
   return (
     <Card className="relative z-20 overflow-visible rounded-lg border-slate-200 bg-white shadow-sm">
@@ -333,12 +389,17 @@ function StudioConsole({
             <ConsoleTab disabled label="Edit Video" />
             <ConsoleTab disabled label="Motion Control" />
           </div>
-          {imageModeEnabled ? <Badge variant="slate">Image · Coming Soon</Badge> : null}
+          <div className="flex flex-wrap gap-2">
+            <Badge variant={agentConnected ? "green" : "orange"}>
+              {agentConnected ? "Hermes connected" : videoAgentStatus?.setupRequired ? "Hermes setup needed" : "Hermes offline"}
+            </Badge>
+            {imageModeEnabled ? <Badge variant="slate">Image · Coming Soon</Badge> : null}
+          </div>
         </div>
       </div>
 
       <div className="space-y-4 p-4">
-        <ModelHeroCard model={model} />
+        <ModelHeroCard model={model} agentConnected={agentConnected} realAvailable={modelRealAvailable} />
 
         <button
           type="button"
@@ -456,7 +517,9 @@ function StudioConsole({
         </div>
 
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-600">
-          {costEstimate?.estimateAvailable && costEstimate.label ? `Mock cost estimate: ${costEstimate.label}` : "Cost estimate unavailable"}
+          {costEstimate?.estimateAvailable && costEstimate.label
+            ? `${costEstimate.mode === "hermes" ? "Hermes cost estimate" : "Mock cost estimate"}: ${costEstimate.label}`
+            : costEstimate?.reason ?? "Cost estimate unavailable"}
         </div>
 
         {error ? (
@@ -495,10 +558,66 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
   const [jobs, setJobs] = useState<StudioJob[]>([]);
   const [activeJob, setActiveJob] = useState<StudioJob | null>(null);
+  const [videoAgentStatus, setVideoAgentStatus] = useState<StudioVideoAgentStatus | null>(null);
+  const [hermesModelIds, setHermesModelIds] = useState<Set<string>>(new Set());
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const model = useMemo(() => getStudioVideoModel(modelId), [modelId]);
+  const agentConnected = videoAgentStatus?.connected === true;
+  const modelRealAvailable = agentConnected && Boolean(model.providerModelId && hermesModelIds.has(model.providerModelId));
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadVideoAgentState() {
+      try {
+        const [statusResponse, modelsResponse] = await Promise.all([
+          fetch("/api/cmo/studio/video-agent/status", { cache: "no-store" }),
+          fetch("/api/cmo/studio/video-agent/models", { cache: "no-store" }),
+        ]);
+        const statusBody = await parseJsonResponse(statusResponse);
+        const modelsBody = await parseJsonResponse(modelsResponse);
+        const modelIds = new Set<string>();
+
+        if (Array.isArray(modelsBody.models)) {
+          for (const item of modelsBody.models) {
+            if (item && typeof item === "object" && "provider_model_id" in item) {
+              const providerModelId = (item as { provider_model_id?: unknown }).provider_model_id;
+              const available = (item as { available?: unknown }).available;
+
+              if (typeof providerModelId === "string" && available !== false) {
+                modelIds.add(providerModelId);
+              }
+            }
+          }
+        }
+
+        if (!cancelled) {
+          setVideoAgentStatus(statusBody as unknown as StudioVideoAgentStatus);
+          setHermesModelIds(modelIds);
+        }
+      } catch {
+        if (!cancelled) {
+          setVideoAgentStatus({
+            configured: false,
+            connected: false,
+            setupRequired: true,
+            message: "Hermes Video Agent status unavailable.",
+          });
+          setHermesModelIds(new Set());
+        }
+      }
+    }
+
+    void loadVideoAgentState();
+    const timer = window.setInterval(loadVideoAgentState, 30000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -508,7 +627,24 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
         const response = await fetch("/api/cmo/studio/cost/estimate", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ modelId, durationSeconds: duration, resolution }),
+          body: JSON.stringify({
+            mediaKind: "video",
+            agent: "video",
+            backend: "higgsfield",
+            operation: "generate_video",
+            model: {
+              uiId: model.id,
+              provider_model_id: model.providerModelId,
+              label: model.name,
+            },
+            settings: {
+              durationSeconds: duration,
+              aspectRatio,
+              resolution,
+              bitrate,
+              variants: 1,
+            },
+          }),
         });
         const body = await parseJsonResponse(response);
 
@@ -527,7 +663,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
     return () => {
       cancelled = true;
     };
-  }, [modelId, duration, resolution]);
+  }, [model, duration, aspectRatio, resolution, bitrate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -606,13 +742,22 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
           "idempotency-key": globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`,
         },
         body: JSON.stringify({
+          mediaKind: "video",
+          agent: "video",
+          backend: "higgsfield",
+          operation: "generate_video",
           prompt,
-          modelId,
+          model: {
+            uiId: model.id,
+            provider_model_id: model.providerModelId,
+            label: model.name,
+          },
           settings: {
             aspectRatio,
             durationSeconds: duration,
             resolution,
             bitrate,
+            variants: 1,
           },
         }),
       });
@@ -663,6 +808,8 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
         <div className="space-y-5">
           <StudioConsole
             imageModeEnabled={imageModeEnabled}
+            videoAgentStatus={videoAgentStatus}
+            modelRealAvailable={modelRealAvailable}
             prompt={prompt}
             model={model}
             aspectRatio={aspectRatio}
@@ -684,13 +831,15 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
         </div>
 
         <main className="min-w-0 space-y-5">
-          <CanvasPreview aspectRatio={aspectRatio} activeJob={activeJob} />
+          <CanvasPreview aspectRatio={aspectRatio} activeJob={activeJob} agentConnected={agentConnected} />
 
           <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-bold text-slate-950">Render state</div>
-                <div className="mt-1 text-xs font-semibold text-slate-500">Async Product job shell with timestamp-based mock progression.</div>
+                <div className="mt-1 text-xs font-semibold text-slate-500">
+                  {agentConnected ? "Async Product job shell dispatching server-side to Hermes Video Agent." : "Async Product job shell with timestamp-based mock progression."}
+                </div>
               </div>
               <Badge variant="slate">{activeJob ? activeJob.id.slice(0, 22) : "No active job"}</Badge>
             </div>

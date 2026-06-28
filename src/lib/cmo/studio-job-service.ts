@@ -57,6 +57,7 @@ export interface StudioJobSettings {
   durationSeconds: number;
   resolution: StudioResolution;
   bitrate: StudioBitrate;
+  variants: number;
 }
 
 export interface StudioCreateJobInput {
@@ -83,6 +84,7 @@ const DEFAULT_SETTINGS: StudioJobSettings = {
   durationSeconds: 8,
   resolution: "720p",
   bitrate: "standard",
+  variants: 1,
 };
 
 const MOCK_RUNNING_AFTER_MS = 1200;
@@ -126,6 +128,9 @@ function normalizeSettings(input: StudioCreateJobInput): { model: ReturnType<typ
   const model = getStudioVideoModel(input.modelId);
   const requestedResolution = input.settings?.resolution ?? DEFAULT_SETTINGS.resolution;
   const resolution = isStudioResolutionSupported(model, requestedResolution) ? requestedResolution : model.maxResolution;
+  const variants = typeof input.settings?.variants === "number" && Number.isFinite(input.settings.variants)
+    ? Math.max(1, Math.min(4, Math.floor(input.settings.variants)))
+    : DEFAULT_SETTINGS.variants;
 
   return {
     model,
@@ -134,6 +139,7 @@ function normalizeSettings(input: StudioCreateJobInput): { model: ReturnType<typ
       durationSeconds: clampStudioDuration(model, input.settings?.durationSeconds ?? DEFAULT_SETTINGS.durationSeconds),
       resolution,
       bitrate: input.settings?.bitrate ?? DEFAULT_SETTINGS.bitrate,
+      variants,
     },
   };
 }
@@ -243,7 +249,7 @@ async function transitionStudioJob(input: {
 }
 
 async function progressMockJob(job: StudioJobRecord): Promise<StudioJobRecord> {
-  if (process.env.CMO_STUDIO_MOCK_RUNNER_ENABLED === "false") {
+  if (process.env.CMO_STUDIO_MOCK_RUNNER_ENABLED === "false" || process.env.CMO_STUDIO_REAL_VIDEO_ENABLED === "true") {
     return job;
   }
 
@@ -297,6 +303,73 @@ async function progressMockJob(job: StudioJobRecord): Promise<StudioJobRecord> {
   }
 
   return job;
+}
+
+export async function markStudioJobRunning(input: {
+  job: StudioJobRecord;
+  providerStatus?: string;
+  diagnostics?: Record<string, unknown>;
+}): Promise<StudioJobRecord> {
+  return transitionStudioJob({
+    job: input.job,
+    status: "running",
+    patch: {
+      provider_status: input.providerStatus ?? "dispatching",
+      dispatch_attempts: input.job.dispatch_attempts + 1,
+      diagnostics_json: {
+        ...input.job.diagnostics_json,
+        ...(input.diagnostics ?? {}),
+      },
+    },
+  });
+}
+
+export async function completeStudioJob(input: {
+  job: StudioJobRecord;
+  providerJobId?: string | null;
+  providerStatus?: string;
+  cost?: Record<string, unknown>;
+  diagnostics?: Record<string, unknown>;
+}): Promise<StudioJobRecord> {
+  return transitionStudioJob({
+    job: input.job,
+    status: "completed",
+    patch: {
+      provider_job_id: input.providerJobId ?? input.job.provider_job_id,
+      provider_status: input.providerStatus ?? "completed",
+      output_asset_ids: input.job.output_asset_ids,
+      cost_json: {
+        ...input.job.cost_json,
+        ...(input.cost ?? {}),
+      },
+      diagnostics_json: {
+        ...input.job.diagnostics_json,
+        ...(input.diagnostics ?? {}),
+      },
+    },
+  });
+}
+
+export async function failStudioJob(input: {
+  job: StudioJobRecord;
+  providerJobId?: string | null;
+  providerStatus?: string;
+  error: Record<string, unknown>;
+  diagnostics?: Record<string, unknown>;
+}): Promise<StudioJobRecord> {
+  return transitionStudioJob({
+    job: input.job,
+    status: "failed",
+    patch: {
+      provider_job_id: input.providerJobId ?? input.job.provider_job_id,
+      provider_status: input.providerStatus ?? "failed",
+      error_json: input.error,
+      diagnostics_json: {
+        ...input.job.diagnostics_json,
+        ...(input.diagnostics ?? {}),
+      },
+    },
+  });
 }
 
 export async function listStudioJobs(context: CmoRequestUserContext, limit = 20): Promise<StudioJobRecord[]> {
@@ -395,6 +468,7 @@ export async function createStudioVideoJob(
     negative_prompt: normalizePrompt(input.negativePrompt) || null,
     model_json: {
       product_model_id: model.id,
+      provider_model_id: model.providerModelId ?? null,
       name: model.name,
       desired_provider: "higgsfield",
       verified_provider_model_id: null,

@@ -1,4 +1,5 @@
 import { requireRequestUserIfAuthRequired } from "@/lib/cmo/auth";
+import { dispatchStudioJob } from "@/lib/cmo/studio-dispatcher";
 import { createStudioVideoJob, listStudioJobs } from "@/lib/cmo/studio-job-service";
 import { isRecord, readJsonObject, stringValue, studioRouteErrorResponse } from "@/lib/cmo/studio-route-utils";
 import type { StudioAspectRatio, StudioBitrate, StudioResolution } from "@/lib/cmo/studio-model-catalog";
@@ -16,6 +17,7 @@ function limitFromRequest(request: Request): number {
 function settingsFromBody(body: Record<string, unknown>) {
   const settings = isRecord(body.settings) ? body.settings : body;
   const durationSeconds = settings.durationSeconds ?? settings.duration_seconds;
+  const variants = settings.variants;
 
   return {
     aspectRatio: stringValue(settings.aspectRatio ?? settings.aspect_ratio) as StudioAspectRatio | undefined,
@@ -24,6 +26,7 @@ function settingsFromBody(body: Record<string, unknown>) {
       : undefined,
     resolution: stringValue(settings.resolution) as StudioResolution | undefined,
     bitrate: stringValue(settings.bitrate) as StudioBitrate | undefined,
+    variants: typeof variants === "number" ? variants : undefined,
   };
 }
 
@@ -33,6 +36,14 @@ function inputAssetIdsFromBody(body: Record<string, unknown>): string[] {
   return Array.isArray(inputAssetIds)
     ? inputAssetIds.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
     : [];
+}
+
+function modelIdFromBody(body: Record<string, unknown>): string | undefined {
+  if (isRecord(body.model)) {
+    return stringValue(body.model.uiId ?? body.model.ui_id ?? body.model.product_model_id ?? body.model.provider_model_id ?? body.model.id);
+  }
+
+  return stringValue(body.modelId ?? body.model_id);
 }
 
 export async function GET(request: Request) {
@@ -52,12 +63,21 @@ export async function POST(request: Request) {
     const result = await createStudioVideoJob(user, {
       prompt: stringValue(body.prompt) ?? "",
       negativePrompt: stringValue(body.negativePrompt ?? body.negative_prompt),
-      modelId: stringValue(body.modelId ?? body.model_id),
+      modelId: modelIdFromBody(body),
       settings: settingsFromBody(body),
       context: isRecord(body.context) ? body.context : {},
       inputAssetIds: inputAssetIdsFromBody(body),
       requestId: stringValue(body.requestId ?? body.request_id) ?? request.headers.get("idempotency-key") ?? undefined,
     });
+
+    if (!result.idempotent) {
+      void dispatchStudioJob(result.job).catch((error) => {
+        console.warn("[studio] Video job dispatch failed.", {
+          jobId: result.job.id,
+          reason: error instanceof Error ? error.message : "unknown",
+        });
+      });
+    }
 
     return Response.json({
       job_id: result.job.id,

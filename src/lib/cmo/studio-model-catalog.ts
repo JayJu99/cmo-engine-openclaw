@@ -8,6 +8,7 @@ export type StudioResolution = "480p" | "720p" | "1080p" | "4K";
 
 export interface StudioVideoModel {
   id: string;
+  providerModelId?: string;
   name: string;
   providerLabel: string;
   maxResolution: StudioResolution;
@@ -16,6 +17,7 @@ export interface StudioVideoModel {
   maxDurationSeconds: number;
   supportsAudio: boolean;
   badges: string[];
+  realVideoSupported?: boolean;
 }
 
 export const STUDIO_ASPECT_RATIOS: StudioAspectRatio[] = ["1:1", "4:5", "9:16", "16:9", "4:3", "3:4", "21:9"];
@@ -55,6 +57,7 @@ export const STUDIO_VIDEO_MODELS: StudioVideoModel[] = [
   },
   {
     id: "seedance-2",
+    providerModelId: "seedance_2_0",
     name: "Seedance 2.0",
     providerLabel: "Desired Higgsfield model",
     maxResolution: "4K",
@@ -63,6 +66,7 @@ export const STUDIO_VIDEO_MODELS: StudioVideoModel[] = [
     maxDurationSeconds: 15,
     supportsAudio: false,
     badges: [],
+    realVideoSupported: true,
   },
   {
     id: "seedance-2-fast",
@@ -166,7 +170,7 @@ export const STUDIO_VIDEO_MODELS: StudioVideoModel[] = [
 ];
 
 export function getStudioVideoModel(modelId: string | null | undefined): StudioVideoModel {
-  return STUDIO_VIDEO_MODELS.find((model) => model.id === modelId) ?? STUDIO_VIDEO_MODELS[0];
+  return STUDIO_VIDEO_MODELS.find((model) => model.id === modelId || model.providerModelId === modelId) ?? STUDIO_VIDEO_MODELS[0];
 }
 
 export function isStudioResolutionSupported(model: StudioVideoModel, resolution: StudioResolution): boolean {
