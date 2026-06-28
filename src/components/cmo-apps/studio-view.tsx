@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 
 type StudioJobStatus = "draft" | "queued" | "running" | "completed" | "failed" | "cancelled";
+const REAL_STUDIO_VIDEO_PROVIDER_MODEL_ID = "seedance_2_0";
 
 interface StudioJob {
   id: string;
@@ -78,6 +79,7 @@ interface CostEstimate {
 interface StudioVideoAgentStatus {
   configured: boolean;
   connected: boolean;
+  realVideoEnabled?: boolean;
   setupRequired?: boolean;
   cli_available?: boolean | null;
   authenticated?: boolean | null;
@@ -338,6 +340,7 @@ function StudioConsole({
   imageModeEnabled,
   videoAgentStatus,
   modelRealAvailable,
+  generateBlockedReason,
   prompt,
   model,
   aspectRatio,
@@ -358,6 +361,7 @@ function StudioConsole({
   imageModeEnabled: boolean;
   videoAgentStatus: StudioVideoAgentStatus | null;
   modelRealAvailable: boolean;
+  generateBlockedReason: string | null;
   prompt: string;
   model: StudioVideoModel;
   aspectRatio: StudioAspectRatio;
@@ -522,13 +526,19 @@ function StudioConsole({
             : costEstimate?.reason ?? "Cost estimate unavailable"}
         </div>
 
+        {generateBlockedReason ? (
+          <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm font-semibold text-orange-700">
+            {generateBlockedReason}
+          </div>
+        ) : null}
+
         {error ? (
           <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">
             {error}
           </div>
         ) : null}
 
-        <Button className="h-14 w-full rounded-lg text-base" size="lg" disabled={isGenerating || !prompt.trim()} onClick={onGenerate}>
+        <Button className="h-14 w-full rounded-lg text-base" size="lg" disabled={isGenerating || !prompt.trim() || Boolean(generateBlockedReason)} onClick={onGenerate}>
           <icons.Sparkles />
           {isGenerating ? "Creating job..." : generateLabel}
         </Button>
@@ -562,10 +572,15 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   const [hermesModelIds, setHermesModelIds] = useState<Set<string>>(new Set());
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const userSelectedModelRef = useRef(false);
 
   const model = useMemo(() => getStudioVideoModel(modelId), [modelId]);
   const agentConnected = videoAgentStatus?.connected === true;
+  const realVideoEnabled = videoAgentStatus?.realVideoEnabled === true;
   const modelRealAvailable = agentConnected && Boolean(model.providerModelId && hermesModelIds.has(model.providerModelId));
+  const generateBlockedReason = realVideoEnabled && !modelRealAvailable
+    ? "Selected model is not available for real Studio video generation."
+    : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -596,6 +611,18 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
         if (!cancelled) {
           setVideoAgentStatus(statusBody as unknown as StudioVideoAgentStatus);
           setHermesModelIds(modelIds);
+          if (
+            statusBody.realVideoEnabled === true &&
+            statusBody.connected === true &&
+            modelIds.has(REAL_STUDIO_VIDEO_PROVIDER_MODEL_ID) &&
+            !userSelectedModelRef.current
+          ) {
+            const realDefaultModel = getStudioVideoModel(REAL_STUDIO_VIDEO_PROVIDER_MODEL_ID);
+
+            setModelId(realDefaultModel.id);
+            setDuration((current) => clampStudioDuration(realDefaultModel, current));
+            setResolution((current) => isStudioResolutionSupported(realDefaultModel, current) ? current : realDefaultModel.maxResolution);
+          }
         }
       } catch {
         if (!cancelled) {
@@ -731,6 +758,11 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   }, [activeJob]);
 
   async function generateJob() {
+    if (generateBlockedReason) {
+      setError(null);
+      return;
+    }
+
     setError(null);
     setIsGenerating(true);
 
@@ -776,6 +808,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   function handleModelChange(value: string) {
     const nextModel = getStudioVideoModel(value);
 
+    userSelectedModelRef.current = true;
     setModelId(nextModel.id);
     setDuration((current) => clampStudioDuration(nextModel, current));
     setResolution((current) => isStudioResolutionSupported(nextModel, current) ? current : nextModel.maxResolution);
@@ -810,6 +843,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             imageModeEnabled={imageModeEnabled}
             videoAgentStatus={videoAgentStatus}
             modelRealAvailable={modelRealAvailable}
+            generateBlockedReason={generateBlockedReason}
             prompt={prompt}
             model={model}
             aspectRatio={aspectRatio}

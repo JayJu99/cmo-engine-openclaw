@@ -79,6 +79,10 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())) : [];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -257,26 +261,49 @@ export async function getVideoAgentStatus(): Promise<Record<string, unknown>> {
 
 export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> {
   const body = await hermesRequest(MODELS_PATH);
-  const source = Array.isArray(body.models) ? body.models : Array.isArray(body.data) ? body.data : [];
+  const source = body.models ?? body.data;
+
+  if (!Array.isArray(source)) {
+    throw new CmoAdapterError("Hermes Video Agent models response is invalid.", 502, "video_agent_invalid_response");
+  }
 
   return source
     .filter(isRecord)
     .map((item) => {
-      const providerModelId = stringValue(item.provider_model_id ?? item.providerModelId ?? item.id ?? item.model);
+      const uiId = stringValue(item.ui_id ?? item.uiId ?? item.id ?? item.model);
+      const explicitProviderModelId = stringValue(item.provider_model_id ?? item.providerModelId);
+      const providerModelId = explicitProviderModelId ?? (uiId === "seedance_2_0" ? uiId : undefined);
+      const duration = isRecord(item.duration) ? item.duration : {};
+      const resolutions = stringArray(item.resolutions ?? item.supported_resolutions ?? item.supportedResolutions);
 
-      if (!providerModelId) {
+      if (!uiId) {
         throw new CmoAdapterError("Hermes Video Agent models response is invalid.", 502, "video_agent_invalid_response");
       }
 
       return {
-        id: stringValue(item.id) ?? providerModelId,
-        provider_model_id: providerModelId,
-        name: stringValue(item.name ?? item.label) ?? providerModelId,
+        id: uiId,
+        uiId,
+        provider_model_id: providerModelId ?? null,
+        providerModelId: providerModelId ?? null,
+        name: stringValue(item.name ?? item.label) ?? uiId,
+        label: stringValue(item.label ?? item.name) ?? uiId,
+        family: stringValue(item.family) ?? null,
+        operations: stringArray(item.operations),
+        resolutions,
+        default_resolution: stringValue(item.default_resolution ?? item.defaultResolution) ?? null,
+        defaultResolution: stringValue(item.default_resolution ?? item.defaultResolution) ?? null,
         available: item.available !== false,
-        max_resolution: stringValue(item.max_resolution ?? item.maxResolution) ?? null,
-        min_duration_seconds: numberValue(item.min_duration_seconds ?? item.minDurationSeconds) ?? null,
-        max_duration_seconds: numberValue(item.max_duration_seconds ?? item.maxDurationSeconds) ?? null,
+        real_video_supported: uiId === "seedance_2_0",
+        max_resolution: stringValue(item.max_resolution ?? item.maxResolution) ?? resolutions.at(-1) ?? null,
+        min_duration_seconds: numberValue(item.min_duration_seconds ?? item.minDurationSeconds ?? duration.min_seconds ?? duration.minSeconds) ?? null,
+        minDurationSeconds: numberValue(item.min_duration_seconds ?? item.minDurationSeconds ?? duration.min_seconds ?? duration.minSeconds) ?? null,
+        max_duration_seconds: numberValue(item.max_duration_seconds ?? item.maxDurationSeconds ?? duration.max_seconds ?? duration.maxSeconds) ?? null,
+        maxDurationSeconds: numberValue(item.max_duration_seconds ?? item.maxDurationSeconds ?? duration.max_seconds ?? duration.maxSeconds) ?? null,
+        default_duration_seconds: numberValue(item.default_duration_seconds ?? item.defaultDurationSeconds ?? duration.default_seconds ?? duration.defaultSeconds) ?? null,
+        defaultDurationSeconds: numberValue(item.default_duration_seconds ?? item.defaultDurationSeconds ?? duration.default_seconds ?? duration.defaultSeconds) ?? null,
+        supports_bitrate: typeof item.supports_bitrate === "boolean" ? item.supports_bitrate : item.supportsBitrate === true,
         supports_audio: typeof item.supports_audio === "boolean" ? item.supports_audio : item.supportsAudio === true,
+        badges: stringArray(item.badges),
       };
     });
 }

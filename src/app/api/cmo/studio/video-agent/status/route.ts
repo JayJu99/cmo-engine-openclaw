@@ -8,16 +8,23 @@ import { studioRouteErrorResponse } from "@/lib/cmo/studio-route-utils";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function withRealVideoState(body: object): Record<string, unknown> {
+  return {
+    ...body,
+    realVideoEnabled: process.env.CMO_STUDIO_REAL_VIDEO_ENABLED === "true",
+  };
+}
+
 export async function GET() {
   try {
-    return Response.json(await getVideoAgentStatus());
+    return Response.json(withRealVideoState(await getVideoAgentStatus()));
   } catch (error) {
     if (error instanceof CmoAdapterError) {
       if (error.code === "video_agent_not_configured") {
-        return Response.json(getHermesVideoAgentSetupState());
+        return Response.json(withRealVideoState(getHermesVideoAgentSetupState()));
       }
 
-      return Response.json({
+      return Response.json(withRealVideoState({
         configured: true,
         connected: false,
         setupRequired: false,
@@ -26,7 +33,7 @@ export async function GET() {
         backend: "higgsfield",
         message: error.message,
         code: error.code,
-      });
+      }));
     }
 
     return studioRouteErrorResponse(error);

@@ -66,8 +66,14 @@ assert(client.includes("AbortController") && client.includes("setTimeout"), "Her
 assert(client.includes("authorization: `Bearer ${config.apiKey}`"), "Hermes client must send bearer auth from env.");
 assert(client.includes("safeUrl") && client.includes("local-path-redacted"), "Hermes client must sanitize local paths and URLs.");
 assert(!client.includes("console.log") && !client.includes("console.warn"), "Hermes client must not log secrets.");
+assert(client.includes("item.ui_id") && client.includes("provider_model_id"), "Hermes models normalization must accept ui_id and provider_model_id fields.");
+assert(client.includes('uiId === "seedance_2_0" ? uiId : undefined'), "Hermes models normalization must fallback provider_model_id to seedance_2_0 for supported v1 real model.");
+assert(client.includes("duration.min_seconds") && client.includes("duration.max_seconds") && client.includes("duration.default_seconds"), "Hermes models normalization must read nested duration fields.");
+assert(client.includes("resolutions") && client.includes("default_resolution"), "Hermes models normalization must read resolution fields.");
+assert(client.includes("real_video_supported"), "Hermes models normalization must mark real-video support.");
 
 assert(statusRoute.includes("getVideoAgentStatus") && statusRoute.includes("getHermesVideoAgentSetupState"), "Status route must proxy safe status and setup state.");
+assert(statusRoute.includes("realVideoEnabled") && statusRoute.includes("CMO_STUDIO_REAL_VIDEO_ENABLED"), "Status route must expose safe real-video enabled state.");
 assert(modelsRoute.includes("getVideoAgentModels") && modelsRoute.includes("product_mock_catalog"), "Models route must proxy Hermes models and fallback to Product catalog.");
 assert(!statusRoute.includes("CMO_HERMES_VIDEO_AGENT_API_KEY") && !modelsRoute.includes("CMO_HERMES_VIDEO_AGENT_API_KEY"), "Proxy routes must not expose API key names.");
 
@@ -93,6 +99,10 @@ assert(catalog.includes('providerModelId: "seedance_2_0"') && catalog.includes("
 assert(studioView.includes("/api/cmo/studio/video-agent/status"), "Studio UI must call Product status proxy.");
 assert(studioView.includes("/api/cmo/studio/video-agent/models"), "Studio UI must call Product models proxy.");
 assert(studioView.includes("Remote Higgsfield result") && studioView.includes("<video"), "Studio UI must preview remote real results.");
+assert(studioView.includes('REAL_STUDIO_VIDEO_PROVIDER_MODEL_ID = "seedance_2_0"'), "Studio UI must know the v1 real default model.");
+assert(studioView.includes("setModelId(realDefaultModel.id)"), "Studio UI must default to Seedance 2.0 when Hermes real mode is connected.");
+assert(studioView.includes("Selected model is not available for real Studio video generation."), "Studio UI must show the unsupported real model Generate guard.");
+assert(studioView.includes("Boolean(generateBlockedReason)"), "Studio UI must disable Generate when a real model is unavailable.");
 assert(!studioView.includes("CMO_HERMES") && !studioView.includes("/agents/video") && !studioView.includes("API_SERVER_KEY"), "Browser UI must not call Hermes directly or expose secrets.");
 assert(!existsSync(join(root, "src/app/apps/[appId]/studio")) && !existsSync(join(root, "src/app/api/cmo/apps/[appId]/studio")), "App-scoped Studio route must not exist.");
 
