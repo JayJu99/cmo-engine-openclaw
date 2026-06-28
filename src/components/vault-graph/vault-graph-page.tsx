@@ -28,6 +28,7 @@ import {
 
 type VaultGraphFilter = "All" | "Knowledge" | "Sources" | "Agents" | "Proposals" | "Decisions";
 type VaultGraphApiStatus = "loading" | "mock-api" | "vault-agent" | "warning" | "fallback";
+type VaultGraphTimeLens = "Now" | "Signal" | "Archive";
 type SignalGroupKey = VaultGraphClusterKey | VaultGraphColorGroup | "workspace";
 type SignalEmphasis = "ambient" | "bridge" | "focused";
 type SignalPath = {
@@ -41,6 +42,11 @@ type VaultGraphInspectorNode = VaultGraphNode & {
   agent?: string;
   source_agent?: string;
   writer?: string;
+};
+type ProjectedVaultGraphNode = VaultGraphNode & {
+  projectionDepth: number;
+  projectionOpacity: number;
+  projectionScale: number;
 };
 type InspectorCopyAction = "path" | "id" | "label";
 
@@ -63,6 +69,8 @@ const filters: { label: VaultGraphFilter; types?: VaultGraphNodeType[]; colorGro
   { label: "Proposals", types: ["proposal"], colorGroups: ["proposals"] },
   { label: "Decisions", types: ["decision", "content_output"], colorGroups: ["decisions", "content_outputs"] },
 ];
+
+const timeLenses: VaultGraphTimeLens[] = ["Now", "Signal", "Archive"];
 
 const colorSystem: Record<
   VaultGraphColorGroup,
@@ -560,6 +568,67 @@ function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function timeLensDepthBias(node: VaultGraphNode, timeLens: VaultGraphTimeLens) {
+  if (timeLens === "Now") {
+    return isAcceptedNode(node) ? 0.18 : isCandidateNode(node) ? -0.12 : 0;
+  }
+
+  if (timeLens === "Signal") {
+    return node.type === "agent" || node.type === "proposal" || node.type === "content_output" ? 0.28 : -0.06;
+  }
+
+  return node.type === "source_note" || node.type === "source_asset" || node.type === "knowledge" ? 0.24 : -0.1;
+}
+
+function baseNodeDepth(node: VaultGraphNode) {
+  if (node.type === "workspace") {
+    return 0.72;
+  }
+
+  const seed = deterministicSeed(`${node.id}:${node.cluster_id ?? node.color_group}`);
+  const seededDepth = ((seed % 1000) / 1000 - 0.5) * 0.92;
+  const roleDepth = isClusterHub(node) ? 0.28 : isSemanticNode(node) ? 0.04 : -0.34;
+
+  return clampNumber(seededDepth + roleDepth, -0.82, 0.88);
+}
+
+function projectVaultGraphNode({
+  node,
+  focusedId,
+  relatedIds,
+  timeLens,
+}: {
+  node: VaultGraphNode;
+  focusedId: string | null;
+  relatedIds: Set<string>;
+  timeLens: VaultGraphTimeLens;
+}): ProjectedVaultGraphNode {
+  const focusLift = focusedId && relatedIds.has(node.id) ? 0.32 : focusedId ? -0.2 : 0;
+  const depth = clampNumber(baseNodeDepth(node) + timeLensDepthBias(node, timeLens) + focusLift, -0.88, 1);
+  const perspective = 1 + depth * 0.105;
+  const x = centerProjectX(node.x, perspective);
+  const y = centerProjectY(node.y, perspective) - depth * 34;
+  const projectionScale = clampNumber(0.78 + (depth + 1) * 0.18, 0.74, 1.2);
+  const projectionOpacity = clampNumber(0.46 + (depth + 1) * 0.24, 0.42, 0.94);
+
+  return {
+    ...node,
+    x,
+    y,
+    projectionDepth: depth,
+    projectionOpacity,
+    projectionScale,
+  };
+}
+
+function centerProjectX(x: number, perspective: number) {
+  return graphWidth / 2 + (x - graphWidth / 2) * perspective;
+}
+
+function centerProjectY(y: number, perspective: number) {
+  return graphHeight / 2 + (y - graphHeight / 2) * perspective;
+}
+
 function edgePath(source: VaultGraphNode, target: VaultGraphNode, edge: VaultGraphEdge, local: boolean) {
   if (local) {
     return `M ${source.x} ${source.y} L ${target.x} ${target.y}`;
@@ -706,6 +775,7 @@ function VaultGraphCanvas({
   hoveredNodeId,
   search,
   zoom,
+  timeLens,
   sourceRoot,
   isSourceUnavailable,
   isLoading,
@@ -715,6 +785,7 @@ function VaultGraphCanvas({
   onZoomIn,
   onZoomOut,
   onZoomReset,
+  onTimeLensChange,
 }: {
   nodes: VaultGraphNode[];
   edges: VaultGraphEdge[];
@@ -722,6 +793,7 @@ function VaultGraphCanvas({
   hoveredNodeId: string | null;
   search: string;
   zoom: number;
+  timeLens: VaultGraphTimeLens;
   sourceRoot: VaultGraphApiResponse["source_root"];
   isSourceUnavailable: boolean;
   isLoading: boolean;
@@ -731,19 +803,24 @@ function VaultGraphCanvas({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onZoomReset: () => void;
+  onTimeLensChange: (timeLens: VaultGraphTimeLens) => void;
 }) {
   const prefersReducedMotion = usePrefersReducedMotion();
-  const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const connectionCounts = useMemo(() => buildConnectionCounts(edges), [edges]);
   const focusedId = hoveredNodeId ?? selectedNode?.id ?? null;
   const shouldDimByFocus = Boolean(hoveredNodeId || selectedNode);
   const relatedIds = useMemo(() => relatedNodeIds(edges, focusedId), [edges, focusedId]);
+  const projectedNodes = useMemo(
+    () => nodes.map((node) => projectVaultGraphNode({ node, focusedId, relatedIds, timeLens })),
+    [focusedId, nodes, relatedIds, timeLens],
+  );
+  const nodeById = useMemo(() => new Map(projectedNodes.map((node) => [node.id, node])), [projectedNodes]);
   const hasSearch = search.trim().length > 0;
   const centerX = graphWidth / 2;
   const centerY = graphHeight / 2;
   const renderZoom = Math.min(1.16, Math.max(0.9, zoom));
-  const decorativeNodes = useMemo(() => nodes.filter((node) => !isSemanticNode(node)), [nodes]);
-  const semanticNodes = useMemo(() => nodes.filter(isSemanticNode), [nodes]);
+  const decorativeNodes = useMemo(() => projectedNodes.filter((node) => !isSemanticNode(node)), [projectedNodes]);
+  const semanticNodes = useMemo(() => projectedNodes.filter(isSemanticNode), [projectedNodes]);
   const localEdges = useMemo(() => edges.filter((edge) => isLocalEdge(edge, nodeById)), [edges, nodeById]);
   const bridgeEdges = useMemo(() => edges.filter((edge) => !isLocalEdge(edge, nodeById)), [edges, nodeById]);
   const visibleClusterIds = useMemo(() => new Set(nodes.map((node) => node.cluster_id).filter(Boolean)), [nodes]);
@@ -898,6 +975,17 @@ function VaultGraphCanvas({
             <stop offset="42%" stopColor="#0f172a" stopOpacity="0.18" />
             <stop offset="100%" stopColor="#020617" stopOpacity="0" />
           </radialGradient>
+          <linearGradient id="timePlaneGradient" x1="0%" x2="100%" y1="0%" y2="100%">
+            <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.06" />
+            <stop offset="45%" stopColor="#a78bfa" stopOpacity="0.18" />
+            <stop offset="100%" stopColor="#f0abfc" stopOpacity="0.04" />
+          </linearGradient>
+          <linearGradient id="timeRibbonGradient" x1="0%" x2="100%" y1="50%" y2="50%">
+            <stop offset="0%" stopColor="#22d3ee" stopOpacity="0" />
+            <stop offset="42%" stopColor="#67e8f9" stopOpacity="0.28" />
+            <stop offset="62%" stopColor="#c4b5fd" stopOpacity="0.22" />
+            <stop offset="100%" stopColor="#f0abfc" stopOpacity="0" />
+          </linearGradient>
           <filter id="darkNodeGlow" x="-140%" y="-140%" width="380%" height="380%">
             <feGaussianBlur stdDeviation="5" result="blur" />
             <feMerge>
@@ -939,6 +1027,14 @@ function VaultGraphCanvas({
               animation: vaultOrbitBreath 8.8s ease-in-out infinite;
             }
 
+            .vault-time-plane {
+              animation: vaultTimePlane 10s ease-in-out infinite;
+            }
+
+            .vault-time-ribbon {
+              animation: vaultTimeRibbon 7.4s linear infinite;
+            }
+
             .vault-node-ambient-ring {
               animation: vaultNodePulse 5.2s ease-in-out infinite;
               transform-box: fill-box;
@@ -975,6 +1071,16 @@ function VaultGraphCanvas({
               50% { stroke-opacity: 0.075; }
             }
 
+            @keyframes vaultTimePlane {
+              0%, 100% { opacity: 0.4; transform: translateY(0); }
+              50% { opacity: 0.68; transform: translateY(-6px); }
+            }
+
+            @keyframes vaultTimeRibbon {
+              from { stroke-dashoffset: 0; }
+              to { stroke-dashoffset: -140; }
+            }
+
             @keyframes vaultNodePulse {
               0%, 100% { opacity: 0.045; }
               50% { opacity: 0.2; }
@@ -999,6 +1105,8 @@ function VaultGraphCanvas({
               .vault-stage-shimmer,
               .vault-star-shimmer,
               .vault-cluster-orbit,
+              .vault-time-plane,
+              .vault-time-ribbon,
               .vault-node-ambient-ring,
               .vault-node-arrival-ring,
               .vault-selected-ring,
@@ -1023,6 +1131,41 @@ function VaultGraphCanvas({
               style={{ animationDelay: `${animationDelay(star.id, 7)}s` }}
             />
           ))}
+        </g>
+        <g className="pointer-events-none" opacity="0.92">
+          {[0, 1, 2, 3].map((layer) => {
+            const lensOffset = timeLens === "Now" ? 0 : timeLens === "Signal" ? 22 : -22;
+            const rx = 355 + layer * 92;
+            const ry = 124 + layer * 34;
+            const y = centerY + 18 + layer * 42 + lensOffset;
+            return (
+              <g key={layer} className={prefersReducedMotion ? undefined : "vault-time-plane"} style={{ animationDelay: `${layer * 0.42}s` }}>
+                <ellipse
+                  cx={centerX}
+                  cy={y}
+                  fill={layer === 1 ? "url(#timePlaneGradient)" : "none"}
+                  opacity={layer === 1 ? 0.42 : 1}
+                  rx={rx}
+                  ry={ry}
+                  stroke={layer === 2 ? "#f0abfc" : "#67e8f9"}
+                  strokeDasharray={layer % 2 === 0 ? "4 18" : "1 14"}
+                  strokeLinecap="round"
+                  strokeOpacity={0.07 + layer * 0.025}
+                  strokeWidth={layer === 1 ? 1.2 : 0.8}
+                  transform={`rotate(${-8 + layer * 3} ${centerX} ${y})`}
+                />
+              </g>
+            );
+          })}
+          <path
+            className={prefersReducedMotion ? undefined : "vault-time-ribbon"}
+            d={`M ${graphViewBox.x + 120} ${centerY + (timeLens === "Archive" ? 120 : 82)} C 220 250, 416 648, 618 410 S 980 246, ${graphViewBox.x + graphViewBox.width - 120} ${centerY + (timeLens === "Signal" ? -96 : -68)}`}
+            fill="none"
+            stroke="url(#timeRibbonGradient)"
+            strokeDasharray="12 28"
+            strokeLinecap="round"
+            strokeWidth="2"
+          />
         </g>
 
         <g transform={`translate(${centerX} ${centerY}) scale(${renderZoom}) translate(${-centerX} ${-centerY})`}>
@@ -1065,19 +1208,20 @@ function VaultGraphCanvas({
             const sourceColor = colorSystem[source.color_group].edge;
             const targetColor = colorSystem[target.color_group].edge;
             const strength = edgeStrength(edge);
+            const depthOpacity = clampNumber((source.projectionOpacity + target.projectionOpacity) / 2 + 0.04, 0.36, 0.98);
             const dimmed = shouldDimByFocus ? !isFocused : false;
-            const opacity = isFocused
+            const opacity = (isFocused
               ? clampNumber(0.52 + strength * 0.28, 0.52, 0.82)
               : dimmed
                 ? local ? 0.055 : 0.075
                 : local
                   ? clampNumber(0.075 + strength * 0.12, 0.075, 0.2)
-                  : clampNumber(0.16 + strength * 0.18, 0.16, 0.34);
-            const width = isFocused
+                  : clampNumber(0.16 + strength * 0.18, 0.16, 0.34)) * depthOpacity;
+            const width = (isFocused
               ? clampNumber(1 + strength * 0.8, 1.05, 1.75)
               : local
                 ? clampNumber(0.45 + strength * 0.35, 0.45, 0.8)
-                : clampNumber(0.58 + strength * 0.55, 0.62, 1.1);
+                : clampNumber(0.58 + strength * 0.55, 0.62, 1.1)) * clampNumber((source.projectionScale + target.projectionScale) / 2, 0.78, 1.18);
 
             return (
               <path
@@ -1139,7 +1283,7 @@ function VaultGraphCanvas({
             const isRelated = relatedIds.has(node.id);
             const searchMatch = matchesSearch(node, search);
             const color = colorSystem[node.color_group];
-            const radius = getNodeRadius(node, connectionCounts.get(node.id) ?? 0);
+            const radius = getNodeRadius(node, connectionCounts.get(node.id) ?? 0) * node.projectionScale;
             const dimmedByFocus = shouldDimByFocus ? !isRelated : false;
             const dimmedBySearch = hasSearch && !searchMatch;
 
@@ -1150,7 +1294,7 @@ function VaultGraphCanvas({
                 cy={node.y}
                 fill={color.fill}
                 filter="url(#darkNodeGlow)"
-                opacity={dimmedByFocus || dimmedBySearch ? 0.22 : 0.72}
+                opacity={(dimmedByFocus || dimmedBySearch ? 0.2 : 0.72) * node.projectionOpacity}
                 r={radius}
               />
             );
@@ -1162,11 +1306,16 @@ function VaultGraphCanvas({
             const isRelated = relatedIds.has(node.id);
             const searchMatch = matchesSearch(node, search);
             const color = colorSystem[node.color_group];
-            const radius = getNodeRadius(node, connectionCounts.get(node.id) ?? 0);
+            const radius = getNodeRadius(node, connectionCounts.get(node.id) ?? 0) * node.projectionScale;
             const dimmedByFocus = shouldDimByFocus ? !isRelated : false;
             const dimmedBySearch = hasSearch && !searchMatch;
             const showLabel = isHovered || isSelected;
             const shouldPulseArrival = isRelated && (Boolean(hoveredNodeId) || selectedNode?.id !== "workspace-holdstation");
+            const nodeOpacity = dimmedByFocus || dimmedBySearch
+              ? clampNumber(0.36 * node.projectionOpacity, 0.2, 0.52)
+              : isRelated && focusedId
+                ? 1
+                : clampNumber(0.78 + node.projectionDepth * 0.12, 0.62, 0.98);
 
             return (
               <g
@@ -1231,7 +1380,7 @@ function VaultGraphCanvas({
                   cy={node.y}
                   fill={node.type === "workspace" ? "url(#workspaceDarkGradient)" : color.fill}
                   filter="url(#darkNodeGlow)"
-                  opacity={dimmedByFocus || dimmedBySearch ? 0.46 : isRelated && focusedId ? 1 : 0.94}
+                  opacity={nodeOpacity}
                   r={radius}
                   stroke={isSelected ? "#ffffff" : color.stroke}
                   strokeOpacity={isSelected ? 0.95 : 0.72}
@@ -1290,7 +1439,31 @@ function VaultGraphCanvas({
 
       <div className="pointer-events-none absolute inset-0 z-20 rounded-[30px] bg-[radial-gradient(circle_at_50%_45%,transparent_0%,transparent_54%,rgba(0,0,0,0.42)_100%)]" />
 
-      <div className="absolute right-4 top-4 z-30 overflow-hidden rounded-full border border-white/10 bg-slate-950/54 p-1 shadow-[0_16px_38px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+      <div className="absolute left-4 top-4 z-30 flex max-w-[calc(100%-7rem)] flex-wrap items-center gap-2 rounded-full border border-white/10 bg-slate-950/56 p-1.5 shadow-[0_16px_38px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+        <span className="flex h-8 items-center gap-1.5 rounded-full border border-cyan-300/12 bg-cyan-300/[0.06] px-3 text-[11px] font-black uppercase tracking-[0.16em] text-cyan-100">
+          <icons.Sparkles className="size-3.5" />
+          4D
+        </span>
+        <div className="flex items-center gap-1">
+          {timeLenses.map((lens) => (
+            <button
+              key={lens}
+              type="button"
+              onClick={() => onTimeLensChange(lens)}
+              className={cn(
+                "h-8 rounded-full px-3 text-[11px] font-bold transition",
+                timeLens === lens
+                  ? "bg-white text-slate-950 shadow-[0_0_24px_rgba(255,255,255,0.16)]"
+                  : "text-slate-400 hover:bg-white/10 hover:text-white",
+              )}
+            >
+              {lens}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="absolute right-4 top-16 z-30 overflow-hidden rounded-full border border-white/10 bg-slate-950/54 p-1 shadow-[0_16px_38px_rgba(0,0,0,0.28)] backdrop-blur-xl sm:top-4">
         <div className="flex items-center gap-1">
           <Button aria-label="Zoom out" size="icon" variant="ghost" className="text-slate-300 hover:bg-white/10 hover:text-white" onClick={onZoomOut}>
             <icons.ChevronDown />
@@ -1786,6 +1959,7 @@ export function VaultGraphPage() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [timeLens, setTimeLens] = useState<VaultGraphTimeLens>("Signal");
   const [graphResponse, setGraphResponse] = useState<VaultGraphApiResponse | null>(null);
   const [apiStatus, setApiStatus] = useState<VaultGraphApiStatus>("loading");
   const isGraphLoading = apiStatus === "loading" || !graphResponse;
@@ -1922,7 +2096,7 @@ export function VaultGraphPage() {
   return (
     <PageChrome
       title="Vault Graph"
-      description="Orbit UI constellation view for workspace knowledge, sources, agents, decisions, and outputs."
+      description="4D constellation view for Vault memory and agent signals."
       actions={
         <Badge variant="slate" className="rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-slate-400">
           {isGraphLoading ? "Loading" : graphResponse.source_root === "vault-agent" ? "Vault Agent" : "Mock"}
@@ -1954,6 +2128,7 @@ export function VaultGraphPage() {
                 selectedNode={selectedNode}
                 hoveredNodeId={hoveredNodeId}
                 zoom={zoom}
+                timeLens={timeLens}
                 sourceRoot={graphResponse?.source_root ?? "mock"}
                 isSourceUnavailable={isSourceUnavailable}
                 isLoading={isGraphLoading}
@@ -1963,6 +2138,7 @@ export function VaultGraphPage() {
                 onZoomIn={() => setZoom((value) => Math.min(1.16, Number((value + 0.08).toFixed(2))))}
                 onZoomOut={() => setZoom((value) => Math.max(0.9, Number((value - 0.08).toFixed(2))))}
                 onZoomReset={() => setZoom(1)}
+                onTimeLensChange={setTimeLens}
               />
               <VaultGraphNodeDetails
                 node={selectedNode}

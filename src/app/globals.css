@@ -47,3 +47,55 @@ body {
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
 }
+
+@media (min-width: 1280px) {
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .desktop-sidebar {
+    width: 88px;
+  }
+
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .desktop-shell-content {
+    padding-left: 88px;
+  }
+
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-header {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-header-inner {
+    flex-direction: column;
+    justify-content: flex-start;
+  }
+
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-logo-full,
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-expanded-only,
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-nav-label,
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-nav-count,
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-collapse-open {
+    display: none;
+  }
+
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-logo-compact,
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-collapse-closed {
+    display: block;
+  }
+
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-collapsed-only {
+    display: grid;
+  }
+
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-nav {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-nav-link {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .sidebar-shell:has(#cmo-sidebar-collapse-toggle:checked) .sidebar-footer {
+    padding: 0.75rem;
+  }
+}

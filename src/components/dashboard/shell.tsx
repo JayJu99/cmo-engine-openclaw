@@ -22,17 +22,19 @@ interface DashboardAuthStatus {
   isOwnerOrAdmin: boolean;
 }
 
-function Logo() {
+function Logo({ collapsed = false }: { collapsed?: boolean }) {
   return (
-    <div className="flex items-center gap-3">
+    <div className={cn("flex items-center gap-3", collapsed && "justify-center")}>
       <div className="relative grid size-12 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-indigo-700 text-white shadow-[0_16px_32px_rgba(99,102,241,0.28)]">
         <div className="absolute inset-2 rounded-xl border border-white/30" />
         <div className="size-4 rounded-md border-4 border-white/90" />
       </div>
-      <div>
-        <div className="text-xl font-bold tracking-tight text-slate-950">CMO Engine</div>
-        <div className="text-xs font-medium text-slate-500">Command Center</div>
-      </div>
+      {!collapsed ? (
+        <div>
+          <div className="text-xl font-bold tracking-tight text-slate-950">CMO Engine</div>
+          <div className="text-xs font-medium text-slate-500">Command Center</div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -115,13 +117,36 @@ export function DashboardShell({
   }
 
   return (
-    <div className="min-h-screen bg-[#fbfcff] soft-grid">
-      <aside className="thin-scrollbar fixed inset-y-0 left-0 z-40 hidden w-[282px] overflow-y-auto border-r border-slate-200/80 bg-white/88 backdrop-blur-xl xl:block">
+    <div className="sidebar-shell min-h-screen bg-[#fbfcff] soft-grid">
+      <aside
+        className="desktop-sidebar thin-scrollbar fixed inset-y-0 left-0 z-40 hidden w-[282px] overflow-y-auto border-r border-slate-200/80 bg-white/88 backdrop-blur-xl transition-[width] duration-200 xl:block"
+      >
         <div className="flex h-full flex-col">
-          <div className="border-b border-slate-100 px-7 py-7">
-            <Logo />
+          <div className="sidebar-header border-b border-slate-100 px-7 py-6">
+            <div className="sidebar-header-inner flex items-center justify-between gap-3">
+              <div className="sidebar-logo-full">
+                <Logo />
+              </div>
+              <div className="sidebar-logo-compact hidden">
+                <Logo collapsed />
+              </div>
+              <label
+                aria-label="Toggle sidebar collapse"
+                title="Toggle sidebar"
+                className="relative grid size-9 place-items-center text-slate-500 transition hover:text-indigo-700"
+              >
+                <input
+                  id="cmo-sidebar-collapse-toggle"
+                  type="checkbox"
+                  className="absolute inset-0 cursor-pointer appearance-none rounded-xl border border-slate-200 bg-white shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 checked:border-indigo-200 checked:bg-indigo-50"
+                  aria-label="Sidebar collapsed"
+                />
+                <icons.ChevronLeft className="sidebar-collapse-open pointer-events-none relative z-10 size-4" />
+                <icons.ChevronRight className="sidebar-collapse-closed pointer-events-none relative z-10 hidden size-4" />
+              </label>
+            </div>
           </div>
-          <nav className="flex-1 space-y-2 px-4 py-6">
+          <nav className="sidebar-nav flex-1 space-y-2 px-4 py-6">
             {navItems.filter((item) => !item.systemOnly || authStatus.isOwnerOrAdmin).map((item) => {
               const Icon = icons[item.icon as IconName];
               const active = item.href === "/" || item.exact
@@ -131,8 +156,9 @@ export function DashboardShell({
                 <Link
                   key={item.href}
                   href={item.href}
+                  title={item.label}
                   className={cn(
-                    "group relative flex h-12 items-center gap-3 rounded-xl px-4 text-sm font-semibold text-slate-600 transition-all hover:bg-slate-50 hover:text-indigo-700",
+                    "sidebar-nav-link group relative flex h-12 items-center gap-3 rounded-xl px-4 text-sm font-semibold text-slate-600 transition-all hover:bg-slate-50 hover:text-indigo-700",
                     active && "bg-indigo-50 text-indigo-700 shadow-[inset_0_0_0_1px_rgba(99,102,241,0.08)]",
                   )}
                 >
@@ -144,9 +170,9 @@ export function DashboardShell({
                     />
                   )}
                   <Icon className="relative size-5" />
-                  <span className="relative flex-1">{item.label}</span>
+                  <span className="sidebar-nav-label relative flex-1">{item.label}</span>
                   {"count" in item && item.count ? (
-                    <span className="relative rounded-lg bg-violet-100 px-2 py-0.5 text-xs text-violet-700">
+                    <span className="sidebar-nav-count relative rounded-lg bg-violet-100 px-2 py-0.5 text-xs text-violet-700">
                       {item.count}
                     </span>
                   ) : null}
@@ -154,32 +180,48 @@ export function DashboardShell({
               );
             })}
           </nav>
-          <div className="space-y-4 p-5">
-            <AuthStatusCard authStatus={authStatus} />
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="text-xs font-medium text-slate-500">CMO System</div>
-              <div className="mt-3 flex items-center gap-2">
+          <div className="sidebar-footer space-y-4 p-5">
+            <div className="sidebar-expanded-only space-y-4">
+              <AuthStatusCard authStatus={authStatus} />
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="text-xs font-medium text-slate-500">CMO System</div>
+                <div className="mt-3 flex items-center gap-2">
+                  <span className="size-2 rounded-full bg-emerald-500" />
+                  <span className="font-bold text-emerald-700">Hermes CMO active</span>
+                </div>
+                <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-600">
+                  Vault-backed workspace context.
+                </div>
+              </div>
+            </div>
+            <div className="sidebar-collapsed-only hidden justify-center gap-3">
+              <span
+                className="grid size-10 place-items-center rounded-xl border border-slate-200 bg-white shadow-sm"
+                title="Workspace Access"
+              >
+                <span className="size-2 rounded-full bg-orange-500" />
+              </span>
+              <span
+                className="grid size-10 place-items-center rounded-xl border border-slate-200 bg-white shadow-sm"
+                title="Hermes CMO active"
+              >
                 <span className="size-2 rounded-full bg-emerald-500" />
-                <span className="font-bold text-emerald-700">Hermes CMO active</span>
-              </div>
-              <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-600">
-                Vault-backed workspace context.
-              </div>
+              </span>
             </div>
           </div>
         </div>
       </aside>
 
-      <div className="xl:pl-[282px]">
+      <div className="desktop-shell-content transition-[padding] duration-200 xl:pl-[282px]">
         <div className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/86 px-4 py-4 backdrop-blur-xl lg:px-8 xl:hidden">
           <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <Logo />
             <div className="grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-2 sm:flex sm:gap-3">
               <Badge variant="green">Hermes CMO active</Badge>
               <AuthStatusCard authStatus={authStatus} compact />
+              </div>
             </div>
           </div>
-        </div>
         <main className="mx-auto w-full max-w-[1720px] px-4 py-6 lg:px-8 xl:px-10">
           {children}
         </main>
