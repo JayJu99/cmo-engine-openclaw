@@ -157,7 +157,7 @@ function modelFromJob(job: StudioJobRecord, providerModelId: string): StudioVide
     badges: Array.isArray(job.model_json.badges) ? job.model_json.badges.filter((item): item is string => typeof item === "string") : [],
     realVideoSupported: true,
     costSupported: true,
-    enablement: job.model_json.enablement === "safe_now" || job.model_json.enablement === "guarded" ? job.model_json.enablement : "unavailable",
+    enablement: job.model_json.enablement === "safe_now" || job.model_json.enablement === "guarded" || job.model_json.enablement === "needs_smoke" ? job.model_json.enablement : "unavailable",
     constraints: Array.isArray(job.model_json.constraints) ? job.model_json.constraints.filter((item): item is string => typeof item === "string") : [],
   };
 }

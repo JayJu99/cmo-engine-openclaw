@@ -25,7 +25,7 @@ export const dynamic = "force-dynamic";
 
 function modelIdFromBody(body: Record<string, unknown>): string | undefined {
   if (isRecord(body.model)) {
-    return stringValue(body.model.uiId ?? body.model.ui_id ?? body.model.product_model_id ?? body.model.providerModelId ?? body.model.provider_model_id ?? body.model.id);
+    return stringValue(body.model.providerModelId ?? body.model.provider_model_id ?? body.model.uiId ?? body.model.ui_id ?? body.model.product_model_id ?? body.model.id);
   }
 
   return stringValue(body.modelId ?? body.model_id);
@@ -87,6 +87,7 @@ function modelFromRecord(record: Record<string, unknown>): StudioVideoModel {
     realVideoSupported: record.realVideoSupported === true || record.real_video_supported === true,
     costSupported: record.costSupported !== false && record.cost_supported !== false,
     enablement: record.enablement === "safe_now" || record.enablement === "guarded" || record.enablement === "needs_smoke" || record.enablement === "disabled_until_upload" ? record.enablement : "unavailable",
+    canGenerateTextToVideo: record.canGenerateTextToVideo === true || record.can_generate_text_to_video === true,
     constraints: Array.isArray(record.constraints) ? record.constraints.filter((item): item is string => typeof item === "string") : [],
   };
 }
@@ -109,7 +110,7 @@ async function hermesCostRequest(body: Record<string, unknown>): Promise<HermesV
     ? await realCatalogModel(body)
     : getStudioVideoModel(modelIdFromBody(body));
 
-  if (!model?.realVideoSupported || !model.providerModelId || model.costSupported === false) {
+  if (!model?.realVideoSupported || !model.providerModelId || model.costSupported === false || model.canGenerateTextToVideo === false) {
     return null;
   }
 
@@ -130,6 +131,7 @@ async function hermesCostRequest(body: Record<string, unknown>): Promise<HermesV
   const mode = chooseStudioVideoMode(model, settings.resolution);
 
   return {
+    request_id: stringValue(body.requestId ?? body.request_id) ?? undefined,
     prompt: stringValue(body.prompt),
     operation: "generate_video",
     backend: "higgsfield",
@@ -149,6 +151,26 @@ async function hermesCostRequest(body: Record<string, unknown>): Promise<HermesV
       source: "studio",
     },
   };
+}
+
+function highCostWarningThreshold(): number {
+  const parsed = Number.parseFloat(process.env.CMO_STUDIO_HIGH_COST_WARNING_CREDITS ?? "");
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 50;
+}
+
+function withHighCostWarning(estimate: Record<string, unknown>): Record<string, unknown> {
+  const credits = numberValue(estimate.credits ?? estimate.estimatedCredits ?? estimate.estimated_credits);
+
+  if (estimate.estimateAvailable === true && credits !== undefined && credits >= highCostWarningThreshold()) {
+    return {
+      ...estimate,
+      warning: "High credit estimate. Review before generating.",
+      highCostWarning: true,
+    };
+  }
+
+  return estimate;
 }
 
 export async function POST(request: Request) {
@@ -214,7 +236,7 @@ export async function POST(request: Request) {
       }
 
       try {
-        return Response.json(await estimateVideoCost(hermesRequest));
+        return Response.json(withHighCostWarning(await estimateVideoCost(hermesRequest)));
       } catch (error) {
         if (error instanceof CmoAdapterError) {
           return Response.json({

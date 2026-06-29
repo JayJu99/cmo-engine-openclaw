@@ -36,6 +36,9 @@ export interface StudioVideoModel {
   enablementLabel?: string;
   disabledReason?: string | null;
   operations?: string[];
+  inputsRequired?: string[];
+  canGenerateTextToVideo?: boolean;
+  requiredInputStatus?: string | null;
   constraints?: string[];
   warnings?: string[];
   catalogSource?: string;
@@ -290,7 +293,7 @@ export function enablementLabel(enablement: StudioVideoEnablement | undefined): 
 
 export function disabledReasonForEnablement(enablement: StudioVideoEnablement | undefined): string | null {
   if (enablement === "needs_smoke") {
-    return "Needs smoke test before real generation.";
+    return "Not smoke-tested yet. Review cost before generating.";
   }
 
   if (enablement === "disabled_until_upload") {
@@ -327,7 +330,7 @@ export function validateStudioVideoSettings(input: {
 }): string | null {
   const enablementReason = disabledReasonForEnablement(input.model.enablement);
 
-  if (enablementReason && input.model.enablement !== "guarded") {
+  if (enablementReason && input.model.enablement !== "guarded" && input.model.enablement !== "needs_smoke") {
     return enablementReason;
   }
 

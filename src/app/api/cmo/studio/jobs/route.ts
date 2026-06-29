@@ -101,6 +101,7 @@ function modelFromCatalogRecord(record: Record<string, unknown>): StudioVideoMod
     costSupported: record.costSupported !== false && record.cost_supported !== false,
     workflowSupported: record.workflowSupported === true || record.workflow_supported === true,
     enablement: record.enablement === "safe_now" || record.enablement === "guarded" || record.enablement === "needs_smoke" || record.enablement === "disabled_until_upload" ? record.enablement : "unavailable",
+    canGenerateTextToVideo: record.canGenerateTextToVideo === true || record.can_generate_text_to_video === true,
     constraints: Array.isArray(record.constraints) ? record.constraints.filter((item): item is string => typeof item === "string") : [],
     warnings: Array.isArray(record.warnings) ? record.warnings.filter((item): item is string => typeof item === "string") : [],
     catalogSource: stringValue(record.catalogSource),
@@ -129,10 +130,10 @@ async function validatedRealModel(body: Record<string, unknown>, settings: Retur
   }
 
   const model = modelFromCatalogRecord(match);
-  const enablementReason = disabledReasonForEnablement(model.enablement);
+  const enablementReason = model.enablement === "needs_smoke" ? null : disabledReasonForEnablement(model.enablement);
 
-  if (enablementReason) {
-    throw new CmoAdapterError(enablementReason, 400, "video_agent_model_unavailable");
+  if (enablementReason || model.canGenerateTextToVideo === false) {
+    throw new CmoAdapterError(enablementReason ?? "Selected model is not available for prompt-only real Studio video generation.", 400, "video_agent_model_unavailable");
   }
 
   const settingsError = validateStudioVideoSettings({
@@ -171,7 +172,7 @@ function inputAssetIdsFromBody(body: Record<string, unknown>): string[] {
 
 function modelIdFromBody(body: Record<string, unknown>): string | undefined {
   if (isRecord(body.model)) {
-    return stringValue(body.model.uiId ?? body.model.ui_id ?? body.model.product_model_id ?? body.model.providerModelId ?? body.model.provider_model_id ?? body.model.id);
+    return stringValue(body.model.providerModelId ?? body.model.provider_model_id ?? body.model.uiId ?? body.model.ui_id ?? body.model.product_model_id ?? body.model.id);
   }
 
   return stringValue(body.modelId ?? body.model_id);

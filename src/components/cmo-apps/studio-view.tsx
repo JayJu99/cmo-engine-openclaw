@@ -103,6 +103,8 @@ interface CostEstimate {
   label?: string;
   mode?: "mock" | "hermes";
   reason?: string;
+  warning?: string;
+  highCostWarning?: boolean;
   backend?: string;
   model?: string;
 }
@@ -190,6 +192,8 @@ function costEstimateFromBody(body: Record<string, unknown>): CostEstimate {
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(body.mode === "mock" || body.mode === "hermes" ? { mode: body.mode } : {}),
     ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
+    ...(typeof body.warning === "string" ? { warning: body.warning } : {}),
+    ...(body.highCostWarning === true ? { highCostWarning: true } : {}),
     ...(typeof body.backend === "string" ? { backend: body.backend } : {}),
     ...(typeof body.model === "string" ? { model: body.model } : {}),
   };
@@ -245,11 +249,30 @@ function modelFromApi(value: unknown): StudioVideoModel | null {
     enablementLabel: typeof record.enablementLabel === "string" ? record.enablementLabel : undefined,
     disabledReason: typeof record.disabledReason === "string" ? record.disabledReason : null,
     operations: stringArray(record.operations),
+    inputsRequired: stringArray(record.inputsRequired ?? record.inputs_required),
+    canGenerateTextToVideo: record.canGenerateTextToVideo === true || record.can_generate_text_to_video === true,
+    requiredInputStatus: typeof record.requiredInputStatus === "string" ? record.requiredInputStatus : typeof record.required_input_status === "string" ? record.required_input_status : null,
     constraints: stringArray(record.constraints),
     warnings: stringArray(record.warnings),
     catalogSource: typeof record.catalogSource === "string" ? record.catalogSource : undefined,
     catalogMode: record.catalogMode === "hermes_v2" || record.catalogMode === "hermes_v1" || record.catalogMode === "product_fallback" ? record.catalogMode : undefined,
   };
+}
+
+function modelReadinessLabel(model: StudioVideoModel): string {
+  if (model.requiredInputStatus) {
+    return model.requiredInputStatus;
+  }
+
+  if (model.costSupported === false) {
+    return "Cost unsupported";
+  }
+
+  if (model.enablement === "needs_smoke") {
+    return "Not smoke-tested";
+  }
+
+  return model.enablementLabel ?? enablementLabel(model.enablement);
 }
 
 function findStudioVideoModel(models: StudioVideoModel[], id: string): StudioVideoModel {
@@ -652,7 +675,7 @@ function StudioConsole({
           >
             {models.map((item) => (
               <option key={item.id} value={item.id}>
-                {item.name} · {item.enablementLabel ?? enablementLabel(item.enablement)} · up to {item.maxResolution} · {item.minDurationSeconds}s-{item.maxDurationSeconds}s
+                {item.name} · {modelReadinessLabel(item)} · {item.costSupported === false ? "Cost unavailable" : "Cost supported"} · up to {item.maxResolution} · {item.minDurationSeconds}s-{item.maxDurationSeconds}s
               </option>
             ))}
           </select>
@@ -736,6 +759,12 @@ function StudioConsole({
             : costEstimate?.reason ?? "Cost estimate unavailable"}
         </div>
 
+        {(model.enablement === "needs_smoke" || costEstimate?.warning) ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-700">
+            {costEstimate?.warning ?? "Not smoke-tested yet. Review cost before generating."}
+          </div>
+        ) : null}
+
         {generateBlockedReason ? (
           <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm font-semibold text-orange-700">
             {generateBlockedReason}
@@ -794,7 +823,9 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   const realVideoEnabled = videoAgentStatus?.realVideoEnabled === true;
   const modelRealAvailable = agentConnected && Boolean(model.providerModelId && hermesModelIds.has(model.providerModelId));
   const settingsBlockedReason = validateStudioVideoSettings({ model, durationSeconds: duration, aspectRatio, resolution, bitrate });
-  const enablementBlockedReason = realVideoEnabled ? model.disabledReason ?? disabledReasonForEnablement(model.enablement) : null;
+  const enablementBlockedReason = realVideoEnabled && (model.enablement === "disabled_until_upload" || model.enablement === "unavailable")
+    ? model.disabledReason ?? disabledReasonForEnablement(model.enablement)
+    : null;
   const costBlockedReason = realVideoEnabled && (!costEstimate?.estimateAvailable || costEstimate.mode !== "hermes")
     ? costEstimate?.reason ?? "Cost estimate must complete before real Studio video generation."
     : null;
@@ -820,7 +851,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
 
         if (Array.isArray(modelsBody.models)) {
           for (const item of nextModels) {
-            const available = item.enablement === "safe_now" || item.enablement === "guarded";
+            const available = item.canGenerateTextToVideo === true || item.enablement === "safe_now" || item.enablement === "guarded" || item.enablement === "needs_smoke";
 
             if (item.providerModelId && available) {
               modelIds.add(item.providerModelId);
@@ -886,6 +917,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             agent: "video",
             backend: "higgsfield",
             operation: "generate_video",
+            requestId: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`,
             prompt,
             model: {
               uiId: model.id,

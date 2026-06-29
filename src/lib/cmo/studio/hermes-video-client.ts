@@ -27,6 +27,7 @@ export type HermesVideoAgentErrorCode =
   | "video_agent_execution_failed";
 
 export interface HermesVideoCostRequest {
+  request_id?: string;
   prompt?: string;
   operation: "generate_video";
   backend?: "higgsfield";
@@ -140,31 +141,51 @@ function uniqueValues<T extends string>(values: Array<T | null>): T[] {
   return Array.from(new Set(values.filter((item): item is T => Boolean(item))));
 }
 
-function realVideoModelAllowlist(): Set<string> {
-  const raw = process.env.CMO_STUDIO_REAL_VIDEO_MODEL_ALLOWLIST;
-  const values = raw?.split(",").map((item) => item.trim()).filter(Boolean);
+function requiredInputStatus(inputsRequired: string[]): string | null {
+  const unsupported = inputsRequired.find((item) => item !== "prompt" && item !== "text");
 
-  return new Set(values?.length ? values : ["seedance_2_0"]);
+  if (!unsupported) {
+    return null;
+  }
+
+  if (/image|frame|reference/.test(unsupported)) {
+    return "Requires image upload";
+  }
+
+  if (/video|clip/.test(unsupported)) {
+    return "Requires video upload";
+  }
+
+  if (/audio|sound/.test(unsupported)) {
+    return "Requires audio input";
+  }
+
+  if (/url|link/.test(unsupported)) {
+    return "Requires URL input";
+  }
+
+  return "Requires input media support.";
+}
+
+function supportsTextToVideo(operations: string[]): boolean {
+  return operations.length === 0 || operations.includes("text_to_video") || operations.includes("generate_video");
 }
 
 function productEnablementPolicy(input: {
   enablement: StudioVideoEnablement;
   providerModelId?: string;
   inputsRequired: string[];
+  operations: string[];
   costSupported: boolean;
 }): StudioVideoEnablement {
-  const requiresUnsupportedMedia = input.inputsRequired.some((item) => item !== "prompt" && item !== "text");
+  const requiresUnsupportedMedia = requiredInputStatus(input.inputsRequired) !== null;
 
   if (requiresUnsupportedMedia) {
     return "disabled_until_upload";
   }
 
-  if (!input.costSupported) {
+  if (!input.costSupported || !input.providerModelId || !supportsTextToVideo(input.operations)) {
     return "unavailable";
-  }
-
-  if ((input.enablement === "safe_now" || input.enablement === "guarded") && (!input.providerModelId || !realVideoModelAllowlist().has(input.providerModelId))) {
-    return "needs_smoke";
   }
 
   return input.enablement;
@@ -491,15 +512,19 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
       const defaultAspectRatio = normalizeStudioAspectRatio(aspectRatioSchema.default) ?? "16:9";
       const defaultBitrate = normalizeStudioBitrate(bitrateSchema.default) ?? "standard";
       const defaultMode = normalizeStudioVideoMode(modeSchema.default) ?? supportedModes[0];
+      const operations = stringArray(item.operations);
       const enablement = studioEnablement(item.enablement ?? (item.available === false ? "unavailable" : item.real_video_supported === false ? "unavailable" : "safe_now"));
       const inputsRequired = stringArray(item.inputs_required ?? item.inputsRequired);
       const costSupported = item.cost_supported !== false;
+      const inputStatus = requiredInputStatus(inputsRequired);
       const productEnablement = productEnablementPolicy({
         enablement,
         providerModelId,
         inputsRequired,
+        operations,
         costSupported,
       });
+      const canGenerateTextToVideo = Boolean(providerModelId && costSupported && supportsTextToVideo(operations) && !inputStatus && productEnablement !== "unavailable");
       const minDuration = numberValue(item.min_duration_seconds ?? item.minDurationSeconds ?? duration.min_seconds ?? duration.minSeconds ?? durationSchema.min) ?? 4;
       const maxDuration = numberValue(item.max_duration_seconds ?? item.maxDurationSeconds ?? duration.max_seconds ?? duration.maxSeconds ?? durationSchema.max) ?? 15;
       const defaultDuration = numberValue(item.default_duration_seconds ?? item.defaultDurationSeconds ?? duration.default_seconds ?? duration.defaultSeconds ?? durationSchema.default) ?? minDuration;
@@ -518,8 +543,9 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
         provider: stringValue(item.provider) ?? stringValue(body.provider) ?? "higgsfield",
         type: stringValue(item.type) ?? "video",
         family: stringValue(item.family) ?? null,
-        operations: stringArray(item.operations),
+        operations,
         inputs_required: inputsRequired,
+        inputsRequired,
         inputs_optional: stringArray(item.inputs_optional ?? item.inputsOptional),
         settings_schema: settingsSchema,
         supported_aspect_ratios: supportedAspectRatios,
@@ -538,10 +564,14 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
         defaultBitrate,
         default_mode: defaultMode,
         defaultMode,
-        available: productEnablement === "safe_now" || productEnablement === "guarded",
+        available: canGenerateTextToVideo,
         enablement: productEnablement,
         enablementLabel: enablementLabel(productEnablement),
-        disabledReason: disabledReasonForEnablement(productEnablement),
+        disabledReason: inputStatus ?? (productEnablement === "needs_smoke" ? null : disabledReasonForEnablement(productEnablement)),
+        can_generate_text_to_video: canGenerateTextToVideo,
+        canGenerateTextToVideo,
+        required_input_status: inputStatus,
+        requiredInputStatus: inputStatus,
         real_video_supported: item.real_video_supported === true || item.realVideoSupported === true || providerModelId === "seedance_2_0",
         realVideoSupported: item.real_video_supported === true || item.realVideoSupported === true || providerModelId === "seedance_2_0",
         cost_supported: costSupported,

@@ -149,6 +149,7 @@ for (const forbidden of ["/agents/studio", "/agents/cmo", "vault", "memory", "Le
 }
 
 await checkHermesExecutePayloadContract();
+await checkDynamicHermesExecutePayloadContract();
 await checkHermesCostRouteSnakeCaseMapping();
 await checkHermesExecuteCompletedResponseMapping();
 await checkHermesExecuteFailedResponseMapping();
@@ -265,6 +266,76 @@ async function checkHermesExecutePayloadContract() {
   });
 }
 
+async function checkDynamicHermesExecutePayloadContract() {
+  const jiti = createJiti(import.meta.url, {
+    interopDefault: true,
+    alias: { "@": resolve("src"), "server-only": resolve("scripts/server-only-noop.cjs") },
+  });
+  const { buildHermesVideoExecuteRequest } = await jiti.import(resolve("src/lib/cmo/studio-dispatcher.ts"));
+  const payload = buildHermesVideoExecuteRequest({
+    id: "studio_job_dynamic_contract",
+    tenant_id: "tenant_contract",
+    created_by: "tester",
+    status: "running",
+    media_kind: "video",
+    agent: "video",
+    backend: "higgsfield",
+    operation: "generate_video",
+    context_json: {},
+    prompt: "dynamic model prompt",
+    negative_prompt: null,
+    model_json: {
+      product_model_id: "legacy-product-kling",
+      ui_id: "legacy-product-kling",
+      provider_model_id: "kling_3_turbo",
+      name: "Kling 3.0 Turbo",
+      enablement: "needs_smoke",
+      settings_schema: {
+        duration: { min: 3, max: 15, default: 5 },
+        aspect_ratio: { default: "16:9", values: ["16:9"] },
+        resolution: { default: "720p", values: ["720p", "1080p"] },
+        mode: { default: "std", values: ["fast", "std"] },
+        bitrate_mode: { default: "standard", values: ["standard"] },
+      },
+      constraints: ["mode 'fast' supports only 480p/720p; use mode 'std' for 1080p/4k"],
+    },
+    settings_json: {
+      durationSeconds: 5,
+      aspectRatio: "16:9",
+      resolution: "1080p",
+      bitrate: "standard",
+      variants: 1,
+    },
+    input_asset_ids: [],
+    output_asset_ids: [],
+    cost_json: { mode: "hermes", estimateAvailable: true, credits: 42, estimatedCredits: 42 },
+    provider_job_id: null,
+    provider_status: null,
+    error_json: null,
+    diagnostics_json: {},
+    request_id: "debug_execute_dynamic_001",
+    dispatch_attempts: 1,
+    dispatch_started_at: null,
+    locked_until: null,
+    created_at: "2026-06-29T00:00:00.000Z",
+    started_at: "2026-06-29T00:00:00.000Z",
+    completed_at: null,
+    updated_at: "2026-06-29T00:00:00.000Z",
+  });
+
+  nodeAssert.deepEqual(payload.model, {
+    ui_id: "kling_3_turbo",
+    provider_model_id: "kling_3_turbo",
+  });
+  nodeAssert.equal(payload.model.ui_id.includes("legacy-product"), false);
+  nodeAssert.equal(payload.settings.mode, "std");
+  nodeAssert.deepEqual(payload.inputs, {
+    images: [],
+    videos: [],
+    audio: [],
+  });
+}
+
 async function checkHermesCostRouteSnakeCaseMapping() {
   const jiti = createJiti(import.meta.url, {
     interopDefault: true,
@@ -299,22 +370,22 @@ async function checkHermesCostRouteSnakeCaseMapping() {
           schema_version: "video.models.response.v2",
           source: "higgsfield_cli",
           models: [{
-            ui_id: "seedance_2_0",
-            provider_model_id: "seedance_2_0",
-            label: "Seedance 2.0",
+            ui_id: "kling_3_turbo",
+            provider_model_id: "kling_3_turbo",
+            label: "Kling 3.0 Turbo",
             provider: "higgsfield",
             type: "video",
             operations: ["text_to_video"],
             real_video_supported: true,
             cost_supported: true,
             settings_schema: {
-              duration: { type: "integer", default: 5, min: 4, max: 15 },
-              aspect_ratio: { default: "16:9", values: ["16:9", "9:16", "1:1"] },
-              resolution: { default: "720p", values: ["480p", "720p", "1080p", "4k"] },
+              duration: { type: "integer", default: 5, min: 3, max: 15 },
+              aspect_ratio: { default: "16:9", values: ["16:9", "9:16"] },
+              resolution: { default: "720p", values: ["720p", "1080p"] },
               mode: { default: "std", values: ["fast", "std"] },
-              bitrate_mode: { default: "standard", values: ["standard", "high"] },
+              bitrate_mode: { default: "standard", values: ["standard"] },
             },
-            enablement: "safe_now",
+            enablement: "needs_smoke",
           }],
         }), {
           status: 200,
@@ -330,8 +401,8 @@ async function checkHermesCostRouteSnakeCaseMapping() {
           request_id: "debug_cost_001",
           estimate_available: true,
           backend: "higgsfield",
-          model: "seedance_2_0",
-          estimated_credits: 17.5,
+          model: "kling_3_turbo",
+          estimated_credits: 75,
           raw: {},
         }), {
           status: 200,
@@ -346,12 +417,13 @@ async function checkHermesCostRouteSnakeCaseMapping() {
       method: "POST",
       body: JSON.stringify({
         prompt: "actual user prompt",
+        requestId: "debug_cost_001",
         mediaKind: "video",
         backend: "higgsfield",
         operation: "generate_video",
         model: {
-          uiId: "seedance_2_0",
-          providerModelId: "seedance_2_0",
+          uiId: "legacy-product-kling",
+          providerModelId: "kling_3_turbo",
         },
         settings: {
           durationSeconds: 5,
@@ -369,17 +441,21 @@ async function checkHermesCostRouteSnakeCaseMapping() {
     nodeAssert.deepEqual(body, {
       estimateAvailable: true,
       mode: "hermes",
-      credits: 17.5,
-      estimatedCredits: 17.5,
-      label: "~17.5 credits",
+      credits: 75,
+      estimatedCredits: 75,
+      label: "~75 credits",
       backend: "higgsfield",
-      model: "seedance_2_0",
+      model: "kling_3_turbo",
+      warning: "High credit estimate. Review before generating.",
+      highCostWarning: true,
     });
+    nodeAssert.equal(capturedCostRequest.request_id, "debug_cost_001");
     nodeAssert.equal(capturedCostRequest.prompt, "actual user prompt");
     nodeAssert.deepEqual(capturedCostRequest.model, {
-      ui_id: "seedance_2_0",
-      provider_model_id: "seedance_2_0",
+      ui_id: "kling_3_turbo",
+      provider_model_id: "kling_3_turbo",
     });
+    nodeAssert.equal(JSON.stringify(capturedCostRequest).includes("legacy-product-kling"), false);
     nodeAssert.deepEqual(capturedCostRequest.settings, {
       duration_seconds: 5,
       aspect_ratio: "9:16",

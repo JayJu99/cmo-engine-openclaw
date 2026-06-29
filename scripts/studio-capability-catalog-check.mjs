@@ -14,6 +14,7 @@ assert.match(clientSource, /settings_schema/, "Hermes client must read settings_
 assert.match(clientSource, /enablement/, "Hermes client must preserve model enablement.");
 assert.match(uiSource, /enablementLabel/, "Studio UI must show model enablement.");
 assert.match(uiSource, /catalogSource/, "Studio UI must show catalog source.");
+assert.match(uiSource, /Not smoke-tested yet\. Review cost before generating\./, "Studio UI must warn instead of blocking needs_smoke text-to-video models.");
 assert.match(jobRouteSource, /validateStudioVideoSettings/, "Jobs route must validate settings before dispatch.");
 assert.match(dispatcherSource, /assertFreshCostGuard/, "Dispatcher must run a fresh cost guard before execute.");
 
@@ -28,12 +29,10 @@ async function withHermesModels(payload, check) {
   const originalEnv = {
     CMO_HERMES_VIDEO_AGENT_BASE_URL: process.env.CMO_HERMES_VIDEO_AGENT_BASE_URL,
     CMO_HERMES_VIDEO_AGENT_API_KEY: process.env.CMO_HERMES_VIDEO_AGENT_API_KEY,
-    CMO_STUDIO_REAL_VIDEO_MODEL_ALLOWLIST: process.env.CMO_STUDIO_REAL_VIDEO_MODEL_ALLOWLIST,
   };
 
   process.env.CMO_HERMES_VIDEO_AGENT_BASE_URL = "http://127.0.0.1:18642";
   process.env.CMO_HERMES_VIDEO_AGENT_API_KEY = "test-contract-secret";
-  delete process.env.CMO_STUDIO_REAL_VIDEO_MODEL_ALLOWLIST;
   globalThis.fetch = async (url) => {
     assert.match(String(url), /\/agents\/video\/models$/, "Models request must call Hermes models endpoint.");
     return new Response(JSON.stringify(payload), {
@@ -92,7 +91,10 @@ await withHermesModels({
       ui_id: "experimental_model",
       provider_model_id: "experimental_model",
       label: "Experimental",
+      operations: ["text_to_video"],
+      inputs_required: ["prompt"],
       real_video_supported: true,
+      cost_supported: true,
       settings_schema: {
         duration: { default: 5, min: 4, max: 8 },
         aspect_ratio: { default: "16:9", values: ["16:9"] },
@@ -106,6 +108,8 @@ await withHermesModels({
       ui_id: "safe_but_not_allowlisted",
       provider_model_id: "safe_but_not_allowlisted",
       label: "Safe But Not Allowlisted",
+      operations: ["text_to_video"],
+      inputs_required: ["prompt"],
       real_video_supported: true,
       cost_supported: true,
       settings_schema: {
@@ -121,7 +125,27 @@ await withHermesModels({
       ui_id: "image_to_video_only",
       provider_model_id: "image_to_video_only",
       label: "Image Input Required",
+      operations: ["image_to_video"],
+      inputs_required: ["start_image"],
       real_video_supported: true,
+      cost_supported: true,
+      settings_schema: {
+        duration: { default: 5, min: 4, max: 8 },
+        aspect_ratio: { default: "16:9", values: ["16:9"] },
+        resolution: { default: "720p", values: ["720p"] },
+        mode: { default: "fast", values: ["fast"] },
+        bitrate_mode: { default: "standard", values: ["standard"] },
+      },
+      enablement: "disabled_until_upload",
+    },
+    {
+      ui_id: "video_required_tool",
+      provider_model_id: "video_required_tool",
+      label: "Video Required Tool",
+      operations: ["reframe"],
+      inputs_required: ["video"],
+      real_video_supported: true,
+      cost_supported: true,
       settings_schema: {
         duration: { default: 5, min: 4, max: 8 },
         aspect_ratio: { default: "16:9", values: ["16:9"] },
@@ -133,7 +157,7 @@ await withHermesModels({
     },
   ],
 }, async (models) => {
-  assert.equal(models.length, 4, "All Hermes v2 models must remain visible.");
+  assert.equal(models.length, 5, "All Hermes v2 models must remain visible.");
   const seedance = models.find((model) => model.providerModelId === "seedance_2_0");
   assert.equal(seedance?.enablement, "safe_now");
   assert.equal(seedance?.available, true);
@@ -142,9 +166,16 @@ await withHermesModels({
   assert.deepEqual(seedance?.supportedModes, ["fast", "std"]);
   assert.equal(seedance?.defaultDurationSeconds, 5);
   assert.equal(seedance?.supportsAudio, true);
-  assert.equal(models.find((model) => model.id === "experimental_model")?.disabledReason, "Needs smoke test before real generation.");
-  assert.equal(models.find((model) => model.id === "safe_but_not_allowlisted")?.enablement, "needs_smoke", "Default Product allowlist must only expose seedance_2_0 for paid real generation.");
-  assert.equal(models.find((model) => model.id === "image_to_video_only")?.disabledReason, "Requires input media support.");
+  const experimental = models.find((model) => model.id === "experimental_model");
+  assert.equal(experimental?.enablement, "needs_smoke");
+  assert.equal(experimental?.available, true, "Prompt-only needs_smoke models must be selectable under cost-first policy.");
+  assert.equal(experimental?.canGenerateTextToVideo, true);
+  assert.equal(experimental?.disabledReason, null);
+  assert.equal(models.find((model) => model.id === "safe_but_not_allowlisted")?.enablement, "safe_now", "Cost-first Product policy must not downgrade prompt-only safe models by allowlist.");
+  assert.equal(models.find((model) => model.id === "image_to_video_only")?.disabledReason, "Requires image upload");
+  assert.equal(models.find((model) => model.id === "image_to_video_only")?.available, false);
+  assert.equal(models.find((model) => model.id === "video_required_tool")?.disabledReason, "Requires video upload");
+  assert.equal(models.find((model) => model.id === "video_required_tool")?.available, false);
 });
 
 await withHermesModels({
