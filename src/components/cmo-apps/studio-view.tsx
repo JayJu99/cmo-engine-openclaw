@@ -14,8 +14,14 @@ import {
   STUDIO_RESOLUTIONS,
   STUDIO_VIDEO_MODELS,
   clampStudioDuration,
+  disabledReasonForEnablement,
+  enablementLabel,
   getStudioVideoModel,
   isStudioResolutionSupported,
+  normalizeStudioAspectRatio,
+  normalizeStudioBitrate,
+  normalizeStudioResolution,
+  validateStudioVideoSettings,
   type StudioAspectRatio,
   type StudioBitrate,
   type StudioResolution,
@@ -61,7 +67,12 @@ interface StudioJob {
       resolution?: string;
     };
     artifact_transport_status?: string;
+    product_asset_id?: string;
+    product_asset_url?: string;
+    provider_original_render_url?: string;
+    provider_original_thumbnail_url?: string;
   };
+  output_asset_ids?: string[];
   provider_status?: string | null;
   created_at: string;
   started_at: string | null;
@@ -71,9 +82,12 @@ interface StudioJob {
 interface CostEstimate {
   estimateAvailable: boolean;
   credits?: number;
+  estimatedCredits?: number;
   label?: string;
   mode?: "mock" | "hermes";
   reason?: string;
+  backend?: string;
+  model?: string;
 }
 
 interface StudioVideoAgentStatus {
@@ -149,20 +163,86 @@ function costEstimateFromBody(body: Record<string, unknown>): CostEstimate {
   return {
     estimateAvailable: body.estimateAvailable === true,
     ...(typeof body.credits === "number" ? { credits: body.credits } : {}),
+    ...(typeof body.estimatedCredits === "number" ? { estimatedCredits: body.estimatedCredits } : {}),
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(body.mode === "mock" || body.mode === "hermes" ? { mode: body.mode } : {}),
     ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
+    ...(typeof body.backend === "string" ? { backend: body.backend } : {}),
+    ...(typeof body.model === "string" ? { model: body.model } : {}),
   };
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function modelFromApi(value: unknown): StudioVideoModel | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const id = typeof record.id === "string" ? record.id : typeof record.uiId === "string" ? record.uiId : typeof record.providerModelId === "string" ? record.providerModelId : null;
+  const supportedResolutions = stringArray(record.supportedResolutions).map(normalizeStudioResolution).filter((item): item is StudioResolution => Boolean(item));
+  const supportedAspectRatios = stringArray(record.supportedAspectRatios).map(normalizeStudioAspectRatio).filter((item): item is StudioAspectRatio => Boolean(item));
+  const supportedBitrates = stringArray(record.supportedBitrates).map(normalizeStudioBitrate).filter((item): item is StudioBitrate => Boolean(item));
+
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    uiId: typeof record.uiId === "string" ? record.uiId : id,
+    providerModelId: typeof record.providerModelId === "string" ? record.providerModelId : typeof record.provider_model_id === "string" ? record.provider_model_id : undefined,
+    name: typeof record.name === "string" ? record.name : typeof record.label === "string" ? record.label : id,
+    providerLabel: typeof record.provider === "string" ? record.provider : "Higgsfield",
+    maxResolution: normalizeStudioResolution(record.maxResolution ?? record.max_resolution) ?? supportedResolutions.at(-1) ?? "720p",
+    supportedResolutions: supportedResolutions.length ? supportedResolutions : ["720p"],
+    supportedAspectRatios,
+    supportedBitrates,
+    supportedModes: stringArray(record.supportedModes).filter((item): item is "fast" | "std" => item === "fast" || item === "std"),
+    defaultDurationSeconds: numberValue(record.defaultDurationSeconds ?? record.default_duration_seconds),
+    defaultAspectRatio: normalizeStudioAspectRatio(record.defaultAspectRatio ?? record.default_aspect_ratio) ?? undefined,
+    defaultResolution: normalizeStudioResolution(record.defaultResolution ?? record.default_resolution) ?? undefined,
+    defaultBitrate: normalizeStudioBitrate(record.defaultBitrate ?? record.default_bitrate) ?? undefined,
+    defaultMode: record.defaultMode === "fast" || record.defaultMode === "std" ? record.defaultMode : undefined,
+    minDurationSeconds: numberValue(record.minDurationSeconds ?? record.min_duration_seconds) ?? 4,
+    maxDurationSeconds: numberValue(record.maxDurationSeconds ?? record.max_duration_seconds) ?? 15,
+    supportsAudio: record.supportsAudio === true || record.supports_audio === true,
+    badges: stringArray(record.badges),
+    realVideoSupported: record.realVideoSupported === true || record.real_video_supported === true,
+    costSupported: record.costSupported !== false && record.cost_supported !== false,
+    workflowSupported: record.workflowSupported === true || record.workflow_supported === true,
+    enablement: record.enablement === "safe_now" || record.enablement === "guarded" || record.enablement === "needs_smoke" || record.enablement === "disabled_until_upload" ? record.enablement : "unavailable",
+    enablementLabel: typeof record.enablementLabel === "string" ? record.enablementLabel : undefined,
+    disabledReason: typeof record.disabledReason === "string" ? record.disabledReason : null,
+    operations: stringArray(record.operations),
+    constraints: stringArray(record.constraints),
+    warnings: stringArray(record.warnings),
+    catalogSource: typeof record.catalogSource === "string" ? record.catalogSource : undefined,
+    catalogMode: record.catalogMode === "hermes_v2" || record.catalogMode === "hermes_v1" || record.catalogMode === "product_fallback" ? record.catalogMode : undefined,
+  };
+}
+
+function findStudioVideoModel(models: StudioVideoModel[], id: string): StudioVideoModel {
+  return models.find((item) => item.id === id || item.providerModelId === id || item.uiId === id) ?? models[0] ?? getStudioVideoModel(id);
 }
 
 function ModelHeroCard({
   model,
   agentConnected,
   realAvailable,
+  catalogSource,
 }: {
   model: StudioVideoModel;
   agentConnected: boolean;
   realAvailable: boolean;
+  catalogSource: string;
 }) {
   return (
     <div className="relative overflow-hidden rounded-lg border border-violet-200 bg-[linear-gradient(135deg,#ffffff_0%,#f5f3ff_54%,#eef2ff_100%)] p-4 shadow-sm">
@@ -183,9 +263,19 @@ function ModelHeroCard({
             {badge}
           </Badge>
         ))}
-        <Badge variant="slate">Mock catalog</Badge>
-        {realAvailable ? <Badge variant="green">Real enabled</Badge> : agentConnected ? <Badge variant="orange">Unavailable in v1</Badge> : null}
+        <Badge variant="slate">{catalogSource}</Badge>
+        <Badge variant={model.enablement === "safe_now" ? "green" : model.enablement === "guarded" ? "orange" : "slate"}>
+          {model.enablementLabel ?? enablementLabel(model.enablement)}
+        </Badge>
+        {realAvailable ? <Badge variant="green">Real enabled</Badge> : agentConnected ? <Badge variant="orange">Unavailable</Badge> : null}
       </div>
+      {[...(model.constraints ?? []), ...(model.warnings ?? [])].length ? (
+        <div className="mt-3 space-y-1 text-xs font-semibold text-slate-600">
+          {[...(model.constraints ?? []), ...(model.warnings ?? [])].map((message) => (
+            <div key={message}>{message}</div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -257,8 +347,16 @@ function CanvasPreview({
   const complete = status === "completed";
   const running = status === "queued" || status === "running";
   const remoteResult = activeJob?.diagnostics_json?.remote_result;
-  const renderUrl = typeof remoteResult?.render_url === "string" ? remoteResult.render_url : null;
+  const productAssetId = activeJob?.output_asset_ids?.[0] ?? activeJob?.diagnostics_json?.product_asset_id;
+  const productAssetUrl = typeof activeJob?.diagnostics_json?.product_asset_url === "string"
+    ? activeJob.diagnostics_json.product_asset_url
+    : productAssetId
+      ? `/api/cmo/studio/assets/${encodeURIComponent(productAssetId)}/preview`
+      : null;
+  const remoteRenderUrl = typeof remoteResult?.render_url === "string" ? remoteResult.render_url : null;
+  const renderUrl = productAssetUrl ?? remoteRenderUrl;
   const thumbnailUrl = typeof remoteResult?.thumbnail_url === "string" ? remoteResult.thumbnail_url : undefined;
+  const uploadFailed = activeJob?.diagnostics_json?.artifact_transport_status === "upload_failed";
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -287,7 +385,8 @@ function CanvasPreview({
           <div className="absolute left-5 top-5 flex flex-wrap gap-2">
             <Badge variant="blue">Video</Badge>
             <Badge variant={statusBadgeVariant(status)}>{status === "draft" ? "empty" : status}</Badge>
-            {renderUrl ? <Badge variant="green">Remote Higgsfield result</Badge> : null}
+            {productAssetUrl ? <Badge variant="green">Product-owned asset</Badge> : renderUrl ? <Badge variant="green">Remote Higgsfield result</Badge> : null}
+            {uploadFailed ? <Badge variant="orange">Upload failed fallback</Badge> : null}
           </div>
           {renderUrl ? (
             <video
@@ -343,6 +442,8 @@ function StudioConsole({
   generateBlockedReason,
   prompt,
   model,
+  models,
+  catalogSource,
   aspectRatio,
   duration,
   resolution,
@@ -364,6 +465,8 @@ function StudioConsole({
   generateBlockedReason: string | null;
   prompt: string;
   model: StudioVideoModel;
+  models: StudioVideoModel[];
+  catalogSource: string;
   aspectRatio: StudioAspectRatio;
   duration: number;
   resolution: StudioResolution;
@@ -383,6 +486,11 @@ function StudioConsole({
     ? `Generate · ${costEstimate.label}`
     : "Generate";
   const agentConnected = videoAgentStatus?.connected === true;
+  const aspectRatioOptions = model.supportedAspectRatios?.length ? model.supportedAspectRatios : STUDIO_ASPECT_RATIOS;
+  const resolutionOptions = model.supportedResolutions.length ? model.supportedResolutions : STUDIO_RESOLUTIONS;
+  const bitrateOptions = model.supportedBitrates?.length
+    ? STUDIO_BITRATES.filter((item) => model.supportedBitrates?.includes(item.id))
+    : STUDIO_BITRATES;
 
   return (
     <Card className="relative z-20 overflow-visible rounded-lg border-slate-200 bg-white shadow-sm">
@@ -403,7 +511,7 @@ function StudioConsole({
       </div>
 
       <div className="space-y-4 p-4">
-        <ModelHeroCard model={model} agentConnected={agentConnected} realAvailable={modelRealAvailable} />
+        <ModelHeroCard model={model} agentConnected={agentConnected} realAvailable={modelRealAvailable} catalogSource={catalogSource} />
 
         <button
           type="button"
@@ -440,9 +548,9 @@ function StudioConsole({
             onChange={(event) => onModelChange(event.target.value)}
             className="h-12 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-950 outline-none transition focus:border-violet-300 focus:ring-4 focus:ring-violet-100"
           >
-            {STUDIO_VIDEO_MODELS.map((item) => (
+            {models.map((item) => (
               <option key={item.id} value={item.id}>
-                {item.name} · up to {item.maxResolution} · {item.minDurationSeconds}s-{item.maxDurationSeconds}s
+                {item.name} · {item.enablementLabel ?? enablementLabel(item.enablement)} · up to {item.maxResolution} · {item.minDurationSeconds}s-{item.maxDurationSeconds}s
               </option>
             ))}
           </select>
@@ -450,7 +558,7 @@ function StudioConsole({
 
         <Field label="Aspect ratio">
           <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
-            {STUDIO_ASPECT_RATIOS.map((option) => (
+            {aspectRatioOptions.map((option) => (
               <button
                 key={option}
                 type="button"
@@ -498,7 +606,7 @@ function StudioConsole({
               onChange={(event) => onResolutionChange(event.target.value as StudioResolution)}
               className="h-12 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-950 outline-none transition focus:border-violet-300 focus:ring-4 focus:ring-violet-100"
             >
-              {STUDIO_RESOLUTIONS.map((option) => (
+              {resolutionOptions.map((option) => (
                 <option key={option} value={option} disabled={!isStudioResolutionSupported(model, option)}>
                   {option}{isStudioResolutionSupported(model, option) ? "" : " · unavailable"}
                 </option>
@@ -511,7 +619,7 @@ function StudioConsole({
               onChange={(event) => onBitrateChange(event.target.value as StudioBitrate)}
               className="h-12 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-950 outline-none transition focus:border-violet-300 focus:ring-4 focus:ring-violet-100"
             >
-              {STUDIO_BITRATES.map((option) => (
+              {bitrateOptions.map((option) => (
                 <option key={option.id} value={option.id}>
                   {option.label} · {option.description}
                 </option>
@@ -570,16 +678,23 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   const [activeJob, setActiveJob] = useState<StudioJob | null>(null);
   const [videoAgentStatus, setVideoAgentStatus] = useState<StudioVideoAgentStatus | null>(null);
   const [hermesModelIds, setHermesModelIds] = useState<Set<string>>(new Set());
+  const [videoModels, setVideoModels] = useState<StudioVideoModel[]>(STUDIO_VIDEO_MODELS);
+  const [catalogSource, setCatalogSource] = useState("Product fallback catalog");
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const userSelectedModelRef = useRef(false);
 
-  const model = useMemo(() => getStudioVideoModel(modelId), [modelId]);
+  const model = useMemo(() => findStudioVideoModel(videoModels, modelId), [modelId, videoModels]);
   const agentConnected = videoAgentStatus?.connected === true;
   const realVideoEnabled = videoAgentStatus?.realVideoEnabled === true;
   const modelRealAvailable = agentConnected && Boolean(model.providerModelId && hermesModelIds.has(model.providerModelId));
-  const generateBlockedReason = realVideoEnabled && !modelRealAvailable
-    ? "Selected model is not available for real Studio video generation."
+  const settingsBlockedReason = validateStudioVideoSettings({ model, durationSeconds: duration, aspectRatio, resolution, bitrate });
+  const enablementBlockedReason = realVideoEnabled ? model.disabledReason ?? disabledReasonForEnablement(model.enablement) : null;
+  const costBlockedReason = realVideoEnabled && (!costEstimate?.estimateAvailable || costEstimate.mode !== "hermes")
+    ? costEstimate?.reason ?? "Cost estimate must complete before real Studio video generation."
+    : null;
+  const generateBlockedReason = realVideoEnabled
+    ? enablementBlockedReason ?? (!modelRealAvailable ? "Selected model is not available for real Studio video generation." : null) ?? settingsBlockedReason ?? costBlockedReason
     : null;
 
   useEffect(() => {
@@ -594,22 +709,26 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
         const statusBody = await parseJsonResponse(statusResponse);
         const modelsBody = await parseJsonResponse(modelsResponse);
         const modelIds = new Set<string>();
+        const nextModels = Array.isArray(modelsBody.models)
+          ? modelsBody.models.map(modelFromApi).filter((item): item is StudioVideoModel => Boolean(item))
+          : [];
 
         if (Array.isArray(modelsBody.models)) {
-          for (const item of modelsBody.models) {
-            if (item && typeof item === "object" && "provider_model_id" in item) {
-              const providerModelId = (item as { provider_model_id?: unknown }).provider_model_id;
-              const available = (item as { available?: unknown }).available;
+          for (const item of nextModels) {
+            const available = item.enablement === "safe_now" || item.enablement === "guarded";
 
-              if (typeof providerModelId === "string" && available !== false) {
-                modelIds.add(providerModelId);
-              }
+            if (item.providerModelId && available) {
+              modelIds.add(item.providerModelId);
             }
           }
         }
 
         if (!cancelled) {
           setVideoAgentStatus(statusBody as unknown as StudioVideoAgentStatus);
+          if (nextModels.length) {
+            setVideoModels(nextModels);
+            setCatalogSource(typeof modelsBody.source === "string" ? modelsBody.source : "Hermes catalog");
+          }
           setHermesModelIds(modelIds);
           if (
             statusBody.realVideoEnabled === true &&
@@ -617,11 +736,14 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             modelIds.has(REAL_STUDIO_VIDEO_PROVIDER_MODEL_ID) &&
             !userSelectedModelRef.current
           ) {
-            const realDefaultModel = getStudioVideoModel(REAL_STUDIO_VIDEO_PROVIDER_MODEL_ID);
+            const realDefaultModel = nextModels.find((item) => item.providerModelId === REAL_STUDIO_VIDEO_PROVIDER_MODEL_ID || item.id === REAL_STUDIO_VIDEO_PROVIDER_MODEL_ID)
+              ?? getStudioVideoModel(REAL_STUDIO_VIDEO_PROVIDER_MODEL_ID);
 
             setModelId(realDefaultModel.id);
-            setDuration((current) => clampStudioDuration(realDefaultModel, current));
-            setResolution((current) => isStudioResolutionSupported(realDefaultModel, current) ? current : realDefaultModel.maxResolution);
+            setDuration((current) => clampStudioDuration(realDefaultModel, realDefaultModel.defaultDurationSeconds ?? current));
+            setAspectRatio(realDefaultModel.defaultAspectRatio ?? "16:9");
+            setResolution(realDefaultModel.defaultResolution ?? realDefaultModel.maxResolution);
+            setBitrate(realDefaultModel.defaultBitrate ?? "standard");
           }
         }
       } catch {
@@ -662,6 +784,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             prompt,
             model: {
               uiId: model.id,
+              providerModelId: model.providerModelId,
               provider_model_id: model.providerModelId,
               label: model.name,
             },
@@ -809,12 +932,14 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   }
 
   function handleModelChange(value: string) {
-    const nextModel = getStudioVideoModel(value);
+    const nextModel = findStudioVideoModel(videoModels, value);
 
     userSelectedModelRef.current = true;
     setModelId(nextModel.id);
     setDuration((current) => clampStudioDuration(nextModel, current));
+    setAspectRatio((current) => nextModel.supportedAspectRatios?.includes(current) ? current : nextModel.defaultAspectRatio ?? nextModel.supportedAspectRatios?.[0] ?? "16:9");
     setResolution((current) => isStudioResolutionSupported(nextModel, current) ? current : nextModel.maxResolution);
+    setBitrate((current) => nextModel.supportedBitrates?.includes(current) ? current : nextModel.defaultBitrate ?? nextModel.supportedBitrates?.[0] ?? "standard");
   }
 
   function handleDurationChange(value: number) {
@@ -849,6 +974,8 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             generateBlockedReason={generateBlockedReason}
             prompt={prompt}
             model={model}
+            models={videoModels}
+            catalogSource={catalogSource}
             aspectRatio={aspectRatio}
             duration={duration}
             resolution={resolution}

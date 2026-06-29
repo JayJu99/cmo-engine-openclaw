@@ -17,6 +17,7 @@ import {
   type StudioMediaKind,
   type StudioOperation,
   type StudioResolution,
+  type StudioVideoModel,
 } from "@/lib/cmo/studio-model-catalog";
 
 export type StudioJobStatus = "draft" | "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -68,6 +69,7 @@ export interface StudioCreateJobInput {
   context?: Record<string, unknown>;
   inputAssetIds?: string[];
   costEstimate?: Record<string, unknown>;
+  modelOverride?: StudioVideoModel;
   requestId?: string;
 }
 
@@ -188,7 +190,7 @@ function initialStudioCost(input: {
 }
 
 function normalizeSettings(input: StudioCreateJobInput): { model: ReturnType<typeof getStudioVideoModel>; settings: StudioJobSettings } {
-  const model = getStudioVideoModel(input.modelId);
+  const model = input.modelOverride ?? getStudioVideoModel(input.modelId);
   const requestedResolution = input.settings?.resolution ?? DEFAULT_SETTINGS.resolution;
   const resolution = isStudioResolutionSupported(model, requestedResolution) ? requestedResolution : model.maxResolution;
   const variants = typeof input.settings?.variants === "number" && Number.isFinite(input.settings.variants)
@@ -391,6 +393,7 @@ export async function completeStudioJob(input: {
   job: StudioJobRecord;
   providerJobId?: string | null;
   providerStatus?: string;
+  outputAssetIds?: string[];
   cost?: Record<string, unknown>;
   diagnostics?: Record<string, unknown>;
 }): Promise<StudioJobRecord> {
@@ -400,7 +403,7 @@ export async function completeStudioJob(input: {
     patch: {
       provider_job_id: input.providerJobId ?? input.job.provider_job_id,
       provider_status: input.providerStatus ?? "completed",
-      output_asset_ids: input.job.output_asset_ids,
+      output_asset_ids: input.outputAssetIds ?? input.job.output_asset_ids,
       cost_json: {
         ...input.job.cost_json,
         ...(input.cost ?? {}),
@@ -533,13 +536,41 @@ export async function createStudioVideoJob(
     negative_prompt: normalizePrompt(input.negativePrompt) || null,
     model_json: {
       product_model_id: model.id,
+      ui_id: model.uiId ?? model.id,
       provider_model_id: model.providerModelId ?? null,
       name: model.name,
       desired_provider: "higgsfield",
       verified_provider_model_id: null,
       supports_audio: model.supportsAudio,
       badges: model.badges,
-      catalog_mode: "mock_desired",
+      enablement: model.enablement ?? null,
+      settings_schema: {
+        duration: {
+          min: model.minDurationSeconds,
+          max: model.maxDurationSeconds,
+          default: model.defaultDurationSeconds ?? settings.durationSeconds,
+        },
+        aspect_ratio: {
+          default: model.defaultAspectRatio ?? settings.aspectRatio,
+          values: model.supportedAspectRatios ?? [],
+        },
+        resolution: {
+          default: model.defaultResolution ?? settings.resolution,
+          values: model.supportedResolutions,
+        },
+        mode: {
+          default: model.defaultMode ?? null,
+          values: model.supportedModes ?? [],
+        },
+        bitrate_mode: {
+          default: model.defaultBitrate ?? settings.bitrate,
+          values: model.supportedBitrates ?? [],
+        },
+      },
+      constraints: model.constraints ?? [],
+      warnings: model.warnings ?? [],
+      catalog_source: model.catalogSource ?? null,
+      catalog_mode: model.catalogMode ?? "mock_desired",
     },
     settings_json: settings,
     input_asset_ids: input.inputAssetIds ?? [],

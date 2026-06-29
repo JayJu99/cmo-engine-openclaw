@@ -1,12 +1,22 @@
 import { CmoAdapterError } from "@/lib/cmo/errors";
 import {
   estimateVideoCost,
+  getVideoAgentModels,
   hermesVideoErrorDiagnostics,
   isHermesVideoAgentConfigured,
   type HermesVideoCostRequest,
 } from "@/lib/cmo/studio/hermes-video-client";
 import { mockStudioCostEstimate } from "@/lib/cmo/studio-job-service";
-import { getStudioVideoModel } from "@/lib/cmo/studio-model-catalog";
+import {
+  chooseStudioVideoMode,
+  getStudioVideoModel,
+  normalizeStudioAspectRatio,
+  normalizeStudioBitrate,
+  normalizeStudioResolution,
+  providerResolutionValue,
+  validateStudioVideoSettings,
+  type StudioVideoModel,
+} from "@/lib/cmo/studio-model-catalog";
 import { isRecord, readJsonObject, stringValue, studioRouteErrorResponse } from "@/lib/cmo/studio-route-utils";
 import type { StudioAspectRatio, StudioBitrate, StudioResolution } from "@/lib/cmo/studio-model-catalog";
 
@@ -35,19 +45,94 @@ function settingsFromBody(body: Record<string, unknown>) {
   };
 }
 
-function hermesCostRequest(body: Record<string, unknown>): HermesVideoCostRequest | null {
-  const model = getStudioVideoModel(modelIdFromBody(body));
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
 
-  if (!model.realVideoSupported || !model.providerModelId) {
+function modelFromRecord(record: Record<string, unknown>): StudioVideoModel {
+  const supportedResolutions = Array.isArray(record.supportedResolutions)
+    ? record.supportedResolutions.map(normalizeStudioResolution).filter((item): item is StudioResolution => Boolean(item))
+    : [];
+  const supportedAspectRatios = Array.isArray(record.supportedAspectRatios)
+    ? record.supportedAspectRatios.map(normalizeStudioAspectRatio).filter((item): item is StudioAspectRatio => Boolean(item))
+    : [];
+  const supportedBitrates = Array.isArray(record.supportedBitrates)
+    ? record.supportedBitrates.map(normalizeStudioBitrate).filter((item): item is StudioBitrate => Boolean(item))
+    : [];
+  const supportedModes = Array.isArray(record.supportedModes)
+    ? record.supportedModes.filter((item): item is "fast" | "std" => item === "fast" || item === "std")
+    : [];
+  const defaultResolution = normalizeStudioResolution(record.defaultResolution ?? record.default_resolution) ?? supportedResolutions[0] ?? "720p";
+
+  return {
+    id: stringValue(record.id) ?? stringValue(record.uiId) ?? stringValue(record.providerModelId) ?? "video-model",
+    uiId: stringValue(record.uiId) ?? stringValue(record.id),
+    providerModelId: stringValue(record.providerModelId ?? record.provider_model_id),
+    name: stringValue(record.name ?? record.label) ?? "Video model",
+    providerLabel: stringValue(record.provider) ?? "Higgsfield",
+    maxResolution: normalizeStudioResolution(record.maxResolution ?? record.max_resolution) ?? supportedResolutions.at(-1) ?? defaultResolution,
+    supportedResolutions: supportedResolutions.length ? supportedResolutions : [defaultResolution],
+    supportedAspectRatios,
+    supportedBitrates,
+    supportedModes,
+    defaultDurationSeconds: numberValue(record.defaultDurationSeconds ?? record.default_duration_seconds),
+    defaultAspectRatio: normalizeStudioAspectRatio(record.defaultAspectRatio ?? record.default_aspect_ratio) ?? undefined,
+    defaultResolution,
+    defaultBitrate: normalizeStudioBitrate(record.defaultBitrate ?? record.default_bitrate) ?? undefined,
+    defaultMode: record.defaultMode === "fast" || record.defaultMode === "std" ? record.defaultMode : undefined,
+    minDurationSeconds: numberValue(record.minDurationSeconds ?? record.min_duration_seconds) ?? 4,
+    maxDurationSeconds: numberValue(record.maxDurationSeconds ?? record.max_duration_seconds) ?? 15,
+    supportsAudio: record.supportsAudio === true || record.supports_audio === true,
+    badges: [],
+    realVideoSupported: record.realVideoSupported === true || record.real_video_supported === true,
+    costSupported: record.costSupported !== false && record.cost_supported !== false,
+    enablement: record.enablement === "safe_now" || record.enablement === "guarded" || record.enablement === "needs_smoke" || record.enablement === "disabled_until_upload" ? record.enablement : "unavailable",
+    constraints: Array.isArray(record.constraints) ? record.constraints.filter((item): item is string => typeof item === "string") : [],
+  };
+}
+
+async function realCatalogModel(body: Record<string, unknown>): Promise<StudioVideoModel | null> {
+  const selectedModelId = modelIdFromBody(body);
+  const catalog = await getVideoAgentModels();
+  const match = catalog.find((item) => {
+    const provider = stringValue(item.providerModelId ?? item.provider_model_id);
+    const uiId = stringValue(item.uiId ?? item.ui_id ?? item.id);
+
+    return provider === selectedModelId || uiId === selectedModelId;
+  });
+
+  return match ? modelFromRecord(match) : null;
+}
+
+async function hermesCostRequest(body: Record<string, unknown>): Promise<HermesVideoCostRequest | null> {
+  const model = process.env.CMO_STUDIO_REAL_VIDEO_ENABLED === "true"
+    ? await realCatalogModel(body)
+    : getStudioVideoModel(modelIdFromBody(body));
+
+  if (!model?.realVideoSupported || !model.providerModelId || model.costSupported === false) {
     return null;
   }
 
   const settings = settingsFromBody(body);
+  const settingsError = validateStudioVideoSettings({
+    model,
+    durationSeconds: settings.durationSeconds,
+    aspectRatio: settings.aspectRatio,
+    resolution: settings.resolution,
+    bitrate: settings.bitrate,
+  });
+
+  if (settingsError) {
+    throw new CmoAdapterError(settingsError, 400, "video_agent_settings_unsupported");
+  }
+
   const providerModelId = model.providerModelId;
+  const mode = chooseStudioVideoMode(model, settings.resolution);
 
   return {
     prompt: stringValue(body.prompt),
     operation: "generate_video",
+    backend: "higgsfield",
     model: {
       ui_id: providerModelId,
       provider_model_id: providerModelId,
@@ -55,10 +140,10 @@ function hermesCostRequest(body: Record<string, unknown>): HermesVideoCostReques
     settings: {
       duration_seconds: settings.durationSeconds,
       aspect_ratio: settings.aspectRatio,
-      resolution: settings.resolution,
+      resolution: providerResolutionValue(settings.resolution),
       bitrate: settings.bitrate,
       variants: settings.variants,
-      ...(providerModelId === "seedance_2_0" && settings.resolution === "720p" ? { mode: "fast" } : {}),
+      ...(mode ? { mode } : {}),
     },
     context: {
       source: "studio",
@@ -91,7 +176,26 @@ export async function POST(request: Request) {
         });
       }
 
-      const hermesRequest = hermesCostRequest(body);
+      let hermesRequest: HermesVideoCostRequest | null;
+
+      try {
+        hermesRequest = await hermesCostRequest(body);
+      } catch (error) {
+        if (error instanceof CmoAdapterError) {
+          return Response.json({
+            estimateAvailable: false,
+            mode: "hermes",
+            reason: error.message,
+            code: error.code,
+            diagnostics: hermesVideoErrorDiagnostics(error, {
+              targetPath: "/agents/video/cost",
+              hermesDispatched: false,
+            }),
+          });
+        }
+
+        throw error;
+      }
 
       if (!hermesRequest) {
         return Response.json({

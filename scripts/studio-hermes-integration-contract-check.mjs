@@ -83,7 +83,7 @@ assert(client.includes("upstream_error") && client.includes("upstream_schema_ver
 
 assert(statusRoute.includes("getVideoAgentStatus") && statusRoute.includes("getHermesVideoAgentSetupState"), "Status route must proxy safe status and setup state.");
 assert(statusRoute.includes("realVideoEnabled") && statusRoute.includes("CMO_STUDIO_REAL_VIDEO_ENABLED"), "Status route must expose safe real-video enabled state.");
-assert(modelsRoute.includes("getVideoAgentModels") && modelsRoute.includes("product_mock_catalog"), "Models route must proxy Hermes models and fallback to Product catalog.");
+assert(modelsRoute.includes("getVideoAgentModelsCatalog"), "Models route must return normalized Hermes/Product fallback catalog.");
 assert(!statusRoute.includes("CMO_HERMES_VIDEO_AGENT_API_KEY") && !modelsRoute.includes("CMO_HERMES_VIDEO_AGENT_API_KEY"), "Proxy routes must not expose API key names.");
 
 assert(costRoute.includes("estimateVideoCost"), "Cost route must proxy Hermes cost.");
@@ -91,7 +91,7 @@ assert(costRoute.includes("CMO_STUDIO_REAL_VIDEO_ENABLED"), "Cost route must be 
 assert(costRoute.includes("video_agent_model_unavailable"), "Cost route must reject unsupported real models.");
 assert(costRoute.includes("prompt: stringValue(body.prompt)"), "Cost route must forward prompt to Hermes cost.");
 assert(costRoute.includes("ui_id: providerModelId") && costRoute.includes("provider_model_id: providerModelId"), "Cost route must send Hermes model object.");
-assert(costRoute.includes('mode: "fast"'), "Cost route must add fast mode for seedance_2_0 720p.");
+assert(costRoute.includes("chooseStudioVideoMode"), "Cost route must choose Hermes mode from catalog settings.");
 assert(costRoute.includes("diagnostics: hermesVideoErrorDiagnostics"), "Cost route must return safe invalid/unreachable diagnostics.");
 
 assert(jobsRoute.includes("dispatchStudioJob"), "Jobs route must dispatch after creating Product job.");
@@ -100,16 +100,16 @@ assert(jobsRoute.includes("costEstimate"), "Jobs route must pass Product Hermes 
 assert(dispatcher.includes("CMO_STUDIO_REAL_VIDEO_ENABLED"), "Dispatcher must be real-video gated.");
 assert(dispatcher.includes("executeVideoJob"), "Dispatcher must call Hermes execute server-side.");
 assert(dispatcher.includes("markStudioJobRunning") && dispatcher.includes("completeStudioJob") && dispatcher.includes("failStudioJob"), "Dispatcher must update queued/running/completed/failed Product jobs.");
-assert(dispatcher.includes('providerModelId === "seedance_2_0"'), "Dispatcher v1 must only allow seedance_2_0 real execution.");
+assert(dispatcher.includes("realVideoProviderModelId") && dispatcher.includes("provider_model_id"), "Dispatcher must use provider_model_id for real execution.");
 assert(dispatcher.includes('schema_version: "video.generation.request.v1"'), "Dispatcher must send Hermes execute schema_version.");
 assert(dispatcher.includes('request_id: job.request_id ?? job.id'), "Dispatcher must send a stable Hermes request_id.");
 assert(dispatcher.includes('backend: "higgsfield"'), "Dispatcher must send Hermes execute backend.");
 assert(dispatcher.includes("ui_id: providerModelId") && dispatcher.includes("provider_model_id: providerModelId"), "Dispatcher must send Hermes execute model object.");
-assert(dispatcher.includes('mode: "fast"'), "Dispatcher must add fast mode for seedance_2_0 720p.");
+assert(dispatcher.includes("chooseStudioVideoMode"), "Dispatcher must choose Hermes mode from catalog settings.");
 assert(dispatcher.includes("images: []") && dispatcher.includes("videos: []") && dispatcher.includes("audio: []"), "Dispatcher must send empty media input arrays for v1 text-to-video.");
 assert(dispatcher.includes("include_estimate: true") && dispatcher.includes("require_estimate: false"), "Dispatcher must request a non-blocking Hermes cost estimate.");
 assert(dispatcher.includes('mode: "product_upload"') && dispatcher.includes("upload_endpoint: null"), "Dispatcher must send product_upload transport without Product-owned upload yet.");
-assert(dispatcher.includes("remote_result") && dispatcher.includes("artifact_transport_status") && dispatcher.includes("not_uploaded"), "Dispatcher must persist remote result metadata without uploading assets.");
+assert(dispatcher.includes("uploadCompletedStudioVideoFromRemote") && dispatcher.includes('artifact_transport_status: uploadedAsset ? "product_uploaded" : uploadError ? "upload_failed"'), "Dispatcher must upload completed remote video artifacts and preserve upload failure fallback.");
 assert(dispatcher.includes("estimatedCredits") && dispatcher.includes("render_url") && dispatcher.includes("thumbnail_url"), "Dispatcher must persist Hermes credits and remote URLs.");
 assert(dispatcher.includes("hermesVideoErrorDiagnostics"), "Dispatcher must preserve safe Hermes error diagnostics.");
 assert(!dispatcher.includes("/agents/studio") && !dispatcher.includes("/agents/cmo"), "Dispatcher must not use generic studio or CMO agent routes.");
@@ -183,7 +183,18 @@ async function checkHermesExecutePayloadContract() {
     negative_prompt: null,
     model_json: {
       product_model_id: "seedance-2",
+      ui_id: "seedance_2_0",
       provider_model_id: "seedance_2_0",
+      name: "Seedance 2.0",
+      enablement: "safe_now",
+      settings_schema: {
+        duration: { min: 4, max: 15, default: 5 },
+        aspect_ratio: { default: "16:9", values: ["16:9", "9:16", "1:1"] },
+        resolution: { default: "720p", values: ["480p", "720p", "1080p", "4k"] },
+        mode: { default: "std", values: ["fast", "std"] },
+        bitrate_mode: { default: "standard", values: ["standard", "high"] },
+      },
+      constraints: ["mode 'fast' supports only 480p/720p; use mode 'std' for 1080p/4k"],
     },
     settings_json: {
       durationSeconds: 5,

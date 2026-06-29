@@ -15,6 +15,8 @@
     "smoke:cmo-creative-user-copy": "node scripts/cmo-creative-user-copy-audit.mjs",
     "smoke:studio-foundation": "node scripts/studio-foundation-contract-check.mjs",
     "smoke:studio-hermes-integration": "node scripts/studio-hermes-integration-contract-check.mjs",
+    "smoke:studio-capability-catalog": "node scripts/studio-capability-catalog-check.mjs",
+    "smoke:studio-artifact-upload": "node scripts/studio-artifact-upload-check.mjs",
     "adapter:dev": "node --watch services/vps-cmo-adapter/server.mjs",
     "adapter:build": "node --check services/vps-cmo-adapter/server.mjs",
     "adapter:start": "node services/vps-cmo-adapter/server.mjs"

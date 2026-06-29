@@ -80,6 +80,26 @@ function normalizeMimeType(value: unknown): StudioAllowedMimeType | null {
   return ALLOWED_MIME_SET.has(mimeType) ? mimeType as StudioAllowedMimeType : null;
 }
 
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function safeRemoteUrl(value: unknown): string | null {
+  const raw = stringValue(value);
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const url = new URL(raw);
+
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeMediaKind(value: unknown, mimeType?: string | null): StudioMediaKind {
   if (value === "video" || value === "image") {
     return value;
@@ -133,6 +153,22 @@ function extensionFromMime(mimeType: string | null): string {
   }
 
   return "mp4";
+}
+
+function mimeTypeFromResponse(response: Response, sourceUrl: string): StudioAllowedMimeType {
+  const headerMime = normalizeMimeType(response.headers.get("content-type")?.split(";")[0]);
+
+  if (headerMime) {
+    return headerMime;
+  }
+
+  const pathname = new URL(sourceUrl).pathname.toLowerCase();
+
+  if (pathname.endsWith(".webm")) {
+    return "video/webm";
+  }
+
+  return "video/mp4";
 }
 
 function rowToSession(row: Record<string, unknown>): StudioUploadSessionRecord {
@@ -435,4 +471,184 @@ export async function completeStudioAssetUpload(input: {
     .eq("id", session.id);
 
   return asset;
+}
+
+export async function downloadRemoteStudioVideoArtifact(input: {
+  renderUrl: string;
+  maxBytes?: number;
+}): Promise<{
+  buffer: Buffer;
+  bytes: number;
+  sha256: string;
+  mimeType: StudioAllowedMimeType;
+}> {
+  const renderUrl = safeRemoteUrl(input.renderUrl);
+
+  if (!renderUrl) {
+    throw new CmoAdapterError("Hermes render URL is not a safe remote URL.", 400, "studio_artifact_invalid_remote_url");
+  }
+
+  const response = await fetch(renderUrl, { cache: "no-store" });
+
+  if (!response.ok || !response.body) {
+    throw new CmoAdapterError(`Studio artifact download failed with HTTP ${response.status}.`, 502, "studio_artifact_download_failed");
+  }
+
+  const mimeType = mimeTypeFromResponse(response, renderUrl);
+
+  if (!mimeType.startsWith("video/")) {
+    throw new CmoAdapterError("Studio artifact download did not return a supported video MIME type.", 400, "studio_artifact_unsupported_mime");
+  }
+
+  const maxBytes = input.maxBytes ?? uploadMaxBytes("video", "studio_output");
+  const hash = createHash("sha256");
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    const chunk = Buffer.from(value);
+
+    bytes += chunk.byteLength;
+
+    if (bytes > maxBytes) {
+      throw new CmoAdapterError("Studio artifact download exceeds the output size limit.", 413, "studio_artifact_too_large");
+    }
+
+    hash.update(chunk);
+    chunks.push(chunk);
+  }
+
+  if (bytes <= 0) {
+    throw new CmoAdapterError("Studio artifact download was empty.", 400, "studio_artifact_empty");
+  }
+
+  return {
+    buffer: Buffer.concat(chunks),
+    bytes,
+    sha256: hash.digest("hex"),
+    mimeType,
+  };
+}
+
+export async function uploadCompletedStudioVideoFromRemote(input: {
+  job: {
+    id: string;
+    tenant_id: string;
+  };
+  renderUrl: string;
+  thumbnailUrl?: string | null;
+  providerJobId?: string | null;
+  durationSeconds?: number | null;
+  aspectRatio?: string | null;
+  resolution?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<StudioAssetRecord> {
+  const renderUrl = safeRemoteUrl(input.renderUrl);
+
+  if (!renderUrl) {
+    throw new CmoAdapterError("Hermes render URL is not a safe remote URL.", 400, "studio_artifact_invalid_remote_url");
+  }
+
+  const artifact = await downloadRemoteStudioVideoArtifact({ renderUrl });
+  const now = new Date().toISOString();
+  const assetId = `studio_asset_${randomUUID()}`;
+  const storageKey = [
+    safeStorageSegment(input.job.tenant_id, "tenant"),
+    safeStorageSegment(input.job.id, "job"),
+    "studio_output",
+    `${safeStorageSegment(input.providerJobId ?? assetId, "render")}-${artifact.sha256.slice(0, 16)}.${extensionFromMime(artifact.mimeType)}`,
+  ].join("/");
+  const supabase = await ensureStudioAssetBucket();
+  const { error: uploadError } = await supabase.storage
+    .from(studioAssetBucket())
+    .upload(storageKey, artifact.buffer, {
+      contentType: artifact.mimeType,
+      upsert: false,
+    });
+
+  if (uploadError) {
+    throw new CmoAdapterError(`Studio artifact upload failed: ${uploadError.message}`, 500, "studio_artifact_upload_failed");
+  }
+
+  const assetRow = {
+    id: assetId,
+    job_id: input.job.id,
+    media_kind: "video",
+    purpose: "studio_output",
+    storage_key: storageKey,
+    render_url: `/api/cmo/studio/assets/${encodeURIComponent(assetId)}/preview`,
+    preview_url: `/api/cmo/studio/assets/${encodeURIComponent(assetId)}/preview`,
+    thumbnail_url: safeRemoteUrl(input.thumbnailUrl) ?? null,
+    mime_type: artifact.mimeType,
+    bytes: artifact.bytes,
+    sha256: artifact.sha256,
+    width: null,
+    height: null,
+    duration_seconds: typeof input.durationSeconds === "number" && Number.isFinite(input.durationSeconds) ? input.durationSeconds : null,
+    metadata_json: {
+      ...(input.metadata ?? {}),
+      provider_original_render_url: renderUrl,
+      provider_original_thumbnail_url: safeRemoteUrl(input.thumbnailUrl),
+      provider_job_id: input.providerJobId ?? null,
+      aspect_ratio: input.aspectRatio ?? null,
+      resolution: input.resolution ?? null,
+      artifact_transport_status: "product_uploaded",
+    },
+    created_at: now,
+  };
+  const { data, error } = await supabase
+    .from("studio_assets")
+    .insert(assetRow)
+    .select("*")
+    .single();
+
+  if (error || !data) {
+    throw new CmoAdapterError("Studio asset metadata create failed.", 500, "studio_asset_metadata_create_failed");
+  }
+
+  return rowToAsset(data);
+}
+
+export async function getStudioAssetPlaybackUrl(input: {
+  context: CmoRequestUserContext;
+  assetId: string;
+}): Promise<{ signedUrl: string; asset: StudioAssetRecord }> {
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase
+    .from("studio_assets")
+    .select("*")
+    .eq("id", input.assetId)
+    .maybeSingle();
+
+  if (error) {
+    throw new CmoAdapterError("Studio asset lookup failed.", 500, "studio_asset_lookup_failed");
+  }
+
+  if (!data) {
+    throw new CmoAdapterError("Studio asset not found.", 404, "studio_asset_not_found");
+  }
+
+  const asset = rowToAsset(data);
+
+  await assertStudioJobExists(input.context, asset.job_id);
+
+  const { data: signed, error: signedError } = await supabase.storage
+    .from(studioAssetBucket())
+    .createSignedUrl(asset.storage_key, 10 * 60);
+
+  if (signedError || !signed?.signedUrl) {
+    throw new CmoAdapterError("Studio asset playback URL create failed.", 500, "studio_asset_playback_url_failed");
+  }
+
+  return {
+    signedUrl: signed.signedUrl,
+    asset,
+  };
 }

@@ -1,6 +1,17 @@
 import "server-only";
 
 import { CmoAdapterError } from "@/lib/cmo/errors";
+import {
+  STUDIO_ASPECT_RATIOS,
+  STUDIO_VIDEO_MODELS,
+  disabledReasonForEnablement,
+  enablementLabel,
+  normalizeStudioAspectRatio,
+  normalizeStudioBitrate,
+  normalizeStudioResolution,
+  normalizeStudioVideoMode,
+  type StudioVideoEnablement,
+} from "@/lib/cmo/studio-model-catalog";
 
 const STATUS_PATH = "/agents/video/status";
 const MODELS_PATH = "/agents/video/models";
@@ -115,6 +126,49 @@ function stringArray(value: unknown): string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function studioEnablement(value: unknown): StudioVideoEnablement {
+  if (value === "safe_now" || value === "guarded" || value === "needs_smoke" || value === "disabled_until_upload") {
+    return value;
+  }
+
+  return "unavailable";
+}
+
+function uniqueValues<T extends string>(values: Array<T | null>): T[] {
+  return Array.from(new Set(values.filter((item): item is T => Boolean(item))));
+}
+
+function fallbackModels(reason: string): Record<string, unknown>[] {
+  return STUDIO_VIDEO_MODELS.map((model) => ({
+    ...model,
+    id: model.providerModelId ?? model.id,
+    uiId: model.providerModelId ?? model.id,
+    provider_model_id: model.providerModelId ?? null,
+    providerModelId: model.providerModelId ?? null,
+    label: model.name,
+    name: model.name,
+    available: false,
+    productFallback: true,
+    reason,
+    enablement: "unavailable",
+    enablementLabel: "Unavailable",
+    disabledReason: reason,
+    max_resolution: model.maxResolution,
+    maxResolution: model.maxResolution,
+    supported_resolutions: model.supportedResolutions,
+    supportedResolutions: model.supportedResolutions,
+    min_duration_seconds: model.minDurationSeconds,
+    minDurationSeconds: model.minDurationSeconds,
+    max_duration_seconds: model.maxDurationSeconds,
+    maxDurationSeconds: model.maxDurationSeconds,
+    supports_audio: model.supportsAudio,
+    supportsAudio: model.supportsAudio,
+    real_video_supported: model.realVideoSupported === true,
+    realVideoSupported: model.realVideoSupported === true,
+    catalogMode: "product_fallback",
+  }));
 }
 
 export function hermesVideoErrorDiagnostics(error: unknown, input: {
@@ -369,6 +423,8 @@ export async function getVideoAgentStatus(): Promise<Record<string, unknown>> {
 export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> {
   const body = await hermesRequest(MODELS_PATH);
   const source = body.models ?? body.data;
+  const catalogMode = body.schema_version === "video.models.response.v2" ? "hermes_v2" : "hermes_v1";
+  const catalogSource = stringValue(body.source) ?? stringValue(body.provider) ?? stringValue(body.backend) ?? "hermes_video_agent";
 
   if (!Array.isArray(source)) {
     throw new CmoAdapterError("Hermes Video Agent models response is invalid.", 502, "video_agent_invalid_response");
@@ -381,7 +437,34 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
       const explicitProviderModelId = stringValue(item.provider_model_id ?? item.providerModelId);
       const providerModelId = explicitProviderModelId ?? (uiId === "seedance_2_0" ? uiId : undefined);
       const duration = isRecord(item.duration) ? item.duration : {};
-      const resolutions = stringArray(item.resolutions ?? item.supported_resolutions ?? item.supportedResolutions);
+      const settingsSchema = isRecord(item.settings_schema) ? item.settings_schema : {};
+      const durationSchema = isRecord(settingsSchema.duration) ? settingsSchema.duration : {};
+      const aspectRatioSchema = isRecord(settingsSchema.aspect_ratio) ? settingsSchema.aspect_ratio : {};
+      const resolutionSchema = isRecord(settingsSchema.resolution) ? settingsSchema.resolution : {};
+      const modeSchema = isRecord(settingsSchema.mode) ? settingsSchema.mode : {};
+      const rawBitrateSchema = settingsSchema.bitrate_mode ?? settingsSchema.bitrate;
+      const bitrateSchema = isRecord(rawBitrateSchema) ? rawBitrateSchema : {};
+      const generateAudioSchema = isRecord(settingsSchema.generate_audio) ? settingsSchema.generate_audio : {};
+      const supportedResolutions = uniqueValues([
+        ...stringArray(resolutionSchema.values).map(normalizeStudioResolution),
+        ...stringArray(item.resolutions ?? item.supported_resolutions ?? item.supportedResolutions).map(normalizeStudioResolution),
+      ]);
+      const supportedAspectRatios = uniqueValues([
+        ...stringArray(aspectRatioSchema.values).map(normalizeStudioAspectRatio),
+        ...STUDIO_ASPECT_RATIOS.map((ratio) => ratio),
+      ]);
+      const supportedModes = uniqueValues(stringArray(modeSchema.values).map(normalizeStudioVideoMode));
+      const supportedBitrates = uniqueValues(stringArray(bitrateSchema.values).map(normalizeStudioBitrate));
+      const defaultResolution = normalizeStudioResolution(resolutionSchema.default ?? item.default_resolution ?? item.defaultResolution)
+        ?? supportedResolutions[0]
+        ?? "720p";
+      const defaultAspectRatio = normalizeStudioAspectRatio(aspectRatioSchema.default) ?? "16:9";
+      const defaultBitrate = normalizeStudioBitrate(bitrateSchema.default) ?? "standard";
+      const defaultMode = normalizeStudioVideoMode(modeSchema.default) ?? supportedModes[0];
+      const enablement = studioEnablement(item.enablement ?? (item.available === false ? "unavailable" : item.real_video_supported === false ? "unavailable" : "safe_now"));
+      const minDuration = numberValue(item.min_duration_seconds ?? item.minDurationSeconds ?? duration.min_seconds ?? duration.minSeconds ?? durationSchema.min) ?? 4;
+      const maxDuration = numberValue(item.max_duration_seconds ?? item.maxDurationSeconds ?? duration.max_seconds ?? duration.maxSeconds ?? durationSchema.max) ?? 15;
+      const defaultDuration = numberValue(item.default_duration_seconds ?? item.defaultDurationSeconds ?? duration.default_seconds ?? duration.defaultSeconds ?? durationSchema.default) ?? minDuration;
 
       if (!uiId) {
         throw new CmoAdapterError("Hermes Video Agent models response is invalid.", 502, "video_agent_invalid_response");
@@ -394,25 +477,85 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
         providerModelId: providerModelId ?? null,
         name: stringValue(item.name ?? item.label) ?? uiId,
         label: stringValue(item.label ?? item.name) ?? uiId,
+        provider: stringValue(item.provider) ?? stringValue(body.provider) ?? "higgsfield",
+        type: stringValue(item.type) ?? "video",
         family: stringValue(item.family) ?? null,
         operations: stringArray(item.operations),
-        resolutions,
-        default_resolution: stringValue(item.default_resolution ?? item.defaultResolution) ?? null,
-        defaultResolution: stringValue(item.default_resolution ?? item.defaultResolution) ?? null,
-        available: item.available !== false,
-        real_video_supported: uiId === "seedance_2_0",
-        max_resolution: stringValue(item.max_resolution ?? item.maxResolution) ?? resolutions.at(-1) ?? null,
-        min_duration_seconds: numberValue(item.min_duration_seconds ?? item.minDurationSeconds ?? duration.min_seconds ?? duration.minSeconds) ?? null,
-        minDurationSeconds: numberValue(item.min_duration_seconds ?? item.minDurationSeconds ?? duration.min_seconds ?? duration.minSeconds) ?? null,
-        max_duration_seconds: numberValue(item.max_duration_seconds ?? item.maxDurationSeconds ?? duration.max_seconds ?? duration.maxSeconds) ?? null,
-        maxDurationSeconds: numberValue(item.max_duration_seconds ?? item.maxDurationSeconds ?? duration.max_seconds ?? duration.maxSeconds) ?? null,
-        default_duration_seconds: numberValue(item.default_duration_seconds ?? item.defaultDurationSeconds ?? duration.default_seconds ?? duration.defaultSeconds) ?? null,
-        defaultDurationSeconds: numberValue(item.default_duration_seconds ?? item.defaultDurationSeconds ?? duration.default_seconds ?? duration.defaultSeconds) ?? null,
-        supports_bitrate: typeof item.supports_bitrate === "boolean" ? item.supports_bitrate : item.supportsBitrate === true,
-        supports_audio: typeof item.supports_audio === "boolean" ? item.supports_audio : item.supportsAudio === true,
+        inputs_required: stringArray(item.inputs_required ?? item.inputsRequired),
+        inputs_optional: stringArray(item.inputs_optional ?? item.inputsOptional),
+        settings_schema: settingsSchema,
+        supported_aspect_ratios: supportedAspectRatios,
+        supportedAspectRatios,
+        supported_resolutions: supportedResolutions,
+        supportedResolutions,
+        supported_modes: supportedModes,
+        supportedModes,
+        supported_bitrates: supportedBitrates,
+        supportedBitrates,
+        default_aspect_ratio: defaultAspectRatio,
+        defaultAspectRatio,
+        default_resolution: defaultResolution,
+        defaultResolution,
+        default_bitrate: defaultBitrate,
+        defaultBitrate,
+        default_mode: defaultMode,
+        defaultMode,
+        available: enablement === "safe_now" || enablement === "guarded",
+        enablement,
+        enablementLabel: enablementLabel(enablement),
+        disabledReason: disabledReasonForEnablement(enablement),
+        real_video_supported: item.real_video_supported === true || item.realVideoSupported === true || providerModelId === "seedance_2_0",
+        realVideoSupported: item.real_video_supported === true || item.realVideoSupported === true || providerModelId === "seedance_2_0",
+        cost_supported: item.cost_supported !== false,
+        costSupported: item.cost_supported !== false,
+        workflow_supported: item.workflow_supported === true,
+        workflowSupported: item.workflow_supported === true,
+        max_resolution: supportedResolutions.at(-1) ?? defaultResolution,
+        maxResolution: supportedResolutions.at(-1) ?? defaultResolution,
+        min_duration_seconds: minDuration,
+        minDurationSeconds: minDuration,
+        max_duration_seconds: maxDuration,
+        maxDurationSeconds: maxDuration,
+        default_duration_seconds: defaultDuration,
+        defaultDurationSeconds: defaultDuration,
+        supports_bitrate: supportedBitrates.length > 0 || typeof item.supports_bitrate === "boolean" ? item.supports_bitrate !== false : item.supportsBitrate === true,
+        supports_audio: typeof generateAudioSchema.default === "boolean" ? generateAudioSchema.default : typeof item.supports_audio === "boolean" ? item.supports_audio : item.supportsAudio === true,
+        supportsAudio: typeof generateAudioSchema.default === "boolean" ? generateAudioSchema.default : typeof item.supports_audio === "boolean" ? item.supports_audio : item.supportsAudio === true,
+        generateAudioDefault: typeof generateAudioSchema.default === "boolean" ? generateAudioSchema.default : undefined,
+        constraints: stringArray(item.constraints),
+        warnings: stringArray(item.warnings),
         badges: stringArray(item.badges),
+        catalogSource,
+        catalogMode,
       };
     });
+}
+
+export async function getVideoAgentModelsCatalog(): Promise<Record<string, unknown>> {
+  try {
+    const models = await getVideoAgentModels();
+
+    return {
+      connected: true,
+      schema_version: "product.video.models.normalized.v1",
+      source: models[0]?.catalogSource ?? "hermes_video_agent",
+      catalogMode: models[0]?.catalogMode ?? "hermes_v1",
+      models,
+    };
+  } catch (error) {
+    if (error instanceof CmoAdapterError) {
+      return {
+        connected: false,
+        schema_version: "product.video.models.normalized.v1",
+        source: "product_mock_catalog",
+        catalogMode: "product_fallback",
+        reason: error.code,
+        models: fallbackModels(error.code),
+      };
+    }
+
+    throw error;
+  }
 }
 
 export async function estimateVideoCost(request: HermesVideoCostRequest): Promise<Record<string, unknown>> {
