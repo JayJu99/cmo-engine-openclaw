@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -69,14 +70,30 @@ interface StudioJob {
     artifact_transport_status?: string;
     product_asset_id?: string;
     product_asset_url?: string;
+    thumbnail_asset_url?: string;
+    thumbnail_upload_status?: string;
     provider_original_render_url?: string;
     provider_original_thumbnail_url?: string;
   };
+  input_asset_ids?: string[];
   output_asset_ids?: string[];
   provider_status?: string | null;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+}
+
+interface StudioInputAsset {
+  id: string;
+  media_kind?: "image" | "video";
+  mime_type?: string;
+  bytes?: number;
+  preview_url?: string | null;
+  render_url?: string | null;
+  thumbnail_url?: string | null;
+  metadata_json?: {
+    original_filename?: string;
+  };
 }
 
 interface CostEstimate {
@@ -135,6 +152,12 @@ function shortPrompt(prompt: string): string {
 
 function jobModelName(job: StudioJob): string {
   return job.model_json.name ?? getStudioVideoModel(job.model_json.product_model_id).name;
+}
+
+function jobThumbnailUrl(job: StudioJob): string | null {
+  return job.diagnostics_json?.thumbnail_asset_url
+    ?? job.diagnostics_json?.remote_result?.thumbnail_url
+    ?? null;
 }
 
 function statusBadgeVariant(status: StudioJobStatus): "green" | "orange" | "slate" | "blue" {
@@ -303,7 +326,10 @@ function HistoryPanel({
           <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-500">
             No Studio jobs yet.
           </div>
-        ) : jobs.map((job) => (
+        ) : jobs.map((job) => {
+          const thumbnailUrl = jobThumbnailUrl(job);
+
+          return (
           <button
             key={job.id}
             type="button"
@@ -313,8 +339,12 @@ function HistoryPanel({
             )}
             onClick={() => onSelect(job)}
           >
-            <span className="grid aspect-video place-items-center rounded-md bg-[linear-gradient(135deg,#eef2ff,#f5f3ff_45%,#e0f2fe)] text-violet-700">
-              <icons.Play className="size-5" />
+            <span className="grid aspect-video place-items-center overflow-hidden rounded-md bg-[linear-gradient(135deg,#eef2ff,#f5f3ff_45%,#e0f2fe)] text-violet-700">
+              {thumbnailUrl ? (
+                <Image src={thumbnailUrl} alt="" width={96} height={54} unoptimized className="h-full w-full object-cover" />
+              ) : (
+                <icons.Play className="size-5" />
+              )}
             </span>
             <span className="min-w-0">
               <span className="block truncate text-sm font-bold text-slate-950">{shortPrompt(job.prompt)}</span>
@@ -328,7 +358,8 @@ function HistoryPanel({
             </span>
             <icons.ChevronRight className="size-4 text-slate-400" />
           </button>
-        ))}
+          );
+        })}
       </div>
     </Card>
   );
@@ -355,8 +386,12 @@ function CanvasPreview({
       : null;
   const remoteRenderUrl = typeof remoteResult?.render_url === "string" ? remoteResult.render_url : null;
   const renderUrl = productAssetUrl ?? remoteRenderUrl;
-  const thumbnailUrl = typeof remoteResult?.thumbnail_url === "string" ? remoteResult.thumbnail_url : undefined;
+  const productThumbnailUrl = typeof activeJob?.diagnostics_json?.thumbnail_asset_url === "string"
+    ? activeJob.diagnostics_json.thumbnail_asset_url
+    : null;
+  const thumbnailUrl = productThumbnailUrl ?? (typeof remoteResult?.thumbnail_url === "string" ? remoteResult.thumbnail_url : undefined);
   const uploadFailed = activeJob?.diagnostics_json?.artifact_transport_status === "upload_failed";
+  const thumbnailUploaded = activeJob?.diagnostics_json?.thumbnail_upload_status === "product_uploaded";
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -386,6 +421,7 @@ function CanvasPreview({
             <Badge variant="blue">Video</Badge>
             <Badge variant={statusBadgeVariant(status)}>{status === "draft" ? "empty" : status}</Badge>
             {productAssetUrl ? <Badge variant="green">Product-owned asset</Badge> : renderUrl ? <Badge variant="green">Remote Higgsfield result</Badge> : null}
+            {thumbnailUploaded ? <Badge variant="green">Product-owned thumbnail</Badge> : null}
             {uploadFailed ? <Badge variant="orange">Upload failed fallback</Badge> : null}
           </div>
           {renderUrl ? (
@@ -449,6 +485,10 @@ function StudioConsole({
   resolution,
   bitrate,
   costEstimate,
+  activeJob,
+  selectedInputAssets,
+  isUploadingInput,
+  uploadStatus,
   isGenerating,
   error,
   onPromptChange,
@@ -457,6 +497,8 @@ function StudioConsole({
   onDurationChange,
   onResolutionChange,
   onBitrateChange,
+  onUploadInput,
+  onRemoveInputAsset,
   onGenerate,
 }: {
   imageModeEnabled: boolean;
@@ -472,6 +514,10 @@ function StudioConsole({
   resolution: StudioResolution;
   bitrate: StudioBitrate;
   costEstimate: CostEstimate | null;
+  activeJob: StudioJob | null;
+  selectedInputAssets: StudioInputAsset[];
+  isUploadingInput: boolean;
+  uploadStatus: string | null;
   isGenerating: boolean;
   error: string | null;
   onPromptChange: (value: string) => void;
@@ -480,8 +526,11 @@ function StudioConsole({
   onDurationChange: (value: number) => void;
   onResolutionChange: (value: StudioResolution) => void;
   onBitrateChange: (value: StudioBitrate) => void;
+  onUploadInput: (file: File) => void;
+  onRemoveInputAsset: (assetId: string) => void;
   onGenerate: () => void;
 }) {
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const generateLabel = costEstimate?.estimateAvailable && costEstimate.label
     ? `Generate · ${costEstimate.label}`
     : "Generate";
@@ -513,10 +562,30 @@ function StudioConsole({
       <div className="space-y-4 p-4">
         <ModelHeroCard model={model} agentConnected={agentConnected} realAvailable={modelRealAvailable} catalogSource={catalogSource} />
 
-        <button
-          type="button"
-          className="grid min-h-32 w-full place-items-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-center transition hover:border-violet-300 hover:bg-violet-50/30"
-        >
+        <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-5">
+          <input
+            ref={uploadInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,video/mp4,video/webm"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+
+              event.currentTarget.value = "";
+              if (file) {
+                onUploadInput(file);
+              }
+            }}
+          />
+          <button
+            type="button"
+            disabled={!activeJob || isUploadingInput}
+            className={cn(
+              "grid w-full place-items-center text-center transition",
+              !activeJob || isUploadingInput ? "cursor-not-allowed opacity-60" : "hover:text-violet-700",
+            )}
+            onClick={() => uploadInputRef.current?.click()}
+          >
           <span className="flex -space-x-2">
             <span className="grid size-11 place-items-center rounded-full border border-white bg-slate-200 text-slate-600 shadow-sm">
               <icons.Sparkles className="size-4" />
@@ -528,9 +597,42 @@ function StudioConsole({
               <icons.Upload className="size-4" />
             </span>
           </span>
-          <span className="mt-4 text-lg font-bold text-slate-500">Upload media</span>
-          <span className="mt-1 text-sm font-bold text-slate-500">Job-scoped Product upload session</span>
-        </button>
+            <span className="mt-4 text-lg font-bold text-slate-500">{isUploadingInput ? "Uploading media..." : "Upload media"}</span>
+            <span className="mt-1 text-sm font-bold text-slate-500">
+              {activeJob ? "Product input asset for future media workflows" : "Select or create a job before uploading references"}
+            </span>
+          </button>
+          {uploadStatus ? <div className="mt-3 text-center text-xs font-bold text-slate-500">{uploadStatus}</div> : null}
+          {selectedInputAssets.length ? (
+            <div className="mt-4 grid gap-2">
+              {selectedInputAssets.map((asset) => {
+                const previewUrl = asset.preview_url ?? asset.render_url ?? `/api/cmo/studio/assets/${encodeURIComponent(asset.id)}/preview`;
+                const name = asset.metadata_json?.original_filename ?? asset.mime_type ?? asset.id;
+
+                return (
+                  <div key={asset.id} className="grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-slate-200 bg-white p-2">
+                    <span className="grid aspect-square place-items-center overflow-hidden rounded bg-slate-100 text-slate-500">
+                      {asset.media_kind === "image" ? (
+                        <Image src={previewUrl} alt="" width={52} height={52} unoptimized className="h-full w-full object-cover" />
+                      ) : (
+                        <icons.Play className="size-4" />
+                      )}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-bold text-slate-800">{name}</span>
+                      <span className="block truncate text-xs font-semibold text-slate-500">
+                        {asset.media_kind ?? "asset"} {typeof asset.bytes === "number" ? `· ${Math.round(asset.bytes / 1024)} KB` : ""}
+                      </span>
+                    </span>
+                    <Button type="button" variant="ghost" size="sm" onClick={() => onRemoveInputAsset(asset.id)}>
+                      Remove
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
 
         <Field label="Prompt">
           <textarea
@@ -680,6 +782,9 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   const [hermesModelIds, setHermesModelIds] = useState<Set<string>>(new Set());
   const [videoModels, setVideoModels] = useState<StudioVideoModel[]>(STUDIO_VIDEO_MODELS);
   const [catalogSource, setCatalogSource] = useState("Product fallback catalog");
+  const [selectedInputAssets, setSelectedInputAssets] = useState<StudioInputAsset[]>([]);
+  const [isUploadingInput, setIsUploadingInput] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const userSelectedModelRef = useRef(false);
@@ -916,6 +1021,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             bitrate,
             variants: 1,
           },
+          inputAssetIds: selectedInputAssets.map((asset) => asset.id),
           ...(costEstimate?.mode === "hermes" ? { costEstimate } : {}),
         }),
       });
@@ -924,6 +1030,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
 
       setActiveJob(job);
       setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+      setSelectedInputAssets([]);
     } catch (generateError) {
       setError(generateError instanceof Error ? generateError.message : "Unable to create Studio job.");
     } finally {
@@ -940,6 +1047,73 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
     setAspectRatio((current) => nextModel.supportedAspectRatios?.includes(current) ? current : nextModel.defaultAspectRatio ?? nextModel.supportedAspectRatios?.[0] ?? "16:9");
     setResolution((current) => isStudioResolutionSupported(nextModel, current) ? current : nextModel.maxResolution);
     setBitrate((current) => nextModel.supportedBitrates?.includes(current) ? current : nextModel.defaultBitrate ?? nextModel.supportedBitrates?.[0] ?? "standard");
+  }
+
+  async function uploadInputAsset(file: File) {
+    if (!activeJob) {
+      setUploadStatus("Select or create a Studio job before uploading reference media.");
+      return;
+    }
+
+    setError(null);
+    setIsUploadingInput(true);
+    setUploadStatus("Preparing Product upload session...");
+
+    try {
+      const mediaKind = file.type.startsWith("image/") ? "image" : "video";
+      const initResponse = await fetch("/api/cmo/studio/assets/ingest/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jobId: activeJob.id,
+          mediaKind,
+          purpose: "studio_input",
+          expectedMimeType: file.type,
+        }),
+      });
+      const initBody = await parseJsonResponse(initResponse);
+      const uploadTarget = typeof initBody.upload_target === "string" ? initBody.upload_target : null;
+      const sessionId = typeof initBody.session_id === "string" ? initBody.session_id : null;
+
+      if (!uploadTarget || !sessionId) {
+        throw new Error("Studio upload session response was incomplete.");
+      }
+
+      setUploadStatus("Uploading to Product storage...");
+      const uploadResponse = await fetch(uploadTarget, {
+        method: "PUT",
+        headers: { "content-type": file.type },
+        body: file,
+      });
+
+      await parseJsonResponse(uploadResponse);
+      setUploadStatus("Finalizing input asset...");
+
+      const completeResponse = await fetch("/api/cmo/studio/assets/ingest/complete", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionId,
+          metadata: {
+            original_filename: file.name,
+            source: "studio_ui_input",
+          },
+        }),
+      });
+      const completeBody = await parseJsonResponse(completeResponse);
+      const asset = completeBody.asset as StudioInputAsset | undefined;
+
+      if (!asset?.id) {
+        throw new Error("Studio input asset response was incomplete.");
+      }
+
+      setSelectedInputAssets((current) => [...current.filter((item) => item.id !== asset.id), asset]);
+      setUploadStatus("Input media uploaded to Product storage.");
+    } catch (uploadError) {
+      setUploadStatus(uploadError instanceof Error ? uploadError.message : "Input media upload failed.");
+    } finally {
+      setIsUploadingInput(false);
+    }
   }
 
   function handleDurationChange(value: number) {
@@ -981,6 +1155,10 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             resolution={resolution}
             bitrate={bitrate}
             costEstimate={costEstimate}
+            activeJob={activeJob}
+            selectedInputAssets={selectedInputAssets}
+            isUploadingInput={isUploadingInput}
+            uploadStatus={uploadStatus}
             isGenerating={isGenerating}
             error={error}
             onPromptChange={handlePromptChange}
@@ -989,6 +1167,8 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             onDurationChange={handleDurationChange}
             onResolutionChange={handleResolutionChange}
             onBitrateChange={setBitrate}
+            onUploadInput={uploadInputAsset}
+            onRemoveInputAsset={(assetId) => setSelectedInputAssets((current) => current.filter((asset) => asset.id !== assetId))}
             onGenerate={generateJob}
           />
           <HistoryPanel jobs={jobs} activeJobId={activeJob?.id ?? null} onSelect={setActiveJob} />

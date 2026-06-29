@@ -140,6 +140,36 @@ function uniqueValues<T extends string>(values: Array<T | null>): T[] {
   return Array.from(new Set(values.filter((item): item is T => Boolean(item))));
 }
 
+function realVideoModelAllowlist(): Set<string> {
+  const raw = process.env.CMO_STUDIO_REAL_VIDEO_MODEL_ALLOWLIST;
+  const values = raw?.split(",").map((item) => item.trim()).filter(Boolean);
+
+  return new Set(values?.length ? values : ["seedance_2_0"]);
+}
+
+function productEnablementPolicy(input: {
+  enablement: StudioVideoEnablement;
+  providerModelId?: string;
+  inputsRequired: string[];
+  costSupported: boolean;
+}): StudioVideoEnablement {
+  const requiresUnsupportedMedia = input.inputsRequired.some((item) => item !== "prompt" && item !== "text");
+
+  if (requiresUnsupportedMedia) {
+    return "disabled_until_upload";
+  }
+
+  if (!input.costSupported) {
+    return "unavailable";
+  }
+
+  if ((input.enablement === "safe_now" || input.enablement === "guarded") && (!input.providerModelId || !realVideoModelAllowlist().has(input.providerModelId))) {
+    return "needs_smoke";
+  }
+
+  return input.enablement;
+}
+
 function fallbackModels(reason: string): Record<string, unknown>[] {
   return STUDIO_VIDEO_MODELS.map((model) => ({
     ...model,
@@ -462,6 +492,14 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
       const defaultBitrate = normalizeStudioBitrate(bitrateSchema.default) ?? "standard";
       const defaultMode = normalizeStudioVideoMode(modeSchema.default) ?? supportedModes[0];
       const enablement = studioEnablement(item.enablement ?? (item.available === false ? "unavailable" : item.real_video_supported === false ? "unavailable" : "safe_now"));
+      const inputsRequired = stringArray(item.inputs_required ?? item.inputsRequired);
+      const costSupported = item.cost_supported !== false;
+      const productEnablement = productEnablementPolicy({
+        enablement,
+        providerModelId,
+        inputsRequired,
+        costSupported,
+      });
       const minDuration = numberValue(item.min_duration_seconds ?? item.minDurationSeconds ?? duration.min_seconds ?? duration.minSeconds ?? durationSchema.min) ?? 4;
       const maxDuration = numberValue(item.max_duration_seconds ?? item.maxDurationSeconds ?? duration.max_seconds ?? duration.maxSeconds ?? durationSchema.max) ?? 15;
       const defaultDuration = numberValue(item.default_duration_seconds ?? item.defaultDurationSeconds ?? duration.default_seconds ?? duration.defaultSeconds ?? durationSchema.default) ?? minDuration;
@@ -481,7 +519,7 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
         type: stringValue(item.type) ?? "video",
         family: stringValue(item.family) ?? null,
         operations: stringArray(item.operations),
-        inputs_required: stringArray(item.inputs_required ?? item.inputsRequired),
+        inputs_required: inputsRequired,
         inputs_optional: stringArray(item.inputs_optional ?? item.inputsOptional),
         settings_schema: settingsSchema,
         supported_aspect_ratios: supportedAspectRatios,
@@ -500,14 +538,14 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
         defaultBitrate,
         default_mode: defaultMode,
         defaultMode,
-        available: enablement === "safe_now" || enablement === "guarded",
-        enablement,
-        enablementLabel: enablementLabel(enablement),
-        disabledReason: disabledReasonForEnablement(enablement),
+        available: productEnablement === "safe_now" || productEnablement === "guarded",
+        enablement: productEnablement,
+        enablementLabel: enablementLabel(productEnablement),
+        disabledReason: disabledReasonForEnablement(productEnablement),
         real_video_supported: item.real_video_supported === true || item.realVideoSupported === true || providerModelId === "seedance_2_0",
         realVideoSupported: item.real_video_supported === true || item.realVideoSupported === true || providerModelId === "seedance_2_0",
-        cost_supported: item.cost_supported !== false,
-        costSupported: item.cost_supported !== false,
+        cost_supported: costSupported,
+        costSupported,
         workflow_supported: item.workflow_supported === true,
         workflowSupported: item.workflow_supported === true,
         max_resolution: supportedResolutions.at(-1) ?? defaultResolution,

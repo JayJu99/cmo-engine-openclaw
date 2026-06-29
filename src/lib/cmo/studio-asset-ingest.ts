@@ -155,20 +155,28 @@ function extensionFromMime(mimeType: string | null): string {
   return "mp4";
 }
 
-function mimeTypeFromResponse(response: Response, sourceUrl: string): StudioAllowedMimeType {
+function mimeTypeFromResponse(response: Response, sourceUrl: string, expectedKind: StudioMediaKind): StudioAllowedMimeType {
   const headerMime = normalizeMimeType(response.headers.get("content-type")?.split(";")[0]);
 
-  if (headerMime) {
+  if (headerMime && (expectedKind === "image" ? headerMime.startsWith("image/") : headerMime.startsWith("video/"))) {
     return headerMime;
   }
 
   const pathname = new URL(sourceUrl).pathname.toLowerCase();
 
-  if (pathname.endsWith(".webm")) {
-    return "video/webm";
+  if (expectedKind === "image") {
+    if (pathname.endsWith(".png")) {
+      return "image/png";
+    }
+
+    if (pathname.endsWith(".jpg") || pathname.endsWith(".jpeg")) {
+      return "image/jpeg";
+    }
+
+    return "image/webp";
   }
 
-  return "video/mp4";
+  return pathname.endsWith(".webm") ? "video/webm" : "video/mp4";
 }
 
 function rowToSession(row: Record<string, unknown>): StudioUploadSessionRecord {
@@ -494,7 +502,7 @@ export async function downloadRemoteStudioVideoArtifact(input: {
     throw new CmoAdapterError(`Studio artifact download failed with HTTP ${response.status}.`, 502, "studio_artifact_download_failed");
   }
 
-  const mimeType = mimeTypeFromResponse(response, renderUrl);
+  const mimeType = mimeTypeFromResponse(response, renderUrl, "video");
 
   if (!mimeType.startsWith("video/")) {
     throw new CmoAdapterError("Studio artifact download did not return a supported video MIME type.", 400, "studio_artifact_unsupported_mime");
@@ -534,6 +542,85 @@ export async function downloadRemoteStudioVideoArtifact(input: {
     bytes,
     sha256: hash.digest("hex"),
     mimeType,
+  };
+}
+
+export async function downloadRemoteStudioThumbnailArtifact(input: {
+  thumbnailUrl: string;
+  maxBytes?: number;
+}): Promise<{
+  buffer: Buffer;
+  bytes: number;
+  sha256: string;
+  mimeType: StudioAllowedMimeType;
+}> {
+  const thumbnailUrl = safeRemoteUrl(input.thumbnailUrl);
+
+  if (!thumbnailUrl) {
+    throw new CmoAdapterError("Hermes thumbnail URL is not a safe remote URL.", 400, "studio_thumbnail_invalid_remote_url");
+  }
+
+  const response = await fetch(thumbnailUrl, { cache: "no-store" });
+
+  if (!response.ok || !response.body) {
+    throw new CmoAdapterError(`Studio thumbnail download failed with HTTP ${response.status}.`, 502, "studio_thumbnail_download_failed");
+  }
+
+  const mimeType = mimeTypeFromResponse(response, thumbnailUrl, "image");
+
+  if (!mimeType.startsWith("image/")) {
+    throw new CmoAdapterError("Studio thumbnail download did not return a supported image MIME type.", 400, "studio_thumbnail_unsupported_mime");
+  }
+
+  const maxBytes = input.maxBytes ?? uploadMaxBytes("image", "studio_output");
+  const hash = createHash("sha256");
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    const chunk = Buffer.from(value);
+
+    bytes += chunk.byteLength;
+
+    if (bytes > maxBytes) {
+      throw new CmoAdapterError("Studio thumbnail download exceeds the output size limit.", 413, "studio_thumbnail_too_large");
+    }
+
+    hash.update(chunk);
+    chunks.push(chunk);
+  }
+
+  if (bytes <= 0) {
+    throw new CmoAdapterError("Studio thumbnail download was empty.", 400, "studio_thumbnail_empty");
+  }
+
+  return {
+    buffer: Buffer.concat(chunks),
+    bytes,
+    sha256: hash.digest("hex"),
+    mimeType,
+  };
+}
+
+function safeErrorMetadata(error: unknown): Record<string, unknown> {
+  if (error instanceof CmoAdapterError) {
+    return {
+      code: error.code,
+      message: error.message,
+      http_status: error.status,
+    };
+  }
+
+  return {
+    code: "studio_thumbnail_upload_failed",
+    message: error instanceof Error ? error.message : "Studio thumbnail upload failed.",
   };
 }
 
@@ -577,6 +664,53 @@ export async function uploadCompletedStudioVideoFromRemote(input: {
     throw new CmoAdapterError(`Studio artifact upload failed: ${uploadError.message}`, 500, "studio_artifact_upload_failed");
   }
 
+  const providerThumbnailUrl = safeRemoteUrl(input.thumbnailUrl);
+  let thumbnailMetadata: Record<string, unknown> = {
+    provider_original_thumbnail_url: providerThumbnailUrl,
+    thumbnail_upload_status: providerThumbnailUrl ? "not_uploaded" : "not_available",
+  };
+  let thumbnailUrl = providerThumbnailUrl;
+
+  if (providerThumbnailUrl) {
+    try {
+      const thumbnail = await downloadRemoteStudioThumbnailArtifact({ thumbnailUrl: providerThumbnailUrl });
+      const thumbnailStorageKey = [
+        safeStorageSegment(input.job.tenant_id, "tenant"),
+        safeStorageSegment(input.job.id, "job"),
+        "studio_output",
+        `${safeStorageSegment(input.providerJobId ?? assetId, "thumbnail")}-thumbnail-${thumbnail.sha256.slice(0, 16)}.${extensionFromMime(thumbnail.mimeType)}`,
+      ].join("/");
+      const { error: thumbnailUploadError } = await supabase.storage
+        .from(studioAssetBucket())
+        .upload(thumbnailStorageKey, thumbnail.buffer, {
+          contentType: thumbnail.mimeType,
+          upsert: false,
+        });
+
+      if (thumbnailUploadError) {
+        throw new CmoAdapterError(`Studio thumbnail upload failed: ${thumbnailUploadError.message}`, 500, "studio_thumbnail_upload_failed");
+      }
+
+      thumbnailUrl = `/api/cmo/studio/assets/${encodeURIComponent(assetId)}/preview?kind=thumbnail`;
+      thumbnailMetadata = {
+        provider_original_thumbnail_url: providerThumbnailUrl,
+        thumbnail_upload_status: "product_uploaded",
+        thumbnail_storage_key: thumbnailStorageKey,
+        thumbnail_mime_type: thumbnail.mimeType,
+        thumbnail_bytes: thumbnail.bytes,
+        thumbnail_sha256: thumbnail.sha256,
+        thumbnail_asset_url: thumbnailUrl,
+      };
+    } catch (error) {
+      thumbnailMetadata = {
+        provider_original_thumbnail_url: providerThumbnailUrl,
+        thumbnail_upload_status: "upload_failed",
+        thumbnail_upload_error: safeErrorMetadata(error),
+      };
+      thumbnailUrl = providerThumbnailUrl;
+    }
+  }
+
   const assetRow = {
     id: assetId,
     job_id: input.job.id,
@@ -585,7 +719,7 @@ export async function uploadCompletedStudioVideoFromRemote(input: {
     storage_key: storageKey,
     render_url: `/api/cmo/studio/assets/${encodeURIComponent(assetId)}/preview`,
     preview_url: `/api/cmo/studio/assets/${encodeURIComponent(assetId)}/preview`,
-    thumbnail_url: safeRemoteUrl(input.thumbnailUrl) ?? null,
+    thumbnail_url: thumbnailUrl,
     mime_type: artifact.mimeType,
     bytes: artifact.bytes,
     sha256: artifact.sha256,
@@ -595,11 +729,11 @@ export async function uploadCompletedStudioVideoFromRemote(input: {
     metadata_json: {
       ...(input.metadata ?? {}),
       provider_original_render_url: renderUrl,
-      provider_original_thumbnail_url: safeRemoteUrl(input.thumbnailUrl),
       provider_job_id: input.providerJobId ?? null,
       aspect_ratio: input.aspectRatio ?? null,
       resolution: input.resolution ?? null,
       artifact_transport_status: "product_uploaded",
+      ...thumbnailMetadata,
     },
     created_at: now,
   };
@@ -619,6 +753,7 @@ export async function uploadCompletedStudioVideoFromRemote(input: {
 export async function getStudioAssetPlaybackUrl(input: {
   context: CmoRequestUserContext;
   assetId: string;
+  kind?: "asset" | "thumbnail";
 }): Promise<{ signedUrl: string; asset: StudioAssetRecord }> {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
@@ -639,9 +774,13 @@ export async function getStudioAssetPlaybackUrl(input: {
 
   await assertStudioJobExists(input.context, asset.job_id);
 
+  const thumbnailStorageKey = typeof asset.metadata_json.thumbnail_storage_key === "string"
+    ? asset.metadata_json.thumbnail_storage_key
+    : null;
+  const storageKey = input.kind === "thumbnail" && thumbnailStorageKey ? thumbnailStorageKey : asset.storage_key;
   const { data: signed, error: signedError } = await supabase.storage
     .from(studioAssetBucket())
-    .createSignedUrl(asset.storage_key, 10 * 60);
+    .createSignedUrl(storageKey, 10 * 60);
 
   if (signedError || !signed?.signedUrl) {
     throw new CmoAdapterError("Studio asset playback URL create failed.", 500, "studio_asset_playback_url_failed");

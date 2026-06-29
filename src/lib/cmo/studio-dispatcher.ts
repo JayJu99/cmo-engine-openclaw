@@ -65,6 +65,24 @@ function safeUploadError(error: unknown): Record<string, unknown> {
   };
 }
 
+function assetMetadataValue(asset: { metadata_json: Record<string, unknown> } | null, key: string): unknown {
+  return asset?.metadata_json?.[key];
+}
+
+function hermesResponseSummary(input: {
+  status?: string;
+  backend?: string;
+  model?: string;
+  providerJobId?: string | null;
+}): Record<string, unknown> {
+  return {
+    ...(input.status ? { status: input.status } : {}),
+    ...(input.backend ? { backend: input.backend } : {}),
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.providerJobId ? { provider_job_id: input.providerJobId } : {}),
+  };
+}
+
 function realVideoProviderModelId(job: StudioJobRecord): string {
   const providerModelId = stringValue(job.model_json.provider_model_id ?? job.model_json.providerModelId);
 
@@ -273,7 +291,8 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
 
     await assertFreshCostGuard(runningJob, providerModelId, model);
 
-    const executeResult = await executeVideoJob(buildHermesVideoExecuteRequest(runningJob));
+    const executeRequest = buildHermesVideoExecuteRequest(runningJob);
+    const executeResult = await executeVideoJob(executeRequest);
 
     if (executeResult.status === "queued" || executeResult.status === "running") {
       return {
@@ -297,9 +316,15 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
           runner: "hermes_video_agent",
           hermes_dispatched: true,
           target_path: "/agents/video/execute",
+          ...(executeRequest.settings.mode ? { derived_mode: executeRequest.settings.mode } : {}),
           artifact_transport_status: "not_uploaded",
           ...(executeResult.diagnostics ?? {}),
-          hermes_response: executeResult.raw ?? {},
+          hermes_response_summary: hermesResponseSummary({
+            status: executeResult.provider_status,
+            backend: executeResult.backend,
+            model: executeResult.model,
+            providerJobId: executeResult.provider_job_id,
+          }),
         },
       });
 
@@ -353,6 +378,14 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
         hermes_dispatched: true,
         ...(executeResult.diagnostics ?? {}),
         artifact_transport_status: uploadedAsset ? "product_uploaded" : uploadError ? "upload_failed" : stringValue(executeResult.diagnostics?.artifact_transport_status) ?? "not_uploaded",
+        ...(executeRequest.settings.mode ? { derived_mode: executeRequest.settings.mode } : {}),
+        ...(uploadedAsset && typeof assetMetadataValue(uploadedAsset, "thumbnail_upload_status") === "string" ? { thumbnail_upload_status: assetMetadataValue(uploadedAsset, "thumbnail_upload_status") } : {}),
+        ...(uploadedAsset && typeof assetMetadataValue(uploadedAsset, "thumbnail_asset_url") === "string" ? { thumbnail_asset_url: assetMetadataValue(uploadedAsset, "thumbnail_asset_url") } : {}),
+        ...(uploadedAsset && typeof assetMetadataValue(uploadedAsset, "thumbnail_storage_key") === "string" ? { thumbnail_storage_key: assetMetadataValue(uploadedAsset, "thumbnail_storage_key") } : {}),
+        ...(uploadedAsset && typeof assetMetadataValue(uploadedAsset, "thumbnail_mime_type") === "string" ? { thumbnail_mime_type: assetMetadataValue(uploadedAsset, "thumbnail_mime_type") } : {}),
+        ...(uploadedAsset && typeof assetMetadataValue(uploadedAsset, "thumbnail_bytes") === "number" ? { thumbnail_bytes: assetMetadataValue(uploadedAsset, "thumbnail_bytes") } : {}),
+        ...(uploadedAsset && typeof assetMetadataValue(uploadedAsset, "thumbnail_sha256") === "string" ? { thumbnail_sha256: assetMetadataValue(uploadedAsset, "thumbnail_sha256") } : {}),
+        ...(uploadedAsset && typeof assetMetadataValue(uploadedAsset, "thumbnail_upload_error") === "object" ? { thumbnail_upload_error: assetMetadataValue(uploadedAsset, "thumbnail_upload_error") } : {}),
         ...(uploadedAsset ? {
           product_asset_id: uploadedAsset.id,
           product_asset_url: uploadedAsset.render_url ?? `/api/cmo/studio/assets/${encodeURIComponent(uploadedAsset.id)}/preview`,
@@ -367,12 +400,19 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
         ...(executeResult.thumbnail_url ? { provider_original_thumbnail_url: executeResult.thumbnail_url } : {}),
         remote_result: {
           render_url: executeResult.render_url,
-          thumbnail_url: executeResult.thumbnail_url,
+          thumbnail_url: typeof assetMetadataValue(uploadedAsset, "thumbnail_asset_url") === "string"
+            ? assetMetadataValue(uploadedAsset, "thumbnail_asset_url")
+            : executeResult.thumbnail_url,
           duration_seconds: executeResult.duration_seconds ?? runningJob.settings_json.durationSeconds,
           aspect_ratio: executeResult.aspect_ratio ?? runningJob.settings_json.aspectRatio,
           resolution: executeResult.resolution ?? runningJob.settings_json.resolution,
         },
-        hermes_response: executeResult.raw ?? {},
+        hermes_response_summary: hermesResponseSummary({
+          status: executeResult.provider_status,
+          backend: executeResult.backend,
+          model: executeResult.model,
+          providerJobId: executeResult.provider_job_id,
+        }),
       },
     });
 

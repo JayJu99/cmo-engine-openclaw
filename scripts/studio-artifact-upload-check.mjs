@@ -15,11 +15,16 @@ assert.match(assetSource, /response\.body\.getReader\(\)/, "Artifact download mu
 assert.match(assetSource, /createHash\("sha256"\)/, "Artifact download must compute sha256.");
 assert.match(assetSource, /\.from\("studio_assets"\)[\s\S]*\.insert\(assetRow\)/, "Artifact upload must create studio_assets rows.");
 assert.match(assetSource, /\.from\(studioAssetBucket\(\)\)[\s\S]*\.upload\(storageKey/, "Artifact upload must write to Supabase Storage.");
+assert.match(assetSource, /downloadRemoteStudioThumbnailArtifact/, "Artifact upload must also support Product-owned thumbnail download.");
+assert.match(assetSource, /thumbnail_storage_key/, "Artifact upload must store Product-owned thumbnail metadata.");
+assert.match(assetSource, /thumbnail_upload_status: "upload_failed"/, "Thumbnail upload failures must not fail completed video upload.");
 assert.match(dispatcherSource, /uploadCompletedStudioVideoFromRemote/, "Dispatcher must upload completed Hermes renders.");
 assert.match(dispatcherSource, /outputAssetIds: uploadedAsset/, "Dispatcher must link uploaded asset IDs to completed jobs.");
 assert.match(dispatcherSource, /upload_failed/, "Dispatcher must preserve remote fallback when upload fails.");
 assert.match(uiSource, /productAssetUrl \?\? remoteRenderUrl/, "UI must prefer Product-owned asset playback over remote URL.");
+assert.match(uiSource, /thumbnail_asset_url/, "UI must prefer Product-owned thumbnails when available.");
 assert.match(previewRouteSource, /getStudioAssetPlaybackUrl/, "Preview route must resolve Product-owned asset playback server-side.");
+assert.match(previewRouteSource, /kind.*thumbnail/, "Preview route must support Product-owned thumbnail playback.");
 
 for (const source of [assetSource, dispatcherSource, uiSource, previewRouteSource]) {
   assert.doesNotMatch(source, /CMO_HERMES_VIDEO_AGENT_API_KEY|API_SERVER_KEY/, "Studio artifact code must not expose server API keys.");
