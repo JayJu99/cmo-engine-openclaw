@@ -149,6 +149,9 @@ for (const forbidden of ["/agents/studio", "/agents/cmo", "vault", "memory", "Le
 }
 
 await checkHermesExecutePayloadContract();
+await checkHermesCostRouteSnakeCaseMapping();
+await checkHermesExecuteCompletedResponseMapping();
+await checkHermesExecuteFailedResponseMapping();
 await checkHermesExecuteErrorDiagnostics();
 
 if (failures.length) {
@@ -262,6 +265,279 @@ async function checkHermesExecutePayloadContract() {
   });
 }
 
+async function checkHermesCostRouteSnakeCaseMapping() {
+  const jiti = createJiti(import.meta.url, {
+    interopDefault: true,
+    alias: { "@": resolve("src"), "server-only": resolve("scripts/server-only-noop.cjs") },
+  });
+  const { POST } = await jiti.import(resolve("src/app/api/cmo/studio/cost/estimate/route.ts"));
+  const originalFetch = globalThis.fetch;
+  const originalEnv = {
+    CMO_HERMES_VIDEO_AGENT_BASE_URL: process.env.CMO_HERMES_VIDEO_AGENT_BASE_URL,
+    CMO_HERMES_VIDEO_AGENT_API_KEY: process.env.CMO_HERMES_VIDEO_AGENT_API_KEY,
+    CMO_STUDIO_REAL_VIDEO_ENABLED: process.env.CMO_STUDIO_REAL_VIDEO_ENABLED,
+    CMO_STUDIO_VIDEO_AGENT_TIMEOUT_MS: process.env.CMO_STUDIO_VIDEO_AGENT_TIMEOUT_MS,
+  };
+  let capturedCostRequest = null;
+
+  process.env.CMO_HERMES_VIDEO_AGENT_BASE_URL = "http://127.0.0.1:18642";
+  process.env.CMO_HERMES_VIDEO_AGENT_API_KEY = "test-contract-secret";
+  process.env.CMO_STUDIO_REAL_VIDEO_ENABLED = "true";
+  process.env.CMO_STUDIO_VIDEO_AGENT_TIMEOUT_MS = "1000";
+
+  try {
+    globalThis.fetch = async (url, init) => {
+      const pathname = new URL(String(url)).pathname;
+      const authorization = init?.headers instanceof Headers
+        ? init.headers.get("authorization")
+        : init?.headers?.authorization;
+
+      nodeAssert.equal(authorization, "Bearer test-contract-secret");
+
+      if (pathname === "/agents/video/models") {
+        return new Response(JSON.stringify({
+          schema_version: "video.models.response.v2",
+          source: "higgsfield_cli",
+          models: [{
+            ui_id: "seedance_2_0",
+            provider_model_id: "seedance_2_0",
+            label: "Seedance 2.0",
+            provider: "higgsfield",
+            type: "video",
+            operations: ["text_to_video"],
+            real_video_supported: true,
+            cost_supported: true,
+            settings_schema: {
+              duration: { type: "integer", default: 5, min: 4, max: 15 },
+              aspect_ratio: { default: "16:9", values: ["16:9", "9:16", "1:1"] },
+              resolution: { default: "720p", values: ["480p", "720p", "1080p", "4k"] },
+              mode: { default: "std", values: ["fast", "std"] },
+              bitrate_mode: { default: "standard", values: ["standard", "high"] },
+            },
+            enablement: "safe_now",
+          }],
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      if (pathname === "/agents/video/cost") {
+        capturedCostRequest = JSON.parse(String(init?.body ?? "{}"));
+
+        return new Response(JSON.stringify({
+          schema_version: "video.cost.response.v1",
+          request_id: "debug_cost_001",
+          estimate_available: true,
+          backend: "higgsfield",
+          model: "seedance_2_0",
+          estimated_credits: 17.5,
+          raw: {},
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      throw new Error(`Unexpected Hermes mock path: ${pathname}`);
+    };
+
+    const response = await POST(new Request("http://product.test/api/cmo/studio/cost/estimate", {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "actual user prompt",
+        mediaKind: "video",
+        backend: "higgsfield",
+        operation: "generate_video",
+        model: {
+          uiId: "seedance_2_0",
+          providerModelId: "seedance_2_0",
+        },
+        settings: {
+          durationSeconds: 5,
+          aspectRatio: "9:16",
+          resolution: "720p",
+          bitrate: "standard",
+          variants: 1,
+        },
+      }),
+      headers: { "Content-Type": "application/json" },
+    }));
+    const body = await response.json();
+
+    nodeAssert.equal(response.status, 200);
+    nodeAssert.deepEqual(body, {
+      estimateAvailable: true,
+      mode: "hermes",
+      credits: 17.5,
+      estimatedCredits: 17.5,
+      label: "~17.5 credits",
+      backend: "higgsfield",
+      model: "seedance_2_0",
+    });
+    nodeAssert.equal(capturedCostRequest.prompt, "actual user prompt");
+    nodeAssert.deepEqual(capturedCostRequest.model, {
+      ui_id: "seedance_2_0",
+      provider_model_id: "seedance_2_0",
+    });
+    nodeAssert.deepEqual(capturedCostRequest.settings, {
+      duration_seconds: 5,
+      aspect_ratio: "9:16",
+      resolution: "720p",
+      bitrate: "standard",
+      variants: 1,
+      mode: "fast",
+    });
+    nodeAssert.equal(JSON.stringify(body).includes("test-contract-secret"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+async function checkHermesExecuteCompletedResponseMapping() {
+  const jiti = createJiti(import.meta.url, {
+    interopDefault: true,
+    alias: { "@": resolve("src"), "server-only": resolve("scripts/server-only-noop.cjs") },
+  });
+  const { executeVideoJob } = await jiti.import(resolve("src/lib/cmo/studio/hermes-video-client.ts"));
+  const originalFetch = globalThis.fetch;
+  const originalEnv = {
+    CMO_HERMES_VIDEO_AGENT_BASE_URL: process.env.CMO_HERMES_VIDEO_AGENT_BASE_URL,
+    CMO_HERMES_VIDEO_AGENT_API_KEY: process.env.CMO_HERMES_VIDEO_AGENT_API_KEY,
+    CMO_STUDIO_VIDEO_AGENT_TIMEOUT_MS: process.env.CMO_STUDIO_VIDEO_AGENT_TIMEOUT_MS,
+  };
+
+  process.env.CMO_HERMES_VIDEO_AGENT_BASE_URL = "http://127.0.0.1:18642";
+  process.env.CMO_HERMES_VIDEO_AGENT_API_KEY = "test-contract-secret";
+  process.env.CMO_STUDIO_VIDEO_AGENT_TIMEOUT_MS = "1000";
+
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      schema_version: "video.generation.response.v1",
+      status: "completed",
+      backend: "higgsfield",
+      operation: "generate_video",
+      model: "seedance_2_0",
+      video: {
+        render_url: "https://cdn.example.test/render.mp4",
+        preview_url: "https://cdn.example.test/preview.mp4",
+        thumbnail_url: "https://cdn.example.test/thumb.webp",
+        duration_seconds: 5,
+        aspect_ratio: "9:16",
+        resolution: "720p",
+      },
+      cost: {
+        estimate_available: true,
+        estimated_credits: 17.5,
+      },
+      diagnostics: {
+        higgsfield_job_id: "higgs_job_123",
+        artifact_transport_status: "not_uploaded",
+        real_cli: true,
+      },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const result = await executeVideoJob(videoExecuteFixture());
+
+    nodeAssert.equal(result.status, "completed");
+    nodeAssert.equal(result.provider_status, "completed");
+    nodeAssert.equal(result.provider_job_id, "higgs_job_123");
+    nodeAssert.equal(result.estimated_credits, 17.5);
+    nodeAssert.equal(result.estimatedCredits, 17.5);
+    nodeAssert.equal(result.backend, "higgsfield");
+    nodeAssert.equal(result.model, "seedance_2_0");
+    nodeAssert.equal(result.render_url, "https://cdn.example.test/render.mp4");
+    nodeAssert.equal(result.thumbnail_url, "https://cdn.example.test/thumb.webp");
+    nodeAssert.equal(result.duration_seconds, 5);
+    nodeAssert.equal(result.aspect_ratio, "9:16");
+    nodeAssert.equal(result.resolution, "720p");
+    nodeAssert.equal(result.diagnostics.artifact_transport_status, "not_uploaded");
+    nodeAssert.equal(JSON.stringify(result).includes("test-contract-secret"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+async function checkHermesExecuteFailedResponseMapping() {
+  const jiti = createJiti(import.meta.url, {
+    interopDefault: true,
+    alias: { "@": resolve("src"), "server-only": resolve("scripts/server-only-noop.cjs") },
+  });
+  const { executeVideoJob } = await jiti.import(resolve("src/lib/cmo/studio/hermes-video-client.ts"));
+  const originalFetch = globalThis.fetch;
+  const originalEnv = {
+    CMO_HERMES_VIDEO_AGENT_BASE_URL: process.env.CMO_HERMES_VIDEO_AGENT_BASE_URL,
+    CMO_HERMES_VIDEO_AGENT_API_KEY: process.env.CMO_HERMES_VIDEO_AGENT_API_KEY,
+    CMO_STUDIO_VIDEO_AGENT_TIMEOUT_MS: process.env.CMO_STUDIO_VIDEO_AGENT_TIMEOUT_MS,
+  };
+
+  process.env.CMO_HERMES_VIDEO_AGENT_BASE_URL = "http://127.0.0.1:18642";
+  process.env.CMO_HERMES_VIDEO_AGENT_API_KEY = "test-contract-secret";
+  process.env.CMO_STUDIO_VIDEO_AGENT_TIMEOUT_MS = "1000";
+
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      schema_version: "video.generation.response.v1",
+      status: "failed",
+      backend: "higgsfield",
+      model: "seedance_2_0",
+      error: {
+        code: "higgsfield_failed",
+        message: "Generation failed.",
+      },
+      diagnostics: {
+        higgsfield_job_id: "higgs_job_failed",
+        artifact_transport_status: "not_uploaded",
+      },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const result = await executeVideoJob(videoExecuteFixture());
+    const serialized = JSON.stringify(result).toLowerCase();
+
+    nodeAssert.equal(result.status, "failed");
+    nodeAssert.equal(result.provider_job_id, "higgs_job_failed");
+    nodeAssert.deepEqual(result.error, {
+      code: "higgsfield_failed",
+      message: "Generation failed.",
+    });
+    nodeAssert.equal(result.diagnostics.artifact_transport_status, "not_uploaded");
+    nodeAssert.equal(serialized.includes("test-contract-secret"), false);
+    nodeAssert.equal(serialized.includes("c:\\users"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 async function checkHermesExecuteErrorDiagnostics() {
   const jiti = createJiti(import.meta.url, {
     interopDefault: true,
@@ -369,4 +645,48 @@ async function checkHermesExecuteErrorDiagnostics() {
       }
     }
   }
+}
+
+function videoExecuteFixture() {
+  return {
+    schema_version: "video.generation.request.v1",
+    request_id: "debug_execute_001",
+    job_id: "studio_job_contract",
+    context: {
+      source: "studio",
+      app_id: null,
+      workspace_id: null,
+      campaign_id: null,
+      brand_id: null,
+    },
+    operation: "generate_video",
+    backend: "higgsfield",
+    model: {
+      ui_id: "seedance_2_0",
+      provider_model_id: "seedance_2_0",
+    },
+    prompt: "actual user prompt",
+    settings: {
+      duration_seconds: 5,
+      aspect_ratio: "9:16",
+      resolution: "720p",
+      mode: "fast",
+      bitrate: "standard",
+      variants: 1,
+    },
+    inputs: {
+      images: [],
+      videos: [],
+      audio: [],
+    },
+    cost: {
+      include_estimate: true,
+      require_estimate: false,
+    },
+    artifact_transport: {
+      mode: "product_upload",
+      upload_endpoint: null,
+      headers: {},
+    },
+  };
 }

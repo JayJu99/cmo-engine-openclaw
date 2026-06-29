@@ -163,6 +163,7 @@ export async function POST(request: Request) {
       if (mediaKind !== "video" || backend !== "higgsfield") {
         return Response.json({
           estimateAvailable: false,
+          mode: "hermes",
           reason: "Studio real provider pricing is only available for video generation through Higgsfield.",
           code: "video_agent_unsupported_request",
         });
@@ -171,8 +172,14 @@ export async function POST(request: Request) {
       if (!isHermesVideoAgentConfigured()) {
         return Response.json({
           estimateAvailable: false,
+          mode: "hermes",
           reason: "Hermes Video Agent is not configured.",
           code: "video_agent_not_configured",
+          diagnostics: {
+            code: "video_agent_not_configured",
+            target_path: "/agents/video/cost",
+            hermes_dispatched: false,
+          },
         });
       }
 
@@ -200,6 +207,7 @@ export async function POST(request: Request) {
       if (!hermesRequest) {
         return Response.json({
           estimateAvailable: false,
+          mode: "hermes",
           reason: "Selected model is not available for real Studio video generation.",
           code: "video_agent_model_unavailable",
         });

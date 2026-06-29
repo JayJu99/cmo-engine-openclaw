@@ -296,6 +296,7 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
         diagnostics: {
           runner: "hermes_video_agent",
           hermes_dispatched: true,
+          target_path: "/agents/video/execute",
           artifact_transport_status: "not_uploaded",
           ...(executeResult.diagnostics ?? {}),
           hermes_response: executeResult.raw ?? {},

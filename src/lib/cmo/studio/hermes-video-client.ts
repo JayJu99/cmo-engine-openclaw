@@ -567,9 +567,26 @@ export async function estimateVideoCost(request: HermesVideoCostRequest): Promis
   const credits = numberValue(body.credits ?? body.estimatedCredits ?? body.estimated_credits);
   const label = stringValue(body.label) ?? (credits !== undefined ? `~${credits} credits` : undefined);
   const estimateAvailable = estimateFlag === false ? false : estimateFlag === true || credits !== undefined;
+  const reason = stringValue(body.reason ?? body.message ?? body.error);
+  const code = stringValue(body.code);
+  const backend = stringValue(body.backend);
+  const model = stringValue(body.model);
+  const diagnostics = redactSensitive({
+    ...(stringValue(body.schema_version) ? { upstream_schema_version: stringValue(body.schema_version) } : {}),
+    ...(stringValue(body.request_id) ? { upstream_request_id: stringValue(body.request_id) } : {}),
+    ...(backend ? { backend } : {}),
+    ...(model ? { model } : {}),
+    ...(reason ? { reason } : {}),
+    ...(code ? { code } : {}),
+  }) as Record<string, unknown>;
 
   if (estimateFlag !== true && estimateFlag !== false && credits === undefined) {
-    throw new CmoAdapterError("Hermes Video Agent cost response is invalid.", 502, "video_agent_invalid_response");
+    const error = new CmoAdapterError("Hermes Video Agent cost response is invalid.", 502, "video_agent_invalid_response");
+    hermesErrorDiagnostics.set(error, {
+      target_path: COST_PATH,
+      ...diagnostics,
+    });
+    throw error;
   }
 
   return {
@@ -578,10 +595,11 @@ export async function estimateVideoCost(request: HermesVideoCostRequest): Promis
     ...(credits !== undefined ? { credits } : {}),
     ...(credits !== undefined ? { estimatedCredits: credits } : {}),
     ...(label ? { label } : {}),
-    ...(stringValue(body.backend) ? { backend: stringValue(body.backend) } : {}),
-    ...(stringValue(body.model) ? { model: stringValue(body.model) } : {}),
-    ...(!estimateAvailable && stringValue(body.reason ?? body.message ?? body.error) ? { reason: stringValue(body.reason ?? body.message ?? body.error) } : {}),
-    ...(!estimateAvailable && stringValue(body.code) ? { code: stringValue(body.code) } : {}),
+    ...(backend ? { backend } : {}),
+    ...(model ? { model } : {}),
+    ...(!estimateAvailable && reason ? { reason } : {}),
+    ...(!estimateAvailable && code ? { code } : {}),
+    ...(!estimateAvailable && Object.keys(diagnostics).length ? { diagnostics } : {}),
   };
 }
 
