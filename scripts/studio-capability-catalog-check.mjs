@@ -93,7 +93,7 @@ await withHermesModels({
       label: "Experimental",
       operations: ["text_to_video"],
       inputs_required: ["prompt"],
-      real_video_supported: true,
+      real_video_supported: false,
       cost_supported: true,
       settings_schema: {
         duration: { default: 5, min: 4, max: 8 },

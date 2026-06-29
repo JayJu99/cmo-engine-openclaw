@@ -46,6 +46,10 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function optionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function configuredMaxCredits(): number {
   const parsed = Number.parseFloat(process.env.CMO_STUDIO_MAX_ESTIMATED_CREDITS ?? "");
 
@@ -101,7 +105,8 @@ function modelFromCatalogRecord(record: Record<string, unknown>): StudioVideoMod
     costSupported: record.costSupported !== false && record.cost_supported !== false,
     workflowSupported: record.workflowSupported === true || record.workflow_supported === true,
     enablement: record.enablement === "safe_now" || record.enablement === "guarded" || record.enablement === "needs_smoke" || record.enablement === "disabled_until_upload" ? record.enablement : "unavailable",
-    canGenerateTextToVideo: record.canGenerateTextToVideo === true || record.can_generate_text_to_video === true,
+    canGenerateTextToVideo: optionalBoolean(record.canGenerateTextToVideo ?? record.can_generate_text_to_video),
+    requiredInputStatus: typeof record.requiredInputStatus === "string" ? record.requiredInputStatus : typeof record.required_input_status === "string" ? record.required_input_status : null,
     constraints: Array.isArray(record.constraints) ? record.constraints.filter((item): item is string => typeof item === "string") : [],
     warnings: Array.isArray(record.warnings) ? record.warnings.filter((item): item is string => typeof item === "string") : [],
     catalogSource: stringValue(record.catalogSource),
@@ -132,8 +137,14 @@ async function validatedRealModel(body: Record<string, unknown>, settings: Retur
   const model = modelFromCatalogRecord(match);
   const enablementReason = model.enablement === "needs_smoke" ? null : disabledReasonForEnablement(model.enablement);
 
-  if (enablementReason || model.canGenerateTextToVideo === false) {
-    throw new CmoAdapterError(enablementReason ?? "Selected model is not available for prompt-only real Studio video generation.", 400, "video_agent_model_unavailable");
+  if (
+    enablementReason
+    || model.canGenerateTextToVideo === false
+    || model.costSupported === false
+    || !model.providerModelId
+    || Boolean(model.requiredInputStatus)
+  ) {
+    throw new CmoAdapterError(enablementReason ?? model.requiredInputStatus ?? "Selected model is not available for prompt-only real Studio video generation.", 400, "video_agent_model_unavailable");
   }
 
   const settingsError = validateStudioVideoSettings({

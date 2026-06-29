@@ -207,6 +207,10 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function optionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function modelFromApi(value: unknown): StudioVideoModel | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -250,7 +254,7 @@ function modelFromApi(value: unknown): StudioVideoModel | null {
     disabledReason: typeof record.disabledReason === "string" ? record.disabledReason : null,
     operations: stringArray(record.operations),
     inputsRequired: stringArray(record.inputsRequired ?? record.inputs_required),
-    canGenerateTextToVideo: record.canGenerateTextToVideo === true || record.can_generate_text_to_video === true,
+    canGenerateTextToVideo: optionalBoolean(record.canGenerateTextToVideo ?? record.can_generate_text_to_video),
     requiredInputStatus: typeof record.requiredInputStatus === "string" ? record.requiredInputStatus : typeof record.required_input_status === "string" ? record.required_input_status : null,
     constraints: stringArray(record.constraints),
     warnings: stringArray(record.warnings),
@@ -273,6 +277,16 @@ function modelReadinessLabel(model: StudioVideoModel): string {
   }
 
   return model.enablementLabel ?? enablementLabel(model.enablement);
+}
+
+function canUseRealTextToVideoModel(model: StudioVideoModel): boolean {
+  return Boolean(
+    model.providerModelId
+    && model.costSupported !== false
+    && model.canGenerateTextToVideo !== false
+    && !model.requiredInputStatus
+    && (model.enablement === "safe_now" || model.enablement === "guarded" || model.enablement === "needs_smoke"),
+  );
 }
 
 function findStudioVideoModel(models: StudioVideoModel[], id: string): StudioVideoModel {
@@ -821,7 +835,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   const model = useMemo(() => findStudioVideoModel(videoModels, modelId), [modelId, videoModels]);
   const agentConnected = videoAgentStatus?.connected === true;
   const realVideoEnabled = videoAgentStatus?.realVideoEnabled === true;
-  const modelRealAvailable = agentConnected && Boolean(model.providerModelId && hermesModelIds.has(model.providerModelId));
+  const modelRealAvailable = agentConnected && canUseRealTextToVideoModel(model) && Boolean(model.providerModelId && hermesModelIds.has(model.providerModelId));
   const settingsBlockedReason = validateStudioVideoSettings({ model, durationSeconds: duration, aspectRatio, resolution, bitrate });
   const enablementBlockedReason = realVideoEnabled && (model.enablement === "disabled_until_upload" || model.enablement === "unavailable")
     ? model.disabledReason ?? disabledReasonForEnablement(model.enablement)
@@ -851,9 +865,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
 
         if (Array.isArray(modelsBody.models)) {
           for (const item of nextModels) {
-            const available = item.canGenerateTextToVideo === true || item.enablement === "safe_now" || item.enablement === "guarded" || item.enablement === "needs_smoke";
-
-            if (item.providerModelId && available) {
+            if (canUseRealTextToVideoModel(item) && item.providerModelId) {
               modelIds.add(item.providerModelId);
             }
           }

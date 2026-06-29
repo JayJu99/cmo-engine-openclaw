@@ -49,6 +49,10 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function optionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function modelFromRecord(record: Record<string, unknown>): StudioVideoModel {
   const supportedResolutions = Array.isArray(record.supportedResolutions)
     ? record.supportedResolutions.map(normalizeStudioResolution).filter((item): item is StudioResolution => Boolean(item))
@@ -87,9 +91,20 @@ function modelFromRecord(record: Record<string, unknown>): StudioVideoModel {
     realVideoSupported: record.realVideoSupported === true || record.real_video_supported === true,
     costSupported: record.costSupported !== false && record.cost_supported !== false,
     enablement: record.enablement === "safe_now" || record.enablement === "guarded" || record.enablement === "needs_smoke" || record.enablement === "disabled_until_upload" ? record.enablement : "unavailable",
-    canGenerateTextToVideo: record.canGenerateTextToVideo === true || record.can_generate_text_to_video === true,
+    canGenerateTextToVideo: optionalBoolean(record.canGenerateTextToVideo ?? record.can_generate_text_to_video),
+    requiredInputStatus: typeof record.requiredInputStatus === "string" ? record.requiredInputStatus : typeof record.required_input_status === "string" ? record.required_input_status : null,
     constraints: Array.isArray(record.constraints) ? record.constraints.filter((item): item is string => typeof item === "string") : [],
   };
+}
+
+function isCostFirstTextToVideoModel(model: StudioVideoModel | null | undefined): model is StudioVideoModel & { providerModelId: string } {
+  return Boolean(
+    model?.providerModelId
+    && model.costSupported !== false
+    && model.canGenerateTextToVideo !== false
+    && !model.requiredInputStatus
+    && (model.enablement === "safe_now" || model.enablement === "guarded" || model.enablement === "needs_smoke"),
+  );
 }
 
 async function realCatalogModel(body: Record<string, unknown>): Promise<StudioVideoModel | null> {
@@ -110,7 +125,7 @@ async function hermesCostRequest(body: Record<string, unknown>): Promise<HermesV
     ? await realCatalogModel(body)
     : getStudioVideoModel(modelIdFromBody(body));
 
-  if (!model?.realVideoSupported || !model.providerModelId || model.costSupported === false || model.canGenerateTextToVideo === false) {
+  if (!isCostFirstTextToVideoModel(model)) {
     return null;
   }
 

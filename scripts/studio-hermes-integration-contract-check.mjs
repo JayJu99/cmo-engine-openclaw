@@ -151,6 +151,7 @@ for (const forbidden of ["/agents/studio", "/agents/cmo", "vault", "memory", "Le
 await checkHermesExecutePayloadContract();
 await checkDynamicHermesExecutePayloadContract();
 await checkHermesCostRouteSnakeCaseMapping();
+await checkCostFirstModelGatePolicy();
 await checkHermesExecuteCompletedResponseMapping();
 await checkHermesExecuteFailedResponseMapping();
 await checkHermesExecuteErrorDiagnostics();
@@ -370,13 +371,13 @@ async function checkHermesCostRouteSnakeCaseMapping() {
           schema_version: "video.models.response.v2",
           source: "higgsfield_cli",
           models: [{
-            ui_id: "kling_3_turbo",
-            provider_model_id: "kling_3_turbo",
+            ui_id: "kling3_0_turbo",
+            provider_model_id: "kling3_0_turbo",
             label: "Kling 3.0 Turbo",
             provider: "higgsfield",
             type: "video",
             operations: ["text_to_video"],
-            real_video_supported: true,
+            real_video_supported: false,
             cost_supported: true,
             settings_schema: {
               duration: { type: "integer", default: 5, min: 3, max: 15 },
@@ -401,7 +402,7 @@ async function checkHermesCostRouteSnakeCaseMapping() {
           request_id: "debug_cost_001",
           estimate_available: true,
           backend: "higgsfield",
-          model: "kling_3_turbo",
+          model: "kling3_0_turbo",
           estimated_credits: 75,
           raw: {},
         }), {
@@ -423,7 +424,7 @@ async function checkHermesCostRouteSnakeCaseMapping() {
         operation: "generate_video",
         model: {
           uiId: "legacy-product-kling",
-          providerModelId: "kling_3_turbo",
+          providerModelId: "kling3_0_turbo",
         },
         settings: {
           durationSeconds: 5,
@@ -445,15 +446,15 @@ async function checkHermesCostRouteSnakeCaseMapping() {
       estimatedCredits: 75,
       label: "~75 credits",
       backend: "higgsfield",
-      model: "kling_3_turbo",
+      model: "kling3_0_turbo",
       warning: "High credit estimate. Review before generating.",
       highCostWarning: true,
     });
     nodeAssert.equal(capturedCostRequest.request_id, "debug_cost_001");
     nodeAssert.equal(capturedCostRequest.prompt, "actual user prompt");
     nodeAssert.deepEqual(capturedCostRequest.model, {
-      ui_id: "kling_3_turbo",
-      provider_model_id: "kling_3_turbo",
+      ui_id: "kling3_0_turbo",
+      provider_model_id: "kling3_0_turbo",
     });
     nodeAssert.equal(JSON.stringify(capturedCostRequest).includes("legacy-product-kling"), false);
     nodeAssert.deepEqual(capturedCostRequest.settings, {
@@ -465,6 +466,191 @@ async function checkHermesCostRouteSnakeCaseMapping() {
       mode: "fast",
     });
     nodeAssert.equal(JSON.stringify(body).includes("test-contract-secret"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+async function checkCostFirstModelGatePolicy() {
+  const jiti = createJiti(import.meta.url, {
+    interopDefault: true,
+    alias: { "@": resolve("src"), "server-only": resolve("scripts/server-only-noop.cjs") },
+  });
+  const { POST } = await jiti.import(resolve("src/app/api/cmo/studio/cost/estimate/route.ts"));
+  const originalFetch = globalThis.fetch;
+  const originalEnv = {
+    CMO_HERMES_VIDEO_AGENT_BASE_URL: process.env.CMO_HERMES_VIDEO_AGENT_BASE_URL,
+    CMO_HERMES_VIDEO_AGENT_API_KEY: process.env.CMO_HERMES_VIDEO_AGENT_API_KEY,
+    CMO_STUDIO_REAL_VIDEO_ENABLED: process.env.CMO_STUDIO_REAL_VIDEO_ENABLED,
+    CMO_STUDIO_VIDEO_AGENT_TIMEOUT_MS: process.env.CMO_STUDIO_VIDEO_AGENT_TIMEOUT_MS,
+    CMO_STUDIO_HIGH_COST_WARNING_CREDITS: process.env.CMO_STUDIO_HIGH_COST_WARNING_CREDITS,
+  };
+  const models = [
+    {
+      ui_id: "seedance_2_0",
+      provider_model_id: "seedance_2_0",
+      label: "Seedance 2.0",
+      operations: ["text_to_video"],
+      inputs_required: ["prompt"],
+      real_video_supported: true,
+      cost_supported: true,
+      settings_schema: {
+        duration: { default: 5, min: 4, max: 15 },
+        aspect_ratio: { default: "16:9", values: ["16:9"] },
+        resolution: { default: "720p", values: ["720p"] },
+        mode: { default: "fast", values: ["fast"] },
+        bitrate_mode: { default: "standard", values: ["standard"] },
+      },
+      enablement: "safe_now",
+    },
+    {
+      ui_id: "kling3_0_turbo",
+      provider_model_id: "kling3_0_turbo",
+      label: "Kling 3.0 Turbo",
+      operations: ["text_to_video"],
+      inputs_required: ["prompt"],
+      real_video_supported: false,
+      cost_supported: true,
+      settings_schema: {
+        duration: { default: 5, min: 3, max: 15 },
+        aspect_ratio: { default: "16:9", values: ["16:9"] },
+        resolution: { default: "720p", values: ["720p"] },
+        mode: { default: "fast", values: ["fast"] },
+        bitrate_mode: { default: "standard", values: ["standard"] },
+      },
+      enablement: "needs_smoke",
+    },
+    {
+      ui_id: "blocked_model",
+      provider_model_id: "blocked_model",
+      label: "Blocked Model",
+      operations: ["text_to_video"],
+      inputs_required: ["prompt"],
+      real_video_supported: false,
+      cost_supported: true,
+      settings_schema: {
+        duration: { default: 5, min: 3, max: 15 },
+        aspect_ratio: { default: "16:9", values: ["16:9"] },
+        resolution: { default: "720p", values: ["720p"] },
+        mode: { default: "fast", values: ["fast"] },
+        bitrate_mode: { default: "standard", values: ["standard"] },
+      },
+      enablement: "unavailable",
+    },
+    {
+      ui_id: "image_required_model",
+      provider_model_id: "image_required_model",
+      label: "Image Required Model",
+      operations: ["image_to_video"],
+      inputs_required: ["start_image"],
+      real_video_supported: false,
+      cost_supported: true,
+      settings_schema: {
+        duration: { default: 5, min: 3, max: 15 },
+        aspect_ratio: { default: "16:9", values: ["16:9"] },
+        resolution: { default: "720p", values: ["720p"] },
+        mode: { default: "fast", values: ["fast"] },
+        bitrate_mode: { default: "standard", values: ["standard"] },
+      },
+      enablement: "disabled_until_upload",
+    },
+  ];
+  const capturedCostRequests = [];
+
+  process.env.CMO_HERMES_VIDEO_AGENT_BASE_URL = "http://127.0.0.1:18642";
+  process.env.CMO_HERMES_VIDEO_AGENT_API_KEY = "test-contract-secret";
+  process.env.CMO_STUDIO_REAL_VIDEO_ENABLED = "true";
+  process.env.CMO_STUDIO_VIDEO_AGENT_TIMEOUT_MS = "1000";
+  process.env.CMO_STUDIO_HIGH_COST_WARNING_CREDITS = "100";
+
+  try {
+    globalThis.fetch = async (url, init) => {
+      const pathname = new URL(String(url)).pathname;
+
+      if (pathname === "/agents/video/models") {
+        return new Response(JSON.stringify({
+          schema_version: "video.models.response.v2",
+          source: "higgsfield_cli",
+          models,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      if (pathname === "/agents/video/cost") {
+        const request = JSON.parse(String(init?.body ?? "{}"));
+        capturedCostRequests.push(request);
+
+        return new Response(JSON.stringify({
+          schema_version: "video.cost.response.v1",
+          estimate_available: true,
+          backend: "higgsfield",
+          model: request.model.provider_model_id,
+          estimated_credits: request.model.provider_model_id === "kling3_0_turbo" ? 7.5 : 17.5,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      throw new Error(`Unexpected Hermes mock path: ${pathname}`);
+    };
+
+    const postEstimate = (providerModelId) => POST(new Request("http://product.test/api/cmo/studio/cost/estimate", {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "prompt for gate policy",
+        mediaKind: "video",
+        backend: "higgsfield",
+        operation: "generate_video",
+        model: {
+          uiId: `legacy-${providerModelId}`,
+          providerModelId,
+        },
+        settings: {
+          durationSeconds: 5,
+          aspectRatio: "16:9",
+          resolution: "720p",
+          bitrate: "standard",
+          variants: 1,
+        },
+      }),
+      headers: { "Content-Type": "application/json" },
+    }));
+
+    const klingResponse = await postEstimate("kling3_0_turbo");
+    const klingBody = await klingResponse.json();
+    nodeAssert.equal(klingBody.estimateAvailable, true, "needs_smoke prompt-only model must be allowed even when realVideoSupported is false.");
+    nodeAssert.equal(klingBody.credits, 7.5);
+    nodeAssert.equal(capturedCostRequests.at(-1).model.provider_model_id, "kling3_0_turbo");
+    nodeAssert.equal(JSON.stringify(capturedCostRequests.at(-1)).includes("seedance_2_0"), false, "Dynamic model must not fallback to Seedance.");
+
+    const unavailableResponse = await postEstimate("blocked_model");
+    const unavailableBody = await unavailableResponse.json();
+    nodeAssert.equal(unavailableBody.estimateAvailable, false);
+    nodeAssert.equal(unavailableBody.code, "video_agent_model_unavailable");
+
+    const disabledResponse = await postEstimate("image_required_model");
+    const disabledBody = await disabledResponse.json();
+    nodeAssert.equal(disabledBody.estimateAvailable, false);
+    nodeAssert.equal(disabledBody.code, "video_agent_model_unavailable");
+
+    const seedanceResponse = await postEstimate("seedance_2_0");
+    const seedanceBody = await seedanceResponse.json();
+    nodeAssert.equal(seedanceBody.estimateAvailable, true, "Seedance behavior must remain unchanged.");
+    nodeAssert.equal(seedanceBody.credits, 17.5);
+    nodeAssert.equal(capturedCostRequests.at(-1).model.provider_model_id, "seedance_2_0");
+
+    nodeAssert.deepEqual(capturedCostRequests.map((request) => request.model.provider_model_id), ["kling3_0_turbo", "seedance_2_0"]);
   } finally {
     globalThis.fetch = originalFetch;
 
