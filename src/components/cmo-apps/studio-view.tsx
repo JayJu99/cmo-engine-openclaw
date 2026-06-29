@@ -782,6 +782,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
           prompt,
           model: {
             uiId: model.id,
+            providerModelId: model.providerModelId,
             provider_model_id: model.providerModelId,
             label: model.name,
           },
@@ -792,6 +793,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             bitrate,
             variants: 1,
           },
+          ...(costEstimate?.mode === "hermes" ? { costEstimate } : {}),
         }),
       });
       const body = await parseJsonResponse(response);

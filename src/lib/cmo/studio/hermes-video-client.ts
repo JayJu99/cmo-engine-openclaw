@@ -18,6 +18,7 @@ export type HermesVideoAgentErrorCode =
 export interface HermesVideoCostRequest {
   prompt?: string;
   operation: "generate_video";
+  backend?: "higgsfield";
   model: {
     ui_id: string;
     provider_model_id: string;
@@ -34,8 +35,28 @@ export interface HermesVideoCostRequest {
 }
 
 export interface HermesVideoExecuteRequest extends HermesVideoCostRequest {
+  schema_version: "video.generation.request.v1";
+  request_id: string;
   job_id: string;
   prompt: string;
+  backend: "higgsfield";
+  context: {
+    source: "studio";
+    app_id: string | null;
+    workspace_id: string | null;
+    campaign_id: string | null;
+    brand_id: string | null;
+    [key: string]: unknown;
+  };
+  inputs: {
+    images: unknown[];
+    videos: unknown[];
+    audio: unknown[];
+  };
+  cost: {
+    include_estimate: true;
+    require_estimate: false;
+  };
   artifact_transport: {
     mode: "product_upload";
     upload_endpoint: null;
@@ -78,6 +99,8 @@ interface HermesConfig {
   timeoutMs: number;
 }
 
+const hermesErrorDiagnostics = new WeakMap<CmoAdapterError, Record<string, unknown>>();
+
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -99,11 +122,14 @@ export function hermesVideoErrorDiagnostics(error: unknown, input: {
   hermesDispatched?: boolean;
 }): Record<string, unknown> {
   if (error instanceof CmoAdapterError) {
+    const upstreamDiagnostics = hermesErrorDiagnostics.get(error) ?? {};
+
     return {
       code: error.code,
       message: error.message,
       http_status: error.status,
       target_path: input.targetPath,
+      ...upstreamDiagnostics,
       ...(input.hermesDispatched !== undefined ? { hermes_dispatched: input.hermesDispatched } : {}),
     };
   }
@@ -176,7 +202,13 @@ function redactSensitive(value: unknown): unknown {
 }
 
 function safeString(value: string): string {
+  const localPathRedacted = value
+    .replace(/[a-zA-Z]:[\\/][^\s"'<>]+/g, "[local-path-redacted]")
+    .replace(/file:\/\/[^\s"'<>]+/g, "[local-path-redacted]")
+    .replace(/\/(?:tmp|var|Users|home|mnt|Volumes|private)(?:\/[^\s"'<>]+)*/g, "[local-path-redacted]");
+
   if (
+    localPathRedacted === "[local-path-redacted]" ||
     /^[a-zA-Z]:[\\/]/.test(value) ||
     value.startsWith("file:") ||
     /^\/(?:tmp|var|Users|home|mnt|Volumes|private)(?:\/|$)/.test(value)
@@ -184,7 +216,7 @@ function safeString(value: string): string {
     return "[local-path-redacted]";
   }
 
-  return value;
+  return localPathRedacted;
 }
 
 function safeUrl(value: unknown): string | null {
@@ -207,28 +239,74 @@ function safeUrl(value: unknown): string | null {
   }
 }
 
-async function parseJsonResponse(response: Response, execute = false): Promise<Record<string, unknown>> {
+function safeUpstreamError(data: Record<string, unknown>): Record<string, unknown> | undefined {
+  const error = isRecord(data.error) ? data.error : {};
+  const type = stringValue(error.type ?? error.code ?? data.type ?? data.code);
+  const message = stringValue(error.message ?? data.message ?? (typeof data.error === "string" ? data.error : undefined));
+  const retryable = typeof error.retryable === "boolean"
+    ? error.retryable
+    : typeof data.retryable === "boolean"
+      ? data.retryable
+      : undefined;
+
+  if (!type && !message && retryable === undefined) {
+    return undefined;
+  }
+
+  return {
+    ...(type ? { type: safeString(type) } : {}),
+    ...(message ? { message: safeString(message) } : {}),
+    ...(retryable !== undefined ? { retryable } : {}),
+  };
+}
+
+function hermesNonOkError(response: Response, path: string, data: Record<string, unknown>, execute: boolean): CmoAdapterError {
+  const upstreamError = safeUpstreamError(data);
+  const message = stringValue(upstreamError?.message) ?? "Hermes Video Agent request failed.";
+  const code = response.status === 401 || response.status === 403
+    ? "video_agent_auth_failed"
+    : execute
+      ? "video_agent_execution_failed"
+      : "video_agent_unreachable";
+  const error = new CmoAdapterError(
+    response.status === 401 || response.status === 403 ? "Hermes Video Agent authentication failed." : message,
+    response.status,
+    code,
+  );
+  const diagnostics = {
+    http_status: response.status,
+    target_path: path,
+    ...(upstreamError ? { upstream_error: upstreamError } : {}),
+    ...(stringValue(data.schema_version) ? { upstream_schema_version: stringValue(data.schema_version) } : {}),
+  };
+
+  hermesErrorDiagnostics.set(error, redactSensitive(diagnostics) as Record<string, unknown>);
+
+  return error;
+}
+
+async function parseJsonResponse(response: Response, path: string, execute = false): Promise<Record<string, unknown>> {
   let body: unknown;
 
   try {
     body = await response.json();
   } catch {
+    if (!response.ok) {
+      const error = new CmoAdapterError("Hermes Video Agent request failed.", response.status, execute ? "video_agent_execution_failed" : "video_agent_unreachable");
+      hermesErrorDiagnostics.set(error, {
+        http_status: response.status,
+        target_path: path,
+      });
+      throw error;
+    }
+
     throw new CmoAdapterError("Hermes Video Agent returned invalid JSON.", 502, "video_agent_invalid_response");
   }
 
   const data = isRecord(body) ? body : {};
 
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      throw new CmoAdapterError("Hermes Video Agent authentication failed.", 502, "video_agent_auth_failed");
-    }
-
-    const message = stringValue(data.error) ?? stringValue(data.message) ?? "Hermes Video Agent request failed.";
-    throw new CmoAdapterError(
-      message,
-      502,
-      execute ? "video_agent_execution_failed" : "video_agent_unreachable",
-    );
+    throw hermesNonOkError(response, path, data, execute);
   }
 
   return data;
@@ -257,7 +335,7 @@ async function hermesRequest(path: string, init?: RequestInit, options?: { execu
       },
     });
 
-    return parseJsonResponse(response, options?.execute === true);
+    return parseJsonResponse(response, path, options?.execute === true);
   } catch (error) {
     if (error instanceof CmoAdapterError) {
       throw error;

@@ -47,7 +47,7 @@ function realVideoProviderModelId(job: StudioJobRecord): string {
   throw new CmoAdapterError("Selected model is not available for real Studio video generation.", 400, "video_agent_execution_failed");
 }
 
-function hermesExecuteRequest(job: StudioJobRecord): HermesVideoExecuteRequest {
+export function buildHermesVideoExecuteRequest(job: StudioJobRecord): HermesVideoExecuteRequest {
   const providerModelId = realVideoProviderModelId(job);
 
   if (job.operation !== "generate_video") {
@@ -55,9 +55,12 @@ function hermesExecuteRequest(job: StudioJobRecord): HermesVideoExecuteRequest {
   }
 
   return {
+    schema_version: "video.generation.request.v1",
+    request_id: job.request_id ?? job.id,
     job_id: job.id,
     prompt: job.prompt,
     operation: "generate_video",
+    backend: "higgsfield",
     model: {
       ui_id: providerModelId,
       provider_model_id: providerModelId,
@@ -71,9 +74,20 @@ function hermesExecuteRequest(job: StudioJobRecord): HermesVideoExecuteRequest {
       ...(providerModelId === "seedance_2_0" && job.settings_json.resolution === "720p" ? { mode: "fast" } : {}),
     },
     context: {
-      ...job.context_json,
       source: "studio",
-      product_job_id: job.id,
+      app_id: stringValue(job.context_json.app_id) ?? null,
+      workspace_id: stringValue(job.context_json.workspace_id) ?? null,
+      campaign_id: stringValue(job.context_json.campaign_id) ?? null,
+      brand_id: stringValue(job.context_json.brand_id) ?? null,
+    },
+    inputs: {
+      images: [],
+      videos: [],
+      audio: [],
+    },
+    cost: {
+      include_estimate: true,
+      require_estimate: false,
     },
     artifact_transport: {
       mode: "product_upload",
@@ -111,7 +125,7 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
     }
 
     hermesDispatched = true;
-    const executeResult = await executeVideoJob(hermesExecuteRequest(runningJob));
+    const executeResult = await executeVideoJob(buildHermesVideoExecuteRequest(runningJob));
 
     if (executeResult.status === "queued" || executeResult.status === "running") {
       return {
@@ -198,7 +212,7 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
 
     return {
       mode: "hermes",
-      hermesDispatched: false,
+      hermesDispatched,
       nextAgentRoute: "/agents/video/execute",
       providerStatus: error instanceof CmoAdapterError ? error.code : "video_agent_execution_failed",
     };

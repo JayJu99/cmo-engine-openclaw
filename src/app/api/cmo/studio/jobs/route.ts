@@ -40,7 +40,7 @@ function inputAssetIdsFromBody(body: Record<string, unknown>): string[] {
 
 function modelIdFromBody(body: Record<string, unknown>): string | undefined {
   if (isRecord(body.model)) {
-    return stringValue(body.model.uiId ?? body.model.ui_id ?? body.model.product_model_id ?? body.model.provider_model_id ?? body.model.id);
+    return stringValue(body.model.uiId ?? body.model.ui_id ?? body.model.product_model_id ?? body.model.providerModelId ?? body.model.provider_model_id ?? body.model.id);
   }
 
   return stringValue(body.modelId ?? body.model_id);
@@ -67,6 +67,7 @@ export async function POST(request: Request) {
       settings: settingsFromBody(body),
       context: isRecord(body.context) ? body.context : {},
       inputAssetIds: inputAssetIdsFromBody(body),
+      costEstimate: isRecord(body.costEstimate) ? body.costEstimate : isRecord(body.cost_json) ? body.cost_json : undefined,
       requestId: stringValue(body.requestId ?? body.request_id) ?? request.headers.get("idempotency-key") ?? undefined,
     });
 

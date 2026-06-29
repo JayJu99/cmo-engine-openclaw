@@ -67,6 +67,7 @@ export interface StudioCreateJobInput {
   settings?: Partial<StudioJobSettings>;
   context?: Record<string, unknown>;
   inputAssetIds?: string[];
+  costEstimate?: Record<string, unknown>;
   requestId?: string;
 }
 
@@ -122,6 +123,68 @@ function normalizePrompt(value: unknown): string {
 
 function normalizeRequestId(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, 160) : null;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeHermesCostEstimate(value: unknown, providerModelId: string | null | undefined): Record<string, unknown> | null {
+  if (!isRecord(value) || value.mode !== "hermes") {
+    return null;
+  }
+
+  const credits = numberValue(value.credits ?? value.estimatedCredits ?? value.estimated_credits);
+  const estimateAvailable = value.estimateAvailable === true || value.estimate_available === true || credits !== undefined;
+
+  if (!estimateAvailable || credits === undefined) {
+    return {
+      mode: "hermes",
+      estimateAvailable: false,
+      reason: stringValue(value.reason) ?? "Hermes cost estimate unavailable.",
+      ...(stringValue(value.code) ? { code: stringValue(value.code) } : {}),
+      backend: "higgsfield",
+      model: providerModelId ?? stringValue(value.model) ?? null,
+    };
+  }
+
+  return {
+    mode: "hermes",
+    estimateAvailable: true,
+    credits,
+    estimatedCredits: credits,
+    label: stringValue(value.label) ?? `~${credits} credits`,
+    backend: stringValue(value.backend) ?? "higgsfield",
+    model: providerModelId ?? stringValue(value.model) ?? null,
+  };
+}
+
+function initialStudioCost(input: {
+  modelId: string;
+  providerModelId: string | null | undefined;
+  durationSeconds: number;
+  resolution: StudioResolution;
+  costEstimate?: Record<string, unknown>;
+}): Record<string, unknown> {
+  if (process.env.CMO_STUDIO_REAL_VIDEO_ENABLED === "true" && input.providerModelId === "seedance_2_0") {
+    return normalizeHermesCostEstimate(input.costEstimate, input.providerModelId) ?? {
+      mode: "hermes",
+      estimateAvailable: false,
+      reason: "Hermes cost estimate has not been attached to this Studio job yet.",
+      backend: "higgsfield",
+      model: input.providerModelId,
+    };
+  }
+
+  return mockStudioCostEstimate({
+    modelId: input.modelId,
+    durationSeconds: input.durationSeconds,
+    resolution: input.resolution,
+  });
 }
 
 function normalizeSettings(input: StudioCreateJobInput): { model: ReturnType<typeof getStudioVideoModel>; settings: StudioJobSettings } {
@@ -444,10 +507,12 @@ export async function createStudioVideoJob(
   }
 
   const { model, settings } = normalizeSettings(input);
-  const cost = mockStudioCostEstimate({
+  const cost = initialStudioCost({
     modelId: model.id,
+    providerModelId: model.providerModelId,
     durationSeconds: settings.durationSeconds,
     resolution: settings.resolution,
+    costEstimate: input.costEstimate,
   });
   const createdAt = new Date().toISOString();
   const id = `studio_job_${randomUUID()}`;
