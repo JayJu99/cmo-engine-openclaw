@@ -126,7 +126,10 @@ assert(studioView.includes("Remote Higgsfield result") && studioView.includes("<
 assert(studioView.includes('REAL_STUDIO_VIDEO_PROVIDER_MODEL_ID = "seedance_2_0"'), "Studio UI must know the v1 real default model.");
 assert(studioView.includes("setModelId(realDefaultModel.id)"), "Studio UI must default to Seedance 2.0 when Hermes real mode is connected.");
 assert(studioView.includes("Selected model is not available for real Studio video generation."), "Studio UI must show the unsupported real model Generate guard.");
-assert(studioView.includes("Boolean(generateBlockedReason)"), "Studio UI must disable Generate when a real model is unavailable.");
+assert(studioView.includes("type StudioReadinessState"), "Studio UI must drive generation with an explicit readiness state machine.");
+assert(studioView.includes("disabled={!readiness.canGenerate}"), "Studio UI must disable Generate from the readiness state.");
+assert(studioView.includes("costRequestSequenceRef"), "Studio UI must protect cost estimates from stale async responses.");
+assert(studioView.includes("Refreshing estimate..."), "Studio UI must mark stale cost estimates while refreshing.");
 assert(studioView.includes("prompt,") && studioView.includes('operation: "generate_video"'), "Studio UI cost request must include prompt and operation.");
 assert(studioView.includes("costEstimate") && studioView.includes('mode === "hermes"'), "Studio UI must attach Product Hermes cost estimate to generated jobs.");
 assert(!studioView.includes("CMO_HERMES") && !studioView.includes("/agents/video") && !studioView.includes("API_SERVER_KEY"), "Browser UI must not call Hermes directly or expose secrets.");

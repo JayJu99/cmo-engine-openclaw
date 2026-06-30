@@ -20,6 +20,14 @@ assert.match(dispatcherSource, /createStudioJobInputImageHandoffs/, "Dispatcher 
 assert.match(dispatcherSource, /workflow === "image_to_video"/, "Dispatcher must branch on image-to-video workflow.");
 assert.match(uiSource, /inputAssetIds: workflow === "image_to_video"/, "UI must send selected image asset id for image-to-video.");
 assert.match(uiSource, /validationModelForWorkflow[\s\S]*disabled_until_upload[\s\S]*enablement: "guarded"/, "Studio UI must not keep disabled_until_upload models blocked after image input is selected.");
+assert.match(uiSource, /type StudioReadinessState/, "Studio UI must expose an explicit readiness state machine.");
+assert.match(uiSource, /Upload an image to generate image-to-video\./, "Image-to-video without selected image must show the upload-image blocked reason.");
+assert.match(uiSource, /Image uploaded\. Checking Hermes cost estimate\.\.\./, "Image-to-video selected image must show image-uploaded cost pending copy.");
+assert.match(uiSource, /Checking Hermes cost estimate\.\.\./, "Cost loading must show explicit checking copy.");
+assert.match(uiSource, /costRequestSequenceRef/, "Cost estimate requests must use a sequence guard so stale responses cannot overwrite current selections.");
+assert.match(uiSource, /costFresh/, "Generate must require a fresh cost estimate for the current model/settings/input.");
+assert.match(uiSource, /Image-to-video ready/, "Image-to-video capable models with selected image must show ready copy.");
+assert.match(uiSource, /This model does not support image-to-video\./, "Unsupported image-to-video models must show the specific blocked reason.");
 
 const jiti = createJiti(import.meta.url, {
   interopDefault: true,

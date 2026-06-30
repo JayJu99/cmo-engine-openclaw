@@ -16,6 +16,10 @@ assert.match(assetSource, /\.createSignedUrl\(asset\.storage_key, 5 \* 60\)/, "I
 assert.match(initRouteSource, /jobId: stringValue\(body\.jobId/, "Init route must accept optional jobId.");
 assert.match(uiSource, /workflow === "image_to_video"/, "Studio UI must expose image-to-video workflow state.");
 assert.match(uiSource, /accept="image\/png,image\/jpeg,image\/webp"/, "Image-to-video input upload must accept image MIME types.");
+assert.match(uiSource, /Replace image/, "Image input upload should act as replace when an image is already selected.");
+assert.match(uiSource, /Pre-job input image is stored in Product storage and linked when you generate\./, "Studio UI must explain pre-job input image storage.");
+assert.match(uiSource, /setSelectedInputAssets\(\[asset\]\)/, "Studio UI must keep a single selected input image instead of duplicate selected cards.");
+assert.match(uiSource, /Image replaced\. Checking Hermes cost estimate\.\.\./, "Replacing an input image must clear stale cost and request a fresh estimate.");
 assert.doesNotMatch(uiSource, /disabled=\{!activeJob \|\| isUploadingInput\}/, "Image input upload must not require an active Studio job.");
 assert.doesNotMatch(assetSource, /bytesBase64|base64/, "Image input handoff must not use base64 JSON media.");
 assert.doesNotMatch(uiSource, /CMO_HERMES|API_SERVER_KEY|\/agents\/video/, "Browser UI must not expose Hermes details.");

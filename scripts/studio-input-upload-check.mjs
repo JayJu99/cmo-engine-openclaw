@@ -21,7 +21,7 @@ assert.match(uiSource, /\/api\/cmo\/studio\/assets\/ingest\/init/, "Studio UI mu
 assert.match(uiSource, /\/api\/cmo\/studio\/assets\/ingest\/complete/, "Studio UI must call Product input upload complete route.");
 assert.match(uiSource, /purpose: "studio_input"/, "Studio UI uploads must create studio_input assets.");
 assert.match(uiSource, /selectedInputAssets/, "Studio UI must keep selected input asset state.");
-assert.match(uiSource, /inputAssetIds: workflow === "image_to_video" \? selectedInputAssets\.filter/, "Studio UI must persist selected image input asset IDs when creating image-to-video jobs.");
+assert.match(uiSource, /inputAssetIds: workflow === "image_to_video" && inputAsset \? \[inputAsset\.id\] : \[\]/, "Studio UI must persist the single selected image input asset ID when creating image-to-video jobs.");
 assert.match(jobsRouteSource, /inputAssetIdsFromBody/, "Jobs route must accept input asset IDs.");
 assert.match(dispatcherSource, /images: inputImages[\s\S]*videos: \[\][\s\S]*audio: \[\]/, "Hermes image-to-video execute payload must send selected image inputs server-side.");
 assert.doesNotMatch(uiSource, /CMO_HERMES|API_SERVER_KEY|\/agents\/video/, "Browser upload UI must not expose Hermes or server secrets.");

@@ -113,6 +113,34 @@ interface CostEstimate {
   model?: string;
 }
 
+type StudioReadinessState =
+  | "empty_prompt"
+  | "missing_image"
+  | "uploading_input"
+  | "loading_catalog"
+  | "checking_cost"
+  | "cost_unavailable"
+  | "settings_invalid"
+  | "unsupported_workflow"
+  | "ready"
+  | "creating_job"
+  | "job_running"
+  | "completed"
+  | "failed";
+
+type StudioCostRequestState = "idle" | "checking" | "ready" | "unavailable";
+
+interface StudioReadiness {
+  state: StudioReadinessState;
+  message: string;
+  blockedReason: string | null;
+  costHelper: string;
+  buttonLabel: string;
+  canGenerate: boolean;
+  badgeLabel: string;
+  badgeVariant: "green" | "orange" | "slate" | "blue";
+}
+
 interface StudioVideoAgentStatus {
   configured: boolean;
   connected: boolean;
@@ -215,6 +243,10 @@ function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function selectedImageAsset(assets: StudioInputAsset[]): StudioInputAsset | null {
+  return assets.find((asset) => asset.media_kind === "image") ?? null;
+}
+
 function modelFromApi(value: unknown): StudioVideoModel | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -270,20 +302,88 @@ function modelFromApi(value: unknown): StudioVideoModel | null {
   };
 }
 
-function modelReadinessLabel(model: StudioVideoModel): string {
-  if (model.requiredInputStatus) {
-    return model.requiredInputStatus;
+function workflowModelStatusLabel(model: StudioVideoModel, workflow: StudioVideoWorkflow, hasImageInput: boolean): string {
+  if (workflow === "image_to_video") {
+    if (!studioModelSupportsWorkflowOperation(model, "image_to_video")) {
+      return "Not image-to-video";
+    }
+
+    if (unsupportedStudioWorkflowInputStatus(model, "image_to_video")) {
+      return model.requiredInputStatus ?? "Requires unsupported input";
+    }
+
+    if (!hasImageInput) {
+      return "Upload image required";
+    }
+
+    return model.enablement === "needs_smoke" ? "Needs smoke" : "Image-to-video ready";
   }
 
-  if (model.costSupported === false) {
-    return "Cost unsupported";
+  if (!studioModelSupportsWorkflowOperation(model, "text_to_video")) {
+    return "Not text-to-video";
+  }
+
+  if (unsupportedStudioWorkflowInputStatus(model, "text_to_video")) {
+    return model.requiredInputStatus ?? "Requires unsupported input";
   }
 
   if (model.enablement === "needs_smoke") {
-    return "Not smoke-tested";
+    return "Needs smoke";
   }
 
-  return model.enablementLabel ?? enablementLabel(model.enablement);
+  if (model.enablement === "disabled_until_upload") {
+    return "Requires upload";
+  }
+
+  if (model.enablement === "unavailable") {
+    return "Unavailable";
+  }
+
+  return "Text-to-video ready";
+}
+
+function workflowModelStatusVariant(model: StudioVideoModel, workflow: StudioVideoWorkflow, hasImageInput: boolean): "green" | "orange" | "slate" {
+  if (workflow === "image_to_video" && supportsStudioWorkflow(model, "image_to_video", { hasImageInput })) {
+    return model.enablement === "needs_smoke" ? "orange" : "green";
+  }
+
+  if (workflow === "text_to_video" && supportsStudioWorkflow(model, "text_to_video")) {
+    return model.enablement === "needs_smoke" ? "orange" : "green";
+  }
+
+  if (workflow === "image_to_video" && studioModelSupportsWorkflowOperation(model, "image_to_video") && !hasImageInput) {
+    return "orange";
+  }
+
+  return "slate";
+}
+
+function modelSelectorRank(model: StudioVideoModel, workflow: StudioVideoWorkflow, hasImageInput: boolean): number {
+  if (supportsStudioWorkflow(model, workflow, { hasImageInput })) {
+    return 0;
+  }
+
+  if (workflow === "image_to_video" && studioModelSupportsWorkflowOperation(model, "image_to_video") && !unsupportedStudioWorkflowInputStatus(model, "image_to_video")) {
+    return 1;
+  }
+
+  if (unsupportedStudioWorkflowInputStatus(model, workflow)) {
+    return 2;
+  }
+
+  return 3;
+}
+
+function modelSelectorLabel(model: StudioVideoModel, workflow: StudioVideoWorkflow, hasImageInput: boolean): string {
+  const readiness = workflowModelStatusLabel(model, workflow, hasImageInput);
+  const enablement = model.enablement === "needs_smoke" ? "Not smoke-tested" : model.enablementLabel ?? enablementLabel(model.enablement);
+  const cost = model.costSupported === false ? "Cost unavailable" : "Cost supported";
+
+  if (workflow === "image_to_video") {
+    return `${model.name} · ${readiness} · ${enablement} · ${cost} · up to ${model.maxResolution}`;
+  }
+
+  return `${model.name} · ${enablement} · ${cost} · up to ${model.maxResolution} · ${model.minDurationSeconds}s-${model.maxDurationSeconds}s`;
 }
 
 function canUseRealTextToVideoModel(model: StudioVideoModel): boolean {
@@ -314,15 +414,20 @@ function ModelHeroCard({
   model,
   agentConnected,
   realAvailable,
-  realAvailableLabel,
+  workflow,
+  hasImageInput,
   catalogSource,
 }: {
   model: StudioVideoModel;
   agentConnected: boolean;
   realAvailable: boolean;
-  realAvailableLabel: string;
+  workflow: StudioVideoWorkflow;
+  hasImageInput: boolean;
   catalogSource: string;
 }) {
+  const statusLabel = workflowModelStatusLabel(model, workflow, hasImageInput);
+  const statusVariant = workflowModelStatusVariant(model, workflow, hasImageInput);
+
   return (
     <div className="relative overflow-hidden rounded-lg border border-violet-200 bg-[linear-gradient(135deg,#ffffff_0%,#f5f3ff_54%,#eef2ff_100%)] p-4 shadow-sm">
       <div className="absolute right-4 top-4 grid size-12 place-items-center rounded-lg border border-white/80 bg-white/70 text-violet-700 shadow-sm">
@@ -343,10 +448,11 @@ function ModelHeroCard({
           </Badge>
         ))}
         <Badge variant="slate">{catalogSource}</Badge>
-        <Badge variant={model.enablement === "safe_now" ? "green" : model.enablement === "guarded" ? "orange" : "slate"}>
-          {model.enablementLabel ?? enablementLabel(model.enablement)}
+        <Badge variant={model.enablement === "safe_now" ? "green" : model.enablement === "guarded" || model.enablement === "needs_smoke" ? "orange" : "slate"}>
+          {model.enablement === "needs_smoke" ? "Needs smoke" : model.enablementLabel ?? enablementLabel(model.enablement)}
         </Badge>
-        {realAvailable ? <Badge variant="green">{realAvailableLabel}</Badge> : agentConnected ? <Badge variant="orange">Unavailable</Badge> : null}
+        <Badge variant={statusVariant}>{statusLabel}</Badge>
+        {!realAvailable && agentConnected && statusVariant === "slate" ? <Badge variant="orange">Unavailable</Badge> : null}
       </div>
       {[...(model.constraints ?? []), ...(model.warnings ?? [])].length ? (
         <div className="mt-3 space-y-1 text-xs font-semibold text-slate-600">
@@ -425,10 +531,14 @@ function CanvasPreview({
   aspectRatio,
   activeJob,
   agentConnected,
+  workflow,
+  selectedInputAssets,
 }: {
   aspectRatio: StudioAspectRatio;
   activeJob: StudioJob | null;
   agentConnected: boolean;
+  workflow: StudioVideoWorkflow;
+  selectedInputAssets: StudioInputAsset[];
 }) {
   const status = activeJob?.status ?? "draft";
   const complete = status === "completed";
@@ -448,6 +558,11 @@ function CanvasPreview({
   const thumbnailUrl = productThumbnailUrl ?? (typeof remoteResult?.thumbnail_url === "string" ? remoteResult.thumbnail_url : undefined);
   const uploadFailed = activeJob?.diagnostics_json?.artifact_transport_status === "upload_failed";
   const thumbnailUploaded = activeJob?.diagnostics_json?.thumbnail_upload_status === "product_uploaded";
+  const inputAsset = workflow === "image_to_video" ? selectedImageAsset(selectedInputAssets) : null;
+  const inputPreviewUrl = inputAsset
+    ? inputAsset.preview_url ?? inputAsset.render_url ?? `/api/cmo/studio/assets/${encodeURIComponent(inputAsset.id)}/preview`
+    : null;
+  const imageToVideoJob = Boolean(activeJob?.input_asset_ids?.length);
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -476,6 +591,7 @@ function CanvasPreview({
           <div className="absolute left-5 top-5 flex flex-wrap gap-2">
             <Badge variant="blue">Video</Badge>
             <Badge variant={statusBadgeVariant(status)}>{status === "draft" ? "empty" : status}</Badge>
+            {imageToVideoJob ? <Badge variant="blue">Image-to-video</Badge> : null}
             {productAssetUrl ? <Badge variant="green">Product-owned asset</Badge> : renderUrl ? <Badge variant="green">Remote Higgsfield result</Badge> : null}
             {thumbnailUploaded ? <Badge variant="green">Product-owned thumbnail</Badge> : null}
             {uploadFailed ? <Badge variant="orange">Upload failed fallback</Badge> : null}
@@ -500,8 +616,21 @@ function CanvasPreview({
                 <div className="mt-4 flex flex-wrap justify-center gap-2">
                   <Badge variant="slate">{jobModelName(activeJob)}</Badge>
                   <Badge variant="slate">{activeJob.settings_json.durationSeconds ?? 8}s</Badge>
+                  <Badge variant="slate">{activeJob.settings_json.aspectRatio ?? "16:9"}</Badge>
                   <Badge variant="slate">{activeJob.settings_json.resolution ?? "720p"}</Badge>
                   <Badge variant="slate">{activeJob.settings_json.bitrate ?? "standard"}</Badge>
+                  {productAssetUrl ? <Badge variant="green">Product-owned asset</Badge> : null}
+                  {thumbnailUploaded ? <Badge variant="green">Product-owned thumbnail</Badge> : null}
+                </div>
+              </div>
+            ) : inputPreviewUrl ? (
+              <div className="max-w-sm">
+                <div className="mx-auto overflow-hidden rounded-lg border border-white bg-white shadow-sm">
+                  <Image src={inputPreviewUrl} alt="" width={220} height={220} unoptimized className="aspect-square w-44 object-cover" />
+                </div>
+                <div className="mt-5 text-xl font-black text-slate-950">Input image ready</div>
+                <div className="mt-2 text-sm font-semibold leading-6 text-slate-600">
+                  Selected Product input is ready for image-to-video generation.
                 </div>
               </div>
             ) : (
@@ -531,7 +660,7 @@ function StudioConsole({
   imageModeEnabled,
   videoAgentStatus,
   modelRealAvailable,
-  generateBlockedReason,
+  readiness,
   workflow,
   prompt,
   model,
@@ -545,7 +674,6 @@ function StudioConsole({
   selectedInputAssets,
   isUploadingInput,
   uploadStatus,
-  isGenerating,
   error,
   onPromptChange,
   onWorkflowChange,
@@ -561,7 +689,7 @@ function StudioConsole({
   imageModeEnabled: boolean;
   videoAgentStatus: StudioVideoAgentStatus | null;
   modelRealAvailable: boolean;
-  generateBlockedReason: string | null;
+  readiness: StudioReadiness;
   workflow: StudioVideoWorkflow;
   prompt: string;
   model: StudioVideoModel;
@@ -575,7 +703,6 @@ function StudioConsole({
   selectedInputAssets: StudioInputAsset[];
   isUploadingInput: boolean;
   uploadStatus: string | null;
-  isGenerating: boolean;
   error: string | null;
   onPromptChange: (value: string) => void;
   onWorkflowChange: (value: StudioVideoWorkflow) => void;
@@ -589,11 +716,18 @@ function StudioConsole({
   onGenerate: () => void;
 }) {
   const uploadInputRef = useRef<HTMLInputElement>(null);
-  const generateLabel = costEstimate?.estimateAvailable && costEstimate.label
-    ? `Generate · ${costEstimate.label}`
-    : "Generate";
   const agentConnected = videoAgentStatus?.connected === true;
   const isImageWorkflow = workflow === "image_to_video";
+  const inputAsset = selectedImageAsset(selectedInputAssets);
+  const hasImageInput = Boolean(inputAsset);
+  const modelOptions = useMemo(
+    () => [...models].sort((left, right) => {
+      const rankDelta = modelSelectorRank(left, workflow, hasImageInput) - modelSelectorRank(right, workflow, hasImageInput);
+
+      return rankDelta || left.name.localeCompare(right.name);
+    }),
+    [hasImageInput, models, workflow],
+  );
   const aspectRatioOptions = model.supportedAspectRatios?.length ? model.supportedAspectRatios : STUDIO_ASPECT_RATIOS;
   const resolutionOptions = model.supportedResolutions.length ? model.supportedResolutions : STUDIO_RESOLUTIONS;
   const bitrateOptions = model.supportedBitrates?.length
@@ -642,9 +776,14 @@ function StudioConsole({
           model={model}
           agentConnected={agentConnected}
           realAvailable={modelRealAvailable}
-          realAvailableLabel={workflow === "image_to_video" ? "Image-to-video ready" : "Real enabled"}
+          workflow={workflow}
+          hasImageInput={hasImageInput}
           catalogSource={catalogSource}
         />
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+          <span className="text-xs font-bold uppercase text-slate-500">Generation readiness</span>
+          <Badge variant={readiness.badgeVariant}>{readiness.badgeLabel}</Badge>
+        </div>
 
         <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-5">
           <input
@@ -681,18 +820,17 @@ function StudioConsole({
               <icons.Upload className="size-4" />
             </span>
           </span>
-            <span className="mt-4 text-lg font-bold text-slate-500">{isUploadingInput ? "Uploading image..." : "Upload image"}</span>
+            <span className="mt-4 text-lg font-bold text-slate-500">{isUploadingInput ? "Uploading image..." : inputAsset ? "Replace image" : "Upload image"}</span>
             <span className="mt-1 text-sm font-bold text-slate-500">
               {isImageWorkflow ? "Product input image for image-to-video" : "Switch to Image to Video to upload an input image"}
             </span>
           </button>
           {uploadStatus ? <div className="mt-3 text-center text-xs font-bold text-slate-500">{uploadStatus}</div> : null}
-          {selectedInputAssets.length ? (
+          {inputAsset ? (
             <div className="mt-4 grid gap-2">
-              {selectedInputAssets.map((asset) => {
+              {[inputAsset].map((asset) => {
                 const previewUrl = asset.preview_url ?? asset.render_url ?? `/api/cmo/studio/assets/${encodeURIComponent(asset.id)}/preview`;
                 const name = asset.metadata_json?.original_filename ?? asset.mime_type ?? asset.id;
-
                 return (
                   <div key={asset.id} className="grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-slate-200 bg-white p-2">
                     <span className="grid aspect-square place-items-center overflow-hidden rounded bg-slate-100 text-slate-500">
@@ -708,12 +846,20 @@ function StudioConsole({
                         {asset.media_kind ?? "asset"} {typeof asset.bytes === "number" ? `· ${Math.round(asset.bytes / 1024)} KB` : ""}
                       </span>
                     </span>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => onRemoveInputAsset(asset.id)}>
-                      Remove
-                    </Button>
+                    <span className="flex gap-1">
+                      <Button type="button" variant="ghost" size="sm" onClick={() => uploadInputRef.current?.click()}>
+                        Replace
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => onRemoveInputAsset(asset.id)}>
+                        Remove
+                      </Button>
+                    </span>
                   </div>
                 );
               })}
+              <div className="text-xs font-semibold text-slate-500">
+                Pre-job input image is stored in Product storage and linked when you generate.
+              </div>
             </div>
           ) : null}
         </div>
@@ -734,9 +880,9 @@ function StudioConsole({
             onChange={(event) => onModelChange(event.target.value)}
             className="h-12 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-950 outline-none transition focus:border-violet-300 focus:ring-4 focus:ring-violet-100"
           >
-            {models.map((item) => (
+            {modelOptions.map((item) => (
               <option key={item.id} value={item.id}>
-                {item.name} · {modelReadinessLabel(item)} · {item.costSupported === false ? "Cost unavailable" : "Cost supported"} · up to {item.maxResolution} · {item.minDurationSeconds}s-{item.maxDurationSeconds}s
+                {modelSelectorLabel(item, workflow, hasImageInput)}
               </option>
             ))}
           </select>
@@ -815,9 +961,19 @@ function StudioConsole({
         </div>
 
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-600">
-          {costEstimate?.estimateAvailable && costEstimate.label
-            ? `${costEstimate.mode === "hermes" ? "Hermes cost estimate" : "Mock cost estimate"}: ${costEstimate.label}`
-            : costEstimate?.reason ?? "Cost estimate unavailable"}
+          <div className="flex items-center justify-between gap-3">
+            <span>
+              {costEstimate?.estimateAvailable && costEstimate.label && readiness.state !== "checking_cost"
+                ? `${costEstimate.mode === "hermes" ? "Hermes cost estimate" : "Mock cost estimate"}: ${costEstimate.label}`
+                : readiness.costHelper}
+            </span>
+            {readiness.state === "checking_cost" ? (
+              <span className="h-2 w-24 overflow-hidden rounded-full bg-slate-200">
+                <span className="block h-full w-2/3 animate-pulse rounded-full bg-violet-500" />
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-2 text-xs font-bold text-slate-500">{readiness.message}</div>
         </div>
 
         {(model.enablement === "needs_smoke" || costEstimate?.warning) ? (
@@ -826,9 +982,9 @@ function StudioConsole({
           </div>
         ) : null}
 
-        {generateBlockedReason ? (
+        {readiness.blockedReason ? (
           <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm font-semibold text-orange-700">
-            {generateBlockedReason}
+            {readiness.blockedReason}
           </div>
         ) : null}
 
@@ -838,24 +994,251 @@ function StudioConsole({
           </div>
         ) : null}
 
-        <Button className="h-14 w-full rounded-lg text-base" size="lg" disabled={isGenerating || !prompt.trim() || Boolean(generateBlockedReason)} onClick={onGenerate}>
+        <Button className="h-14 w-full rounded-lg text-base" size="lg" disabled={!readiness.canGenerate} onClick={onGenerate}>
           <icons.Sparkles />
-          {isGenerating ? "Creating job..." : generateLabel}
+          {readiness.buttonLabel}
         </Button>
       </div>
     </Card>
   );
 }
 
+function clientErrorMessage(body: Record<string, unknown>, fallback: string): string {
+  const code = typeof body.code === "string" ? body.code : "";
+  const error = typeof body.error === "string" ? body.error : fallback;
+
+  if (code === "video_agent_unreachable" || code === "video_agent_not_configured") {
+    return "Hermes Video Agent is offline. Check gateway status.";
+  }
+
+  if (code === "video_agent_cost_unavailable" || code === "video_agent_invalid_response") {
+    return "Hermes could not estimate this configuration. Try another model or shorter duration.";
+  }
+
+  if (code === "studio_asset_handoff_failed" || code === "video_agent_input_required") {
+    return "Could not prepare input image for Hermes. Re-upload the image and try again.";
+  }
+
+  if (code === "video_agent_execution_failed") {
+    return "Higgsfield generation failed. Try another model or prompt.";
+  }
+
+  return error.replace(/[a-zA-Z]:[\\/][^\s"'<>]+/g, "[local path]").replace(/file:\/\/[^\s"'<>]+/g, "[local path]");
+}
+
 async function parseJsonResponse(response: Response): Promise<Record<string, unknown>> {
   const body = await response.json() as unknown;
 
   if (!response.ok) {
-    const error = body && typeof body === "object" && "error" in body ? String((body as { error?: unknown }).error) : "Studio request failed.";
-    throw new Error(error);
+    const record = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {};
+
+    throw new Error(clientErrorMessage(record, "Studio request failed."));
   }
 
   return body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {};
+}
+
+function studioReadiness(input: {
+  workflow: StudioVideoWorkflow;
+  prompt: string;
+  model: StudioVideoModel;
+  hasImageInput: boolean;
+  isUploadingInput: boolean;
+  isGenerating: boolean;
+  catalogLoading: boolean;
+  settingsBlockedReason: string | null;
+  workflowBlockedReason: string | null;
+  enablementBlockedReason: string | null;
+  modelRealAvailable: boolean;
+  realVideoEnabled: boolean;
+  costRequestState: StudioCostRequestState;
+  costEstimate: CostEstimate | null;
+  costFresh: boolean;
+  activeJob: StudioJob | null;
+}): StudioReadiness {
+  const costLabel = input.costEstimate?.estimateAvailable && input.costEstimate.label
+    ? input.costEstimate.label
+    : null;
+  const runningJob = input.activeJob?.status === "queued" || input.activeJob?.status === "running";
+  const failedJob = input.activeJob?.status === "failed";
+  const completedJob = input.activeJob?.status === "completed";
+
+  if (input.isGenerating) {
+    return {
+      state: "creating_job",
+      message: input.workflow === "image_to_video" ? "Creating image-to-video job..." : "Creating Studio job...",
+      blockedReason: null,
+      costHelper: costLabel ? `Refreshing estimate... ${costLabel}` : "Refreshing estimate...",
+      buttonLabel: "Creating job...",
+      canGenerate: false,
+      badgeLabel: "Creating job",
+      badgeVariant: "orange",
+    };
+  }
+
+  if (input.workflow === "image_to_video" && input.isUploadingInput) {
+    return {
+      state: "uploading_input",
+      message: "Uploading image to Product storage...",
+      blockedReason: "Uploading image to Product storage...",
+      costHelper: "Uploading image to Product storage...",
+      buttonLabel: "Generate",
+      canGenerate: false,
+      badgeLabel: "Uploading image",
+      badgeVariant: "orange",
+    };
+  }
+
+  if (input.workflow === "image_to_video" && !input.hasImageInput) {
+    return {
+      state: "missing_image",
+      message: "Upload an image to generate image-to-video.",
+      blockedReason: "Upload an image to generate image-to-video.",
+      costHelper: "Upload an image to generate image-to-video.",
+      buttonLabel: "Generate",
+      canGenerate: false,
+      badgeLabel: "Image required",
+      badgeVariant: "orange",
+    };
+  }
+
+  if (!input.prompt.trim()) {
+    return {
+      state: "empty_prompt",
+      message: "Enter a prompt to estimate cost.",
+      blockedReason: "Enter a prompt to estimate cost.",
+      costHelper: "Enter a prompt to estimate cost.",
+      buttonLabel: "Generate",
+      canGenerate: false,
+      badgeLabel: "Prompt required",
+      badgeVariant: "slate",
+    };
+  }
+
+  if (input.catalogLoading) {
+    return {
+      state: "loading_catalog",
+      message: "Loading Hermes model catalog...",
+      blockedReason: "Loading Hermes model catalog...",
+      costHelper: "Loading Hermes model catalog...",
+      buttonLabel: "Generate",
+      canGenerate: false,
+      badgeLabel: "Loading catalog",
+      badgeVariant: "orange",
+    };
+  }
+
+  if (input.realVideoEnabled && (input.workflowBlockedReason || input.enablementBlockedReason || !input.modelRealAvailable)) {
+    const blockedReason = input.workflowBlockedReason ?? input.enablementBlockedReason ?? "Selected model is not available for real Studio video generation.";
+
+    return {
+      state: "unsupported_workflow",
+      message: blockedReason,
+      blockedReason,
+      costHelper: blockedReason,
+      buttonLabel: "Generate",
+      canGenerate: false,
+      badgeLabel: input.workflow === "image_to_video" ? "Not image-to-video" : "Unavailable",
+      badgeVariant: "slate",
+    };
+  }
+
+  if (input.settingsBlockedReason) {
+    return {
+      state: "settings_invalid",
+      message: input.settingsBlockedReason,
+      blockedReason: input.settingsBlockedReason,
+      costHelper: input.settingsBlockedReason,
+      buttonLabel: "Generate",
+      canGenerate: false,
+      badgeLabel: "Settings invalid",
+      badgeVariant: "orange",
+    };
+  }
+
+  if (input.costRequestState === "checking") {
+    const message = input.workflow === "image_to_video" && input.hasImageInput
+      ? "Image uploaded. Checking Hermes cost estimate..."
+      : "Checking Hermes cost estimate...";
+
+    return {
+      state: "checking_cost",
+      message,
+      blockedReason: message,
+      costHelper: costLabel ? `Refreshing estimate... ${costLabel}` : message,
+      buttonLabel: "Checking cost...",
+      canGenerate: false,
+      badgeLabel: "Checking cost",
+      badgeVariant: "orange",
+    };
+  }
+
+  if (!input.costFresh) {
+    const message = input.workflow === "image_to_video"
+      ? "Cost estimate unavailable for this image-to-video setup."
+      : "Cost estimate unavailable. Adjust model/settings or try again.";
+
+    return {
+      state: "cost_unavailable",
+      message,
+      blockedReason: message,
+      costHelper: message,
+      buttonLabel: "Generate",
+      canGenerate: false,
+      badgeLabel: "Cost unavailable",
+      badgeVariant: "orange",
+    };
+  }
+
+  if (runningJob) {
+    return {
+      state: "job_running",
+      message: "Generating with Hermes Video Agent...",
+      blockedReason: "Generating with Hermes Video Agent...",
+      costHelper: costLabel ? `Hermes cost estimate: ${costLabel}` : "Hermes cost estimate ready.",
+      buttonLabel: "Generating...",
+      canGenerate: false,
+      badgeLabel: "Job running",
+      badgeVariant: "orange",
+    };
+  }
+
+  if (failedJob) {
+    return {
+      state: "failed",
+      message: "Generation failed. Adjust the prompt or model and try again.",
+      blockedReason: null,
+      costHelper: costLabel ? `Hermes cost estimate: ${costLabel}` : "Hermes cost estimate ready.",
+      buttonLabel: costLabel ? `Generate · ${costLabel}` : "Generate",
+      canGenerate: true,
+      badgeLabel: "Ready after failure",
+      badgeVariant: "orange",
+    };
+  }
+
+  if (completedJob) {
+    return {
+      state: "completed",
+      message: input.workflow === "image_to_video" ? "Ready to generate from selected image." : "Ready to generate.",
+      blockedReason: null,
+      costHelper: costLabel ? `Hermes cost estimate: ${costLabel}` : "Hermes cost estimate ready.",
+      buttonLabel: costLabel ? `Generate · ${costLabel}` : "Generate",
+      canGenerate: true,
+      badgeLabel: "Ready",
+      badgeVariant: "green",
+    };
+  }
+
+  return {
+    state: "ready",
+    message: input.workflow === "image_to_video" ? "Ready to generate from selected image." : "Ready to generate.",
+    blockedReason: null,
+    costHelper: costLabel ? `Hermes cost estimate: ${costLabel}` : "Hermes cost estimate ready.",
+    buttonLabel: costLabel ? `Generate · ${costLabel}` : "Generate",
+    canGenerate: true,
+    badgeLabel: "Ready",
+    badgeVariant: "green",
+  };
 }
 
 export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: boolean }) {
@@ -867,6 +1250,8 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   const [resolution, setResolution] = useState<StudioResolution>("720p");
   const [bitrate, setBitrate] = useState<StudioBitrate>("standard");
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
+  const [costRequestState, setCostRequestState] = useState<StudioCostRequestState>("idle");
+  const [costEstimateKey, setCostEstimateKey] = useState<string | null>(null);
   const [jobs, setJobs] = useState<StudioJob[]>([]);
   const [activeJob, setActiveJob] = useState<StudioJob | null>(null);
   const [videoAgentStatus, setVideoAgentStatus] = useState<StudioVideoAgentStatus | null>(null);
@@ -879,16 +1264,27 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const userSelectedModelRef = useRef(false);
+  const costRequestSequenceRef = useRef(0);
 
   const model = useMemo(() => findStudioVideoModel(videoModels, modelId), [modelId, videoModels]);
   const agentConnected = videoAgentStatus?.connected === true;
   const realVideoEnabled = videoAgentStatus?.realVideoEnabled === true;
-  const hasImageInput = selectedInputAssets.some((asset) => asset.media_kind === "image");
+  const inputAsset = selectedImageAsset(selectedInputAssets);
+  const hasImageInput = Boolean(inputAsset);
+  const costInputKey = useMemo(() => JSON.stringify({
+    workflow,
+    prompt: prompt.trim(),
+    modelId: model.id,
+    providerModelId: model.providerModelId ?? null,
+    duration,
+    aspectRatio,
+    resolution,
+    bitrate,
+    inputImageId: workflow === "image_to_video" ? inputAsset?.id ?? null : null,
+  }), [aspectRatio, bitrate, duration, inputAsset?.id, model.id, model.providerModelId, prompt, resolution, workflow]);
+  const costFresh = costRequestState === "ready" && costEstimateKey === costInputKey && costEstimate?.estimateAvailable === true;
   const modelRealAvailable = agentConnected && modelAvailableForWorkflow(model, workflow, hasImageInput) && Boolean(model.providerModelId && hermesModelIds.has(model.providerModelId));
   const settingsBlockedReason = validateStudioVideoSettings({ model: validationModelForWorkflow(model, workflow, hasImageInput), durationSeconds: duration, aspectRatio, resolution, bitrate });
-  const imageInputBlockedReason = realVideoEnabled && workflow === "image_to_video" && !hasImageInput
-    ? "Upload an image to generate image-to-video."
-    : null;
   const workflowBlockedReason = realVideoEnabled && workflow === "image_to_video" && hasImageInput && !studioModelSupportsWorkflowOperation(model, "image_to_video")
     ? "This model does not support image-to-video."
     : realVideoEnabled && workflow === "image_to_video" && hasImageInput
@@ -897,14 +1293,37 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   const enablementBlockedReason = realVideoEnabled && workflow === "text_to_video" && (model.enablement === "disabled_until_upload" || model.enablement === "unavailable")
     ? model.disabledReason ?? disabledReasonForEnablement(model.enablement)
     : null;
-  const costBlockedReason = realVideoEnabled && model.costSupported === false
-    ? "Cost estimate unavailable."
-    : realVideoEnabled && (!costEstimate?.estimateAvailable || costEstimate.mode !== "hermes")
-      ? costEstimate?.reason ?? "Cost estimate unavailable."
-    : null;
-  const generateBlockedReason = realVideoEnabled
-    ? imageInputBlockedReason ?? workflowBlockedReason ?? enablementBlockedReason ?? settingsBlockedReason ?? costBlockedReason ?? (!modelRealAvailable ? "Selected model is not available for real Studio video generation." : null)
-    : null;
+  const canAttemptCostEstimate = Boolean(prompt.trim())
+    && (workflow !== "image_to_video" || hasImageInput)
+    && !isUploadingInput
+    && videoAgentStatus !== null
+    && !settingsBlockedReason
+    && !workflowBlockedReason
+    && !enablementBlockedReason
+    && (!realVideoEnabled || modelRealAvailable);
+  const effectiveCostRequestState: StudioCostRequestState = !canAttemptCostEstimate
+    ? "idle"
+    : costEstimateKey !== costInputKey
+      ? "checking"
+      : costRequestState;
+  const readiness = studioReadiness({
+    workflow,
+    prompt,
+    model,
+    hasImageInput,
+    isUploadingInput,
+    isGenerating,
+    catalogLoading: videoAgentStatus === null,
+    settingsBlockedReason,
+    workflowBlockedReason,
+    enablementBlockedReason,
+    modelRealAvailable,
+    realVideoEnabled,
+    costRequestState: effectiveCostRequestState,
+    costEstimate,
+    costFresh,
+    activeJob,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -976,9 +1395,15 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    const requestSequence = costRequestSequenceRef.current + 1;
+    const currentCostKey = costInputKey;
+    costRequestSequenceRef.current = requestSequence;
 
-    async function estimateCost() {
+    if (!canAttemptCostEstimate) {
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
       try {
         const response = await fetch("/api/cmo/studio/cost/estimate", {
           method: "POST",
@@ -997,7 +1422,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
               provider_model_id: model.providerModelId,
               label: model.name,
             },
-            inputAssetIds: workflow === "image_to_video" ? selectedInputAssets.filter((asset) => asset.media_kind === "image").slice(0, 1).map((asset) => asset.id) : [],
+            inputAssetIds: workflow === "image_to_video" && inputAsset ? [inputAsset.id] : [],
             settings: {
               durationSeconds: duration,
               aspectRatio,
@@ -1008,23 +1433,50 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
           }),
         });
         const body = await parseJsonResponse(response);
+        const estimate = costEstimateFromBody(body);
 
-        if (!cancelled) {
-          setCostEstimate(costEstimateFromBody(body));
+        if (costRequestSequenceRef.current === requestSequence) {
+          setCostEstimate(estimate);
+          setCostEstimateKey(currentCostKey);
+          setCostRequestState(estimate.estimateAvailable ? "ready" : "unavailable");
         }
-      } catch {
-        if (!cancelled) {
-          setCostEstimate({ estimateAvailable: false });
+      } catch (costError) {
+        if (costRequestSequenceRef.current === requestSequence) {
+          setCostEstimate({
+            estimateAvailable: false,
+            reason: costError instanceof Error ? costError.message : undefined,
+          });
+          setCostEstimateKey(currentCostKey);
+          setCostRequestState("unavailable");
         }
       }
-    }
-
-    void estimateCost();
+    }, 400);
 
     return () => {
-      cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [model, prompt, duration, aspectRatio, resolution, bitrate, workflow, selectedInputAssets]);
+  }, [
+    aspectRatio,
+    bitrate,
+    costInputKey,
+    canAttemptCostEstimate,
+    duration,
+    enablementBlockedReason,
+    hasImageInput,
+    inputAsset,
+    isUploadingInput,
+    model.id,
+    model.name,
+    model.providerModelId,
+    modelRealAvailable,
+    prompt,
+    realVideoEnabled,
+    resolution,
+    settingsBlockedReason,
+    videoAgentStatus,
+    workflow,
+    workflowBlockedReason,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1092,7 +1544,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   }, [activeJob]);
 
   async function generateJob() {
-    if (generateBlockedReason) {
+    if (!readiness.canGenerate) {
       setError(null);
       return;
     }
@@ -1127,8 +1579,8 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             bitrate,
             variants: 1,
           },
-          inputAssetIds: workflow === "image_to_video" ? selectedInputAssets.filter((asset) => asset.media_kind === "image").slice(0, 1).map((asset) => asset.id) : [],
-          ...(costEstimate?.mode === "hermes" ? { costEstimate } : {}),
+          inputAssetIds: workflow === "image_to_video" && inputAsset ? [inputAsset.id] : [],
+          ...(costFresh && costEstimate?.mode === "hermes" ? { costEstimate } : {}),
         }),
       });
       const body = await parseJsonResponse(response);
@@ -1163,6 +1615,8 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
       return;
     }
 
+    const replacingImage = Boolean(selectedImageAsset(selectedInputAssets));
+
     setError(null);
     setIsUploadingInput(true);
     setUploadStatus("Preparing Product upload session...");
@@ -1186,7 +1640,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
         throw new Error("Studio upload session response was incomplete.");
       }
 
-      setUploadStatus("Uploading to Product storage...");
+      setUploadStatus("Uploading image to Product storage...");
       const uploadResponse = await fetch(uploadTarget, {
         method: "PUT",
         headers: { "content-type": file.type },
@@ -1215,7 +1669,9 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
       }
 
       setSelectedInputAssets([asset]);
-      setUploadStatus("Input media uploaded to Product storage.");
+      setCostEstimateKey(null);
+      setCostRequestState("checking");
+      setUploadStatus(replacingImage ? "Image replaced. Checking Hermes cost estimate..." : "Image uploaded. Checking Hermes cost estimate...");
     } catch (uploadError) {
       setUploadStatus(uploadError instanceof Error ? uploadError.message : "Input media upload failed.");
     } finally {
@@ -1252,7 +1708,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             imageModeEnabled={imageModeEnabled}
             videoAgentStatus={videoAgentStatus}
             modelRealAvailable={modelRealAvailable}
-            generateBlockedReason={generateBlockedReason}
+            readiness={readiness}
             workflow={workflow}
             prompt={prompt}
             model={model}
@@ -1266,7 +1722,6 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             selectedInputAssets={selectedInputAssets}
             isUploadingInput={isUploadingInput}
             uploadStatus={uploadStatus}
-            isGenerating={isGenerating}
             error={error}
             onPromptChange={handlePromptChange}
             onWorkflowChange={setWorkflow}
@@ -1276,14 +1731,24 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             onResolutionChange={handleResolutionChange}
             onBitrateChange={setBitrate}
             onUploadInput={uploadInputAsset}
-            onRemoveInputAsset={(assetId) => setSelectedInputAssets((current) => current.filter((asset) => asset.id !== assetId))}
+            onRemoveInputAsset={(assetId) => {
+              setSelectedInputAssets((current) => current.filter((asset) => asset.id !== assetId));
+              setCostEstimateKey(null);
+              setCostRequestState("idle");
+            }}
             onGenerate={generateJob}
           />
           <HistoryPanel jobs={jobs} activeJobId={activeJob?.id ?? null} onSelect={setActiveJob} />
         </div>
 
         <main className="min-w-0 space-y-5">
-          <CanvasPreview aspectRatio={aspectRatio} activeJob={activeJob} agentConnected={agentConnected} />
+          <CanvasPreview
+            aspectRatio={aspectRatio}
+            activeJob={activeJob}
+            agentConnected={agentConnected}
+            workflow={workflow}
+            selectedInputAssets={selectedInputAssets}
+          />
 
           <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
