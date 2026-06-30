@@ -14,7 +14,7 @@ assert.match(costRouteSource, /createStudioInputImageHandoffs/, "Cost route must
 assert.match(costRouteSource, /inputs:[\s\S]*images: handoffImages/, "Cost route must send inputs.images to Hermes.");
 assert.match(costRouteSource, /validationModelForWorkflow[\s\S]*disabled_until_upload[\s\S]*enablement: "guarded"/, "Cost route must allow disabled_until_upload models after an image input is selected.");
 assert.match(jobsRouteSource, /Upload an image to generate image-to-video\./, "Jobs route must block image-to-video without an image.");
-assert.match(jobsRouteSource, /canGenerateImageToVideo/, "Jobs route must validate image-to-video model capability.");
+assert.match(jobsRouteSource, /supportsStudioWorkflow/, "Jobs route must validate image-to-video model capability through the shared workflow gate.");
 assert.match(jobsRouteSource, /validationModelForWorkflow[\s\S]*disabled_until_upload[\s\S]*enablement: "guarded"/, "Jobs route must allow disabled_until_upload models after an image input is selected.");
 assert.match(dispatcherSource, /createStudioJobInputImageHandoffs/, "Dispatcher must load input image assets before execute.");
 assert.match(dispatcherSource, /workflow === "image_to_video"/, "Dispatcher must branch on image-to-video workflow.");
@@ -26,6 +26,51 @@ const jiti = createJiti(import.meta.url, {
   alias: { "@": resolve(root, "src"), "server-only": resolve(root, "scripts/server-only-noop.cjs") },
 });
 const { buildHermesVideoExecuteRequest } = await jiti.import(resolve(root, "src/lib/cmo/studio-dispatcher.ts"));
+const { supportsStudioWorkflow, studioModelSupportsWorkflowOperation } = await jiti.import(resolve(root, "src/lib/cmo/studio-model-catalog.ts"));
+const optionalImageModel = {
+  id: "seedance_2_0",
+  uiId: "seedance_2_0",
+  providerModelId: "seedance_2_0",
+  name: "Seedance 2.0",
+  providerLabel: "Higgsfield",
+  maxResolution: "720p",
+  supportedResolutions: ["720p"],
+  minDurationSeconds: 4,
+  maxDurationSeconds: 15,
+  supportsAudio: false,
+  badges: [],
+  costSupported: true,
+  realVideoSupported: false,
+  enablement: "safe_now",
+  operations: ["text_to_video", "image_to_video"],
+  inputsRequired: ["prompt"],
+  inputsOptional: ["start_image"],
+  canGenerateTextToVideo: true,
+  canGenerateImageToVideo: false,
+};
+const needsSmokeOptionalImageModel = {
+  ...optionalImageModel,
+  id: "kling3_0_turbo",
+  uiId: "kling3_0_turbo",
+  providerModelId: "kling3_0_turbo",
+  name: "Kling 3.0 Turbo",
+  enablement: "needs_smoke",
+};
+const textOnlyModel = {
+  ...optionalImageModel,
+  id: "text_only",
+  uiId: "text_only",
+  providerModelId: "text_only",
+  operations: ["text_to_video"],
+  inputsOptional: [],
+};
+
+assert.equal(supportsStudioWorkflow(optionalImageModel, "image_to_video", { hasImageInput: true }), true, "Seedance optional start_image catalog shape must not be blocked for image-to-video.");
+assert.equal(supportsStudioWorkflow(needsSmokeOptionalImageModel, "image_to_video", { hasImageInput: true }), true, "needs_smoke image-to-video models must warn only, not hard block.");
+assert.equal(supportsStudioWorkflow(optionalImageModel, "image_to_video", { hasImageInput: false }), false, "Image-to-video must require a selected Product image input.");
+assert.equal(studioModelSupportsWorkflowOperation(textOnlyModel, "image_to_video"), false, "Models without image_to_video operation must be blocked.");
+assert.equal(supportsStudioWorkflow(optionalImageModel, "text_to_video"), true, "Text-to-video must continue to pass for optional image models.");
+
 const imageInput = {
   asset_id: "studio_asset_input_001",
   role: "start_image",

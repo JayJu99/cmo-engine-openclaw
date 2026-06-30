@@ -198,10 +198,6 @@ function unsupportedImageInputStatus(inputsRequired: string[]): string | null {
   return unsupported ? `This model requires unsupported input: ${unsupported}.` : null;
 }
 
-function requiresImageInput(inputsRequired: string[]): boolean {
-  return inputsRequired.some((item) => item !== "prompt" && item !== "text");
-}
-
 function productEnablementPolicy(input: {
   enablement: StudioVideoEnablement;
   providerModelId?: string;
@@ -210,12 +206,13 @@ function productEnablementPolicy(input: {
   costSupported: boolean;
 }): StudioVideoEnablement {
   const requiresUnsupportedMedia = requiredInputStatus(input.inputsRequired) !== null;
+  const imageToVideoCapable = supportsImageToVideo(input.operations) && !unsupportedImageInputStatus(input.inputsRequired);
 
   if (requiresUnsupportedMedia) {
-    return "disabled_until_upload";
+    return imageToVideoCapable ? "disabled_until_upload" : "unavailable";
   }
 
-  if (!input.costSupported || !input.providerModelId || !supportsTextToVideo(input.operations)) {
+  if (!input.costSupported || !input.providerModelId || (!supportsTextToVideo(input.operations) && !imageToVideoCapable)) {
     return "unavailable";
   }
 
@@ -234,7 +231,6 @@ function canGenerateImageToVideo(input: {
     && input.costSupported
     && supportsImageToVideo(input.operations)
     && !unsupportedImageInputStatus(input.inputsRequired)
-    && requiresImageInput(input.inputsRequired)
     && (input.enablement === "safe_now" || input.enablement === "guarded" || input.enablement === "needs_smoke" || input.enablement === "disabled_until_upload"),
   );
 }
@@ -563,6 +559,7 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
       const operations = stringArray(item.operations);
       const enablement = studioEnablement(item.enablement ?? (item.available === false ? "unavailable" : "safe_now"));
       const inputsRequired = stringArray(item.inputs_required ?? item.inputsRequired);
+      const inputsOptional = stringArray(item.inputs_optional ?? item.inputsOptional);
       const costSupported = item.cost_supported !== false;
       const inputStatus = requiredInputStatus(inputsRequired);
       const unsupportedInputStatus = unsupportedImageInputStatus(inputsRequired);
@@ -602,7 +599,8 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
         operations,
         inputs_required: inputsRequired,
         inputsRequired,
-        inputs_optional: stringArray(item.inputs_optional ?? item.inputsOptional),
+        inputs_optional: inputsOptional,
+        inputsOptional,
         settings_schema: settingsSchema,
         supported_aspect_ratios: supportedAspectRatios,
         supportedAspectRatios,

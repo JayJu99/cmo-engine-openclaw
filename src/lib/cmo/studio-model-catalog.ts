@@ -38,6 +38,7 @@ export interface StudioVideoModel {
   disabledReason?: string | null;
   operations?: string[];
   inputsRequired?: string[];
+  inputsOptional?: string[];
   canGenerateTextToVideo?: boolean;
   canGenerateImageToVideo?: boolean;
   requiredInputStatus?: string | null;
@@ -50,6 +51,9 @@ export interface StudioVideoModel {
 
 export const STUDIO_ASPECT_RATIOS: StudioAspectRatio[] = ["1:1", "4:5", "9:16", "16:9", "4:3", "3:4", "21:9"];
 export const STUDIO_RESOLUTIONS: StudioResolution[] = ["480p", "720p", "1080p", "4K"];
+const STUDIO_TEXT_TO_VIDEO_INPUTS = new Set(["prompt", "text"]);
+const STUDIO_IMAGE_TO_VIDEO_INPUTS = new Set(["prompt", "text", "start_image", "end_image", "image", "image_references"]);
+const STUDIO_REAL_ENABLEMENTS = new Set<StudioVideoEnablement>(["safe_now", "guarded", "needs_smoke"]);
 
 export const STUDIO_BITRATES: Array<{
   id: StudioBitrate;
@@ -308,6 +312,55 @@ export function disabledReasonForEnablement(enablement: StudioVideoEnablement | 
   }
 
   return null;
+}
+
+export function studioModelSupportsWorkflowOperation(model: StudioVideoModel, workflow: StudioVideoWorkflow): boolean {
+  const operations = model.operations ?? [];
+
+  if (workflow === "image_to_video") {
+    return operations.includes("image_to_video");
+  }
+
+  return operations.length === 0 || operations.includes("text_to_video") || operations.includes("generate_video");
+}
+
+export function unsupportedStudioWorkflowInputStatus(model: StudioVideoModel, workflow: StudioVideoWorkflow): string | null {
+  const supportedInputs = workflow === "image_to_video" ? STUDIO_IMAGE_TO_VIDEO_INPUTS : STUDIO_TEXT_TO_VIDEO_INPUTS;
+  const unsupported = (model.inputsRequired ?? []).find((item) => !supportedInputs.has(item));
+
+  if (!unsupported) {
+    return null;
+  }
+
+  return model.unsupportedInputStatus ?? model.requiredInputStatus ?? `This model requires unsupported input: ${unsupported}.`;
+}
+
+export function supportsStudioWorkflow(
+  model: StudioVideoModel,
+  workflow: StudioVideoWorkflow,
+  input?: { hasImageInput?: boolean },
+): model is StudioVideoModel & { providerModelId: string } {
+  if (!model.providerModelId || model.costSupported === false || !studioModelSupportsWorkflowOperation(model, workflow)) {
+    return false;
+  }
+
+  if (workflow === "image_to_video" && input?.hasImageInput !== true) {
+    return false;
+  }
+
+  if (unsupportedStudioWorkflowInputStatus(model, workflow)) {
+    return false;
+  }
+
+  if (workflow === "text_to_video" && model.canGenerateTextToVideo === false) {
+    return false;
+  }
+
+  if (STUDIO_REAL_ENABLEMENTS.has(model.enablement ?? "unavailable")) {
+    return true;
+  }
+
+  return workflow === "image_to_video" && model.enablement === "disabled_until_upload" && input?.hasImageInput === true;
 }
 
 export function chooseStudioVideoMode(model: StudioVideoModel, resolution: StudioResolution): StudioVideoMode | undefined {

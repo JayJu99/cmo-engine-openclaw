@@ -16,6 +16,8 @@ import {
   normalizeStudioBitrate,
   normalizeStudioResolution,
   providerResolutionValue,
+  supportsStudioWorkflow,
+  unsupportedStudioWorkflowInputStatus,
   validateStudioVideoSettings,
   type StudioVideoModel,
 } from "@/lib/cmo/studio-model-catalog";
@@ -80,6 +82,7 @@ function modelFromRecord(record: Record<string, unknown>): StudioVideoModel {
     : [];
   const defaultResolution = normalizeStudioResolution(record.defaultResolution ?? record.default_resolution) ?? supportedResolutions[0] ?? "720p";
   const inputsRequired = record.inputsRequired ?? record.inputs_required;
+  const inputsOptional = record.inputsOptional ?? record.inputs_optional;
 
   return {
     id: stringValue(record.id) ?? stringValue(record.uiId) ?? stringValue(record.providerModelId) ?? "video-model",
@@ -106,6 +109,7 @@ function modelFromRecord(record: Record<string, unknown>): StudioVideoModel {
     enablement: record.enablement === "safe_now" || record.enablement === "guarded" || record.enablement === "needs_smoke" || record.enablement === "disabled_until_upload" ? record.enablement : "unavailable",
     operations: Array.isArray(record.operations) ? record.operations.filter((item): item is string => typeof item === "string") : [],
     inputsRequired: Array.isArray(inputsRequired) ? inputsRequired.filter((item): item is string => typeof item === "string") : [],
+    inputsOptional: Array.isArray(inputsOptional) ? inputsOptional.filter((item): item is string => typeof item === "string") : [],
     canGenerateTextToVideo: optionalBoolean(record.canGenerateTextToVideo ?? record.can_generate_text_to_video),
     canGenerateImageToVideo: optionalBoolean(record.canGenerateImageToVideo ?? record.can_generate_image_to_video),
     requiredInputStatus: typeof record.requiredInputStatus === "string" ? record.requiredInputStatus : typeof record.required_input_status === "string" ? record.required_input_status : null,
@@ -115,23 +119,11 @@ function modelFromRecord(record: Record<string, unknown>): StudioVideoModel {
 }
 
 function isCostFirstTextToVideoModel(model: StudioVideoModel | null | undefined): model is StudioVideoModel & { providerModelId: string } {
-  return Boolean(
-    model?.providerModelId
-    && model.costSupported !== false
-    && model.canGenerateTextToVideo !== false
-    && !model.requiredInputStatus
-    && (model.enablement === "safe_now" || model.enablement === "guarded" || model.enablement === "needs_smoke"),
-  );
+  return Boolean(model && supportsStudioWorkflow(model, "text_to_video"));
 }
 
 function isImageToVideoModel(model: StudioVideoModel | null | undefined, hasImage: boolean): model is StudioVideoModel & { providerModelId: string } {
-  return Boolean(
-    model?.providerModelId
-    && model.costSupported !== false
-    && model.canGenerateImageToVideo === true
-    && !model.unsupportedInputStatus
-    && (model.enablement === "safe_now" || model.enablement === "guarded" || model.enablement === "needs_smoke" || (model.enablement === "disabled_until_upload" && hasImage)),
-  );
+  return Boolean(model && supportsStudioWorkflow(model, "image_to_video", { hasImageInput: hasImage }));
 }
 
 function validationModelForWorkflow(model: StudioVideoModel, workflow: StudioVideoWorkflow): StudioVideoModel {
@@ -170,7 +162,7 @@ async function hermesCostRequest(body: Record<string, unknown>): Promise<HermesV
   }
 
   if (workflow === "image_to_video" && !isImageToVideoModel(model, hasImageInput)) {
-    throw new CmoAdapterError(model?.unsupportedInputStatus ?? "This model does not support image-to-video.", 400, "video_agent_model_unavailable");
+    throw new CmoAdapterError(unsupportedStudioWorkflowInputStatus(model ?? getStudioVideoModel(modelIdFromBody(body)), "image_to_video") ?? "This model does not support image-to-video.", 400, "video_agent_model_unavailable");
   }
 
   if (!model?.providerModelId) {

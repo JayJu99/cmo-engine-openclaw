@@ -22,6 +22,9 @@ import {
   normalizeStudioAspectRatio,
   normalizeStudioBitrate,
   normalizeStudioResolution,
+  studioModelSupportsWorkflowOperation,
+  supportsStudioWorkflow,
+  unsupportedStudioWorkflowInputStatus,
   validateStudioVideoSettings,
   type StudioAspectRatio,
   type StudioBitrate,
@@ -255,6 +258,7 @@ function modelFromApi(value: unknown): StudioVideoModel | null {
     disabledReason: typeof record.disabledReason === "string" ? record.disabledReason : null,
     operations: stringArray(record.operations),
     inputsRequired: stringArray(record.inputsRequired ?? record.inputs_required),
+    inputsOptional: stringArray(record.inputsOptional ?? record.inputs_optional),
     canGenerateTextToVideo: optionalBoolean(record.canGenerateTextToVideo ?? record.can_generate_text_to_video),
     canGenerateImageToVideo: optionalBoolean(record.canGenerateImageToVideo ?? record.can_generate_image_to_video),
     requiredInputStatus: typeof record.requiredInputStatus === "string" ? record.requiredInputStatus : typeof record.required_input_status === "string" ? record.required_input_status : null,
@@ -283,23 +287,11 @@ function modelReadinessLabel(model: StudioVideoModel): string {
 }
 
 function canUseRealTextToVideoModel(model: StudioVideoModel): boolean {
-  return Boolean(
-    model.providerModelId
-    && model.costSupported !== false
-    && model.canGenerateTextToVideo !== false
-    && !model.requiredInputStatus
-    && (model.enablement === "safe_now" || model.enablement === "guarded" || model.enablement === "needs_smoke"),
-  );
+  return supportsStudioWorkflow(model, "text_to_video");
 }
 
 function canUseImageToVideoModel(model: StudioVideoModel, hasImageInput: boolean): boolean {
-  return Boolean(
-    model.providerModelId
-    && model.costSupported !== false
-    && model.canGenerateImageToVideo === true
-    && !model.unsupportedInputStatus
-    && (model.enablement === "safe_now" || model.enablement === "guarded" || model.enablement === "needs_smoke" || (model.enablement === "disabled_until_upload" && hasImageInput)),
-  );
+  return supportsStudioWorkflow(model, "image_to_video", { hasImageInput });
 }
 
 function modelAvailableForWorkflow(model: StudioVideoModel, workflow: StudioVideoWorkflow, hasImageInput: boolean): boolean {
@@ -322,11 +314,13 @@ function ModelHeroCard({
   model,
   agentConnected,
   realAvailable,
+  realAvailableLabel,
   catalogSource,
 }: {
   model: StudioVideoModel;
   agentConnected: boolean;
   realAvailable: boolean;
+  realAvailableLabel: string;
   catalogSource: string;
 }) {
   return (
@@ -352,7 +346,7 @@ function ModelHeroCard({
         <Badge variant={model.enablement === "safe_now" ? "green" : model.enablement === "guarded" ? "orange" : "slate"}>
           {model.enablementLabel ?? enablementLabel(model.enablement)}
         </Badge>
-        {realAvailable ? <Badge variant="green">Real enabled</Badge> : agentConnected ? <Badge variant="orange">Unavailable</Badge> : null}
+        {realAvailable ? <Badge variant="green">{realAvailableLabel}</Badge> : agentConnected ? <Badge variant="orange">Unavailable</Badge> : null}
       </div>
       {[...(model.constraints ?? []), ...(model.warnings ?? [])].length ? (
         <div className="mt-3 space-y-1 text-xs font-semibold text-slate-600">
@@ -644,7 +638,13 @@ function StudioConsole({
           ))}
         </div>
 
-        <ModelHeroCard model={model} agentConnected={agentConnected} realAvailable={modelRealAvailable} catalogSource={catalogSource} />
+        <ModelHeroCard
+          model={model}
+          agentConnected={agentConnected}
+          realAvailable={modelRealAvailable}
+          realAvailableLabel={workflow === "image_to_video" ? "Image-to-video ready" : "Real enabled"}
+          catalogSource={catalogSource}
+        />
 
         <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-5">
           <input
@@ -889,17 +889,21 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   const imageInputBlockedReason = realVideoEnabled && workflow === "image_to_video" && !hasImageInput
     ? "Upload an image to generate image-to-video."
     : null;
-  const workflowBlockedReason = realVideoEnabled && workflow === "image_to_video" && hasImageInput && !canUseImageToVideoModel(model, hasImageInput)
-    ? model.unsupportedInputStatus ?? "This model does not support image-to-video."
-    : null;
+  const workflowBlockedReason = realVideoEnabled && workflow === "image_to_video" && hasImageInput && !studioModelSupportsWorkflowOperation(model, "image_to_video")
+    ? "This model does not support image-to-video."
+    : realVideoEnabled && workflow === "image_to_video" && hasImageInput
+      ? unsupportedStudioWorkflowInputStatus(model, "image_to_video")
+      : null;
   const enablementBlockedReason = realVideoEnabled && workflow === "text_to_video" && (model.enablement === "disabled_until_upload" || model.enablement === "unavailable")
     ? model.disabledReason ?? disabledReasonForEnablement(model.enablement)
     : null;
-  const costBlockedReason = realVideoEnabled && (!costEstimate?.estimateAvailable || costEstimate.mode !== "hermes")
-    ? costEstimate?.reason ?? "Cost estimate must complete before real Studio video generation."
+  const costBlockedReason = realVideoEnabled && model.costSupported === false
+    ? "Cost estimate unavailable."
+    : realVideoEnabled && (!costEstimate?.estimateAvailable || costEstimate.mode !== "hermes")
+      ? costEstimate?.reason ?? "Cost estimate unavailable."
     : null;
   const generateBlockedReason = realVideoEnabled
-    ? imageInputBlockedReason ?? workflowBlockedReason ?? enablementBlockedReason ?? (!modelRealAvailable ? "Selected model is not available for real Studio video generation." : null) ?? settingsBlockedReason ?? costBlockedReason
+    ? imageInputBlockedReason ?? workflowBlockedReason ?? enablementBlockedReason ?? settingsBlockedReason ?? costBlockedReason ?? (!modelRealAvailable ? "Selected model is not available for real Studio video generation." : null)
     : null;
 
   useEffect(() => {

@@ -552,6 +552,7 @@ export async function createStudioVideoJob(
       workflow: input.workflow ?? settings.workflow ?? "text_to_video",
       operations: model.operations ?? [],
       inputs_required: model.inputsRequired ?? [],
+      inputs_optional: model.inputsOptional ?? [],
       can_generate_text_to_video: model.canGenerateTextToVideo ?? null,
       can_generate_image_to_video: model.canGenerateImageToVideo ?? null,
       settings_schema: {

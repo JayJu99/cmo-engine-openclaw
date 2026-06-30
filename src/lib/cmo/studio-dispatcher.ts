@@ -171,6 +171,7 @@ function modelFromJob(job: StudioJobRecord, providerModelId: string): StudioVide
     costSupported: true,
     operations: Array.isArray(job.model_json.operations) ? job.model_json.operations.filter((item): item is string => typeof item === "string") : [],
     inputsRequired: Array.isArray(job.model_json.inputs_required) ? job.model_json.inputs_required.filter((item): item is string => typeof item === "string") : [],
+    inputsOptional: Array.isArray(job.model_json.inputs_optional) ? job.model_json.inputs_optional.filter((item): item is string => typeof item === "string") : [],
     canGenerateTextToVideo: job.model_json.can_generate_text_to_video === true,
     canGenerateImageToVideo: job.model_json.can_generate_image_to_video === true,
     enablement: job.model_json.enablement === "safe_now" || job.model_json.enablement === "guarded" || job.model_json.enablement === "needs_smoke"

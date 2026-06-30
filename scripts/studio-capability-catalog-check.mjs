@@ -75,6 +75,7 @@ await withHermesModels({
       cost_supported: true,
       workflow_supported: false,
       inputs_required: ["prompt"],
+      inputs_optional: ["start_image"],
       settings_schema: {
         duration: { type: "integer", default: 5, min: 4, max: 15 },
         aspect_ratio: { default: "16:9", values: ["16:9", "9:16", "1:1"] },
@@ -86,6 +87,24 @@ await withHermesModels({
       constraints: ["mode 'fast' supports only 480p/720p; use mode 'std' for 1080p/4k"],
       warnings: [],
       enablement: "safe_now",
+    },
+    {
+      ui_id: "kling3_0_turbo",
+      provider_model_id: "kling3_0_turbo",
+      label: "Kling 3.0 Turbo",
+      operations: ["text_to_video", "image_to_video"],
+      inputs_required: ["prompt"],
+      inputs_optional: ["start_image", "image_references"],
+      real_video_supported: false,
+      cost_supported: true,
+      settings_schema: {
+        duration: { default: 5, min: 3, max: 15 },
+        aspect_ratio: { default: "16:9", values: ["16:9"] },
+        resolution: { default: "720p", values: ["720p", "1080p"] },
+        mode: { default: "fast", values: ["fast"] },
+        bitrate_mode: { default: "standard", values: ["standard"] },
+      },
+      enablement: "needs_smoke",
     },
     {
       ui_id: "experimental_model",
@@ -157,7 +176,7 @@ await withHermesModels({
     },
   ],
 }, async (models) => {
-  assert.equal(models.length, 5, "All Hermes v2 models must remain visible.");
+  assert.equal(models.length, 6, "All Hermes v2 models must remain visible.");
   const seedance = models.find((model) => model.providerModelId === "seedance_2_0");
   assert.equal(seedance?.enablement, "safe_now");
   assert.equal(seedance?.available, true);
@@ -166,6 +185,13 @@ await withHermesModels({
   assert.deepEqual(seedance?.supportedModes, ["fast", "std"]);
   assert.equal(seedance?.defaultDurationSeconds, 5);
   assert.equal(seedance?.supportsAudio, true);
+  assert.deepEqual(seedance?.inputsOptional, ["start_image"]);
+  assert.equal(seedance?.canGenerateImageToVideo, true, "Optional start_image models with image_to_video operation must be image-to-video capable.");
+  const klingTurbo = models.find((model) => model.id === "kling3_0_turbo");
+  assert.equal(klingTurbo?.enablement, "needs_smoke");
+  assert.equal(klingTurbo?.realVideoSupported, false);
+  assert.equal(klingTurbo?.canGenerateTextToVideo, true);
+  assert.equal(klingTurbo?.canGenerateImageToVideo, true, "needs_smoke optional-image Kling must not be blocked by legacy realVideoSupported.");
   const experimental = models.find((model) => model.id === "experimental_model");
   assert.equal(experimental?.enablement, "needs_smoke");
   assert.equal(experimental?.available, true, "Prompt-only needs_smoke models must be selectable under cost-first policy.");
