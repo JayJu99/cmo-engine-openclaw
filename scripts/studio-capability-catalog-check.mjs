@@ -174,8 +174,10 @@ await withHermesModels({
   assert.equal(models.find((model) => model.id === "safe_but_not_allowlisted")?.enablement, "safe_now", "Cost-first Product policy must not downgrade prompt-only safe models by allowlist.");
   assert.equal(models.find((model) => model.id === "image_to_video_only")?.disabledReason, "Requires image upload");
   assert.equal(models.find((model) => model.id === "image_to_video_only")?.available, false);
+  assert.equal(models.find((model) => model.id === "image_to_video_only")?.canGenerateImageToVideo, true);
   assert.equal(models.find((model) => model.id === "video_required_tool")?.disabledReason, "Requires video upload");
   assert.equal(models.find((model) => model.id === "video_required_tool")?.available, false);
+  assert.equal(models.find((model) => model.id === "video_required_tool")?.canGenerateImageToVideo, false);
 });
 
 await withHermesModels({

@@ -18,6 +18,7 @@ const MODELS_PATH = "/agents/video/models";
 const COST_PATH = "/agents/video/cost";
 const EXECUTE_PATH = "/agents/video/execute";
 const DEFAULT_TIMEOUT_MS = 120000;
+const IMAGE_TO_VIDEO_INPUTS = new Set(["prompt", "text", "start_image", "image", "image_references", "end_image"]);
 
 export type HermesVideoAgentErrorCode =
   | "video_agent_not_configured"
@@ -30,6 +31,7 @@ export interface HermesVideoCostRequest {
   request_id?: string;
   prompt?: string;
   operation: "generate_video";
+  workflow?: "text_to_video" | "image_to_video";
   backend?: "higgsfield";
   model: {
     ui_id: string;
@@ -39,11 +41,26 @@ export interface HermesVideoCostRequest {
     duration_seconds: number;
     aspect_ratio: string;
     resolution: string;
-    bitrate: string;
     variants: number;
+    bitrate?: string;
     mode?: string;
   };
+  inputs?: {
+    images: HermesVideoInputImage[];
+    videos: unknown[];
+    audio: unknown[];
+  };
   context?: Record<string, unknown>;
+}
+
+export interface HermesVideoInputImage {
+  asset_id: string;
+  role: "start_image" | "end_image" | "image_reference";
+  download_url: string;
+  mime_type: string;
+  bytes: number;
+  sha256?: string;
+  filename?: string;
 }
 
 export interface HermesVideoExecuteRequest extends HermesVideoCostRequest {
@@ -61,7 +78,7 @@ export interface HermesVideoExecuteRequest extends HermesVideoCostRequest {
     [key: string]: unknown;
   };
   inputs: {
-    images: unknown[];
+    images: HermesVideoInputImage[];
     videos: unknown[];
     audio: unknown[];
   };
@@ -171,6 +188,20 @@ function supportsTextToVideo(operations: string[]): boolean {
   return operations.length === 0 || operations.includes("text_to_video") || operations.includes("generate_video");
 }
 
+function supportsImageToVideo(operations: string[]): boolean {
+  return operations.includes("image_to_video");
+}
+
+function unsupportedImageInputStatus(inputsRequired: string[]): string | null {
+  const unsupported = inputsRequired.find((item) => !IMAGE_TO_VIDEO_INPUTS.has(item));
+
+  return unsupported ? `This model requires unsupported input: ${unsupported}.` : null;
+}
+
+function requiresImageInput(inputsRequired: string[]): boolean {
+  return inputsRequired.some((item) => item !== "prompt" && item !== "text");
+}
+
 function productEnablementPolicy(input: {
   enablement: StudioVideoEnablement;
   providerModelId?: string;
@@ -189,6 +220,23 @@ function productEnablementPolicy(input: {
   }
 
   return input.enablement;
+}
+
+function canGenerateImageToVideo(input: {
+  providerModelId?: string;
+  inputsRequired: string[];
+  operations: string[];
+  costSupported: boolean;
+  enablement: StudioVideoEnablement;
+}): boolean {
+  return Boolean(
+    input.providerModelId
+    && input.costSupported
+    && supportsImageToVideo(input.operations)
+    && !unsupportedImageInputStatus(input.inputsRequired)
+    && requiresImageInput(input.inputsRequired)
+    && (input.enablement === "safe_now" || input.enablement === "guarded" || input.enablement === "needs_smoke" || input.enablement === "disabled_until_upload"),
+  );
 }
 
 function fallbackModels(reason: string): Record<string, unknown>[] {
@@ -513,10 +561,11 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
       const defaultBitrate = normalizeStudioBitrate(bitrateSchema.default) ?? "standard";
       const defaultMode = normalizeStudioVideoMode(modeSchema.default) ?? supportedModes[0];
       const operations = stringArray(item.operations);
-      const enablement = studioEnablement(item.enablement ?? (item.available === false ? "unavailable" : item.real_video_supported === false ? "unavailable" : "safe_now"));
+      const enablement = studioEnablement(item.enablement ?? (item.available === false ? "unavailable" : "safe_now"));
       const inputsRequired = stringArray(item.inputs_required ?? item.inputsRequired);
       const costSupported = item.cost_supported !== false;
       const inputStatus = requiredInputStatus(inputsRequired);
+      const unsupportedInputStatus = unsupportedImageInputStatus(inputsRequired);
       const productEnablement = productEnablementPolicy({
         enablement,
         providerModelId,
@@ -525,6 +574,13 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
         costSupported,
       });
       const canGenerateTextToVideo = Boolean(providerModelId && costSupported && supportsTextToVideo(operations) && !inputStatus && productEnablement !== "unavailable");
+      const imageToVideoCapable = canGenerateImageToVideo({
+        providerModelId,
+        inputsRequired,
+        operations,
+        costSupported,
+        enablement,
+      });
       const minDuration = numberValue(item.min_duration_seconds ?? item.minDurationSeconds ?? duration.min_seconds ?? duration.minSeconds ?? durationSchema.min) ?? 4;
       const maxDuration = numberValue(item.max_duration_seconds ?? item.maxDurationSeconds ?? duration.max_seconds ?? duration.maxSeconds ?? durationSchema.max) ?? 15;
       const defaultDuration = numberValue(item.default_duration_seconds ?? item.defaultDurationSeconds ?? duration.default_seconds ?? duration.defaultSeconds ?? durationSchema.default) ?? minDuration;
@@ -570,8 +626,12 @@ export async function getVideoAgentModels(): Promise<Record<string, unknown>[]> 
         disabledReason: inputStatus ?? (productEnablement === "needs_smoke" ? null : disabledReasonForEnablement(productEnablement)),
         can_generate_text_to_video: canGenerateTextToVideo,
         canGenerateTextToVideo,
+        can_generate_image_to_video: imageToVideoCapable,
+        canGenerateImageToVideo: imageToVideoCapable,
         required_input_status: inputStatus,
         requiredInputStatus: inputStatus,
+        unsupported_input_status: unsupportedInputStatus,
+        unsupportedInputStatus,
         real_video_supported: item.real_video_supported === true || item.realVideoSupported === true || providerModelId === "seedance_2_0",
         realVideoSupported: item.real_video_supported === true || item.realVideoSupported === true || providerModelId === "seedance_2_0",
         cost_supported: costSupported,

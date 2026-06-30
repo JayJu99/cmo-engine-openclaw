@@ -27,6 +27,7 @@ import {
   type StudioBitrate,
   type StudioResolution,
   type StudioVideoModel,
+  type StudioVideoWorkflow,
 } from "@/lib/cmo/studio-model-catalog";
 import { cn } from "@/lib/utils";
 
@@ -255,7 +256,9 @@ function modelFromApi(value: unknown): StudioVideoModel | null {
     operations: stringArray(record.operations),
     inputsRequired: stringArray(record.inputsRequired ?? record.inputs_required),
     canGenerateTextToVideo: optionalBoolean(record.canGenerateTextToVideo ?? record.can_generate_text_to_video),
+    canGenerateImageToVideo: optionalBoolean(record.canGenerateImageToVideo ?? record.can_generate_image_to_video),
     requiredInputStatus: typeof record.requiredInputStatus === "string" ? record.requiredInputStatus : typeof record.required_input_status === "string" ? record.required_input_status : null,
+    unsupportedInputStatus: typeof record.unsupportedInputStatus === "string" ? record.unsupportedInputStatus : typeof record.unsupported_input_status === "string" ? record.unsupported_input_status : null,
     constraints: stringArray(record.constraints),
     warnings: stringArray(record.warnings),
     catalogSource: typeof record.catalogSource === "string" ? record.catalogSource : undefined,
@@ -287,6 +290,28 @@ function canUseRealTextToVideoModel(model: StudioVideoModel): boolean {
     && !model.requiredInputStatus
     && (model.enablement === "safe_now" || model.enablement === "guarded" || model.enablement === "needs_smoke"),
   );
+}
+
+function canUseImageToVideoModel(model: StudioVideoModel, hasImageInput: boolean): boolean {
+  return Boolean(
+    model.providerModelId
+    && model.costSupported !== false
+    && model.canGenerateImageToVideo === true
+    && !model.unsupportedInputStatus
+    && (model.enablement === "safe_now" || model.enablement === "guarded" || model.enablement === "needs_smoke" || (model.enablement === "disabled_until_upload" && hasImageInput)),
+  );
+}
+
+function modelAvailableForWorkflow(model: StudioVideoModel, workflow: StudioVideoWorkflow, hasImageInput: boolean): boolean {
+  return workflow === "image_to_video"
+    ? canUseImageToVideoModel(model, hasImageInput)
+    : canUseRealTextToVideoModel(model);
+}
+
+function validationModelForWorkflow(model: StudioVideoModel, workflow: StudioVideoWorkflow, hasImageInput: boolean): StudioVideoModel {
+  return workflow === "image_to_video" && hasImageInput && model.enablement === "disabled_until_upload"
+    ? { ...model, enablement: "guarded" }
+    : model;
 }
 
 function findStudioVideoModel(models: StudioVideoModel[], id: string): StudioVideoModel {
@@ -513,6 +538,7 @@ function StudioConsole({
   videoAgentStatus,
   modelRealAvailable,
   generateBlockedReason,
+  workflow,
   prompt,
   model,
   models,
@@ -522,13 +548,13 @@ function StudioConsole({
   resolution,
   bitrate,
   costEstimate,
-  activeJob,
   selectedInputAssets,
   isUploadingInput,
   uploadStatus,
   isGenerating,
   error,
   onPromptChange,
+  onWorkflowChange,
   onModelChange,
   onAspectRatioChange,
   onDurationChange,
@@ -542,6 +568,7 @@ function StudioConsole({
   videoAgentStatus: StudioVideoAgentStatus | null;
   modelRealAvailable: boolean;
   generateBlockedReason: string | null;
+  workflow: StudioVideoWorkflow;
   prompt: string;
   model: StudioVideoModel;
   models: StudioVideoModel[];
@@ -551,13 +578,13 @@ function StudioConsole({
   resolution: StudioResolution;
   bitrate: StudioBitrate;
   costEstimate: CostEstimate | null;
-  activeJob: StudioJob | null;
   selectedInputAssets: StudioInputAsset[];
   isUploadingInput: boolean;
   uploadStatus: string | null;
   isGenerating: boolean;
   error: string | null;
   onPromptChange: (value: string) => void;
+  onWorkflowChange: (value: StudioVideoWorkflow) => void;
   onModelChange: (value: string) => void;
   onAspectRatioChange: (value: StudioAspectRatio) => void;
   onDurationChange: (value: number) => void;
@@ -572,6 +599,7 @@ function StudioConsole({
     ? `Generate · ${costEstimate.label}`
     : "Generate";
   const agentConnected = videoAgentStatus?.connected === true;
+  const isImageWorkflow = workflow === "image_to_video";
   const aspectRatioOptions = model.supportedAspectRatios?.length ? model.supportedAspectRatios : STUDIO_ASPECT_RATIOS;
   const resolutionOptions = model.supportedResolutions.length ? model.supportedResolutions : STUDIO_RESOLUTIONS;
   const bitrateOptions = model.supportedBitrates?.length
@@ -597,13 +625,32 @@ function StudioConsole({
       </div>
 
       <div className="space-y-4 p-4">
+        <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-1">
+          {([
+            ["text_to_video", "Text to Video"],
+            ["image_to_video", "Image to Video"],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={cn(
+                "h-10 rounded-md text-sm font-black transition",
+                workflow === id ? "bg-white text-violet-700 shadow-sm ring-1 ring-violet-100" : "text-slate-500 hover:text-slate-900",
+              )}
+              onClick={() => onWorkflowChange(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         <ModelHeroCard model={model} agentConnected={agentConnected} realAvailable={modelRealAvailable} catalogSource={catalogSource} />
 
         <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-5">
           <input
             ref={uploadInputRef}
             type="file"
-            accept="image/png,image/jpeg,image/webp,video/mp4,video/webm"
+            accept="image/png,image/jpeg,image/webp"
             className="hidden"
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
@@ -616,10 +663,10 @@ function StudioConsole({
           />
           <button
             type="button"
-            disabled={!activeJob || isUploadingInput}
+            disabled={!isImageWorkflow || isUploadingInput}
             className={cn(
               "grid w-full place-items-center text-center transition",
-              !activeJob || isUploadingInput ? "cursor-not-allowed opacity-60" : "hover:text-violet-700",
+              !isImageWorkflow || isUploadingInput ? "cursor-not-allowed opacity-60" : "hover:text-violet-700",
             )}
             onClick={() => uploadInputRef.current?.click()}
           >
@@ -634,9 +681,9 @@ function StudioConsole({
               <icons.Upload className="size-4" />
             </span>
           </span>
-            <span className="mt-4 text-lg font-bold text-slate-500">{isUploadingInput ? "Uploading media..." : "Upload media"}</span>
+            <span className="mt-4 text-lg font-bold text-slate-500">{isUploadingInput ? "Uploading image..." : "Upload image"}</span>
             <span className="mt-1 text-sm font-bold text-slate-500">
-              {activeJob ? "Product input asset for future media workflows" : "Select or create a job before uploading references"}
+              {isImageWorkflow ? "Product input image for image-to-video" : "Switch to Image to Video to upload an input image"}
             </span>
           </button>
           {uploadStatus ? <div className="mt-3 text-center text-xs font-bold text-slate-500">{uploadStatus}</div> : null}
@@ -813,6 +860,7 @@ async function parseJsonResponse(response: Response): Promise<Record<string, unk
 
 export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: boolean }) {
   const [prompt, setPrompt] = useState("");
+  const [workflow, setWorkflow] = useState<StudioVideoWorkflow>("text_to_video");
   const [modelId, setModelId] = useState(STUDIO_VIDEO_MODELS[0].id);
   const [aspectRatio, setAspectRatio] = useState<StudioAspectRatio>("16:9");
   const [duration, setDuration] = useState(8);
@@ -835,16 +883,23 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   const model = useMemo(() => findStudioVideoModel(videoModels, modelId), [modelId, videoModels]);
   const agentConnected = videoAgentStatus?.connected === true;
   const realVideoEnabled = videoAgentStatus?.realVideoEnabled === true;
-  const modelRealAvailable = agentConnected && canUseRealTextToVideoModel(model) && Boolean(model.providerModelId && hermesModelIds.has(model.providerModelId));
-  const settingsBlockedReason = validateStudioVideoSettings({ model, durationSeconds: duration, aspectRatio, resolution, bitrate });
-  const enablementBlockedReason = realVideoEnabled && (model.enablement === "disabled_until_upload" || model.enablement === "unavailable")
+  const hasImageInput = selectedInputAssets.some((asset) => asset.media_kind === "image");
+  const modelRealAvailable = agentConnected && modelAvailableForWorkflow(model, workflow, hasImageInput) && Boolean(model.providerModelId && hermesModelIds.has(model.providerModelId));
+  const settingsBlockedReason = validateStudioVideoSettings({ model: validationModelForWorkflow(model, workflow, hasImageInput), durationSeconds: duration, aspectRatio, resolution, bitrate });
+  const imageInputBlockedReason = realVideoEnabled && workflow === "image_to_video" && !hasImageInput
+    ? "Upload an image to generate image-to-video."
+    : null;
+  const workflowBlockedReason = realVideoEnabled && workflow === "image_to_video" && hasImageInput && !canUseImageToVideoModel(model, hasImageInput)
+    ? model.unsupportedInputStatus ?? "This model does not support image-to-video."
+    : null;
+  const enablementBlockedReason = realVideoEnabled && workflow === "text_to_video" && (model.enablement === "disabled_until_upload" || model.enablement === "unavailable")
     ? model.disabledReason ?? disabledReasonForEnablement(model.enablement)
     : null;
   const costBlockedReason = realVideoEnabled && (!costEstimate?.estimateAvailable || costEstimate.mode !== "hermes")
     ? costEstimate?.reason ?? "Cost estimate must complete before real Studio video generation."
     : null;
   const generateBlockedReason = realVideoEnabled
-    ? enablementBlockedReason ?? (!modelRealAvailable ? "Selected model is not available for real Studio video generation." : null) ?? settingsBlockedReason ?? costBlockedReason
+    ? imageInputBlockedReason ?? workflowBlockedReason ?? enablementBlockedReason ?? (!modelRealAvailable ? "Selected model is not available for real Studio video generation." : null) ?? settingsBlockedReason ?? costBlockedReason
     : null;
 
   useEffect(() => {
@@ -865,7 +920,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
 
         if (Array.isArray(modelsBody.models)) {
           for (const item of nextModels) {
-            if (canUseRealTextToVideoModel(item) && item.providerModelId) {
+            if ((canUseRealTextToVideoModel(item) || canUseImageToVideoModel(item, true)) && item.providerModelId) {
               modelIds.add(item.providerModelId);
             }
           }
@@ -929,6 +984,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             agent: "video",
             backend: "higgsfield",
             operation: "generate_video",
+            workflow,
             requestId: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`,
             prompt,
             model: {
@@ -937,6 +993,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
               provider_model_id: model.providerModelId,
               label: model.name,
             },
+            inputAssetIds: workflow === "image_to_video" ? selectedInputAssets.filter((asset) => asset.media_kind === "image").slice(0, 1).map((asset) => asset.id) : [],
             settings: {
               durationSeconds: duration,
               aspectRatio,
@@ -963,7 +1020,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
     return () => {
       cancelled = true;
     };
-  }, [model, prompt, duration, aspectRatio, resolution, bitrate]);
+  }, [model, prompt, duration, aspectRatio, resolution, bitrate, workflow, selectedInputAssets]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1051,6 +1108,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
           agent: "video",
           backend: "higgsfield",
           operation: "generate_video",
+          workflow,
           prompt,
           model: {
             uiId: model.id,
@@ -1065,7 +1123,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             bitrate,
             variants: 1,
           },
-          inputAssetIds: selectedInputAssets.map((asset) => asset.id),
+          inputAssetIds: workflow === "image_to_video" ? selectedInputAssets.filter((asset) => asset.media_kind === "image").slice(0, 1).map((asset) => asset.id) : [],
           ...(costEstimate?.mode === "hermes" ? { costEstimate } : {}),
         }),
       });
@@ -1074,7 +1132,9 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
 
       setActiveJob(job);
       setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
-      setSelectedInputAssets([]);
+      if (workflow === "text_to_video") {
+        setSelectedInputAssets([]);
+      }
     } catch (generateError) {
       setError(generateError instanceof Error ? generateError.message : "Unable to create Studio job.");
     } finally {
@@ -1094,8 +1154,8 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
   }
 
   async function uploadInputAsset(file: File) {
-    if (!activeJob) {
-      setUploadStatus("Select or create a Studio job before uploading reference media.");
+    if (!file.type.startsWith("image/")) {
+      setUploadStatus("Upload an image to generate image-to-video.");
       return;
     }
 
@@ -1109,7 +1169,6 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          jobId: activeJob.id,
           mediaKind,
           purpose: "studio_input",
           expectedMimeType: file.type,
@@ -1151,7 +1210,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
         throw new Error("Studio input asset response was incomplete.");
       }
 
-      setSelectedInputAssets((current) => [...current.filter((item) => item.id !== asset.id), asset]);
+      setSelectedInputAssets([asset]);
       setUploadStatus("Input media uploaded to Product storage.");
     } catch (uploadError) {
       setUploadStatus(uploadError instanceof Error ? uploadError.message : "Input media upload failed.");
@@ -1190,6 +1249,7 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             videoAgentStatus={videoAgentStatus}
             modelRealAvailable={modelRealAvailable}
             generateBlockedReason={generateBlockedReason}
+            workflow={workflow}
             prompt={prompt}
             model={model}
             models={videoModels}
@@ -1199,13 +1259,13 @@ export function StudioView({ imageModeEnabled = false }: { imageModeEnabled?: bo
             resolution={resolution}
             bitrate={bitrate}
             costEstimate={costEstimate}
-            activeJob={activeJob}
             selectedInputAssets={selectedInputAssets}
             isUploadingInput={isUploadingInput}
             uploadStatus={uploadStatus}
             isGenerating={isGenerating}
             error={error}
             onPromptChange={handlePromptChange}
+            onWorkflowChange={setWorkflow}
             onModelChange={handleModelChange}
             onAspectRatioChange={setAspectRatio}
             onDurationChange={handleDurationChange}

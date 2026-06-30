@@ -16,14 +16,14 @@ assert.match(assetSource, /input_asset_ids/, "Completed input uploads must updat
 assert.match(initRouteSource, /createStudioAssetUploadSession/, "Init route must create Product upload sessions.");
 assert.match(uploadRouteSource, /uploadStudioAssetSessionBytes/, "Upload route must store bytes server-side.");
 assert.match(completeRouteSource, /completeStudioAssetUpload/, "Complete route must create studio_assets rows.");
-assert.match(uiSource, /accept="image\/png,image\/jpeg,image\/webp,video\/mp4,video\/webm"/, "Studio UI must accept the supported input MIME types.");
+assert.match(uiSource, /accept="image\/png,image\/jpeg,image\/webp"/, "Studio UI must accept image input MIME types for image-to-video.");
 assert.match(uiSource, /\/api\/cmo\/studio\/assets\/ingest\/init/, "Studio UI must call Product input upload init route.");
 assert.match(uiSource, /\/api\/cmo\/studio\/assets\/ingest\/complete/, "Studio UI must call Product input upload complete route.");
 assert.match(uiSource, /purpose: "studio_input"/, "Studio UI uploads must create studio_input assets.");
 assert.match(uiSource, /selectedInputAssets/, "Studio UI must keep selected input asset state.");
-assert.match(uiSource, /inputAssetIds: selectedInputAssets\.map/, "Studio UI must persist selected input asset IDs when creating jobs.");
+assert.match(uiSource, /inputAssetIds: workflow === "image_to_video" \? selectedInputAssets\.filter/, "Studio UI must persist selected image input asset IDs when creating image-to-video jobs.");
 assert.match(jobsRouteSource, /inputAssetIdsFromBody/, "Jobs route must accept input asset IDs.");
-assert.match(dispatcherSource, /images: \[\][\s\S]*videos: \[\][\s\S]*audio: \[\]/, "Hermes v2.1 must not send input assets to Hermes yet.");
+assert.match(dispatcherSource, /images: inputImages[\s\S]*videos: \[\][\s\S]*audio: \[\]/, "Hermes image-to-video execute payload must send selected image inputs server-side.");
 assert.doesNotMatch(uiSource, /CMO_HERMES|API_SERVER_KEY|\/agents\/video/, "Browser upload UI must not expose Hermes or server secrets.");
 
 console.log("Studio input upload check passed.");

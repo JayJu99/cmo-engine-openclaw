@@ -17,6 +17,7 @@ import {
   type StudioMediaKind,
   type StudioOperation,
   type StudioResolution,
+  type StudioVideoWorkflow,
   type StudioVideoModel,
 } from "@/lib/cmo/studio-model-catalog";
 
@@ -59,6 +60,7 @@ export interface StudioJobSettings {
   resolution: StudioResolution;
   bitrate: StudioBitrate;
   variants: number;
+  workflow?: StudioVideoWorkflow;
 }
 
 export interface StudioCreateJobInput {
@@ -67,6 +69,7 @@ export interface StudioCreateJobInput {
   modelId?: string;
   settings?: Partial<StudioJobSettings>;
   context?: Record<string, unknown>;
+  workflow?: StudioVideoWorkflow;
   inputAssetIds?: string[];
   costEstimate?: Record<string, unknown>;
   modelOverride?: StudioVideoModel;
@@ -172,7 +175,7 @@ function initialStudioCost(input: {
   resolution: StudioResolution;
   costEstimate?: Record<string, unknown>;
 }): Record<string, unknown> {
-  if (process.env.CMO_STUDIO_REAL_VIDEO_ENABLED === "true" && input.providerModelId === "seedance_2_0") {
+  if (process.env.CMO_STUDIO_REAL_VIDEO_ENABLED === "true" && input.providerModelId) {
     return normalizeHermesCostEstimate(input.costEstimate, input.providerModelId) ?? {
       mode: "hermes",
       estimateAvailable: false,
@@ -205,6 +208,7 @@ function normalizeSettings(input: StudioCreateJobInput): { model: ReturnType<typ
       resolution,
       bitrate: input.settings?.bitrate ?? DEFAULT_SETTINGS.bitrate,
       variants,
+      workflow: input.workflow ?? input.settings?.workflow ?? "text_to_video",
     },
   };
 }
@@ -531,6 +535,7 @@ export async function createStudioVideoJob(
     context_json: {
       ...(input.context ?? {}),
       product_route: "/studio",
+      workflow: input.workflow ?? settings.workflow ?? "text_to_video",
     },
     prompt,
     negative_prompt: normalizePrompt(input.negativePrompt) || null,
@@ -544,6 +549,11 @@ export async function createStudioVideoJob(
       supports_audio: model.supportsAudio,
       badges: model.badges,
       enablement: model.enablement ?? null,
+      workflow: input.workflow ?? settings.workflow ?? "text_to_video",
+      operations: model.operations ?? [],
+      inputs_required: model.inputsRequired ?? [],
+      can_generate_text_to_video: model.canGenerateTextToVideo ?? null,
+      can_generate_image_to_video: model.canGenerateImageToVideo ?? null,
       settings_schema: {
         duration: {
           min: model.minDurationSeconds,
@@ -582,6 +592,7 @@ export async function createStudioVideoJob(
     diagnostics_json: {
       runner: "product_mock",
       hermes_dispatched: false,
+      workflow: input.workflow ?? settings.workflow ?? "text_to_video",
       catalog_count: STUDIO_VIDEO_MODELS.length,
     },
     request_id: requestId,

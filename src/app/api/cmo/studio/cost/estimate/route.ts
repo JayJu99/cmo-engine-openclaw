@@ -1,4 +1,6 @@
+import { requireRequestUserIfAuthRequired } from "@/lib/cmo/auth";
 import { CmoAdapterError } from "@/lib/cmo/errors";
+import { createStudioInputImageHandoffs } from "@/lib/cmo/studio-asset-ingest";
 import {
   estimateVideoCost,
   getVideoAgentModels,
@@ -18,7 +20,7 @@ import {
   type StudioVideoModel,
 } from "@/lib/cmo/studio-model-catalog";
 import { isRecord, readJsonObject, stringValue, studioRouteErrorResponse } from "@/lib/cmo/studio-route-utils";
-import type { StudioAspectRatio, StudioBitrate, StudioResolution } from "@/lib/cmo/studio-model-catalog";
+import type { StudioAspectRatio, StudioBitrate, StudioResolution, StudioVideoWorkflow } from "@/lib/cmo/studio-model-catalog";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,6 +47,16 @@ function settingsFromBody(body: Record<string, unknown>) {
   };
 }
 
+function workflowFromBody(body: Record<string, unknown>): StudioVideoWorkflow {
+  return stringValue(body.workflow) === "image_to_video" ? "image_to_video" : "text_to_video";
+}
+
+function inputAssetIdsFromBody(body: Record<string, unknown>): string[] {
+  const value = body.inputAssetIds ?? body.input_asset_ids;
+
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())) : [];
+}
+
 function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -67,6 +79,7 @@ function modelFromRecord(record: Record<string, unknown>): StudioVideoModel {
     ? record.supportedModes.filter((item): item is "fast" | "std" => item === "fast" || item === "std")
     : [];
   const defaultResolution = normalizeStudioResolution(record.defaultResolution ?? record.default_resolution) ?? supportedResolutions[0] ?? "720p";
+  const inputsRequired = record.inputsRequired ?? record.inputs_required;
 
   return {
     id: stringValue(record.id) ?? stringValue(record.uiId) ?? stringValue(record.providerModelId) ?? "video-model",
@@ -91,8 +104,12 @@ function modelFromRecord(record: Record<string, unknown>): StudioVideoModel {
     realVideoSupported: record.realVideoSupported === true || record.real_video_supported === true,
     costSupported: record.costSupported !== false && record.cost_supported !== false,
     enablement: record.enablement === "safe_now" || record.enablement === "guarded" || record.enablement === "needs_smoke" || record.enablement === "disabled_until_upload" ? record.enablement : "unavailable",
+    operations: Array.isArray(record.operations) ? record.operations.filter((item): item is string => typeof item === "string") : [],
+    inputsRequired: Array.isArray(inputsRequired) ? inputsRequired.filter((item): item is string => typeof item === "string") : [],
     canGenerateTextToVideo: optionalBoolean(record.canGenerateTextToVideo ?? record.can_generate_text_to_video),
+    canGenerateImageToVideo: optionalBoolean(record.canGenerateImageToVideo ?? record.can_generate_image_to_video),
     requiredInputStatus: typeof record.requiredInputStatus === "string" ? record.requiredInputStatus : typeof record.required_input_status === "string" ? record.required_input_status : null,
+    unsupportedInputStatus: typeof record.unsupportedInputStatus === "string" ? record.unsupportedInputStatus : typeof record.unsupported_input_status === "string" ? record.unsupported_input_status : null,
     constraints: Array.isArray(record.constraints) ? record.constraints.filter((item): item is string => typeof item === "string") : [],
   };
 }
@@ -105,6 +122,22 @@ function isCostFirstTextToVideoModel(model: StudioVideoModel | null | undefined)
     && !model.requiredInputStatus
     && (model.enablement === "safe_now" || model.enablement === "guarded" || model.enablement === "needs_smoke"),
   );
+}
+
+function isImageToVideoModel(model: StudioVideoModel | null | undefined, hasImage: boolean): model is StudioVideoModel & { providerModelId: string } {
+  return Boolean(
+    model?.providerModelId
+    && model.costSupported !== false
+    && model.canGenerateImageToVideo === true
+    && !model.unsupportedInputStatus
+    && (model.enablement === "safe_now" || model.enablement === "guarded" || model.enablement === "needs_smoke" || (model.enablement === "disabled_until_upload" && hasImage)),
+  );
+}
+
+function validationModelForWorkflow(model: StudioVideoModel, workflow: StudioVideoWorkflow): StudioVideoModel {
+  return workflow === "image_to_video" && model.enablement === "disabled_until_upload"
+    ? { ...model, enablement: "guarded" }
+    : model;
 }
 
 async function realCatalogModel(body: Record<string, unknown>): Promise<StudioVideoModel | null> {
@@ -124,14 +157,29 @@ async function hermesCostRequest(body: Record<string, unknown>): Promise<HermesV
   const model = process.env.CMO_STUDIO_REAL_VIDEO_ENABLED === "true"
     ? await realCatalogModel(body)
     : getStudioVideoModel(modelIdFromBody(body));
+  const workflow = workflowFromBody(body);
+  const inputAssetIds = inputAssetIdsFromBody(body);
+  const hasImageInput = inputAssetIds.length > 0;
 
-  if (!isCostFirstTextToVideoModel(model)) {
+  if (workflow === "text_to_video" && !isCostFirstTextToVideoModel(model)) {
+    return null;
+  }
+
+  if (workflow === "image_to_video" && !hasImageInput) {
+    throw new CmoAdapterError("Upload an image to use this image-to-video model.", 400, "video_agent_input_required");
+  }
+
+  if (workflow === "image_to_video" && !isImageToVideoModel(model, hasImageInput)) {
+    throw new CmoAdapterError(model?.unsupportedInputStatus ?? "This model does not support image-to-video.", 400, "video_agent_model_unavailable");
+  }
+
+  if (!model?.providerModelId) {
     return null;
   }
 
   const settings = settingsFromBody(body);
   const settingsError = validateStudioVideoSettings({
-    model,
+    model: validationModelForWorkflow(model, workflow),
     durationSeconds: settings.durationSeconds,
     aspectRatio: settings.aspectRatio,
     resolution: settings.resolution,
@@ -144,11 +192,18 @@ async function hermesCostRequest(body: Record<string, unknown>): Promise<HermesV
 
   const providerModelId = model.providerModelId;
   const mode = chooseStudioVideoMode(model, settings.resolution);
+  const handoffImages = workflow === "image_to_video"
+    ? await createStudioInputImageHandoffs({
+      context: await requireRequestUserIfAuthRequired(),
+      assetIds: inputAssetIds,
+    })
+    : [];
 
   return {
     request_id: stringValue(body.requestId ?? body.request_id) ?? undefined,
     prompt: stringValue(body.prompt),
     operation: "generate_video",
+    workflow,
     backend: "higgsfield",
     model: {
       ui_id: providerModelId,
@@ -158,10 +213,17 @@ async function hermesCostRequest(body: Record<string, unknown>): Promise<HermesV
       duration_seconds: settings.durationSeconds,
       aspect_ratio: settings.aspectRatio,
       resolution: providerResolutionValue(settings.resolution),
-      bitrate: settings.bitrate,
       variants: settings.variants,
+      ...(model.supportedBitrates?.length ? { bitrate: settings.bitrate } : {}),
       ...(mode ? { mode } : {}),
     },
+    ...(workflow === "image_to_video" ? {
+      inputs: {
+        images: handoffImages,
+        videos: [],
+        audio: [],
+      },
+    } : {}),
     context: {
       source: "studio",
     },

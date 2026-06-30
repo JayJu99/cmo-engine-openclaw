@@ -1,5 +1,6 @@
 import { requireRequestUserIfAuthRequired } from "@/lib/cmo/auth";
 import { CmoAdapterError } from "@/lib/cmo/errors";
+import { createStudioInputImageHandoffs } from "@/lib/cmo/studio-asset-ingest";
 import { dispatchStudioJob } from "@/lib/cmo/studio-dispatcher";
 import { createStudioVideoJob, listStudioJobs } from "@/lib/cmo/studio-job-service";
 import { getVideoAgentModels } from "@/lib/cmo/studio/hermes-video-client";
@@ -14,6 +15,7 @@ import {
   type StudioBitrate,
   type StudioResolution,
   type StudioVideoModel,
+  type StudioVideoWorkflow,
 } from "@/lib/cmo/studio-model-catalog";
 
 export const runtime = "nodejs";
@@ -40,6 +42,10 @@ function settingsFromBody(body: Record<string, unknown>) {
     bitrate: stringValue(settings.bitrate) as StudioBitrate | undefined,
     variants: typeof variants === "number" ? variants : undefined,
   };
+}
+
+function workflowFromBody(body: Record<string, unknown>): StudioVideoWorkflow {
+  return stringValue(body.workflow) === "image_to_video" ? "image_to_video" : "text_to_video";
 }
 
 function numberValue(value: unknown): number | undefined {
@@ -80,6 +86,7 @@ function modelFromCatalogRecord(record: Record<string, unknown>): StudioVideoMod
     ? record.supportedModes.filter((item): item is "fast" | "std" => item === "fast" || item === "std")
     : [];
   const resolution = normalizeStudioResolution(record.defaultResolution) ?? supportedResolutions[0] ?? "720p";
+  const inputsRequired = record.inputsRequired ?? record.inputs_required;
 
   return {
     id: stringValue(record.id) ?? stringValue(record.uiId) ?? stringValue(record.providerModelId) ?? "video-model",
@@ -105,8 +112,12 @@ function modelFromCatalogRecord(record: Record<string, unknown>): StudioVideoMod
     costSupported: record.costSupported !== false && record.cost_supported !== false,
     workflowSupported: record.workflowSupported === true || record.workflow_supported === true,
     enablement: record.enablement === "safe_now" || record.enablement === "guarded" || record.enablement === "needs_smoke" || record.enablement === "disabled_until_upload" ? record.enablement : "unavailable",
+    operations: Array.isArray(record.operations) ? record.operations.filter((item): item is string => typeof item === "string") : [],
+    inputsRequired: Array.isArray(inputsRequired) ? inputsRequired.filter((item): item is string => typeof item === "string") : [],
     canGenerateTextToVideo: optionalBoolean(record.canGenerateTextToVideo ?? record.can_generate_text_to_video),
+    canGenerateImageToVideo: optionalBoolean(record.canGenerateImageToVideo ?? record.can_generate_image_to_video),
     requiredInputStatus: typeof record.requiredInputStatus === "string" ? record.requiredInputStatus : typeof record.required_input_status === "string" ? record.required_input_status : null,
+    unsupportedInputStatus: typeof record.unsupportedInputStatus === "string" ? record.unsupportedInputStatus : typeof record.unsupported_input_status === "string" ? record.unsupported_input_status : null,
     constraints: Array.isArray(record.constraints) ? record.constraints.filter((item): item is string => typeof item === "string") : [],
     warnings: Array.isArray(record.warnings) ? record.warnings.filter((item): item is string => typeof item === "string") : [],
     catalogSource: stringValue(record.catalogSource),
@@ -114,11 +125,23 @@ function modelFromCatalogRecord(record: Record<string, unknown>): StudioVideoMod
   };
 }
 
-async function validatedRealModel(body: Record<string, unknown>, settings: ReturnType<typeof settingsFromBody>): Promise<StudioVideoModel | undefined> {
+function validationModelForWorkflow(model: StudioVideoModel, workflow: StudioVideoWorkflow): StudioVideoModel {
+  return workflow === "image_to_video" && model.enablement === "disabled_until_upload"
+    ? { ...model, enablement: "guarded" }
+    : model;
+}
+
+async function validatedRealModel(
+  context: Awaited<ReturnType<typeof requireRequestUserIfAuthRequired>>,
+  body: Record<string, unknown>,
+  settings: ReturnType<typeof settingsFromBody>,
+): Promise<StudioVideoModel | undefined> {
   if (process.env.CMO_STUDIO_REAL_VIDEO_ENABLED !== "true") {
     return undefined;
   }
 
+  const workflow = workflowFromBody(body);
+  const inputAssetIds = inputAssetIdsFromBody(body);
   const providerModelId = isRecord(body.model)
     ? stringValue(body.model.providerModelId ?? body.model.provider_model_id ?? body.model.uiId ?? body.model.ui_id)
     : modelIdFromBody(body);
@@ -137,18 +160,32 @@ async function validatedRealModel(body: Record<string, unknown>, settings: Retur
   const model = modelFromCatalogRecord(match);
   const enablementReason = model.enablement === "needs_smoke" ? null : disabledReasonForEnablement(model.enablement);
 
-  if (
+  if (workflow === "image_to_video" && inputAssetIds.length === 0) {
+    throw new CmoAdapterError("Upload an image to generate image-to-video.", 400, "video_agent_input_required");
+  }
+
+  if (workflow === "text_to_video" && (
     enablementReason
     || model.canGenerateTextToVideo === false
     || model.costSupported === false
     || !model.providerModelId
     || Boolean(model.requiredInputStatus)
-  ) {
+  )) {
     throw new CmoAdapterError(enablementReason ?? model.requiredInputStatus ?? "Selected model is not available for prompt-only real Studio video generation.", 400, "video_agent_model_unavailable");
   }
 
+  if (workflow === "image_to_video" && (
+    model.costSupported === false
+    || !model.providerModelId
+    || model.canGenerateImageToVideo !== true
+    || Boolean(model.unsupportedInputStatus)
+    || (model.enablement !== "safe_now" && model.enablement !== "guarded" && model.enablement !== "needs_smoke" && model.enablement !== "disabled_until_upload")
+  )) {
+    throw new CmoAdapterError(model.unsupportedInputStatus ?? "This model does not support image-to-video.", 400, "video_agent_model_unavailable");
+  }
+
   const settingsError = validateStudioVideoSettings({
-    model,
+    model: validationModelForWorkflow(model, workflow),
     durationSeconds: settings.durationSeconds ?? model.defaultDurationSeconds ?? model.minDurationSeconds,
     aspectRatio: settings.aspectRatio ?? model.defaultAspectRatio ?? "16:9",
     resolution: settings.resolution ?? model.defaultResolution ?? "720p",
@@ -168,6 +205,13 @@ async function validatedRealModel(body: Record<string, unknown>, settings: Retur
 
   if (credits > configuredMaxCredits()) {
     throw new CmoAdapterError("Estimated cost exceeds current safety limit.", 400, "video_agent_cost_limit_exceeded");
+  }
+
+  if (workflow === "image_to_video") {
+    await createStudioInputImageHandoffs({
+      context,
+      assetIds: inputAssetIds,
+    });
   }
 
   return model;
@@ -204,13 +248,15 @@ export async function POST(request: Request) {
     const user = await requireRequestUserIfAuthRequired();
     const body = await readJsonObject(request);
     const settings = settingsFromBody(body);
-    const modelOverride = await validatedRealModel(body, settings);
+    const workflow = workflowFromBody(body);
+    const modelOverride = await validatedRealModel(user, body, settings);
     const result = await createStudioVideoJob(user, {
       prompt: stringValue(body.prompt) ?? "",
       negativePrompt: stringValue(body.negativePrompt ?? body.negative_prompt),
       modelId: modelIdFromBody(body),
       settings,
       context: isRecord(body.context) ? body.context : {},
+      workflow,
       inputAssetIds: inputAssetIdsFromBody(body),
       costEstimate: normalizedCostEstimate(body),
       modelOverride,

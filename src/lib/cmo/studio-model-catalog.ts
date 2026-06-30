@@ -7,6 +7,7 @@ export type StudioAspectRatio = "1:1" | "4:5" | "9:16" | "16:9" | "4:3" | "3:4" 
 export type StudioResolution = "480p" | "720p" | "1080p" | "4K";
 export type StudioVideoEnablement = "safe_now" | "guarded" | "needs_smoke" | "disabled_until_upload" | "unavailable";
 export type StudioVideoMode = "fast" | "std";
+export type StudioVideoWorkflow = "text_to_video" | "image_to_video";
 
 export interface StudioVideoModel {
   id: string;
@@ -38,7 +39,9 @@ export interface StudioVideoModel {
   operations?: string[];
   inputsRequired?: string[];
   canGenerateTextToVideo?: boolean;
+  canGenerateImageToVideo?: boolean;
   requiredInputStatus?: string | null;
+  unsupportedInputStatus?: string | null;
   constraints?: string[];
   warnings?: string[];
   catalogSource?: string;
@@ -308,6 +311,10 @@ export function disabledReasonForEnablement(enablement: StudioVideoEnablement | 
 }
 
 export function chooseStudioVideoMode(model: StudioVideoModel, resolution: StudioResolution): StudioVideoMode | undefined {
+  if (model.supportedModes && model.supportedModes.length === 0) {
+    return undefined;
+  }
+
   const modes = model.supportedModes?.length ? model.supportedModes : ["fast"];
 
   if ((resolution === "1080p" || resolution === "4K") && modes.includes("std")) {
@@ -352,7 +359,7 @@ export function validateStudioVideoSettings(input: {
 
   const mode = chooseStudioVideoMode(input.model, input.resolution);
 
-  if (!mode) {
+  if (!mode && input.model.supportedModes?.length !== 0) {
     return "Selected model does not expose a supported generation mode.";
   }
 

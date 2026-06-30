@@ -1,7 +1,11 @@
 import "server-only";
 
 import { CmoAdapterError } from "@/lib/cmo/errors";
-import { uploadCompletedStudioVideoFromRemote } from "@/lib/cmo/studio-asset-ingest";
+import {
+  createStudioJobInputImageHandoffs,
+  uploadCompletedStudioVideoFromRemote,
+  type StudioHandoffImage,
+} from "@/lib/cmo/studio-asset-ingest";
 import {
   estimateVideoCost,
   executeVideoJob,
@@ -25,6 +29,7 @@ import {
   type StudioAspectRatio,
   type StudioBitrate,
   type StudioResolution,
+  type StudioVideoWorkflow,
   type StudioVideoModel,
 } from "@/lib/cmo/studio-model-catalog";
 
@@ -97,6 +102,12 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function workflowFromJob(job: StudioJobRecord): StudioVideoWorkflow {
+  const value = job.settings_json.workflow ?? job.context_json.workflow ?? job.model_json.workflow;
+
+  return value === "image_to_video" ? "image_to_video" : "text_to_video";
+}
+
 function configuredMaxCredits(): number {
   const parsed = Number.parseFloat(process.env.CMO_STUDIO_MAX_ESTIMATED_CREDITS ?? "");
 
@@ -104,6 +115,7 @@ function configuredMaxCredits(): number {
 }
 
 function modelFromJob(job: StudioJobRecord, providerModelId: string): StudioVideoModel {
+  const workflow = workflowFromJob(job);
   const settingsSchema = job.model_json.settings_schema && typeof job.model_json.settings_schema === "object" && !Array.isArray(job.model_json.settings_schema)
     ? job.model_json.settings_schema as Record<string, unknown>
     : {};
@@ -157,15 +169,25 @@ function modelFromJob(job: StudioJobRecord, providerModelId: string): StudioVide
     badges: Array.isArray(job.model_json.badges) ? job.model_json.badges.filter((item): item is string => typeof item === "string") : [],
     realVideoSupported: true,
     costSupported: true,
-    enablement: job.model_json.enablement === "safe_now" || job.model_json.enablement === "guarded" || job.model_json.enablement === "needs_smoke" ? job.model_json.enablement : "unavailable",
+    operations: Array.isArray(job.model_json.operations) ? job.model_json.operations.filter((item): item is string => typeof item === "string") : [],
+    inputsRequired: Array.isArray(job.model_json.inputs_required) ? job.model_json.inputs_required.filter((item): item is string => typeof item === "string") : [],
+    canGenerateTextToVideo: job.model_json.can_generate_text_to_video === true,
+    canGenerateImageToVideo: job.model_json.can_generate_image_to_video === true,
+    enablement: job.model_json.enablement === "safe_now" || job.model_json.enablement === "guarded" || job.model_json.enablement === "needs_smoke"
+      ? job.model_json.enablement
+      : workflow === "image_to_video" && job.model_json.enablement === "disabled_until_upload"
+        ? "guarded"
+        : "unavailable",
     constraints: Array.isArray(job.model_json.constraints) ? job.model_json.constraints.filter((item): item is string => typeof item === "string") : [],
   };
 }
 
-async function assertFreshCostGuard(job: StudioJobRecord, providerModelId: string, model: StudioVideoModel) {
+async function assertFreshCostGuard(job: StudioJobRecord, providerModelId: string, model: StudioVideoModel, inputImages: StudioHandoffImage[]) {
+  const workflow = workflowFromJob(job);
   const estimate = await estimateVideoCost({
     prompt: job.prompt,
     operation: "generate_video",
+    workflow,
     backend: "higgsfield",
     model: {
       ui_id: providerModelId,
@@ -175,10 +197,17 @@ async function assertFreshCostGuard(job: StudioJobRecord, providerModelId: strin
       duration_seconds: job.settings_json.durationSeconds,
       aspect_ratio: job.settings_json.aspectRatio,
       resolution: providerResolutionValue(job.settings_json.resolution),
-      bitrate: job.settings_json.bitrate,
       variants: job.settings_json.variants ?? 1,
+      ...(model.supportedBitrates?.length ? { bitrate: job.settings_json.bitrate } : {}),
       ...(chooseStudioVideoMode(model, job.settings_json.resolution) ? { mode: chooseStudioVideoMode(model, job.settings_json.resolution) } : {}),
     },
+    ...(workflow === "image_to_video" ? {
+      inputs: {
+        images: inputImages,
+        videos: [],
+        audio: [],
+      },
+    } : {}),
     context: {
       source: "studio",
     },
@@ -194,9 +223,10 @@ async function assertFreshCostGuard(job: StudioJobRecord, providerModelId: strin
   }
 }
 
-export function buildHermesVideoExecuteRequest(job: StudioJobRecord): HermesVideoExecuteRequest {
+export function buildHermesVideoExecuteRequest(job: StudioJobRecord, inputImages: StudioHandoffImage[] = []): HermesVideoExecuteRequest {
   const providerModelId = realVideoProviderModelId(job);
   const model = modelFromJob(job, providerModelId);
+  const workflow = workflowFromJob(job);
   const settingsError = validateStudioVideoSettings({
     model,
     durationSeconds: job.settings_json.durationSeconds,
@@ -215,12 +245,17 @@ export function buildHermesVideoExecuteRequest(job: StudioJobRecord): HermesVide
 
   const mode = chooseStudioVideoMode(model, job.settings_json.resolution);
 
+  if (workflow === "image_to_video" && inputImages.length === 0) {
+    throw new CmoAdapterError("Upload an image to generate image-to-video.", 400, "video_agent_input_required");
+  }
+
   return {
     schema_version: "video.generation.request.v1",
     request_id: job.request_id ?? job.id,
     job_id: job.id,
     prompt: job.prompt,
     operation: "generate_video",
+    workflow,
     backend: "higgsfield",
     model: {
       ui_id: providerModelId,
@@ -230,8 +265,8 @@ export function buildHermesVideoExecuteRequest(job: StudioJobRecord): HermesVide
       duration_seconds: job.settings_json.durationSeconds,
       aspect_ratio: job.settings_json.aspectRatio as StudioAspectRatio,
       resolution: providerResolutionValue(job.settings_json.resolution as StudioResolution),
-      bitrate: job.settings_json.bitrate as StudioBitrate,
       variants: job.settings_json.variants ?? 1,
+      ...(model.supportedBitrates?.length ? { bitrate: job.settings_json.bitrate as StudioBitrate } : {}),
       ...(mode ? { mode } : {}),
     },
     context: {
@@ -242,7 +277,7 @@ export function buildHermesVideoExecuteRequest(job: StudioJobRecord): HermesVide
       brand_id: stringValue(job.context_json.brand_id) ?? null,
     },
     inputs: {
-      images: [],
+      images: inputImages,
       videos: [],
       audio: [],
     },
@@ -288,10 +323,14 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
     hermesDispatched = true;
     const providerModelId = realVideoProviderModelId(runningJob);
     const model = modelFromJob(runningJob, providerModelId);
+    const workflow = workflowFromJob(runningJob);
+    const inputImages = workflow === "image_to_video"
+      ? await createStudioJobInputImageHandoffs({ job: runningJob })
+      : [];
 
-    await assertFreshCostGuard(runningJob, providerModelId, model);
+    await assertFreshCostGuard(runningJob, providerModelId, model, inputImages);
 
-    const executeRequest = buildHermesVideoExecuteRequest(runningJob);
+    const executeRequest = buildHermesVideoExecuteRequest(runningJob, inputImages);
     const executeResult = await executeVideoJob(executeRequest);
 
     if (executeResult.status === "queued" || executeResult.status === "running") {
@@ -317,6 +356,7 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
           hermes_dispatched: true,
           target_path: "/agents/video/execute",
           ...(executeRequest.settings.mode ? { derived_mode: executeRequest.settings.mode } : {}),
+          workflow,
           artifact_transport_status: "not_uploaded",
           ...(executeResult.diagnostics ?? {}),
           hermes_response_summary: hermesResponseSummary({
@@ -355,6 +395,7 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
           metadata: {
             backend: executeResult.backend ?? "higgsfield",
             model: executeResult.model ?? runningJob.model_json.provider_model_id ?? null,
+            workflow,
           },
         });
       } catch (error) {
@@ -376,6 +417,7 @@ export async function dispatchStudioJob(job: StudioJobRecord): Promise<StudioDis
       diagnostics: {
         runner: "hermes_video_agent",
         hermes_dispatched: true,
+        workflow,
         ...(executeResult.diagnostics ?? {}),
         artifact_transport_status: uploadedAsset ? "product_uploaded" : uploadError ? "upload_failed" : stringValue(executeResult.diagnostics?.artifact_transport_status) ?? "not_uploaded",
         ...(executeRequest.settings.mode ? { derived_mode: executeRequest.settings.mode } : {}),

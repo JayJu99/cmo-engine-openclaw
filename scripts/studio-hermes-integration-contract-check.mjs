@@ -106,7 +106,7 @@ assert(dispatcher.includes('request_id: job.request_id ?? job.id'), "Dispatcher 
 assert(dispatcher.includes('backend: "higgsfield"'), "Dispatcher must send Hermes execute backend.");
 assert(dispatcher.includes("ui_id: providerModelId") && dispatcher.includes("provider_model_id: providerModelId"), "Dispatcher must send Hermes execute model object.");
 assert(dispatcher.includes("chooseStudioVideoMode"), "Dispatcher must choose Hermes mode from catalog settings.");
-assert(dispatcher.includes("images: []") && dispatcher.includes("videos: []") && dispatcher.includes("audio: []"), "Dispatcher must send empty media input arrays for v1 text-to-video.");
+assert(dispatcher.includes("images: inputImages") && dispatcher.includes("videos: []") && dispatcher.includes("audio: []"), "Dispatcher must send workflow-aware media input arrays to Hermes.");
 assert(dispatcher.includes("include_estimate: true") && dispatcher.includes("require_estimate: false"), "Dispatcher must request a non-blocking Hermes cost estimate.");
 assert(dispatcher.includes('mode: "product_upload"') && dispatcher.includes("upload_endpoint: null"), "Dispatcher must send product_upload transport without Product-owned upload yet.");
 assert(dispatcher.includes("uploadCompletedStudioVideoFromRemote") && dispatcher.includes('artifact_transport_status: uploadedAsset ? "product_uploaded" : uploadError ? "upload_failed"'), "Dispatcher must upload completed remote video artifacts and preserve upload failure fallback.");

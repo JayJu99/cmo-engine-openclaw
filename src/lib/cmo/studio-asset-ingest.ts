@@ -23,7 +23,9 @@ const UPLOAD_SESSION_TTL_MS = 60 * 60 * 1000;
 
 export interface StudioUploadSessionRecord {
   id: string;
-  job_id: string;
+  job_id: string | null;
+  tenant_id: string;
+  created_by: string | null;
   media_kind: StudioMediaKind;
   purpose: StudioAssetPurpose;
   status: StudioUploadSessionStatus;
@@ -43,7 +45,9 @@ export interface StudioUploadSessionRecord {
 
 export interface StudioAssetRecord {
   id: string;
-  job_id: string;
+  job_id: string | null;
+  tenant_id: string;
+  created_by: string | null;
   media_kind: StudioMediaKind;
   purpose: StudioAssetPurpose;
   storage_key: string;
@@ -58,6 +62,16 @@ export interface StudioAssetRecord {
   duration_seconds: number | null;
   metadata_json: Record<string, unknown>;
   created_at: string;
+}
+
+export interface StudioHandoffImage {
+  asset_id: string;
+  role: "start_image" | "end_image" | "image_reference";
+  download_url: string;
+  mime_type: string;
+  bytes: number;
+  sha256?: string;
+  filename?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -110,6 +124,20 @@ function normalizeMediaKind(value: unknown, mimeType?: string | null): StudioMed
 
 function normalizePurpose(value: unknown): StudioAssetPurpose {
   return value === "studio_output" ? "studio_output" : "studio_input";
+}
+
+function studioActor(context: CmoRequestUserContext): { tenantId: string; createdBy: string | null } {
+  if (context.mode === "supabase") {
+    return {
+      tenantId: context.userId,
+      createdBy: context.userId,
+    };
+  }
+
+  return {
+    tenantId: "legacy_admin",
+    createdBy: context.mode,
+  };
 }
 
 function uploadMaxBytes(mediaKind: StudioMediaKind, purpose: StudioAssetPurpose): number {
@@ -182,7 +210,9 @@ function mimeTypeFromResponse(response: Response, sourceUrl: string, expectedKin
 function rowToSession(row: Record<string, unknown>): StudioUploadSessionRecord {
   return {
     id: String(row.id),
-    job_id: String(row.job_id),
+    job_id: typeof row.job_id === "string" ? row.job_id : null,
+    tenant_id: String(row.tenant_id ?? ""),
+    created_by: typeof row.created_by === "string" ? row.created_by : null,
     media_kind: row.media_kind as StudioMediaKind,
     purpose: row.purpose as StudioAssetPurpose,
     status: row.status as StudioUploadSessionStatus,
@@ -204,7 +234,9 @@ function rowToSession(row: Record<string, unknown>): StudioUploadSessionRecord {
 function rowToAsset(row: Record<string, unknown>): StudioAssetRecord {
   return {
     id: String(row.id),
-    job_id: String(row.job_id),
+    job_id: typeof row.job_id === "string" ? row.job_id : null,
+    tenant_id: String(row.tenant_id ?? ""),
+    created_by: typeof row.created_by === "string" ? row.created_by : null,
     media_kind: row.media_kind as StudioMediaKind,
     purpose: row.purpose as StudioAssetPurpose,
     storage_key: String(row.storage_key),
@@ -279,7 +311,7 @@ function assertSessionOpen(session: StudioUploadSessionRecord) {
 
 export async function createStudioAssetUploadSession(input: {
   context: CmoRequestUserContext;
-  jobId: string;
+  jobId?: string | null;
   mediaKind?: unknown;
   purpose?: unknown;
   expectedMimeType?: unknown;
@@ -290,21 +322,29 @@ export async function createStudioAssetUploadSession(input: {
     throw new CmoAdapterError("Unsupported Studio asset MIME type.", 400, "studio_asset_unsupported_mime");
   }
 
-  const job = await assertStudioJobExists(input.context, input.jobId);
-  const mediaKind = normalizeMediaKind(input.mediaKind ?? job.media_kind, expectedMimeType);
   const purpose = normalizePurpose(input.purpose);
+  const job = input.jobId ? await assertStudioJobExists(input.context, input.jobId) : null;
+  const actor = studioActor(input.context);
+  const mediaKind = normalizeMediaKind(input.mediaKind ?? job?.media_kind, expectedMimeType);
+
+  if (!job && (purpose !== "studio_input" || mediaKind !== "image")) {
+    throw new CmoAdapterError("Pre-job Studio uploads are only supported for input images.", 400, "studio_prejob_upload_unsupported");
+  }
+
   const maxBytes = uploadMaxBytes(mediaKind, purpose);
   const now = new Date();
   const sessionId = `studio_upload_${randomUUID()}`;
   const storageKey = [
-    safeStorageSegment(job.tenant_id, "tenant"),
-    safeStorageSegment(job.id, "job"),
+    safeStorageSegment(job?.tenant_id ?? actor.tenantId, "tenant"),
+    safeStorageSegment(job?.id ?? "prejob", "job"),
     purpose,
     `${safeStorageSegment(sessionId, "session")}.${extensionFromMime(expectedMimeType)}`,
   ].join("/");
   const row = {
     id: sessionId,
-    job_id: job.id,
+    job_id: job?.id ?? null,
+    tenant_id: job?.tenant_id ?? actor.tenantId,
+    created_by: job?.created_by ?? actor.createdBy,
     media_kind: mediaKind,
     purpose,
     status: "pending",
@@ -411,7 +451,12 @@ export async function completeStudioAssetUpload(input: {
   const session = await loadSession(input.sessionId);
 
   assertSessionOpen(session);
-  await assertStudioJobExists(input.context, session.job_id);
+  const actor = studioActor(input.context);
+  const job = session.job_id ? await assertStudioJobExists(input.context, session.job_id) : null;
+
+  if (!job && session.tenant_id !== actor.tenantId) {
+    throw new CmoAdapterError("Studio upload session not found.", 404, "studio_upload_session_not_found");
+  }
 
   if (session.status !== "uploaded") {
     throw new CmoAdapterError("Studio upload session has no uploaded bytes.", 409, "studio_upload_session_not_uploaded");
@@ -432,6 +477,8 @@ export async function completeStudioAssetUpload(input: {
   const assetRow = {
     id: assetId,
     job_id: session.job_id,
+    tenant_id: job?.tenant_id ?? session.tenant_id,
+    created_by: job?.created_by ?? session.created_by ?? actor.createdBy,
     media_kind: session.media_kind,
     purpose: session.purpose,
     storage_key: session.storage_key,
@@ -458,20 +505,23 @@ export async function completeStudioAssetUpload(input: {
   }
 
   const asset = rowToAsset(data);
-  const assetColumn = session.purpose === "studio_output" ? "output_asset_ids" : "input_asset_ids";
-  const { data: jobData } = await supabase
-    .from("studio_generation_jobs")
-    .select("input_asset_ids,output_asset_ids")
-    .eq("id", session.job_id)
-    .maybeSingle();
-  const jobAssetIds = isRecord(jobData) ? jobData as Record<string, unknown> : {};
-  const currentIds = jobAssetIds[assetColumn];
-  const nextIds = Array.from(new Set([...(Array.isArray(currentIds) ? currentIds.filter((item): item is string => typeof item === "string") : []), asset.id]));
 
-  await supabase
-    .from("studio_generation_jobs")
-    .update({ [assetColumn]: nextIds })
-    .eq("id", session.job_id);
+  if (session.job_id) {
+    const assetColumn = session.purpose === "studio_output" ? "output_asset_ids" : "input_asset_ids";
+    const { data: jobData } = await supabase
+      .from("studio_generation_jobs")
+      .select("input_asset_ids,output_asset_ids")
+      .eq("id", session.job_id)
+      .maybeSingle();
+    const jobAssetIds = isRecord(jobData) ? jobData as Record<string, unknown> : {};
+    const currentIds = jobAssetIds[assetColumn];
+    const nextIds = Array.from(new Set([...(Array.isArray(currentIds) ? currentIds.filter((item): item is string => typeof item === "string") : []), asset.id]));
+
+    await supabase
+      .from("studio_generation_jobs")
+      .update({ [assetColumn]: nextIds })
+      .eq("id", session.job_id);
+  }
 
   await supabase
     .from("studio_asset_upload_sessions")
@@ -714,6 +764,8 @@ export async function uploadCompletedStudioVideoFromRemote(input: {
   const assetRow = {
     id: assetId,
     job_id: input.job.id,
+    tenant_id: input.job.tenant_id,
+    created_by: null,
     media_kind: "video",
     purpose: "studio_output",
     storage_key: storageKey,
@@ -771,8 +823,13 @@ export async function getStudioAssetPlaybackUrl(input: {
   }
 
   const asset = rowToAsset(data);
+  const actor = studioActor(input.context);
 
-  await assertStudioJobExists(input.context, asset.job_id);
+  if (asset.job_id) {
+    await assertStudioJobExists(input.context, asset.job_id);
+  } else if (asset.tenant_id !== actor.tenantId) {
+    throw new CmoAdapterError("Studio asset not found.", 404, "studio_asset_not_found");
+  }
 
   const thumbnailStorageKey = typeof asset.metadata_json.thumbnail_storage_key === "string"
     ? asset.metadata_json.thumbnail_storage_key
@@ -790,4 +847,110 @@ export async function getStudioAssetPlaybackUrl(input: {
     signedUrl: signed.signedUrl,
     asset,
   };
+}
+
+async function loadStudioInputImageAssets(input: {
+  tenantId: string;
+  assetIds: string[];
+  jobId?: string | null;
+}): Promise<StudioAssetRecord[]> {
+  const assetIds = Array.from(new Set(input.assetIds.filter(Boolean))).slice(0, 2);
+
+  if (!assetIds.length) {
+    throw new CmoAdapterError("Upload an image to generate image-to-video.", 400, "video_agent_input_required");
+  }
+
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase
+    .from("studio_assets")
+    .select("*")
+    .in("id", assetIds);
+
+  if (error) {
+    throw new CmoAdapterError("Studio input asset lookup failed.", 500, "studio_input_asset_lookup_failed");
+  }
+
+  const assets = (data ?? []).map((row) => rowToAsset(row));
+
+  for (const assetId of assetIds) {
+    const asset = assets.find((item) => item.id === assetId);
+
+    if (!asset || asset.tenant_id !== input.tenantId) {
+      throw new CmoAdapterError("Studio input image asset not found.", 404, "studio_input_asset_not_found");
+    }
+
+    if (asset.purpose !== "studio_input" || asset.media_kind !== "image" || !asset.mime_type.startsWith("image/")) {
+      throw new CmoAdapterError("Selected Studio input asset is not an image.", 400, "video_input_unsupported");
+    }
+
+    if (asset.job_id && input.jobId && asset.job_id !== input.jobId) {
+      throw new CmoAdapterError("Selected Studio input asset belongs to another Studio job.", 403, "studio_input_asset_scope_mismatch");
+    }
+  }
+
+  return assetIds.map((assetId) => assets.find((item) => item.id === assetId)).filter((item): item is StudioAssetRecord => Boolean(item));
+}
+
+function handoffFilename(asset: StudioAssetRecord): string | undefined {
+  const original = asset.metadata_json.original_filename;
+
+  return typeof original === "string" && original.trim()
+    ? safeStorageSegment(original, "studio-input-image")
+    : undefined;
+}
+
+async function signedHandoffImages(assets: StudioAssetRecord[]): Promise<StudioHandoffImage[]> {
+  const supabase = createSupabaseAdminClient();
+  const images: StudioHandoffImage[] = [];
+
+  for (const [index, asset] of assets.entries()) {
+    const { data, error } = await supabase.storage
+      .from(studioAssetBucket())
+      .createSignedUrl(asset.storage_key, 5 * 60);
+
+    if (error || !data?.signedUrl) {
+      throw new CmoAdapterError("Studio input handoff URL create failed.", 500, "studio_input_handoff_url_failed");
+    }
+
+    images.push({
+      asset_id: asset.id,
+      role: index === 0 ? "start_image" : "end_image",
+      download_url: data.signedUrl,
+      mime_type: asset.mime_type,
+      bytes: asset.bytes,
+      sha256: asset.sha256,
+      ...(handoffFilename(asset) ? { filename: handoffFilename(asset) } : {}),
+    });
+  }
+
+  return images;
+}
+
+export async function createStudioInputImageHandoffs(input: {
+  context: CmoRequestUserContext;
+  assetIds: string[];
+}): Promise<StudioHandoffImage[]> {
+  const actor = studioActor(input.context);
+  const assets = await loadStudioInputImageAssets({
+    tenantId: actor.tenantId,
+    assetIds: input.assetIds,
+  });
+
+  return signedHandoffImages(assets.slice(0, 1));
+}
+
+export async function createStudioJobInputImageHandoffs(input: {
+  job: {
+    id: string;
+    tenant_id: string;
+    input_asset_ids: string[];
+  };
+}): Promise<StudioHandoffImage[]> {
+  const assets = await loadStudioInputImageAssets({
+    tenantId: input.job.tenant_id,
+    jobId: input.job.id,
+    assetIds: input.job.input_asset_ids,
+  });
+
+  return signedHandoffImages(assets.slice(0, 1));
 }

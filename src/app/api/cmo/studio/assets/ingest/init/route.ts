@@ -11,7 +11,7 @@ export async function POST(request: Request) {
     const body = await readJsonObject(request);
     const session = await createStudioAssetUploadSession({
       context: user,
-      jobId: stringValue(body.jobId ?? body.job_id) ?? "",
+      jobId: stringValue(body.jobId ?? body.job_id),
       mediaKind: body.mediaKind ?? body.media_kind,
       purpose: body.purpose,
       expectedMimeType: body.expectedMimeType ?? body.expected_mime_type ?? body.mimeType ?? body.mime_type,
