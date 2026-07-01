@@ -10,6 +10,7 @@ type NavItem = {
 export const navItems: NavItem[] = [
   { label: "Command Center", href: "/", icon: "Home" },
   { label: "Apps", href: "/apps", icon: "Grid2X2" },
+  { label: "Studio", href: "/studio", icon: "Sparkles" },
   { label: "Daily Notes", href: "/daily", icon: "FileText" },
   { label: "Vault", href: "/vault", icon: "Package", exact: true },
   { label: "Vault Graph", href: "/vault/graph", icon: "Workflow" },
