@@ -607,11 +607,12 @@ export type CmoRuntimeErrorReason =
   | "invalid_response"
   | "empty_answer"
   | "execution_error";
-export type HermesCmoChatStatus = "live" | "failed_then_existing_fallback" | "guardrail_violation_then_existing_fallback" | "interrupted";
+export type HermesCmoChatStatus = "live" | "failed_then_existing_fallback" | "guardrail_violation_then_existing_fallback" | "interrupted" | "failed_boundary";
 export type HermesCmoDelegationsMode = "proposals_only" | "echo_surf_bounded";
 export type CmoLensReadoutRangeKey = "this_week" | "last_7_days" | "last_30_days" | "this_month";
 export type CmoProductRenderSource =
   | "hermes_cmo"
+  | "hermes_cmo_boundary_failure"
   | "fallback_after_hermes_failure"
   | "local_runtime_fallback"
   | "legacy_cmo_engine"
@@ -621,7 +622,8 @@ export type CmoOuterTimeoutSource = "default_app_turn" | "creative_execute";
 export type CmoRouteDecision = "app_turn" | "creative_execution" | "creative_ideation" | "creative_session" | "execute" | "tool_execute" | "cmo_agent";
 export type CmoStrategyMode = "DIAGNOSE" | "FOCUS" | "PRIORITIZE" | "REVIEW" | "RESET";
 export type CmoDecisionLabel = "KEEP" | "CUT" | "TEST" | "SCALE" | "WAIT";
-export type HermesCmoAgentUsed = "cmo" | "echo" | "surf" | "creative";
+export type HermesCmoAgentUsed = "cmo" | "echo" | "surf" | "creative" | "lens" | "vault_agent";
+export type HermesCmoDelegationTargetAgent = Exclude<HermesCmoAgentUsed, "cmo">;
 export type HermesCmoExecutableMode =
   | "echo.default"
   | "echo.source_translate"
@@ -874,14 +876,14 @@ export interface HermesCmoActivityEventSummary {
   message: string;
   userVisible: boolean;
   sourceAgent?: HermesCmoAgentUsed;
-  sourceMode?: "cmo.default" | "cmo.tool_capable" | HermesCmoExecutableMode;
+  sourceMode?: "cmo.default" | "cmo.tool_capable" | HermesCmoExecutableMode | string;
 }
 
 export interface HermesCmoDelegationSummaryItem {
   delegationId: string;
-  targetAgent: "echo" | "surf" | "creative";
-  mode: HermesCmoExecutableMode;
-  objective: string;
+  targetAgent: HermesCmoDelegationTargetAgent;
+  mode: HermesCmoExecutableMode | string;
+  objective?: string;
   status: "completed" | "failed" | "skipped";
   summary: string;
   failureReason?: string;
@@ -923,10 +925,10 @@ export interface CmoEvidenceSourceDisplay {
 
 export interface HermesCmoChatMetadata {
   runtimeMode: "hermes_cmo";
-  runtimeStatus: "live" | "fallback";
+  runtimeStatus: "live" | "fallback" | "runtime_error";
   calledHermesCmo: true;
   hermesRequestSent?: true;
-  productRenderSource?: "hermes_cmo" | "fallback_after_hermes_failure";
+  productRenderSource?: "hermes_cmo" | "fallback_after_hermes_failure" | "hermes_cmo_boundary_failure";
   selectedHermesEndpoint?: string;
   hermesEndpointKind?: "execute" | "tool_execute" | "agent_chat" | "cmo_agent";
   endpoint_kind?: "execute" | "tool_execute" | "agent_chat" | "cmo_agent";
@@ -1087,6 +1089,7 @@ export interface HermesCmoChatMetadata {
   decisions_count?: number;
   session_summary_update_present?: boolean;
   suggested_vault_updates_count?: number;
+  approval_requests_count?: number;
   approval_events_count?: number;
   latest_approval_action?: CmoVaultUpdateReviewAction;
   dry_run_results_count?: number;
@@ -1485,6 +1488,7 @@ export interface CMOChatMessage {
   creativeAssets?: Record<string, unknown>[];
   creative_assets?: Record<string, unknown>[];
   sessionArtifacts?: Record<string, unknown>[];
+  approvalRequests?: Record<string, unknown>[];
   suggestedVaultUpdates?: Record<string, unknown>[];
   vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
   vaultUpdateDryRunResults?: CmoVaultApprovedWriteDryRunResult[];
@@ -1666,6 +1670,7 @@ export interface CMOChatSession {
   creativeAssets?: Record<string, unknown>[];
   creative_assets?: Record<string, unknown>[];
   sessionArtifacts?: Record<string, unknown>[];
+  approvalRequests?: Record<string, unknown>[];
   suggestedVaultUpdates?: Record<string, unknown>[];
   vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
   vaultUpdateDryRunResults?: CmoVaultApprovedWriteDryRunResult[];
@@ -1799,6 +1804,7 @@ export interface CMOAppChatResponse {
   creativeAssets?: Record<string, unknown>[];
   creative_assets?: Record<string, unknown>[];
   sessionArtifacts?: Record<string, unknown>[];
+  approvalRequests?: Record<string, unknown>[];
   suggestedVaultUpdates?: Record<string, unknown>[];
   vaultUpdateApprovalEvents?: CmoVaultUpdateApprovalEvent[];
   vaultUpdateDryRunResults?: CmoVaultApprovedWriteDryRunResult[];

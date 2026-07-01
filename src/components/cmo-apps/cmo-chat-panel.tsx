@@ -1248,6 +1248,7 @@ export function CMOChatPanel({
                 indexedContextBuildDurationMs: response.indexedContextBuildDurationMs,
                 sessionSummary: response.sessionSummary,
                 sessionArtifacts: response.sessionArtifacts,
+                approvalRequests: response.approvalRequests,
                 suggestedVaultUpdates: response.suggestedVaultUpdates,
                 vaultUpdateApprovalEvents: response.vaultUpdateApprovalEvents,
                 vaultUpdateDryRunResults: response.vaultUpdateDryRunResults,
@@ -1678,6 +1679,48 @@ export function CMOChatPanel({
     );
   }
 
+  function renderApprovalRequests(message: CMOChatMessage) {
+    const requests = message.approvalRequests ?? [];
+
+    if (message.role !== "assistant" || !requests.length) {
+      return null;
+    }
+
+    return (
+      <div className="mt-4 border-t border-slate-100 pt-4">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase text-slate-500">
+            <icons.ShieldCheck className="size-4" />
+            Approval Requests
+          </div>
+          <Badge variant="orange">pending</Badge>
+          <Badge variant="slate">{requests.length}</Badge>
+        </div>
+        <div className="grid gap-3">
+          {requests.map((request, index) => {
+            const key = recordString(request, ["approval_id", "id", "payload_ref"]) || `approval_${index}`;
+            const kind = recordString(request, ["kind", "type"]) || "approval";
+            const title = recordString(request, ["title", "name"]) || "Untitled approval";
+            const summary = recordString(request, ["summary", "description"]);
+            const sideEffect = recordString(request, ["side_effect_if_approved", "side_effect"]);
+
+            return (
+              <div key={key} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="slate">{kind}</Badge>
+                  <Badge variant="orange">manual</Badge>
+                </div>
+                <div className="mt-2 break-words text-sm font-bold leading-6 text-slate-950">{title}</div>
+                {summary ? <p className="mt-1 break-words text-sm leading-6 text-slate-600">{summary}</p> : null}
+                {sideEffect ? <p className="mt-2 break-words text-xs font-medium leading-5 text-slate-500">{sideEffect}</p> : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   function renderSuggestedVaultUpdates(message: CMOChatMessage) {
     const candidates = message.suggestedVaultUpdates ?? [];
 
@@ -2089,6 +2132,7 @@ export function CMOChatPanel({
                   {message.role === "assistant" ? renderCreativeDraftBadge(message) : null}
                   {message.role === "assistant" ? renderAssistantEvidence(message) : null}
                   {renderAssistantRunControls(message)}
+                  {renderApprovalRequests(message)}
                   {renderSuggestedVaultUpdates(message)}
                   {message.role === "assistant" && assistantProvenance(message) ? (
                     <div className="mt-4 border-t border-emerald-100 pt-3 text-xs font-semibold text-emerald-700">

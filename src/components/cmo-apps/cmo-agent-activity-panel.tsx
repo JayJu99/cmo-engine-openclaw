@@ -3,6 +3,7 @@ import { icons } from "@/components/dashboard/icons";
 import type {
   CMOChatMessage,
   HermesCmoActivityEventSummary,
+  HermesCmoAgentUsed,
   HermesCmoDelegationSummaryItem,
 } from "@/lib/cmo/app-workspace-types";
 import { buildCmoActivitySteps } from "@/lib/cmo/cmo-chat-evidence-display";
@@ -31,7 +32,9 @@ function normalizeStatus(value: string | undefined, fallback: ActivityStatus): A
   return fallback;
 }
 
-function agentLabel(agent: "cmo" | "echo" | "surf" | "creative" | undefined): string {
+function agentLabel(agent: HermesCmoAgentUsed | undefined): string {
+  if (agent === "vault_agent") return "Vault Agent";
+  if (agent === "lens") return "Lens";
   if (agent === "creative") return "Creative Agent";
   if (agent === "surf") return "Surf Agent";
   if (agent === "echo") return "Echo Agent";
@@ -86,15 +89,19 @@ function displayStatusForCreativeEvent(event: HermesCmoActivityEventSummary): Ac
   return normalizeStatus(event.status, "completed");
 }
 
-function delegationMatchKey(agent: "echo" | "surf" | "creative" | undefined, mode: string | undefined): string | null {
-  if (!agent) {
+function delegationAgent(agent: HermesCmoAgentUsed | undefined): HermesCmoAgentUsed | undefined {
+  return agent && agent !== "cmo" ? agent : undefined;
+}
+
+function delegationMatchKey(agent: HermesCmoAgentUsed | undefined, mode: string | undefined): string | null {
+  if (!delegationAgent(agent)) {
     return null;
   }
 
   return `${agent}:${mode ?? "*"}`;
 }
 
-function hasDelegationMatch(matches: Set<string>, agent: "echo" | "surf" | "creative" | undefined, mode: string | undefined): boolean {
+function hasDelegationMatch(matches: Set<string>, agent: HermesCmoAgentUsed | undefined, mode: string | undefined): boolean {
   if (!agent) {
     return false;
   }
@@ -108,7 +115,7 @@ function delegationOutcomeSets(
 ): { completed: Set<string>; failed: Set<string> } {
   const completed = new Set<string>();
   const failed = new Set<string>();
-  const addMatch = (target: Set<string>, agent: "echo" | "surf" | "creative" | undefined, mode: string | undefined) => {
+  const addMatch = (target: Set<string>, agent: HermesCmoAgentUsed | undefined, mode: string | undefined) => {
     const key = delegationMatchKey(agent, mode);
 
     if (key) {
@@ -122,12 +129,12 @@ function delegationOutcomeSets(
     }
 
     if (event.status === "failed") {
-      addMatch(failed, event.sourceAgent === "echo" || event.sourceAgent === "surf" || event.sourceAgent === "creative" ? event.sourceAgent : undefined, event.sourceMode);
+      addMatch(failed, delegationAgent(event.sourceAgent), event.sourceMode);
       return;
     }
 
     if (event.status === "completed") {
-      addMatch(completed, event.sourceAgent === "echo" || event.sourceAgent === "surf" || event.sourceAgent === "creative" ? event.sourceAgent : undefined, event.sourceMode);
+      addMatch(completed, delegationAgent(event.sourceAgent), event.sourceMode);
     }
   });
 
@@ -151,7 +158,7 @@ function displayStatusForEvent(
 ): ActivityStatus {
   const fallback = normalizeStatus(event.status, event.type === "delegation.started" ? "running" : "completed");
 
-  if (event.type !== "delegation.started" || (event.sourceAgent !== "echo" && event.sourceAgent !== "surf" && event.sourceAgent !== "creative")) {
+  if (event.type !== "delegation.started" || !delegationAgent(event.sourceAgent)) {
     return fallback;
   }
 
@@ -258,7 +265,11 @@ function toolAgentFromRow(row: ActivityRow): "surf" | "echo" | "creative" | null
 }
 
 function activityRows(message: CMOChatMessage | undefined, running: boolean): ActivityRow[] {
-  if (message) {
+  const hermesFirstMessage =
+    message?.productRenderSource === "hermes_cmo" ||
+    message?.productRenderSource === "hermes_cmo_boundary_failure";
+
+  if (message && !hermesFirstMessage) {
     const displaySteps = buildCmoActivitySteps(message, running);
     const hasSpecificEvidenceStep = displaySteps.some((step) =>
       step.label === "Lens" ||
@@ -306,7 +317,7 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
 
   rows.push(
     ...delegationEvents
-      .filter((event) => event.sourceAgent === "echo" || event.sourceAgent === "surf")
+      .filter((event) => Boolean(delegationAgent(event.sourceAgent)) && event.sourceAgent !== "creative")
       .map((event, index): ActivityRow => ({
         key: `${event.eventId}-${index}`,
         label: eventLabel(event),

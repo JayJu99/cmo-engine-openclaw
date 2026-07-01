@@ -108,7 +108,14 @@ function arrayValue<T = unknown>(value: unknown): T[] {
 }
 
 function hermesAgentUsedValue(value: unknown): HermesCmoAgentUsed | undefined {
-  return value === "cmo" || value === "echo" || value === "surf" || value === "creative" ? value : undefined;
+  return value === "cmo" ||
+    value === "echo" ||
+    value === "surf" ||
+    value === "creative" ||
+    value === "lens" ||
+    value === "vault_agent"
+    ? value
+    : undefined;
 }
 
 function hasCreativeExecutionMetadata(value: unknown): boolean {
@@ -1875,7 +1882,7 @@ function agentsUsedFromMetadata(
     ...agentsUsedFromExecutedDelegations(delegationSummary),
     ...activityEvents
       .map((event) => event.sourceAgent)
-      .filter((agent): agent is HermesCmoAgentUsed => agent === "cmo" || agent === "echo" || agent === "surf" || agent === "creative"),
+      .filter((agent): agent is HermesCmoAgentUsed => Boolean(hermesAgentUsedValue(agent))),
   ]));
 }
 

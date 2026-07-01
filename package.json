@@ -13,6 +13,12 @@
     "smoke:cmo-creative-agent": "node scripts/cmo-creative-agent-contract-check.mjs",
     "smoke:cmo-creative-draft-state": "node scripts/cmo-creative-draft-state-check.mjs",
     "smoke:cmo-creative-user-copy": "node scripts/cmo-creative-user-copy-audit.mjs",
+    "check:cmo-hermes-first-contract": "node scripts/cmo-hermes-first-contract-check.mjs",
+    "check:cmo-hermes-first-response-mapping": "node scripts/cmo-hermes-first-response-mapping-check.mjs",
+    "check:cmo-hermes-first-boundary-failure": "node scripts/cmo-hermes-first-boundary-failure-check.mjs",
+    "check:cmo-hermes-first-no-second-brain": "node scripts/cmo-hermes-first-no-second-brain-check.mjs",
+    "check:cmo-hermes-first-ui-contract": "node scripts/cmo-hermes-first-ui-contract-check.mjs",
+    "smoke:cmo-hermes-first": "node scripts/cmo-hermes-first-smoke.mjs",
     "adapter:dev": "node --watch services/vps-cmo-adapter/server.mjs",
     "adapter:build": "node --check services/vps-cmo-adapter/server.mjs",
     "adapter:start": "node services/vps-cmo-adapter/server.mjs"
