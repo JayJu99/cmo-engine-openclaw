@@ -60,6 +60,12 @@ import {
   cmoAttachmentsForHermes,
   normalizeCmoSessionAttachments,
 } from "@/lib/cmo/attachments";
+import {
+  createProductChatRunLifecycleEvent,
+  mergeCmoActivityEvents,
+  normalizeCmoActivityEvents,
+  type NormalizeCmoActivityEventContext,
+} from "@/lib/cmo/activity-events";
 import { getAppWorkspace } from "@/lib/cmo/app-workspaces";
 import { buildContextPack, withContextPackMessage } from "@/lib/cmo/context-pack-builder";
 import { summarizeContextQuality } from "@/lib/cmo/context-quality";
@@ -2140,35 +2146,15 @@ function normalizeHermesCmoAgentUsed(value: unknown): HermesCmoAgentUsed | undef
     : undefined;
 }
 
-function normalizeHermesCmoActivityEvents(value: unknown): HermesCmoActivityEventSummary[] | undefined {
+function normalizeHermesCmoActivityEvents(
+  value: unknown,
+  context: NormalizeCmoActivityEventContext = {},
+): HermesCmoActivityEventSummary[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
 
-  return value
-    .map((event): HermesCmoActivityEventSummary | null => {
-      if (!isRecord(event)) {
-        return null;
-      }
-
-      const eventId = stringValue(event.eventId);
-      const type = stringValue(event.type);
-      const status = stringValue(event.status);
-      const message = stringValue(event.message);
-
-      return eventId && type && status && message
-        ? {
-            eventId,
-            type,
-            status,
-            message,
-            userVisible: event.userVisible === true,
-            ...(normalizeHermesCmoAgentUsed(event.sourceAgent) ? { sourceAgent: normalizeHermesCmoAgentUsed(event.sourceAgent) } : {}),
-            ...(stringValue(event.sourceMode) ? { sourceMode: stringValue(event.sourceMode) as HermesCmoActivityEventSummary["sourceMode"] } : {}),
-          }
-        : null;
-    })
-    .filter((event): event is HermesCmoActivityEventSummary => Boolean(event));
+  return normalizeCmoActivityEvents(value, context) as HermesCmoActivityEventSummary[];
 }
 
 function normalizeHermesCmoDelegationSummary(value: unknown): HermesCmoDelegationSummaryItem[] | undefined {
@@ -2331,7 +2317,10 @@ function attachHermesCmoPlatformPersistence(
   };
 }
 
-function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | undefined {
+function normalizeHermesCmoMetadata(
+  value: unknown,
+  context: NormalizeCmoActivityEventContext = {},
+): HermesCmoChatMetadata | undefined {
   if (
     !isRecord(value) ||
     value.runtimeMode !== "hermes_cmo" ||
@@ -2351,7 +2340,10 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     return undefined;
   }
 
-  const activityEvents = normalizeHermesCmoActivityEvents(value.activityEvents);
+  const activityEvents = normalizeHermesCmoActivityEvents(value.activityEvents, {
+    ...context,
+    requestId,
+  });
   const delegationSummary = normalizeHermesCmoDelegationSummary(value.delegationSummary);
   const agentsUsed = Array.isArray(value.agentsUsed)
     ? value.agentsUsed.map(normalizeHermesCmoAgentUsed).filter((agent): agent is HermesCmoAgentUsed => Boolean(agent))
@@ -3834,14 +3826,23 @@ function normalizeSession(value: unknown): CMOChatSession | null {
               ? message.role
               : "assistant";
 
-          const messageHermesCmoMetadata = normalizeHermesCmoMetadata(message.hermesCmoMetadata);
+          const normalizedMessageId = stringValue(message.id, `message_${index + 1}`);
+          const normalizedMessageCreatedAt = stringValue(message.createdAt, new Date(0).toISOString());
+          const normalizedMessageRunId = normalizeOptionalString(message.cmoRunId);
+          const messageHermesCmoMetadata = normalizeHermesCmoMetadata(message.hermesCmoMetadata, {
+            sessionId: id,
+            turnId: normalizedMessageId,
+            runId: normalizedMessageRunId,
+            chatRunId: normalizedMessageRunId,
+            createdAt: normalizedMessageCreatedAt,
+          });
           const messageVaultContextUsage = message.vault_context_usage ?? vaultContextUsageFromMetadata(messageHermesCmoMetadata);
 
           return {
-            id: stringValue(message.id, `message_${index + 1}`),
+            id: normalizedMessageId,
             role,
             content: role === "assistant" ? scrubPersistedReplayText(message.content) : stringValue(message.content),
-            createdAt: stringValue(message.createdAt, new Date(0).toISOString()),
+            createdAt: normalizedMessageCreatedAt,
             authMode: normalizeAuthMode(message.authMode),
             userId: normalizeOptionalString(message.userId),
             userEmail: normalizeOptionalString(message.userEmail),
@@ -3868,7 +3869,13 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             mainBottleneck: normalizeOptionalString(message.mainBottleneck),
             decisionLabel: normalizeDecisionLabel(message.decisionLabel),
             currentStep: normalizeOptionalString(message.currentStep),
-            activityEvents: normalizeHermesCmoActivityEvents(message.activityEvents),
+            activityEvents: normalizeHermesCmoActivityEvents(message.activityEvents, {
+              sessionId: id,
+              turnId: normalizedMessageId,
+              runId: normalizedMessageRunId,
+              chatRunId: normalizedMessageRunId,
+              createdAt: normalizedMessageCreatedAt,
+            }),
             delegationSummary: normalizeHermesCmoDelegationSummary(message.delegationSummary),
             agentsUsed: Array.isArray(message.agentsUsed)
               ? message.agentsUsed.map(normalizeHermesCmoAgentUsed).filter((agent): agent is HermesCmoAgentUsed => Boolean(agent))
@@ -3880,7 +3887,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             delegationsMode: normalizeHermesCmoDelegationsMode(message.delegationsMode),
             vaultAgentDryRun: normalizeVaultAgentDryRunMetadata(message.vaultAgentDryRun),
             vaultAgentContextPack: normalizeVaultAgentContextPackMetadata(message.vaultAgentContextPack),
-            cmoRunId: normalizeOptionalString(message.cmoRunId),
+            cmoRunId: normalizedMessageRunId,
             cmoRunStatus: normalizeCmoRunStatus(message.cmoRunStatus),
             cmoRunEndpoint: message.cmoRunEndpoint === "/agents/cmo/tool-execute" ? message.cmoRunEndpoint : undefined,
             cmoRunToolsUsed: Array.isArray(message.cmoRunToolsUsed)
@@ -3993,7 +4000,15 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     ? activeSourceId
     : sessionLocalSources[0]?.source_id;
 
-  const sessionHermesCmoMetadata = normalizeHermesCmoMetadata(value.hermesCmoMetadata);
+  const normalizedSessionCreatedAt = stringValue(value.createdAt, new Date(0).toISOString());
+  const normalizedSessionUpdatedAt = stringValue(value.updatedAt, new Date(0).toISOString());
+  const normalizedSessionRunId = normalizeOptionalString(value.cmoRunId);
+  const sessionHermesCmoMetadata = normalizeHermesCmoMetadata(value.hermesCmoMetadata, {
+    sessionId: id,
+    runId: normalizedSessionRunId,
+    chatRunId: normalizedSessionRunId,
+    createdAt: normalizedSessionUpdatedAt || normalizedSessionCreatedAt,
+  });
   const sessionVaultContextUsage = value.vault_context_usage ?? vaultContextUsageFromMetadata(sessionHermesCmoMetadata);
 
   return {
@@ -4015,8 +4030,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     messages,
     contextUsed,
     status: value.status === "pending" || value.status === "running" || value.status === "failed" || value.status === "timed_out" ? value.status : "completed",
-    createdAt: stringValue(value.createdAt, new Date(0).toISOString()),
-    updatedAt: stringValue(value.updatedAt, new Date(0).toISOString()),
+    createdAt: normalizedSessionCreatedAt,
+    updatedAt: normalizedSessionUpdatedAt,
     isDevelopmentFallback: value.isDevelopmentFallback === true,
     isRuntimeFallback: value.isRuntimeFallback === true,
     runtimeStatus,
@@ -4040,7 +4055,12 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     mainBottleneck: normalizeOptionalString(value.mainBottleneck),
     decisionLabel: normalizeDecisionLabel(value.decisionLabel),
     currentStep: normalizeOptionalString(value.currentStep),
-    activityEvents: normalizeHermesCmoActivityEvents(value.activityEvents),
+    activityEvents: normalizeHermesCmoActivityEvents(value.activityEvents, {
+      sessionId: id,
+      runId: normalizedSessionRunId,
+      chatRunId: normalizedSessionRunId,
+      createdAt: normalizedSessionUpdatedAt || normalizedSessionCreatedAt,
+    }),
     delegationSummary: normalizeHermesCmoDelegationSummary(value.delegationSummary),
     agentsUsed: Array.isArray(value.agentsUsed)
       ? value.agentsUsed.map(normalizeHermesCmoAgentUsed).filter((agent): agent is HermesCmoAgentUsed => Boolean(agent))
@@ -4052,7 +4072,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     delegationsMode: normalizeHermesCmoDelegationsMode(value.delegationsMode),
     vaultAgentDryRun: normalizeVaultAgentDryRunMetadata(value.vaultAgentDryRun),
     vaultAgentContextPack: normalizeVaultAgentContextPackMetadata(value.vaultAgentContextPack),
-    cmoRunId: normalizeOptionalString(value.cmoRunId),
+    cmoRunId: normalizedSessionRunId,
     cmoRunStatus: normalizeCmoRunStatus(value.cmoRunStatus),
     cmoRunEndpoint: value.cmoRunEndpoint === "/agents/cmo/tool-execute" ? value.cmoRunEndpoint : undefined,
     cmoRunToolsUsed: Array.isArray(value.cmoRunToolsUsed)
@@ -4844,6 +4864,25 @@ export async function createAppChatSession(
       contextCharLength,
       indexedSupplementCharLength,
     };
+    const asyncRunEventContext = {
+      sessionId,
+      turnId: messageId,
+      requestId: messageId,
+      runId: cmoRunId,
+      chatRunId: cmoRunId,
+    };
+    const asyncRunEventMetadata = {
+      endpoint: "/agents/cmo/tool-execute",
+    };
+    const queuedActivityEvents = [
+      createProductChatRunLifecycleEvent({
+        ...asyncRunEventContext,
+        status: "queued",
+        seq: 1,
+        createdAt: now,
+        safeMetadata: asyncRunEventMetadata,
+      }),
+    ] as HermesCmoActivityEventSummary[];
     const pendingSession: CMOChatSession = {
       id: sessionId,
       appId: request.appId,
@@ -4885,6 +4924,7 @@ export async function createAppChatSession(
       cmoRunEndpoint: "/agents/cmo/tool-execute",
       cmoRunStartedAt: now,
       cmoRunTimeoutMs: asyncToolRunTimeoutMs,
+      activityEvents: queuedActivityEvents,
       runtimeContext,
       ...(creativeWorkingState ? { creativeWorkingState } : {}),
       ...(creativeDecision ? { creativeDecision } : {}),
@@ -4947,6 +4987,7 @@ export async function createAppChatSession(
           cmoRunEndpoint: "/agents/cmo/tool-execute",
           cmoRunStartedAt: now,
           cmoRunTimeoutMs: asyncToolRunTimeoutMs,
+          activityEvents: queuedActivityEvents,
           runtimeContext,
           ...(creativeWorkingState ? { creativeWorkingState } : {}),
           ...(creativeDecision ? { creativeDecision } : {}),
@@ -4974,6 +5015,18 @@ export async function createAppChatSession(
         return;
       }
 
+      const runningActivityEvent = createProductChatRunLifecycleEvent({
+        ...asyncRunEventContext,
+        status: "running",
+        seq: 2,
+        createdAt: runningAt,
+        safeMetadata: asyncRunEventMetadata,
+      });
+      const runningActivityEvents = mergeCmoActivityEvents(currentBeforeRunning.activityEvents, [runningActivityEvent], {
+        ...asyncRunEventContext,
+        createdAt: runningAt,
+      }) as HermesCmoActivityEventSummary[];
+
       await writeJsonFile(sessionPath(sessionId), {
         ...currentBeforeRunning,
         status: "running",
@@ -4981,7 +5034,17 @@ export async function createAppChatSession(
         cmoRunId,
         cmoRunStatus: "running",
         cmoRunTimeoutMs: asyncToolRunTimeoutMs,
-        messages: currentBeforeRunning.messages.map((message) => message.id === assistantId ? { ...message, cmoRunId, cmoRunStatus: "running", cmoRunTimeoutMs: asyncToolRunTimeoutMs } : message),
+        activityEvents: runningActivityEvents,
+        messages: currentBeforeRunning.messages.map((message) => message.id === assistantId ? {
+          ...message,
+          cmoRunId,
+          cmoRunStatus: "running",
+          cmoRunTimeoutMs: asyncToolRunTimeoutMs,
+          activityEvents: mergeCmoActivityEvents(message.activityEvents, [runningActivityEvent], {
+            ...asyncRunEventContext,
+            createdAt: runningAt,
+          }) as HermesCmoActivityEventSummary[],
+        } : message),
       });
 
       const runStartedMs = Date.now();
@@ -5059,6 +5122,37 @@ export async function createAppChatSession(
             context: lensReadoutContext as unknown as Record<string, unknown> | null,
             warning: lensReadoutContextWarning,
           }),
+        };
+        const completedActivityEvents = mergeCmoActivityEvents(
+          [
+            ...queuedActivityEvents,
+            createProductChatRunLifecycleEvent({
+              ...asyncRunEventContext,
+              status: "running",
+              seq: 2,
+              createdAt: runStartedAt,
+              safeMetadata: asyncRunEventMetadata,
+            }),
+            ...(mappedHermesResult.hermesCmoMetadata.activityEvents ?? []),
+          ],
+          [
+            createProductChatRunLifecycleEvent({
+              ...asyncRunEventContext,
+              status: "completed",
+              seq: 3,
+              createdAt: completedAt,
+              safeMetadata: asyncRunEventMetadata,
+            }),
+          ],
+          {
+            ...asyncRunEventContext,
+            createdAt: completedAt,
+          },
+        ) as HermesCmoActivityEventSummary[];
+        mappedHermesResult.hermesCmoMetadata = {
+          ...mappedHermesResult.hermesCmoMetadata,
+          activityEventsCount: completedActivityEvents.length,
+          activityEvents: completedActivityEvents,
         };
         const completedSessionArtifacts = mergeHermesCmoChatV11Artifacts(
           sessionArtifacts,
@@ -5180,6 +5274,31 @@ export async function createAppChatSession(
           cmoRunDurationMs: durationMs,
           cmoRunTimeoutMs: asyncToolRunTimeoutMs,
         };
+        const failureActivityEvents = mergeCmoActivityEvents(
+          [
+            ...queuedActivityEvents,
+            createProductChatRunLifecycleEvent({
+              ...asyncRunEventContext,
+              status: "running",
+              seq: 2,
+              createdAt: runStartedAt,
+              safeMetadata: asyncRunEventMetadata,
+            }),
+          ],
+          [
+            createProductChatRunLifecycleEvent({
+              ...asyncRunEventContext,
+              status: runStatus,
+              seq: 3,
+              createdAt: completedAt,
+              safeMetadata: asyncRunEventMetadata,
+            }),
+          ],
+          {
+            ...asyncRunEventContext,
+            createdAt: completedAt,
+          },
+        ) as HermesCmoActivityEventSummary[];
 
         finalSession = {
           ...pendingSession,
@@ -5193,6 +5312,7 @@ export async function createAppChatSession(
           hermesCmoErrorReason: reason,
           decisionLayer: failedDecisionLayer,
           rawCaptureStatus: "pending",
+          activityEvents: failureActivityEvents,
           ...failureMetadata,
           messages: pendingSession.messages.map((message) => message.id === assistantId ? {
             ...message,
@@ -5202,6 +5322,7 @@ export async function createAppChatSession(
             runtimeErrorReason: runStatus === "timed_out" ? "timeout" : "execution_error",
             productFallbackReason: "async_tool_run_failed",
             hermesCmoErrorReason: reason,
+            activityEvents: failureActivityEvents,
             ...failureMetadata,
           } : message),
         };
@@ -5273,6 +5394,7 @@ export async function createAppChatSession(
       cmoRunEndpoint: "/agents/cmo/tool-execute",
       cmoRunStartedAt: now,
       cmoRunTimeoutMs: asyncToolRunTimeoutMs,
+      activityEvents: queuedActivityEvents,
       contextDiagnostics,
       contextQualitySummary,
       graphHints,
@@ -5923,15 +6045,23 @@ export async function createAppChatSession(
         usedHermesCmoChat = true;
       } else if (creativeTimeout) {
         const creativeTimeoutMs = getCmoHermesCreativeExecuteTimeoutMs();
-        const creativeTimeoutEvent: HermesCmoActivityEventSummary = {
-          eventId: `evt_${messageId}_creative_timeout`,
-          type: "creative.failed",
-          status: "timed_out",
-          message: `Creative execution timed out after ${creativeTimeoutMs}ms before Hermes returned image metadata.`,
-          userVisible: true,
-          sourceAgent: "creative",
-          sourceMode: "creative.generate_image",
-        };
+        const creativeTimeoutEvent = normalizeCmoActivityEvents([
+          {
+            type: "creative.failed",
+            status: "timed_out",
+            message: `Creative execution timed out after ${creativeTimeoutMs}ms before Hermes returned image metadata.`,
+            user_visible: true,
+            source_agent: "creative",
+            sourceMode: "creative.generate_image",
+          },
+        ], {
+          sessionId,
+          turnId: messageId,
+          requestId: messageId,
+          runId: cmoRunId,
+          chatRunId: cmoRunId,
+          createdAt: now,
+        })[0] as HermesCmoActivityEventSummary;
 
         answer = "";
         status = "failed";
@@ -7183,6 +7313,32 @@ export async function stopAppChatRun(input: {
   const stoppedAt = new Date().toISOString();
   const startedAtMs = Date.parse(assistant.cmoRunStartedAt ?? assistant.createdAt);
   const durationMs = Number.isFinite(startedAtMs) ? Math.max(0, Date.now() - startedAtMs) : undefined;
+  const cancelledActivityEvent = createProductChatRunLifecycleEvent({
+    sessionId: session.id,
+    turnId: input.assistantMessageId,
+    requestId: assistant.sourceUserMessageId,
+    runId: assistant.cmoRunId ?? input.cmoRunId,
+    chatRunId: assistant.cmoRunId ?? input.cmoRunId,
+    status: "cancelled",
+    seq: (assistant.activityEvents ?? session.activityEvents ?? []).length + 1,
+    createdAt: stoppedAt,
+    safeMetadata: {
+      endpoint: assistant.cmoRunEndpoint ?? "/agents/cmo/tool-execute",
+      previous_status: assistant.cmoRunStatus ?? "running",
+    },
+  });
+  const cancelledActivityEvents = mergeCmoActivityEvents(
+    assistant.activityEvents ?? session.activityEvents,
+    [cancelledActivityEvent],
+    {
+      sessionId: session.id,
+      turnId: input.assistantMessageId,
+      requestId: assistant.sourceUserMessageId,
+      runId: assistant.cmoRunId ?? input.cmoRunId,
+      chatRunId: assistant.cmoRunId ?? input.cmoRunId,
+      createdAt: stoppedAt,
+    },
+  ) as HermesCmoActivityEventSummary[];
   const stoppedMessagePatch: Partial<CMOChatMessage> = {
     content: stoppedToolRunAnswer(),
     runtimeStatus: "runtime_error",
@@ -7194,6 +7350,7 @@ export async function stopAppChatRun(input: {
     hermesCmoStatus: "interrupted",
     cmoRunStatus: "interrupted",
     cmoRunCompletedAt: stoppedAt,
+    activityEvents: cancelledActivityEvents,
     ...(typeof durationMs === "number" ? { cmoRunDurationMs: durationMs, liveAttemptDurationMs: durationMs } : {}),
   };
   const updated: CMOChatSession = {
@@ -7210,6 +7367,7 @@ export async function stopAppChatRun(input: {
     hermesCmoStatus: "interrupted",
     cmoRunStatus: "interrupted",
     cmoRunCompletedAt: stoppedAt,
+    activityEvents: cancelledActivityEvents,
     ...(typeof durationMs === "number" ? { cmoRunDurationMs: durationMs, liveAttemptDurationMs: durationMs } : {}),
     messages: session.messages.map((message) => {
       if (message.id !== input.assistantMessageId) {

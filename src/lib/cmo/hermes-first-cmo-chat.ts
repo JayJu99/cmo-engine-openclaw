@@ -16,6 +16,7 @@ import type {
   VaultNoteRef,
 } from "@/lib/cmo/app-workspace-types";
 import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs } from "@/lib/cmo/config";
+import { normalizeCmoActivityEvents } from "@/lib/cmo/activity-events";
 import {
   OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
   buildOutboundHermesTraceSafeRequest,
@@ -427,41 +428,13 @@ function normalizeSourceAgent(value: unknown): HermesCmoAgentUsed | undefined {
     : undefined;
 }
 
-function normalizeActivityEvents(value: unknown): HermesCmoActivityEventSummary[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value
-    .slice(0, 80)
-    .map((event, index): HermesCmoActivityEventSummary | null => {
-      if (!isRecord(event)) {
-        return null;
-      }
-
-      const source = isRecord(event.source) ? event.source : {};
-      const eventId = compactString(event.event_id ?? event.eventId, 120) || `evt_${index + 1}`;
-      const type = compactString(event.type, 120);
-      const status = compactString(event.status, 80);
-      const message = compactString(event.message, 1_000);
-      const sourceAgent = normalizeSourceAgent(event.sourceAgent ?? source.agent);
-      const sourceMode = compactString(event.sourceMode ?? source.mode, 120);
-
-      if (!type || !status || !message) {
-        return null;
-      }
-
-      return {
-        eventId,
-        type,
-        status,
-        message,
-        userVisible: event.user_visible === true || event.userVisible === true,
-        ...(sourceAgent ? { sourceAgent } : {}),
-        ...(sourceMode ? { sourceMode: sourceMode as HermesCmoActivityEventSummary["sourceMode"] } : {}),
-      };
-    })
-    .filter((event): event is HermesCmoActivityEventSummary => Boolean(event));
+function normalizeActivityEvents(value: unknown, context: {
+  sessionId?: string;
+  turnId?: string;
+  requestId?: string;
+  createdAt?: string;
+} = {}): HermesCmoActivityEventSummary[] {
+  return normalizeCmoActivityEvents(value, context) as HermesCmoActivityEventSummary[];
 }
 
 function normalizeDelegationSummary(value: unknown): HermesCmoDelegationSummaryItem[] {
@@ -882,7 +855,12 @@ export function normalizeHermesFirstCmoChatResponse(
     ...(safeRecord(payload.intent_decision, 4_000) ? { intent_decision: safeRecord(payload.intent_decision, 4_000) } : {}),
     ...(safeRecord(payload.route_decision, 4_000) ? { route_decision: safeRecord(payload.route_decision, 4_000) } : {}),
     ...(safeRecord(payload.answer_basis, 4_000) ? { answer_basis: safeRecord(payload.answer_basis, 4_000) } : {}),
-    activity_events: normalizeActivityEvents(payload.activity_events),
+    activity_events: normalizeActivityEvents(payload.activity_events, {
+      sessionId: compactString(payload.session_id, 160) || request.session_id,
+      turnId: compactString(payload.turn_id, 160) || request.turn_id,
+      requestId: compactString(payload.request_id, 160) || request.request_id,
+      createdAt: request.created_at,
+    }),
     delegation_summary: normalizeDelegationSummary(payload.delegation_summary),
     agents_used: normalizeAgentsUsed(payload.agents_used ?? metadata.agents_used),
     artifacts_out: safeRecordList(payload.artifacts_out, 40),
@@ -1337,17 +1315,20 @@ export function hermesFirstBoundaryFailureResponse(input: {
     openclawCalls: 0,
   };
   const forbidden = forbiddenCounters();
-  const activityEvents: HermesCmoActivityEventSummary[] = [
+  const activityEvents = normalizeCmoActivityEvents([
     {
-      eventId: `${input.failure.requestId}_boundary_failure`,
+      event_id: `${input.failure.requestId}_boundary_failure`,
       type: "run.failed",
       status: "failed",
       message: input.failure.publicReason,
-      userVisible: true,
-      sourceAgent: "cmo",
+      user_visible: true,
+      source_agent: "cmo",
       sourceMode: "cmo.default",
     },
-  ];
+  ], {
+    requestId: input.failure.requestId,
+    createdAt: new Date(0).toISOString(),
+  }) as HermesCmoActivityEventSummary[];
   const metadata = baseMetadata({
     requestId: input.failure.requestId,
     responseStatus: "failed",

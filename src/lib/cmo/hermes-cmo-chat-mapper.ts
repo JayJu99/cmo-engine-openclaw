@@ -21,6 +21,11 @@ import type {
 } from "@/lib/cmo/hermes-cmo-runtime";
 import type { HermesCmoAttachmentRef } from "@/lib/cmo/attachments";
 import {
+  cmoActivityEventSourceAgent,
+  cmoActivityEventSourceMode,
+  normalizeCmoActivityEvents,
+} from "@/lib/cmo/activity-events";
+import {
   isExplicitCreativeExecutionIntent,
 } from "./app-routing-intent";
 import type { CmoRuntimeTurnInput } from "@/lib/cmo/runtime";
@@ -116,6 +121,10 @@ function hermesAgentUsedValue(value: unknown): HermesCmoAgentUsed | undefined {
     value === "vault_agent"
     ? value
     : undefined;
+}
+
+function hermesAgentUsedFromActivitySource(value: unknown): HermesCmoAgentUsed | undefined {
+  return value === "vault" ? "vault_agent" : hermesAgentUsedValue(value);
 }
 
 function hasCreativeExecutionMetadata(value: unknown): boolean {
@@ -1881,8 +1890,8 @@ function agentsUsedFromMetadata(
   return Array.from(new Set<HermesCmoAgentUsed>([
     ...agentsUsedFromExecutedDelegations(delegationSummary),
     ...activityEvents
-      .map((event) => event.sourceAgent)
-      .filter((agent): agent is HermesCmoAgentUsed => Boolean(hermesAgentUsedValue(agent))),
+      .map((event) => hermesAgentUsedFromActivitySource(cmoActivityEventSourceAgent(event)))
+      .filter((agent): agent is HermesCmoAgentUsed => Boolean(agent)),
   ]));
 }
 
@@ -1896,27 +1905,21 @@ function activityEventsFromHermes(
 ): HermesCmoActivityEventSummary[] {
   const executedMatches = executedDelegationMatchKeys(delegationSummary);
 
-  return arrayValue<Record<string, unknown>>(result.activity_events)
-    .map((event) => {
-      const source = isRecord(event.source) ? event.source : {};
-
-      return {
-        eventId: typeof event.event_id === "string" ? event.event_id : "",
-        type: typeof event.type === "string" ? event.type : "",
-        status: typeof event.status === "string" ? event.status : "",
-        message: typeof event.message === "string" ? event.message : "",
-        userVisible: event.user_visible === true,
-        sourceAgent: hermesAgentUsedValue(source.agent) ?? "cmo",
-        sourceMode: typeof source.mode === "string" ? source.mode as HermesCmoActivityEventSummary["sourceMode"] : "cmo.default",
-      };
-    })
+  return normalizeCmoActivityEvents(result.activity_events, {
+    sessionId: result.request.session_id,
+    turnId: result.request.turn_id,
+    requestId: result.request.request_id,
+    createdAt: result.request.created_at,
+  })
     .filter((event) => {
-      if (event.sourceAgent !== "surf" && event.sourceAgent !== "echo") {
+      const sourceAgent = cmoActivityEventSourceAgent(event);
+
+      if (sourceAgent !== "surf" && sourceAgent !== "echo") {
         return true;
       }
 
-      return executedMatches.has(`${event.sourceAgent}:${event.sourceMode}`);
-    });
+      return executedMatches.has(`${sourceAgent}:${cmoActivityEventSourceMode(event)}`);
+    }) as HermesCmoActivityEventSummary[];
 }
 
 function metadataFromHermes(
@@ -2217,11 +2220,13 @@ export function sanitizeHermesCmoMappedChatResult(result: HermesCmoMappedChatRes
   const delegationSummary = result.hermesCmoMetadata.delegationSummary ?? [];
   const counters = countersFromExecutedDelegations(result.hermesCmoCounters, delegationSummary);
   const activityEvents = (result.hermesCmoMetadata.activityEvents ?? []).filter((event) => {
-    if (event.sourceAgent !== "surf" && event.sourceAgent !== "echo") {
+    const sourceAgent = cmoActivityEventSourceAgent(event);
+
+    if (sourceAgent !== "surf" && sourceAgent !== "echo") {
       return true;
     }
 
-    return executedDelegationMatchKeys(delegationSummary).has(`${event.sourceAgent}:${event.sourceMode}`);
+    return executedDelegationMatchKeys(delegationSummary).has(`${sourceAgent}:${cmoActivityEventSourceMode(event)}`);
   });
   const executedCounts = executedAgentCounts(delegationSummary);
   const metadata: HermesCmoChatMetadata = {

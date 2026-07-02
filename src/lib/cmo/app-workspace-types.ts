@@ -869,13 +869,41 @@ export interface CmoSessionLocalResearchResult {
   };
 }
 
-export interface HermesCmoActivityEventSummary {
-  eventId: string;
+export interface CmoActivityEventV1 {
+  schema_version: "cmo.activity.event.v1";
+  event_id: string;
+  seq: number;
+  created_at: string;
+  session_id?: string;
+  turn_id?: string;
+  request_id?: string;
+  run_id?: string;
+  chat_run_id?: string;
+  source_agent: string;
+  type: string;
+  status: CmoActivityEventStatus;
+  title?: string;
+  message?: string;
+  user_visible: boolean;
+  safe_metadata?: Record<string, unknown>;
+}
+
+export type CmoActivityEventStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "timed_out"
+  | "cancelled";
+
+export interface HermesCmoActivityEventSummary extends Omit<CmoActivityEventV1, "status"> {
+  eventId?: string;
   type: string;
   status: string;
-  message: string;
-  userVisible: boolean;
-  sourceAgent?: HermesCmoAgentUsed;
+  message?: string;
+  userVisible?: boolean;
+  sourceAgent?: HermesCmoAgentUsed | "product" | "hermes" | "vault";
   sourceMode?: "cmo.default" | "cmo.tool_capable" | HermesCmoExecutableMode | string;
 }
 
