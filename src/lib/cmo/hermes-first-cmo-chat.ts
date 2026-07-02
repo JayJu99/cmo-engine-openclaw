@@ -155,6 +155,7 @@ export interface HermesFirstCmoChatResponse {
   artifacts_out: Record<string, unknown>[];
   approval_requests: Record<string, unknown>[];
   suggested_vault_updates: Record<string, unknown>[];
+  vault_context_usage?: unknown;
   suggested_session_summary_update?: unknown;
   state_updates?: Record<string, unknown>;
   warnings: string[];
@@ -216,6 +217,7 @@ export interface HermesFirstMappedAppChat {
   hermesCmoErrorReason?: string;
   hermesCmoCounters: HermesCmoSafetyCounters;
   hermesCmoMetadata: HermesCmoChatMetadata;
+  vault_context_usage?: unknown;
   activityEvents?: HermesCmoActivityEventSummary[];
   delegationSummary?: HermesCmoDelegationSummaryItem[];
   agentsUsed?: HermesCmoAgentUsed[];
@@ -886,6 +888,7 @@ export function normalizeHermesFirstCmoChatResponse(
     artifacts_out: safeRecordList(payload.artifacts_out, 40),
     approval_requests: safeRecordList(payload.approval_requests, 40),
     suggested_vault_updates: safeRecordList(payload.suggested_vault_updates, 40),
+    ...(payload.vault_context_usage !== undefined ? { vault_context_usage: payload.vault_context_usage } : {}),
     suggested_session_summary_update: payload.suggested_session_summary_update,
     ...(safeRecord(payload.state_updates, 4_000) ? { state_updates: safeRecord(payload.state_updates, 4_000) } : {}),
     warnings: stringList(payload.warnings ?? payload.contract_warnings, 20),
@@ -1272,6 +1275,7 @@ export function mapHermesFirstCmoChatToAppChat(input: {
       artifacts_out_count: input.response.artifacts_out.length,
       session_summary_update_present: input.response.suggested_session_summary_update !== undefined,
       suggested_vault_updates_count: input.response.suggested_vault_updates.length,
+      ...(input.response.vault_context_usage !== undefined ? { vault_context_usage: input.response.vault_context_usage } : {}),
       approval_requests_count: input.response.approval_requests.length,
       contract_warnings: input.response.warnings,
       contract_warnings_count: input.response.warnings.length,
@@ -1302,6 +1306,7 @@ export function mapHermesFirstCmoChatToAppChat(input: {
     hermesCmoStatus: "live",
     hermesCmoCounters: counters,
     hermesCmoMetadata: metadata,
+    ...(input.response.vault_context_usage !== undefined ? { vault_context_usage: input.response.vault_context_usage } : {}),
     activityEvents: input.response.activity_events,
     delegationSummary: input.response.delegation_summary,
     ...(agentsUsed?.length ? { agentsUsed } : {}),

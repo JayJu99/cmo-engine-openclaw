@@ -1419,6 +1419,7 @@ export interface CMOChatMessage {
   hermesCmoErrorReason?: string;
   hermesCmoCounters?: HermesCmoSafetyCounters;
   hermesCmoMetadata?: HermesCmoChatMetadata;
+  vault_context_usage?: unknown;
   strategyMode?: CmoStrategyMode;
   mainBottleneck?: string;
   decisionLabel?: CmoDecisionLabel;
@@ -1564,6 +1565,9 @@ export interface CmoVaultApprovedWriteResult {
 export interface CMOChatSession {
   id: string;
   appId: string;
+  app_id: string;
+  workspaceId: string;
+  workspace_id: string;
   appName: string;
   topic?: string;
   authMode?: CmoAuthMode;
@@ -1597,6 +1601,7 @@ export interface CMOChatSession {
   hermesCmoErrorReason?: string;
   hermesCmoCounters?: HermesCmoSafetyCounters;
   hermesCmoMetadata?: HermesCmoChatMetadata;
+  vault_context_usage?: unknown;
   strategyMode?: CmoStrategyMode;
   mainBottleneck?: string;
   decisionLabel?: CmoDecisionLabel;
@@ -1735,6 +1740,7 @@ export interface CMOAppChatResponse {
   hermesCmoErrorReason?: string;
   hermesCmoCounters?: HermesCmoSafetyCounters;
   hermesCmoMetadata?: HermesCmoChatMetadata;
+  vault_context_usage?: unknown;
   strategyMode?: CmoStrategyMode;
   mainBottleneck?: string;
   decisionLabel?: CmoDecisionLabel;

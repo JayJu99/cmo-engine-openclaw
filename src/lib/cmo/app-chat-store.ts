@@ -1529,7 +1529,7 @@ function normalizeAppChatRequest(body: unknown): CMOAppChatRequest {
     throw new CmoAdapterError("App chat request body must be an object", 400, "cmo_app_chat_invalid_request");
   }
 
-  const appId = stringValue(body.appId);
+  const appId = stringValue(body.appId ?? body.app_id);
   const knownApp = appId ? getAppWorkspace(appId) : undefined;
   const appName = stringValue(body.appName, knownApp?.name ?? "Selected app");
   const message = stringValue(body.message ?? body.question ?? body.input);
@@ -1547,7 +1547,7 @@ function normalizeAppChatRequest(body: unknown): CMOAppChatRequest {
   }
 
   const registryEntry = requireWorkspaceRegistryEntry(knownApp.id);
-  const requestedWorkspaceId = stringValue(body.workspaceId);
+  const requestedWorkspaceId = stringValue(body.workspaceId ?? body.workspace_id);
   const legacyHoldstationMiniAppScope =
     knownApp.id === "holdstation-mini-app" && requestedWorkspaceId === registryEntry.tenantId;
   const workspaceId = legacyHoldstationMiniAppScope
@@ -2669,6 +2669,10 @@ function normalizeHermesCmoMetadata(value: unknown): HermesCmoChatMetadata | und
     ...(typeof value.echoCalls === "number" && Number.isFinite(value.echoCalls) ? { echoCalls: Math.max(0, Math.floor(value.echoCalls)) } : {}),
     ...(platformPersistenceSummary ? { platformPersistenceSummary } : {}),
   };
+}
+
+function vaultContextUsageFromMetadata(metadata: HermesCmoChatMetadata | undefined): unknown {
+  return metadata?.vault_context_usage;
 }
 
 function normalizeVaultAgentDryRunMetadata(value: unknown): VaultAgentDryRunMetadata | undefined {
@@ -3808,7 +3812,10 @@ function normalizeSession(value: unknown): CMOChatSession | null {
   }
 
   const id = stringValue(value.id);
-  const appId = stringValue(value.appId);
+  const appId = stringValue(value.appId ?? value.app_id);
+  const knownApp = appId ? getAppWorkspace(appId) : undefined;
+  const workspaceId = stringValue(value.workspaceId) || stringValue(value.workspace_id) || knownApp?.workspaceId || appId;
+  const app_id = stringValue(value.app_id) || appId;
   const appName = stringValue(value.appName, "Selected app");
 
   if (!id || !appId) {
@@ -3826,6 +3833,9 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             message.role === "assistant" || message.role === "system" || message.role === "user"
               ? message.role
               : "assistant";
+
+          const messageHermesCmoMetadata = normalizeHermesCmoMetadata(message.hermesCmoMetadata);
+          const messageVaultContextUsage = message.vault_context_usage ?? vaultContextUsageFromMetadata(messageHermesCmoMetadata);
 
           return {
             id: stringValue(message.id, `message_${index + 1}`),
@@ -3852,7 +3862,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             hermesCmoStatus: normalizeHermesCmoChatStatus(message.hermesCmoStatus),
             hermesCmoErrorReason: normalizeOptionalString(message.hermesCmoErrorReason),
             hermesCmoCounters: normalizeHermesCmoCounters(message.hermesCmoCounters),
-            hermesCmoMetadata: normalizeHermesCmoMetadata(message.hermesCmoMetadata),
+            hermesCmoMetadata: messageHermesCmoMetadata,
+            ...(messageVaultContextUsage !== undefined ? { vault_context_usage: messageVaultContextUsage } : {}),
             strategyMode: normalizeStrategyMode(message.strategyMode),
             mainBottleneck: normalizeOptionalString(message.mainBottleneck),
             decisionLabel: normalizeDecisionLabel(message.decisionLabel),
@@ -3982,9 +3993,15 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     ? activeSourceId
     : sessionLocalSources[0]?.source_id;
 
+  const sessionHermesCmoMetadata = normalizeHermesCmoMetadata(value.hermesCmoMetadata);
+  const sessionVaultContextUsage = value.vault_context_usage ?? vaultContextUsageFromMetadata(sessionHermesCmoMetadata);
+
   return {
     id,
     appId,
+    app_id,
+    workspaceId,
+    workspace_id: workspaceId,
     appName,
     topic: stringValue(value.topic),
     authMode: normalizeAuthMode(value.authMode),
@@ -4017,7 +4034,8 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     hermesCmoStatus: normalizeHermesCmoChatStatus(value.hermesCmoStatus),
     hermesCmoErrorReason: normalizeOptionalString(value.hermesCmoErrorReason),
     hermesCmoCounters: normalizeHermesCmoCounters(value.hermesCmoCounters),
-    hermesCmoMetadata: normalizeHermesCmoMetadata(value.hermesCmoMetadata),
+    hermesCmoMetadata: sessionHermesCmoMetadata,
+    ...(sessionVaultContextUsage !== undefined ? { vault_context_usage: sessionVaultContextUsage } : {}),
     strategyMode: normalizeStrategyMode(value.strategyMode),
     mainBottleneck: normalizeOptionalString(value.mainBottleneck),
     decisionLabel: normalizeDecisionLabel(value.decisionLabel),
@@ -4471,6 +4489,7 @@ export async function createAppChatSession(
   }): Promise<CMOAppChatResponse> => {
     const completedAnswer = input.completed.normalizedHermesAnswer;
     const completedMetadata = completedUnifiedCmoAgentMetadata(undefined, input.completed);
+    const completedVaultContextUsage = vaultContextUsageFromMetadata(completedMetadata);
     const completedStatus: CMOChatSession["status"] = "completed";
     const completedRuntimeStatus: CMORuntimeStatus = "live";
     const completedRuntimeMode: CmoRuntimeMode = "live";
@@ -4511,6 +4530,9 @@ export async function createAppChatSession(
     const completedSession: CMOChatSession = {
       id: sessionId,
       appId: request.appId,
+      app_id: request.appId,
+      workspaceId: request.workspaceId,
+      workspace_id: request.workspaceId,
       appName: request.appName,
       topic: continuedSession?.topic || request.topic || request.message.slice(0, 96),
       authMode: continuedSession?.authMode ?? userIdentity.authMode,
@@ -4542,6 +4564,7 @@ export async function createAppChatSession(
       hermesCmoStatus: "live",
       hermesCmoCounters: completedMetadata.counters,
       hermesCmoMetadata: completedMetadata,
+      ...(completedVaultContextUsage !== undefined ? { vault_context_usage: completedVaultContextUsage } : {}),
       activityEvents: completedMetadata.activityEvents,
       delegationSummary: completedMetadata.delegationSummary,
       agentsUsed: completedMetadata.agentsUsed,
@@ -4613,6 +4636,7 @@ export async function createAppChatSession(
           hermesCmoStatus: "live",
           hermesCmoCounters: completedMetadata.counters,
           hermesCmoMetadata: completedMetadata,
+          ...(completedVaultContextUsage !== undefined ? { vault_context_usage: completedVaultContextUsage } : {}),
           activityEvents: completedMetadata.activityEvents,
           delegationSummary: completedMetadata.delegationSummary,
           agentsUsed: completedMetadata.agentsUsed,
@@ -4683,6 +4707,7 @@ export async function createAppChatSession(
       hermesCmoStatus: "live",
       hermesCmoCounters: completedMetadata.counters,
       hermesCmoMetadata: completedMetadata,
+      ...(completedVaultContextUsage !== undefined ? { vault_context_usage: completedVaultContextUsage } : {}),
       activityEvents: completedMetadata.activityEvents,
       delegationSummary: completedMetadata.delegationSummary,
       agentsUsed: completedMetadata.agentsUsed,
@@ -4822,6 +4847,9 @@ export async function createAppChatSession(
     const pendingSession: CMOChatSession = {
       id: sessionId,
       appId: request.appId,
+      app_id: request.appId,
+      workspaceId: request.workspaceId,
+      workspace_id: request.workspaceId,
       appName: request.appName,
       topic: continuedSession?.topic || request.topic || request.message.slice(0, 96),
       authMode: continuedSession?.authMode ?? userIdentity.authMode,
@@ -6649,10 +6677,14 @@ export async function createAppChatSession(
       }),
     };
   }
+  const vaultContextUsage = vaultContextUsageFromMetadata(hermesCmoMetadata);
 
   let session: CMOChatSession = {
     id: sessionId,
     appId: request.appId,
+    app_id: request.appId,
+    workspaceId: request.workspaceId,
+    workspace_id: request.workspaceId,
     appName: request.appName,
     topic: continuedSession?.topic || request.topic || request.message.slice(0, 96),
     authMode: continuedSession?.authMode ?? userIdentity.authMode,
@@ -6688,6 +6720,7 @@ export async function createAppChatSession(
     ...(hermesCmoErrorReason ? { hermesCmoErrorReason } : {}),
     ...(hermesCmoCounters ? { hermesCmoCounters } : {}),
     ...(hermesCmoMetadata ? { hermesCmoMetadata } : {}),
+    ...(vaultContextUsage !== undefined ? { vault_context_usage: vaultContextUsage } : {}),
     ...(strategyMode ? { strategyMode } : {}),
     ...(mainBottleneck ? { mainBottleneck } : {}),
     ...(decisionLabel ? { decisionLabel } : {}),
@@ -6768,6 +6801,7 @@ export async function createAppChatSession(
         ...(hermesCmoErrorReason ? { hermesCmoErrorReason } : {}),
         ...(hermesCmoCounters ? { hermesCmoCounters } : {}),
         ...(hermesCmoMetadata ? { hermesCmoMetadata } : {}),
+        ...(vaultContextUsage !== undefined ? { vault_context_usage: vaultContextUsage } : {}),
         ...(strategyMode ? { strategyMode } : {}),
         ...(mainBottleneck ? { mainBottleneck } : {}),
         ...(decisionLabel ? { decisionLabel } : {}),
@@ -7003,6 +7037,7 @@ export async function createAppChatSession(
         };
       })()
     : timingMetadata;
+  const responseVaultContextUsage = vaultContextUsageFromMetadata(hermesCmoMetadata) ?? persistedSession.vault_context_usage;
 
   return {
     messageId: assistantId,
@@ -7031,6 +7066,7 @@ export async function createAppChatSession(
     ...(hermesCmoErrorReason ? { hermesCmoErrorReason } : {}),
     ...(hermesCmoCounters ? { hermesCmoCounters } : {}),
     ...(hermesCmoMetadata ? { hermesCmoMetadata } : {}),
+    ...(responseVaultContextUsage !== undefined ? { vault_context_usage: responseVaultContextUsage } : {}),
     ...(strategyMode ? { strategyMode } : {}),
     ...(mainBottleneck ? { mainBottleneck } : {}),
     ...(decisionLabel ? { decisionLabel } : {}),

@@ -404,9 +404,59 @@ function runtimeStatusVariant(status: CMORuntimeStatus | null): "green" | "orang
   return "slate";
 }
 
-function runtimeExplanation(status: CMORuntimeStatus | null, reason: CmoRuntimeErrorReason | null): string | null {
+function numberFromRecord(record: Record<string, unknown>, keys: string[]): number {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return 0;
+}
+
+function vaultContextUsageForMessage(message: CMOChatMessage | null | undefined): unknown {
+  return message?.vault_context_usage ?? message?.hermesCmoMetadata?.vault_context_usage;
+}
+
+function vaultContextUsageWasUsed(value: unknown): boolean {
+  if (!isRecord(value) || value.used !== true) {
+    return false;
+  }
+
+  return numberFromRecord(value, ["items_count", "item_count", "sources_count", "source_count", "context_pack_source_count"]) > 0;
+}
+
+function vaultAgentContextPackAvailable(message: CMOChatMessage | null | undefined): boolean {
+  const pack = message?.vaultAgentContextPack;
+
+  return pack?.context_pack_status === "completed" && (pack.context_pack_source_count ?? 0) > 0;
+}
+
+function workspaceContextStatusLabel(message: CMOChatMessage | null | undefined, missingCount: number): string {
+  if (vaultContextUsageWasUsed(vaultContextUsageForMessage(message))) {
+    return "Workspace context used";
+  }
+
+  if (vaultAgentContextPackAvailable(message)) {
+    return "Workspace context available";
+  }
+
+  return missingCount ? "Workspace context incomplete" : "Workspace context resolved";
+}
+
+function runtimeExplanation(status: CMORuntimeStatus | null, reason: CmoRuntimeErrorReason | null, message?: CMOChatMessage | null): string | null {
+  if (vaultContextUsageWasUsed(vaultContextUsageForMessage(message))) {
+    return "Workspace context was used for this answer.";
+  }
+
+  if (vaultAgentContextPackAvailable(message)) {
+    return "Workspace context is available for this answer.";
+  }
+
   if (status === "connected" || status === "live" || status === "configured_but_unreachable") {
-    return "Using approved workspace context.";
+    return "CMO runtime is live.";
   }
 
   if (status === "development_fallback") {
@@ -415,18 +465,18 @@ function runtimeExplanation(status: CMORuntimeStatus | null, reason: CmoRuntimeE
 
   if (status === "live_failed_then_fallback") {
     if (reason === "timeout") {
-      return "Workspace context was used after the CMO request timed out.";
+      return "CMO request timed out. Workspace context usage was not confirmed.";
     }
 
     if (reason === "execution_error") {
-      return "Workspace context was used for this answer.";
+      return "CMO runtime failed. Workspace context usage was not confirmed.";
     }
 
     if (reason === "invalid_response" || reason === "empty_answer") {
-      return "Workspace context was used after the CMO response could not be completed.";
+      return "CMO response could not be completed. Workspace context usage was not confirmed.";
     }
 
-    return "Workspace context was used for this answer.";
+    return "CMO fallback answered. Workspace context usage was not confirmed.";
   }
 
   if (status === "runtime_error") {
@@ -445,7 +495,15 @@ function assistantProvenance(message: CMOChatMessage): string | null {
     return null;
   }
 
-  return message.runtimeMode === "live" ? "CMO Hermes - workspace context enabled" : "Workspace context answer";
+  if (vaultContextUsageWasUsed(vaultContextUsageForMessage(message))) {
+    return "CMO Hermes - workspace context used";
+  }
+
+  if (vaultAgentContextPackAvailable(message)) {
+    return "CMO Hermes - workspace context available";
+  }
+
+  return message.runtimeMode === "live" ? "CMO Hermes" : "CMO fallback answer";
 }
 
 function renderAssistantContent(content: string) {
@@ -888,7 +946,10 @@ export function CMOChatPanel({
   const selectedQualitySummary = contextBrief.contextQualitySummary;
   const visibleMessages = messages.length ? messages : selectedSession?.messages ?? [];
   const activeDisplaySessionId = activeSessionId ?? sessionId ?? selectedSession?.id ?? null;
-  const latestVisibleCmoRunStatus = latestAssistantMessage(visibleMessages)?.cmoRunStatus;
+  const latestVisibleAssistant = latestAssistantMessage(visibleMessages);
+  const latestVisibleCmoRunStatus = latestVisibleAssistant?.cmoRunStatus;
+  const runtimeExplanationText = runtimeExplanation(runtimeStatus, runtimeErrorReason, latestVisibleAssistant);
+  const workspaceContextBadgeLabel = workspaceContextStatusLabel(latestVisibleAssistant, selectedQualitySummary.missingCount);
 
   useEffect(() => {
     let isMounted = true;
@@ -1179,19 +1240,22 @@ export function CMOChatPanel({
       setRuntimeErrorReason(response.runtimeErrorReason ?? null);
       keepPendingRun = isActiveCmoRunStatus(response.cmoRunStatus);
       setError(response.status === "failed" ? response.runtimeError || "CMO runtime returned an error." : null);
+      const responseWorkspaceContextUsed = vaultContextUsageWasUsed(response.vault_context_usage ?? response.hermesCmoMetadata?.vault_context_usage);
       setSendStatus(
         response.runtimeProvider === "dashboard" && response.runtimeAgent === "decision-review"
           ? "Decision review updated from chat."
           : response.runtimeProvider === "hermes" && response.runtimeAgent === "cmo"
-            ? "CMO response received from live Hermes CMO."
+            ? responseWorkspaceContextUsed
+              ? "CMO response received from live Hermes CMO with workspace context."
+              : "CMO response received from live Hermes CMO."
           : response.isRuntimeFallback || response.runtimeStatus === "live_failed_then_fallback"
-          ? response.runtimeErrorReason === "timeout"
-            ? "Workspace context was used after the CMO request timed out."
-            : response.runtimeErrorReason === "invalid_response" || response.runtimeErrorReason === "empty_answer"
-              ? "Workspace context was used after the CMO response could not be completed."
-              : response.runtimeErrorReason === "execution_error"
-                ? "Workspace context was used for this answer."
+          ? responseWorkspaceContextUsed
+            ? response.runtimeErrorReason === "timeout"
+              ? "Workspace context was used after the CMO request timed out."
+              : response.runtimeErrorReason === "invalid_response" || response.runtimeErrorReason === "empty_answer"
+                ? "Workspace context was used after the CMO response could not be completed."
                 : "Workspace context was used for this answer."
+            : "CMO fallback answered. Workspace context usage was not confirmed."
           : response.isDevelopmentFallback
             ? "Workspace context is available for this session."
             : "CMO response received from live Hermes CMO.",
@@ -1213,6 +1277,7 @@ export function CMOChatPanel({
                 hermesCmoErrorReason: response.hermesCmoErrorReason,
                 hermesCmoCounters: response.hermesCmoCounters,
                 hermesCmoMetadata: response.hermesCmoMetadata,
+                vault_context_usage: response.vault_context_usage ?? response.hermesCmoMetadata?.vault_context_usage,
                 strategyMode: response.strategyMode,
                 mainBottleneck: response.mainBottleneck,
                 decisionLabel: response.decisionLabel,
@@ -2084,7 +2149,7 @@ export function CMOChatPanel({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge title={runtimeStatus ?? "not_checked"} variant={runtimeStatusVariant(runtimeStatus)}>{runtimeStatusLabel(runtimeStatus)}</Badge>
-            <Badge variant={selectedQualitySummary.missingCount ? "orange" : "green"}>Using approved workspace context.</Badge>
+            <Badge variant={selectedQualitySummary.missingCount ? "orange" : "green"}>{workspaceContextBadgeLabel}</Badge>
             <Button variant="outline" size="sm" onClick={focusChat}>
               <icons.MessageSquare />
               Start CMO Session
@@ -2095,9 +2160,9 @@ export function CMOChatPanel({
           Ask what this app should focus on next. Hermes uses workspace context automatically.
         </div>
 
-        {visibleMessages.length && runtimeExplanation(runtimeStatus, runtimeErrorReason) ? (
+        {visibleMessages.length && runtimeExplanationText ? (
           <div className={cn("border-b px-5 py-3 text-sm font-medium", runtimeStatus === "runtime_error" || runtimeStatus === "live_failed_then_fallback" ? "border-orange-100 bg-orange-50 text-orange-800" : "border-emerald-100 bg-emerald-50 text-emerald-800")}>
-            {runtimeExplanation(runtimeStatus, runtimeErrorReason)}
+            {runtimeExplanationText}
           </div>
         ) : null}
 

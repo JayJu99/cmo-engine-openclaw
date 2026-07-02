@@ -358,7 +358,8 @@ try {
   const mapperSource = readFileSync("src/lib/cmo/hermes-cmo-chat-mapper.ts", "utf8");
   assert.match(mapperSource, /vaultAgentContextPackArtifact/);
   assert.match(mapperSource, /type: "vault_context_pack"/);
-  assert.match(mapperSource, /artifacts_in: vaultContextPack \? \[vaultContextPack\] : \[\]/);
+  assert.match(mapperSource, /const vaultContextPack = vaultAgentContextPackArtifact\(input\);/);
+  assert.match(mapperSource, /artifacts_in: \[vaultContextPack,[\s\S]*\]\.filter\(\(artifact\): artifact is Record<string, unknown> => Boolean\(artifact\)\)/);
 
   const responseTypes = readFileSync("src/lib/cmo/app-workspace-types.ts", "utf8");
   const responseBlock = responseTypes.match(/export interface CMOAppChatResponse \{[\s\S]*?\n\}/)?.[0] ?? "";
