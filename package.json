@@ -15,6 +15,7 @@
     "smoke:cmo-creative-user-copy": "node scripts/cmo-creative-user-copy-audit.mjs",
     "check:cmo-chat-contract-cleanup": "node scripts/cmo-chat-contract-cleanup-check.mjs",
     "check:cmo-chat-activity-events": "node scripts/cmo-chat-activity-event-contract-check.mjs",
+    "check:cmo-chat-progress-visibility": "node scripts/cmo-chat-progress-visibility-check.mjs",
     "check:cmo-hermes-first-contract": "node scripts/cmo-hermes-first-contract-check.mjs",
     "check:cmo-hermes-first-response-mapping": "node scripts/cmo-hermes-first-response-mapping-check.mjs",
     "check:cmo-hermes-first-boundary-failure": "node scripts/cmo-hermes-first-boundary-failure-check.mjs",

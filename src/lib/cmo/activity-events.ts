@@ -486,6 +486,22 @@ export function cmoActivityEventType(event: unknown): string {
   return stringValue(event.type, 160) ?? "";
 }
 
+export function cmoActivityEventTitle(event: unknown): string {
+  if (!isRecord(event)) {
+    return "";
+  }
+
+  return stringValue(event.title, 180) ?? "";
+}
+
+export function cmoActivityEventMessage(event: unknown): string {
+  if (!isRecord(event)) {
+    return "";
+  }
+
+  return stringValue(event.message, 1_000) ?? "";
+}
+
 export function cmoActivityEventStatus(event: unknown): CmoActivityEventStatus {
   if (!isRecord(event)) {
     return "completed";

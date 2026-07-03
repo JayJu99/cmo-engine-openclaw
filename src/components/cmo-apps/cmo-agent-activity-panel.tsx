@@ -8,9 +8,11 @@ import type {
 import {
   cmoActivityEventDelegationId,
   cmoActivityEventId,
+  cmoActivityEventMessage,
   cmoActivityEventSourceAgent,
   cmoActivityEventSourceMode,
   cmoActivityEventStatus,
+  cmoActivityEventTitle,
   cmoActivityEventType,
   cmoActivityEventUserVisible,
 } from "@/lib/cmo/activity-events";
@@ -25,6 +27,16 @@ interface ActivityRow {
   label: string;
   status: ActivityStatus;
   detail?: string;
+}
+
+function compactDetail(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return trimmed.length > 140 ? `${trimmed.slice(0, 137)}...` : trimmed;
 }
 
 interface CmoAgentActivityPanelProps {
@@ -91,6 +103,10 @@ function eventLabel(event: HermesCmoActivityEventSummary): string {
   return "CMO";
 }
 
+function eventDetail(event: HermesCmoActivityEventSummary): string | undefined {
+  return compactDetail(cmoActivityEventMessage(event) || cmoActivityEventTitle(event));
+}
+
 function displayStatusForCreativeEvent(event: HermesCmoActivityEventSummary): ActivityStatus {
   const type = cmoActivityEventType(event);
   const status = cmoActivityEventStatus(event);
@@ -112,6 +128,58 @@ function displayStatusForCreativeEvent(event: HermesCmoActivityEventSummary): Ac
   }
 
   return normalizeStatus(status, "completed");
+}
+
+function lifecycleLabel(type: string, status: string): string {
+  if (type === "product.chat_run.queued" || status === "queued") return "CMO queued";
+  if (type === "product.chat_run.running" || status === "running") return "CMO running";
+  if (type === "product.chat_run.completed" || status === "completed") return "CMO completed";
+  if (type === "product.chat_run.failed" || status === "failed") return "CMO failed";
+  if (type === "product.chat_run.timed_out" || status === "timed_out") return "CMO timed out";
+  if (type === "product.chat_run.cancelled" || status === "cancelled") return "CMO cancelled";
+  return "CMO";
+}
+
+function lifecycleDetail(event: HermesCmoActivityEventSummary, message: CMOChatMessage | undefined): string | undefined {
+  const explicitDetail = eventDetail(event);
+  const status = cmoActivityEventStatus(event);
+
+  if (explicitDetail) {
+    return explicitDetail;
+  }
+
+  if (status === "failed") {
+    return compactDetail(message?.hermesCmoErrorReason ?? message?.runtimeErrorReason ?? message?.productFallbackReason ?? "Run failed.");
+  }
+
+  if (status === "timed_out") {
+    return "Timed out before Hermes returned a final result.";
+  }
+
+  if (status === "cancelled") {
+    return "Stopped by user.";
+  }
+
+  return undefined;
+}
+
+function lifecycleRows(
+  events: HermesCmoActivityEventSummary[],
+  message: CMOChatMessage | undefined,
+): ActivityRow[] {
+  return events
+    .filter((event) => cmoActivityEventUserVisible(event) && cmoActivityEventType(event).startsWith("product.chat_run."))
+    .map((event, index) => {
+      const type = cmoActivityEventType(event);
+      const status = cmoActivityEventStatus(event);
+
+      return {
+        key: `${cmoActivityEventId(event) || type}-${index}`,
+        label: lifecycleLabel(type, status),
+        status: normalizeStatus(status, "completed"),
+        detail: lifecycleDetail(event, message),
+      };
+    });
 }
 
 function delegationAgent(agent: ActivityAgent | undefined): ActivityAgent | undefined {
@@ -341,8 +409,10 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
   const hermesFirstMessage =
     message?.productRenderSource === "hermes_cmo" ||
     message?.productRenderSource === "hermes_cmo_boundary_failure";
+  const events = message?.activityEvents ?? message?.hermesCmoMetadata?.activityEvents ?? [];
+  const lifecycle = lifecycleRows(events, message);
 
-  if (message && !hermesFirstMessage) {
+  if (message && !hermesFirstMessage && lifecycle.length === 0) {
     const displaySteps = buildCmoActivitySteps(message, running);
     const hasSpecificEvidenceStep = displaySteps.some((step) =>
       step.label === "Lens" ||
@@ -359,7 +429,7 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
     }
   }
 
-  if (running) {
+  if (running && lifecycle.length === 0 && events.length === 0) {
     return [
       {
         key: "optimistic-cmo-running",
@@ -369,7 +439,6 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
     ];
   }
 
-  const events = message?.activityEvents ?? message?.hermesCmoMetadata?.activityEvents ?? [];
   const delegations = message?.delegationSummary ?? message?.hermesCmoMetadata?.delegationSummary ?? [];
   const rows: ActivityRow[] = [];
   const firstCmoEvent = events.find((event) => cmoActivityEventUserVisible(event) && cmoActivityEventSourceAgent(event) === "cmo");
@@ -389,7 +458,9 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
   const hasFriendlyTools = friendlyToolsUsed(message).length > 0;
   const hasSpecialistWork = hasDelegationEvents || delegations.length > 0 || hasFriendlyTools;
 
-  if (hasSpecialistWork) {
+  rows.push(...lifecycle);
+
+  if (hasSpecialistWork && lifecycle.length === 0) {
     rows.push({
       key: "cmo-analyzing",
       label: "CMO analyzing",
@@ -408,6 +479,7 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
         key: `${cmoActivityEventId(event)}-${index}`,
         label: eventLabel(event),
         status: displayStatusForEvent(event, delegationOutcomes),
+        detail: eventDetail(event),
       })),
   );
 
@@ -416,7 +488,7 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
       key: `${cmoActivityEventId(event)}-creative-${index}`,
       label: eventLabel(event),
       status: displayStatusForCreativeEvent(event),
-      detail: cmoActivityEventType(event).replace(/^creative\./, ""),
+      detail: eventDetail(event) ?? cmoActivityEventType(event).replace(/^creative\./, ""),
     })),
   );
 
@@ -437,11 +509,14 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
       : "completed";
 
   if (rows.length > 0) {
-    rows.push({
-      key: "cmo-final-answer",
-      label: "CMO final answer",
-      status: finalStatus,
-    });
+    if (!running && runStatus !== "running") {
+      rows.push({
+        key: "cmo-final-answer",
+        label: "CMO final answer",
+        status: finalStatus,
+      });
+    }
+
     return rows;
   }
 
@@ -510,7 +585,7 @@ export function CmoAgentActivityPanel({ message, running = false, elapsedMs = nu
   const status = overallStatus(rows, running);
   const duration = formatDuration(running ? elapsedMs : message?.totalDurationMs ?? message?.liveAttemptDurationMs);
   const currentStep = running
-    ? "CMO running"
+    ? rows[rows.length - 1]?.label ?? "CMO running"
     : rows[rows.length - 1]?.status === "timed_out"
       ? "CMO timed out"
       : rows[rows.length - 1]?.status === "failed"
@@ -520,31 +595,32 @@ export function CmoAgentActivityPanel({ message, running = false, elapsedMs = nu
   return (
     <details className="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3" open={running}>
       <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-white text-indigo-700 ring-1 ring-indigo-100">
-            <icons.Activity className="size-4" />
-          </span>
-          <div className="min-w-0">
-            <div className="text-xs font-extrabold uppercase text-slate-500">Agent Activity</div>
-            <div className="truncate text-sm font-bold text-slate-900">{currentStep}</div>
+        <div className="flex flex-1 flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-white text-indigo-700 ring-1 ring-indigo-100">
+              <icons.Activity className="size-4" />
+            </span>
+            <div className="min-w-0">
+              <div className="text-xs font-extrabold uppercase text-slate-500">Agent Activity</div>
+              <div className="truncate text-sm font-bold text-slate-900">{currentStep}</div>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {duration ? <span className="text-xs font-semibold text-slate-500">{duration}</span> : null}
+            <Badge variant={statusVariant(status)}>{statusLabel(status)}</Badge>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {duration ? <span className="text-xs font-semibold text-slate-500">{duration}</span> : null}
-          <Badge variant={statusVariant(status)}>{statusLabel(status)}</Badge>
-        </div>
-      </div>
       </summary>
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {rows.map((row) => (
-          <div key={row.key} className="flex min-w-0 items-center gap-2 rounded-full bg-white px-2.5 py-1.5 ring-1 ring-slate-100">
+      <div className="mt-3 space-y-2">
+        {rows.map((row, index) => (
+          <div key={row.key} className="grid grid-cols-[1.25rem_1fr_auto] items-start gap-2">
             <span
               className={cn(
-                "grid size-5 shrink-0 place-items-center rounded-full",
+                "relative grid size-5 place-items-center rounded-full",
+                index < rows.length - 1 ? "after:absolute after:left-1/2 after:top-5 after:h-4 after:w-px after:-translate-x-1/2 after:bg-slate-200" : null,
                 row.status === "completed" ? "bg-emerald-50 text-emerald-700" : null,
-                row.status === "failed" ? "bg-red-50 text-red-700" : null,
+                row.status === "failed" || row.status === "timed_out" ? "bg-red-50 text-red-700" : null,
                 row.status === "running" ? "bg-blue-50 text-blue-700" : null,
                 row.status === "waiting" ? "bg-orange-50 text-orange-700" : null,
                 row.status === "skipped" ? "bg-slate-100 text-slate-500" : null,
@@ -552,8 +628,11 @@ export function CmoAgentActivityPanel({ message, running = false, elapsedMs = nu
             >
               {statusIcon(row.status)}
             </span>
-            <span className="text-xs font-bold text-slate-900">{row.label}</span>
-            {row.detail ? <span className="max-w-52 truncate text-xs font-semibold text-slate-500">{row.detail}</span> : null}
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-slate-900">{row.label}</div>
+              {row.detail ? <div className="mt-0.5 break-words text-xs font-semibold leading-5 text-slate-500">{row.detail}</div> : null}
+            </div>
+            <Badge variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
           </div>
         ))}
       </div>
