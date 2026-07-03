@@ -47,10 +47,52 @@ const firstPath = "src/lib/cmo/hermes-first-cmo-chat.ts";
 const v11Path = "src/lib/cmo/hermes-cmo-chat-v11.ts";
 const runtimePath = "src/lib/cmo/hermes-cmo-runtime.ts";
 const outboundSanitizerPath = "src/lib/cmo/hermes-outbound-payload-sanitizer.ts";
+const runnerCheckPath = "scripts/cmo-lens-measurement-runner-check.mjs";
 
-for (const file of [appStorePath, typesPath, runnerPath, resultPath, mapperPath, firstPath, v11Path, runtimePath, outboundSanitizerPath]) {
+for (const file of [appStorePath, typesPath, runnerPath, resultPath, mapperPath, firstPath, v11Path, runtimePath, outboundSanitizerPath, runnerCheckPath]) {
   assertFileExists(file, `${file} is missing`);
 }
+
+function assertLatestUserMessagePrimacyUse(relativePath, message) {
+  const text = source(relativePath);
+  assertIncludes(relativePath, "LATEST_USER_MESSAGE_PRIMACY_RULE", `${message}: missing stable primacy rule constant/use`);
+  assert.ok(
+    /context_grounding_rules:\s*\[[\s\S]{0,180}LATEST_USER_MESSAGE_PRIMACY_RULE/.test(text) ||
+      (
+        /const contextGroundingRules\s*=\s*\[[\s\S]{0,180}LATEST_USER_MESSAGE_PRIMACY_RULE/.test(text) &&
+        /context_grounding_rules:\s*contextGroundingRules/.test(text)
+      ),
+    `${message}: primacy rule must be sent in context_grounding_rules`,
+  );
+}
+
+function assertLatestUserMessagePrimacyDefinition(relativePath, message) {
+  const text = source(relativePath);
+  assertLatestUserMessagePrimacyUse(relativePath, message);
+  assert.ok(
+    text.includes("intent.user_message") &&
+      text.includes("Conversation history") &&
+      text.includes("prior assistant messages") &&
+      text.includes("latest user explicitly asks to continue") &&
+      text.includes("drafts, posts, copy, scripts, or content") &&
+      text.includes("requested content/drafts instead of measurement advice"),
+    `${message}: primacy rule must make latest intent.user_message source of truth and protect content drafting turns`,
+  );
+}
+
+assertLatestUserMessagePrimacyDefinition(mapperPath, "Legacy Hermes mapper");
+assertLatestUserMessagePrimacyDefinition(firstPath, "Hermes-first request");
+assertLatestUserMessagePrimacyUse(v11Path, "Hermes v1.1 request");
+assertIncludes(
+  runnerCheckPath,
+  'runner.shouldRunLensMeasurementForMessage("Viết giúp 3 bài social để tăng awareness tuần này"), false',
+  "Generic social drafting prompt must stay a non-Lens turn after metric history",
+);
+assertIncludes(
+  runnerCheckPath,
+  'runner.shouldRunLensMeasurementForMessage("tuần này muốn tăng traffic social"), true',
+  "Goal/measurement traffic prompt must still trigger Lens",
+);
 
 assertIncludes(runnerPath, "export function shouldRunLensMeasurementForMessage", "Runner must expose conservative measurement detector");
 assertIncludes(runnerPath, '"conversion"', "Metric intent must support conversion");

@@ -39,6 +39,8 @@ export const HERMES_FIRST_CMO_CHAT_RESPONSE_SCHEMA = "hermes.cmo.chat.response.v
 const LENS_MEASUREMENT_RESULT_ARTIFACT_KIND = "lens_measurement_result" as const;
 const LENS_MEASUREMENT_GROUNDING_RULE =
   "A Lens measurement result may be attached under lens.measurement_result.v1. Use its status, safe_user_message, metrics_summary, and missing_requirements as measurement truth. If status is missing_capability, no_data, or failed, explain the limitation and do not invent metrics." as const;
+const LATEST_USER_MESSAGE_PRIMACY_RULE =
+  "Always answer the latest user request in intent.user_message. Conversation history and prior assistant messages are supporting context only; do not continue, optimize, or reframe a prior assistant answer unless the latest user explicitly asks to continue it. If intent.user_message asks for drafts, posts, copy, scripts, or content, return the requested content/drafts instead of measurement advice." as const;
 
 type HermesFirstCmoChatStatus = "completed" | "needs_user_input" | "failed";
 type HermesFirstBoundaryFailureType =
@@ -723,6 +725,7 @@ export function buildHermesFirstCmoChatRequest(input: HermesFirstCmoChatRequestI
       allow_paid_media_generation: false,
       allow_publish: false,
       context_grounding_rules: [
+        LATEST_USER_MESSAGE_PRIMACY_RULE,
         "Use provided context as grounding when relevant.",
         "Treat suggested Vault updates as draft-only unless Product later approves them.",
         "Do not perform durable writes, paid generation, or publishing in this turn.",
@@ -1014,7 +1017,7 @@ export async function runHermesFirstCmoChat(input: HermesFirstCmoChatRequestInpu
         allow_memory_mutation: false,
         allow_paid_media_generation: false,
         allow_publish: false,
-        context_grounding_rules: [],
+        context_grounding_rules: [LATEST_USER_MESSAGE_PRIMACY_RULE],
       },
       persistence_policy: {
         session_json_owner: "product",

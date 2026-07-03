@@ -9,6 +9,7 @@ import {
   LENS_MEASUREMENT_GROUNDING_RULE,
   LENS_MEASUREMENT_RESULT_ARTIFACT_KIND,
   LENS_READOUT_GROUNDING_RULE,
+  LATEST_USER_MESSAGE_PRIMACY_RULE,
   mapCmoChatToHermesCmoRequest,
   type HermesCmoChatRequestInput,
 } from "./hermes-cmo-chat-mapper";
@@ -1038,6 +1039,7 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
       read_web_allowed: true,
       read_browser_allowed: true,
       context_grounding_rules: [
+        LATEST_USER_MESSAGE_PRIMACY_RULE,
         ...(hasLensReadoutArtifact ? [LENS_READOUT_GROUNDING_RULE] : []),
         ...(hasLensMeasurementArtifact ? [LENS_MEASUREMENT_GROUNDING_RULE] : []),
       ],
