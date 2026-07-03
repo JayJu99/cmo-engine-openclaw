@@ -18,6 +18,7 @@ import type {
 import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs } from "@/lib/cmo/config";
 import { normalizeCmoActivityEvents } from "@/lib/cmo/activity-events";
 import {
+  compactLensMeasurementResultForHermesContext,
   createLensCapabilityContext,
   LENS_MEASUREMENT_RESULT_CONTRACT,
   type LensCapabilityContext,
@@ -37,7 +38,7 @@ export const HERMES_FIRST_CMO_CHAT_REQUEST_SCHEMA = "hermes.cmo.chat.request.v1_
 export const HERMES_FIRST_CMO_CHAT_RESPONSE_SCHEMA = "hermes.cmo.chat.response.v1_1" as const;
 const LENS_MEASUREMENT_RESULT_ARTIFACT_KIND = "lens_measurement_result" as const;
 const LENS_MEASUREMENT_GROUNDING_RULE =
-  "A Lens measurement result may be attached under lens.measurement_result.v1. Use its status, safe_user_message, metrics_pack, and missing_requirements as measurement truth. If status is missing_capability, no_data, or failed, explain the limitation and do not invent metrics." as const;
+  "A Lens measurement result may be attached under lens.measurement_result.v1. Use its status, safe_user_message, metrics_summary, and missing_requirements as measurement truth. If status is missing_capability, no_data, or failed, explain the limitation and do not invent metrics." as const;
 
 type HermesFirstCmoChatStatus = "completed" | "needs_user_input" | "failed";
 type HermesFirstBoundaryFailureType =
@@ -556,6 +557,8 @@ function sessionSummaryRecord(summary?: string): Record<string, unknown> | null 
 }
 
 function artifactInputs(input: HermesFirstCmoChatRequestInput): Record<string, unknown>[] {
+  const lensMeasurementResult = compactLensMeasurementResultForHermesContext(input.contextPackage.lensMeasurementResult);
+
   return [
     ...safeRecordList(input.sessionArtifacts, 20),
     ...(isRecord(input.contextPackage.lensReadoutContext)
@@ -566,13 +569,13 @@ function artifactInputs(input: HermesFirstCmoChatRequestInput): Record<string, u
           context: safeRecord(input.contextPackage.lensReadoutContext, MAX_RECORD_JSON_CHARS),
         }]
       : []),
-    ...(isRecord(input.contextPackage.lensMeasurementResult)
+    ...(lensMeasurementResult
       ? [{
           schema_version: "cmo.lens_measurement_result_ref.v1",
           contract: LENS_MEASUREMENT_RESULT_CONTRACT,
           kind: LENS_MEASUREMENT_RESULT_ARTIFACT_KIND,
           artifact_id: `lens_measurement_${input.request.appId}_${input.request.rangeKey ?? "last_7_days"}`,
-          result: safeRecord(input.contextPackage.lensMeasurementResult, MAX_RECORD_JSON_CHARS),
+          result: lensMeasurementResult,
         }]
       : []),
     ...safeRecordList(input.inputMaterialAttachments, 20),
@@ -675,6 +678,7 @@ export function buildHermesFirstCmoChatRequest(input: HermesFirstCmoChatRequestI
     appId: input.request.appId,
     rangeKey: input.request.rangeKey,
   });
+  const lensMeasurementResult = compactLensMeasurementResultForHermesContext(input.contextPackage.lensMeasurementResult);
   const requestBody: HermesFirstCmoChatRequest = {
     schema_version: HERMES_FIRST_CMO_CHAT_REQUEST_SCHEMA,
     request_id: `req_hf_cmo_chat_${input.userMessageId}`,
@@ -703,7 +707,7 @@ export function buildHermesFirstCmoChatRequest(input: HermesFirstCmoChatRequestI
       vault_context: input.vaultContext ?? null,
       lens_request_context: lensCapabilityContext,
       ...(isRecord(input.contextPackage.lensReadoutContext) ? { lens_readout_context: input.contextPackage.lensReadoutContext } : {}),
-      ...(isRecord(input.contextPackage.lensMeasurementResult) ? { lens_measurement_result: input.contextPackage.lensMeasurementResult } : {}),
+      ...(lensMeasurementResult ? { lens_measurement_result: lensMeasurementResult as unknown as Record<string, unknown> } : {}),
     },
     capabilities: {
       lens: lensCapabilityContext,
@@ -722,7 +726,7 @@ export function buildHermesFirstCmoChatRequest(input: HermesFirstCmoChatRequestI
         "Use provided context as grounding when relevant.",
         "Treat suggested Vault updates as draft-only unless Product later approves them.",
         "Do not perform durable writes, paid generation, or publishing in this turn.",
-        ...(isRecord(input.contextPackage.lensMeasurementResult) ? [LENS_MEASUREMENT_GROUNDING_RULE] : []),
+        ...(lensMeasurementResult ? [LENS_MEASUREMENT_GROUNDING_RULE] : []),
       ],
     },
     persistence_policy: {

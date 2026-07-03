@@ -28,6 +28,16 @@ function assertExcludes(relativePath, pattern, message) {
   assert.doesNotMatch(source(relativePath), pattern, message);
 }
 
+function sourceSection(relativePath, startNeedle, endNeedle) {
+  const text = source(relativePath);
+  const start = text.indexOf(startNeedle);
+  assert.ok(start >= 0, `${relativePath} missing section start: ${startNeedle}`);
+  const end = text.indexOf(endNeedle, start + startNeedle.length);
+  assert.ok(end > start, `${relativePath} missing section end: ${endNeedle}`);
+
+  return text.slice(start, end);
+}
+
 const appStorePath = "src/lib/cmo/app-chat-store.ts";
 const typesPath = "src/lib/cmo/app-workspace-types.ts";
 const runnerPath = "src/lib/cmo/lens-measurement-runner.ts";
@@ -64,18 +74,28 @@ assertMatches(typesPath, /export interface CMOChatMessage[\s\S]*?lensMeasurement
 assertMatches(typesPath, /export interface CMOChatSession[\s\S]*?lensMeasurementResult\?: LensMeasurementResult[\s\S]*?strategyMode/, "Session must persist LensMeasurementResult");
 assertMatches(typesPath, /export interface CMOAppChatResponse[\s\S]*?lensMeasurementResult\?: LensMeasurementResult[\s\S]*?strategyMode/, "API response must expose LensMeasurementResult");
 
-assertIncludes(mapperPath, "lensMeasurementResultArtifact", "Legacy mapper must wrap LensMeasurementResult as a request artifact");
-assertIncludes(mapperPath, "lens_measurement_result: lensMeasurementResult", "Legacy mapper must attach direct context_pack.lens_measurement_result");
+assertIncludes(resultPath, "export function compactLensMeasurementResultForHermesContext", "Lens result contract must expose outbound-safe compaction helper");
+assertIncludes(resultPath, 'contract: "lens.metrics_summary.v1"', "Completed Lens results must use compact metrics summary for Hermes context");
+assertIncludes(resultPath, "metrics_summary", "Outbound-safe Lens result must use metrics_summary instead of full metrics_pack");
+assertExcludes(resultPath, /metrics_summary[\s\S]{0,2200}\b(propertyId|propertyDisplayName|accountDisplayName|snapshotId|sources)\b/, "Outbound metrics summary must not include GA4 property/account/snapshot/source fields");
+assertIncludes(mapperPath, "compactLensMeasurementResultForHermesContext", "Legacy mapper must compact LensMeasurementResult before outbound serialization");
+assertIncludes(mapperPath, "lensMeasurementResultArtifact", "Legacy mapper must wrap compact LensMeasurementResult as a request artifact");
+assertIncludes(mapperPath, "lens_measurement_result: lensMeasurementResult", "Legacy mapper must attach compact context_pack.lens_measurement_result");
 assertIncludes(mapperPath, "LENS_MEASUREMENT_GROUNDING_RULE", "Legacy mapper must add grounding rule for Lens result");
 assertMatches(mapperPath, /artifacts_in:[\s\S]{0,260}lensMeasurementArtifact/, "Legacy artifacts_in must include Lens measurement artifact");
+assertExcludes(mapperPath, /lens_measurement_result:\s*input\.contextPackage\.lensMeasurementResult|result:\s*input\.contextPackage\.lensMeasurementResult|result:\s*safeRecord\(input\.contextPackage\.lensMeasurementResult/i, "Legacy mapper must not serialize raw LensMeasurementResult");
 
 assertIncludes(firstPath, "lens_measurement_result", "Hermes-first request must carry Lens measurement result");
 assertIncludes(firstPath, "cmo.lens_measurement_result_ref.v1", "Hermes-first artifacts must include Lens measurement result ref");
 assertIncludes(firstPath, "LENS_MEASUREMENT_GROUNDING_RULE", "Hermes-first request must include measurement grounding rule");
+assertIncludes(firstPath, "compactLensMeasurementResultForHermesContext", "Hermes-first request must compact LensMeasurementResult before outbound serialization");
+assertExcludes(firstPath, /lens_measurement_result:\s*input\.contextPackage\.lensMeasurementResult|result:\s*input\.contextPackage\.lensMeasurementResult|result:\s*safeRecord\(input\.contextPackage\.lensMeasurementResult/i, "Hermes-first path must not serialize raw LensMeasurementResult");
 
 assertIncludes(v11Path, "lens_measurement_result", "Hermes v1.1 request must carry Lens measurement result");
 assertIncludes(v11Path, "hasLensMeasurementArtifact", "Hermes v1.1 request must detect Lens measurement artifact");
 assertIncludes(v11Path, "LENS_MEASUREMENT_GROUNDING_RULE", "Hermes v1.1 request must include measurement grounding rule");
+assertIncludes(v11Path, "compactLensMeasurementResultForHermesContext", "Hermes v1.1 request must compact LensMeasurementResult before outbound serialization");
+assertExcludes(v11Path, /lens_measurement_result:\s*input\.contextPackage\.lensMeasurementResult|result:\s*input\.contextPackage\.lensMeasurementResult/i, "Hermes v1.1 path must not serialize raw LensMeasurementResult");
 
 assertExcludes(appStorePath, /answer\s*=\s*[^;\n]*(lensMeasurementResult|lens_measurement_result|safe_user_message|metrics_pack)/i, "Product must not replace CMO answer with Lens measurement result");
 assertExcludes(mapperPath, /answer\s*=\s*[^;\n]*(lensMeasurementResult|lens_measurement_result|safe_user_message|metrics_pack)/i, "Mapper must not create canned metric answers");
@@ -87,8 +107,12 @@ assertExcludes(v11Path, /source_agent:\s*["']lens["']|sourceAgent:\s*["']lens["'
 assertExcludes(runtimePath, /"lens"\s*\||allowedAgents[\s\S]{0,120}"lens"/, "Lens must not be added as executable runtime delegation agent");
 assertExcludes(runnerPath, /getLensReadoutContextForAppSafe|lens-readout-context|lensReadoutContext/i, "Lens measurement runner must not depend on Product readout prefetch");
 assertExcludes(appStorePath, /runLensMeasurementRequest\(\{[\s\S]{0,420}lensReadoutContext/i, "Product app chat must not feed Product readout prefetch into Lens measurement runner");
+assert.doesNotMatch(sourceSection(firstPath, "function buildSafeHistory", "function sessionSummaryRecord"), /lensMeasurementResult|lens_measurement_result|metrics_pack/i, "Hermes-first history must not serialize previous Lens measurement payloads");
+assert.doesNotMatch(sourceSection(v11Path, "function sanitizedMessages", "function stringListFromUnknown"), /lensMeasurementResult|lens_measurement_result|metrics_pack/i, "Hermes v1.1 history must not serialize previous Lens measurement payloads");
+assert.doesNotMatch(sourceSection(mapperPath, "function replayableChatHistory", "function recentSessionSummary"), /lensMeasurementResult|lens_measurement_result|metrics_pack/i, "Legacy Hermes history must not serialize previous Lens measurement payloads");
 
 assertExcludes(runnerPath, /\b(access_token|refresh_token|encrypted_refresh_token|authorization|headers|cookie|rawGa4Response|raw_ga4_response|answer_body|prompt)\b/i, "Runner must not expose secrets/raw GA4/prompt/answer in Lens measurement path");
+assert.doesNotMatch(sourceSection(resultPath, "function safeMetricsSummary", "export function compactLensMeasurementResultForHermesContext"), /\b(access_token|refresh_token|encrypted_refresh_token|authorization|headers|cookie|rawGa4Response|raw_ga4_response|answer_body|prompt|local_path|file_path)\b/i, "Outbound metrics summary must not expose secrets/raw GA4/prompt/answer/local paths");
 assertExcludes(mapperPath, /lens_measurement_result[\s\S]{0,260}\b(access_token|refresh_token|encrypted_refresh_token|authorization|headers|cookie|rawGa4Response|raw_ga4_response|answer_body|prompt)\b/i, "Mapper Lens measurement path must not expose secrets/raw GA4/prompt/answer");
 assertExcludes(firstPath, /lens_measurement_result[\s\S]{0,260}\b(access_token|refresh_token|encrypted_refresh_token|authorization|headers|cookie|rawGa4Response|raw_ga4_response|answer_body|prompt)\b/i, "Hermes-first Lens measurement path must not expose secrets/raw GA4/prompt/answer");
 assertExcludes(v11Path, /lens_measurement_result[\s\S]{0,260}\b(access_token|refresh_token|encrypted_refresh_token|authorization|headers|cookie|rawGa4Response|raw_ga4_response|answer_body|prompt)\b/i, "Hermes v1.1 Lens measurement path must not expose secrets/raw GA4/prompt/answer");

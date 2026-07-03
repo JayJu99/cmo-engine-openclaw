@@ -14,7 +14,7 @@ import {
 } from "./hermes-cmo-chat-mapper";
 import { redactSensitiveText } from "./creative-agent";
 import { HERMES_CMO_CHAT_V11_ENDPOINT } from "./hermes-cmo-chat-router";
-import { createLensCapabilityContext, type LensCapabilityContext } from "./lens-measurement-result";
+import { compactLensMeasurementResultForHermesContext, createLensCapabilityContext, type LensCapabilityContext } from "./lens-measurement-result";
 import {
   OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
   buildOutboundHermesTraceSafeRequest,
@@ -978,6 +978,7 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
     appId: input.request.appId,
     rangeKey: input.request.rangeKey,
   });
+  const lensMeasurementResult = compactLensMeasurementResultForHermesContext(input.contextPackage.lensMeasurementResult);
   const artifactsIn = sanitizeHermesCmoChatV11Records([
     ...(Array.isArray(legacyRequest.context_pack.artifacts_in) ? legacyRequest.context_pack.artifacts_in : []),
     ...(input.sessionArtifacts ?? []),
@@ -1021,7 +1022,7 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
       artifacts_in: artifactsIn,
       vault_context: input.vaultContext ?? null,
       lens_request_context: lensCapabilityContext,
-      ...(input.contextPackage.lensMeasurementResult ? { lens_measurement_result: input.contextPackage.lensMeasurementResult as unknown as Record<string, unknown> } : {}),
+      ...(lensMeasurementResult ? { lens_measurement_result: lensMeasurementResult as unknown as Record<string, unknown> } : {}),
     },
     capabilities: {
       lens: lensCapabilityContext,

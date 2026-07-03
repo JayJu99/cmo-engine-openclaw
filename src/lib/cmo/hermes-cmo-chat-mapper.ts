@@ -25,7 +25,7 @@ import {
   cmoActivityEventSourceMode,
   normalizeCmoActivityEvents,
 } from "@/lib/cmo/activity-events";
-import { createLensCapabilityContext, LENS_MEASUREMENT_RESULT_CONTRACT } from "@/lib/cmo/lens-measurement-result";
+import { compactLensMeasurementResultForHermesContext, createLensCapabilityContext } from "@/lib/cmo/lens-measurement-result";
 import {
   isExplicitCreativeExecutionIntent,
 } from "./app-routing-intent";
@@ -42,7 +42,7 @@ export const LENS_READOUT_GROUNDING_RULE =
   "A Lens readout context may be attached under lens.readout_context.v1 in artifacts_in. Use it as evidence for app performance questions. Do not invent activation or retention metrics when the readout marks them as definition_needed. Do not treat Active Users as Activated Users. Do not treat Engagement Rate as Activation Rate. If the requested range has missing_snapshot, state that cached GA4 metrics need syncing." as const;
 export const LENS_MEASUREMENT_RESULT_ARTIFACT_KIND = "lens_measurement_result" as const;
 export const LENS_MEASUREMENT_GROUNDING_RULE =
-  "A Lens measurement result may be attached under lens.measurement_result.v1. Use its status, safe_user_message, metrics_pack, and missing_requirements as measurement truth. If status is missing_capability, no_data, or failed, explain the limitation and do not invent metrics." as const;
+  "A Lens measurement result may be attached under lens.measurement_result.v1. Use its status, safe_user_message, metrics_summary, and missing_requirements as measurement truth. If status is missing_capability, no_data, or failed, explain the limitation and do not invent metrics." as const;
 
 export const HERMES_CMO_FORBIDDEN_ZERO_COUNTERS = [
   "vaultAgentCalls",
@@ -784,14 +784,16 @@ function lensReadoutContextArtifact(context: Record<string, unknown> | null): Re
 }
 
 function lensMeasurementResultArtifact(result: unknown): Record<string, unknown> | null {
-  if (!isRecord(result) || result.contract !== LENS_MEASUREMENT_RESULT_CONTRACT) {
+  const outboundResult = compactLensMeasurementResultForHermesContext(result);
+
+  if (!outboundResult) {
     return null;
   }
 
   return {
-    contract: LENS_MEASUREMENT_RESULT_CONTRACT,
+    contract: outboundResult.contract,
     kind: LENS_MEASUREMENT_RESULT_ARTIFACT_KIND,
-    result,
+    result: outboundResult,
   };
 }
 
@@ -1007,8 +1009,8 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const sourceAnswerContext = sourceAnswerContextArtifact(input);
   const lensReadoutContext = isRecord(input.contextPackage.lensReadoutContext) ? input.contextPackage.lensReadoutContext : null;
   const lensReadoutArtifact = lensReadoutContextArtifact(lensReadoutContext);
-  const lensMeasurementResult = input.contextPackage.lensMeasurementResult;
-  const lensMeasurementArtifact = lensMeasurementResultArtifact(lensMeasurementResult);
+  const lensMeasurementResult = compactLensMeasurementResultForHermesContext(input.contextPackage.lensMeasurementResult);
+  const lensMeasurementArtifact = lensMeasurementResultArtifact(input.contextPackage.lensMeasurementResult);
   const lensCapabilityContext = createLensCapabilityContext({
     tenantId: input.request.tenantId,
     workspaceId: input.request.workspaceId,
