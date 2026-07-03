@@ -182,6 +182,41 @@ function lifecycleRows(
     });
 }
 
+function isCmoRunFailedEvent(type: string): boolean {
+  return type === "run.failed" || type === "cmo.run.failed";
+}
+
+function isExplicitCompletedRunEvent(event: HermesCmoActivityEventSummary): boolean {
+  const type = cmoActivityEventType(event);
+
+  return (
+    cmoActivityEventUserVisible(event) &&
+    cmoActivityEventStatus(event) === "completed" &&
+    (type === "product.chat_run.completed" || type === "run.completed" || type === "cmo.run.completed")
+  );
+}
+
+function cmoRunEventRows(events: HermesCmoActivityEventSummary[], message: CMOChatMessage | undefined): ActivityRow[] {
+  return events
+    .filter((event) => cmoActivityEventUserVisible(event) && isCmoRunFailedEvent(cmoActivityEventType(event)))
+    .map((event, index): ActivityRow => ({
+      key: `${cmoActivityEventId(event) || cmoActivityEventType(event)}-cmo-run-${index}`,
+      label: "CMO failed",
+      status: "failed",
+      detail: eventDetail(event) ?? compactDetail(message?.hermesCmoErrorReason ?? message?.runtimeErrorReason ?? message?.productFallbackReason),
+    }));
+}
+
+function messageHasFailureSignal(message: CMOChatMessage | undefined): boolean {
+  return Boolean(
+    message?.productRenderSource === "hermes_cmo_boundary_failure" ||
+    message?.runtimeStatus === "runtime_error" ||
+    message?.hermesCmoErrorReason ||
+    message?.runtimeErrorReason ||
+    message?.productFallbackReason,
+  );
+}
+
 function delegationAgent(agent: ActivityAgent | undefined): ActivityAgent | undefined {
   return agent && agent !== "cmo" && agent !== "product" && agent !== "hermes" ? agent : undefined;
 }
@@ -457,8 +492,10 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
   const delegationOutcomes = delegationOutcomeSets(events, delegations);
   const hasFriendlyTools = friendlyToolsUsed(message).length > 0;
   const hasSpecialistWork = hasDelegationEvents || delegations.length > 0 || hasFriendlyTools;
+  const hasExplicitCompletedRun = events.some(isExplicitCompletedRunEvent);
 
   rows.push(...lifecycle);
+  rows.push(...cmoRunEventRows(events, message));
 
   if (hasSpecialistWork && lifecycle.length === 0) {
     rows.push({
@@ -504,7 +541,7 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
   const runStatus = statusFromCmoRun(message?.cmoRunStatus);
   const finalStatus = runStatus === "failed" || runStatus === "timed_out"
     ? runStatus
-    : rows.some((row) => row.status === "failed" || row.status === "timed_out")
+    : rows.some((row) => row.status === "failed" || row.status === "timed_out") || (messageHasFailureSignal(message) && !hasExplicitCompletedRun)
       ? "failed"
       : "completed";
 

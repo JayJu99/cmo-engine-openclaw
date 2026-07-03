@@ -544,8 +544,8 @@ function renderAssistantContent(content: string) {
           h3: ({ children }) => <h4 className="pt-2 text-sm font-extrabold uppercase leading-6 text-slate-950 first:pt-0">{children}</h4>,
           h4: ({ children }) => <h5 className="pt-2 text-sm font-bold leading-6 text-slate-950 first:pt-0">{children}</h5>,
           hr: () => <hr className="border-slate-200" />,
-          li: ({ children }) => <li className="pl-1 text-slate-700">{children}</li>,
-          ol: ({ children }) => <ol className="list-decimal space-y-1 pl-5">{children}</ol>,
+          li: ({ children, className, ...props }) => <li {...props} className={cn("pl-1 text-slate-700", className)}>{children}</li>,
+          ol: ({ children, className, ...props }) => <ol {...props} className={cn("list-decimal space-y-1 pl-5", className)}>{children}</ol>,
           p: ({ children }) => <p className="whitespace-pre-wrap text-slate-700">{children}</p>,
           pre: ({ children }) => (
             <pre className="overflow-auto rounded-xl bg-slate-950 p-3 text-xs leading-6 text-slate-50 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-slate-50">
