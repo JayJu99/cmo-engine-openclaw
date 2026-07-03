@@ -122,6 +122,18 @@ const uniqueLimited = (values: string[], limit: number): string[] =>
 const literalEntriesForString = (value: string): Array<{ literal: string; label: string }> =>
   OUTBOUND_CALLSITE_FORBIDDEN_LITERALS.filter(({ literal }) => value.includes(literal));
 
+export const OUTBOUND_HERMES_LOCAL_PATH_REDACTION = "[local_path_redacted]" as const;
+
+export function sanitizeOutboundHermesContextText(value: string): string {
+  return value
+    .replace(/\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
+    .replace(/file:[^\s"',})\]]+/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
+    .replace(/[A-Za-z]:[\\/][^\s"',})\]]+/g, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
+    .replace(/\/(?:tmp|Users|home|var|mnt|private|Volumes)\/[^\r\n"',})\]]*/g, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
+    .replace(/\.png_redact\b/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
+    .replace(/\b(?:creative-agent-images|cmo-creative-execute|conversion_h_|Creative_image_asset_Refine)\b/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION);
+}
+
 const sanitizedSnippetAroundLiteral = (value: string, literal: string): string => {
   const index = value.indexOf(literal);
   if (index < 0) {
@@ -132,12 +144,9 @@ const sanitizedSnippetAroundLiteral = (value: string, literal: string): string =
   const end = Math.min(value.length, index + literal.length + 32);
   const snippet = value.slice(start, end)
     .replace(/\s+/g, " ")
-    .replace(/[A-Za-z]:[\\/][^"',\s}]+/g, "[local_path_redacted]")
-    .replace(/file:[^"',\s}]+/gi, "file:[local_path_redacted]")
-    .replace(/\/(?:tmp|Users|home|var|mnt|private|Volumes)\/[^"',\s}]+/g, (match) => {
-      const prefix = match.match(/^\/(?:tmp|Users|home|var|mnt|private|Volumes)\//)?.[0] ?? "/local/";
-      return `${prefix}[local_path_redacted]`;
-    });
+    .replace(/[A-Za-z]:[\\/][^"',\s}]+/g, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
+    .replace(/file:[^"',\s}]+/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
+    .replace(/\/(?:tmp|Users|home|var|mnt|private|Volumes)\/[^"',\s}]+/g, OUTBOUND_HERMES_LOCAL_PATH_REDACTION);
 
   return `${start > 0 ? "..." : ""}${snippet}${end < value.length ? "..." : ""}`.slice(0, 240);
 };
@@ -382,7 +391,13 @@ function sanitizeValue(
   sanitizedFields: string[],
 ): unknown {
   if (typeof value === "string") {
-    if (!outboundHermesStringHasForbiddenArtifactText(value)) {
+    const sanitizedContextText = sanitizeOutboundHermesContextText(value);
+    if (sanitizedContextText !== value) {
+      sanitizedFields.push(fieldPathPreview(path));
+      return sanitizedContextText;
+    }
+
+    if (!outboundHermesStringHasForbiddenArtifactText(sanitizedContextText)) {
       return value;
     }
 

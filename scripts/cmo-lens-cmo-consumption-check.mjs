@@ -46,8 +46,9 @@ const mapperPath = "src/lib/cmo/hermes-cmo-chat-mapper.ts";
 const firstPath = "src/lib/cmo/hermes-first-cmo-chat.ts";
 const v11Path = "src/lib/cmo/hermes-cmo-chat-v11.ts";
 const runtimePath = "src/lib/cmo/hermes-cmo-runtime.ts";
+const outboundSanitizerPath = "src/lib/cmo/hermes-outbound-payload-sanitizer.ts";
 
-for (const file of [appStorePath, typesPath, runnerPath, resultPath, mapperPath, firstPath, v11Path, runtimePath]) {
+for (const file of [appStorePath, typesPath, runnerPath, resultPath, mapperPath, firstPath, v11Path, runtimePath, outboundSanitizerPath]) {
   assertFileExists(file, `${file} is missing`);
 }
 
@@ -110,6 +111,15 @@ assertExcludes(appStorePath, /runLensMeasurementRequest\(\{[\s\S]{0,420}lensRead
 assert.doesNotMatch(sourceSection(firstPath, "function buildSafeHistory", "function sessionSummaryRecord"), /lensMeasurementResult|lens_measurement_result|metrics_pack/i, "Hermes-first history must not serialize previous Lens measurement payloads");
 assert.doesNotMatch(sourceSection(v11Path, "function sanitizedMessages", "function stringListFromUnknown"), /lensMeasurementResult|lens_measurement_result|metrics_pack/i, "Hermes v1.1 history must not serialize previous Lens measurement payloads");
 assert.doesNotMatch(sourceSection(mapperPath, "function replayableChatHistory", "function recentSessionSummary"), /lensMeasurementResult|lens_measurement_result|metrics_pack/i, "Legacy Hermes history must not serialize previous Lens measurement payloads");
+assertIncludes(outboundSanitizerPath, "export function sanitizeOutboundHermesContextText", "Outbound sanitizer must expose targeted context text redaction");
+assertIncludes(outboundSanitizerPath, "OUTBOUND_HERMES_LOCAL_PATH_REDACTION", "Outbound sanitizer must use stable local path redaction marker");
+assertIncludes(outboundSanitizerPath, "tmp|Users|home|var|mnt|private|Volumes", "Outbound sanitizer must keep these local path roots guarded");
+assertIncludes(outboundSanitizerPath, ".replace(/file:", "Outbound sanitizer must redact file URLs");
+assertIncludes(outboundSanitizerPath, ".replace(/[A-Za-z]:", "Outbound sanitizer must redact absolute Windows paths");
+assertIncludes(outboundSanitizerPath, "creative-agent-images|cmo-creative-execute|conversion_h_|Creative_image_asset_Refine", "Outbound sanitizer must redact known local artifact literals");
+assertIncludes(outboundSanitizerPath, "sanitizeOutboundHermesContextText(value)", "Outbound sanitizer must run targeted context redaction before final guard replacement");
+assertExcludes(outboundSanitizerPath, /12 Knowledge|13 Sources|Apps\/Holdstation Mini App/, "Outbound sanitizer must not target logical Vault/project paths");
+assert.doesNotMatch(sourceSection(outboundSanitizerPath, "const sanitizedSnippetAroundLiteral", "const collectCallsiteBlockedStringFields"), /file:\[local_path_redacted\]|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/\[local_path_redacted\]/, "Outbound diagnostics snippets must not preserve forbidden local path prefixes");
 
 assertExcludes(runnerPath, /\b(access_token|refresh_token|encrypted_refresh_token|authorization|headers|cookie|rawGa4Response|raw_ga4_response|answer_body|prompt)\b/i, "Runner must not expose secrets/raw GA4/prompt/answer in Lens measurement path");
 assert.doesNotMatch(sourceSection(resultPath, "function safeMetricsSummary", "export function compactLensMeasurementResultForHermesContext"), /\b(access_token|refresh_token|encrypted_refresh_token|authorization|headers|cookie|rawGa4Response|raw_ga4_response|answer_body|prompt|local_path|file_path)\b/i, "Outbound metrics summary must not expose secrets/raw GA4/prompt/answer/local paths");
