@@ -25,6 +25,7 @@ import {
   cmoActivityEventSourceMode,
   normalizeCmoActivityEvents,
 } from "@/lib/cmo/activity-events";
+import { createLensCapabilityContext } from "@/lib/cmo/lens-measurement-result";
 import {
   isExplicitCreativeExecutionIntent,
 } from "./app-routing-intent";
@@ -991,11 +992,17 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const sourceAnswerContext = sourceAnswerContextArtifact(input);
   const lensReadoutContext = isRecord(input.contextPackage.lensReadoutContext) ? input.contextPackage.lensReadoutContext : null;
   const lensReadoutArtifact = lensReadoutContextArtifact(lensReadoutContext);
+  const lensCapabilityContext = createLensCapabilityContext({
+    tenantId: input.request.tenantId,
+    workspaceId: input.request.workspaceId,
+    appId: input.request.appId,
+    rangeKey: input.request.rangeKey,
+  });
   const contextGroundingRules = lensReadoutArtifact ? [LENS_READOUT_GROUNDING_RULE] : [];
   const sessionLocalSources = sessionLocalSourceArtifacts(input);
   const sessionWorkingMemoryResolution = resolveSessionWorkingMemory({
     scope: {
-      tenantId: input.request.tenantId ?? "holdstation",
+      tenantId: input.request.tenantId ?? input.request.workspaceId ?? input.request.appId,
       workspaceId: input.request.workspaceId,
       appId: input.request.appId,
       userId: userId(input),
@@ -1064,6 +1071,10 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
         },
       }
     : undefined;
+  const hermesCapabilities = {
+    ...(creativeCapabilities ?? {}),
+    lens: lensCapabilityContext,
+  };
   const creativeSideEffectPolicy = cmoOwnedCreativeDecisionEnvelope
     ? {
         creativeMutationAllowed: true,
@@ -1101,7 +1112,11 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     session_id: input.sessionId,
     turn_id: input.userMessageId,
     created_at: input.createdAt,
+    tenant_id: lensCapabilityContext.scope.tenant_id,
+    workspace_id: lensCapabilityContext.scope.workspace_id,
+    app_id: lensCapabilityContext.scope.app_id,
     workspace: {
+      tenant_id: lensCapabilityContext.scope.tenant_id,
       workspace_id: input.request.workspaceId,
       app_id: input.request.appId,
       app_name: input.request.appName,
@@ -1190,7 +1205,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
           creative_decision_owner_when_live: "hermes_cmo",
         }
       : {}),
-    ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
+    capabilities: hermesCapabilities,
     ...(creativeSideEffectPolicy ? { sideEffectPolicy: creativeSideEffectPolicy } : {}),
     ...(productIntentHint ? { product_intent_hint: productIntentHint } : {}),
     ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
@@ -1203,6 +1218,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       recent_session_summary: recentSessionSummary(input.history),
       indexed_context_supplement: indexedContextSupplement,
       artifacts_in: [vaultContextPack, ...sessionLocalSources, ...sessionLocalResearchResults, sourceAnswerContext, lensReadoutArtifact].filter((artifact): artifact is Record<string, unknown> => Boolean(artifact)),
+      lens_request_context: lensCapabilityContext,
       ...(input.contextPackage.activeSourceId ? { active_source_id: input.contextPackage.activeSourceId } : {}),
       ...(sourceReviewContext ? { source_review_context: sourceReviewContext } : {}),
       ...(sourceAnswerContext ? { source_answer_context: sourceAnswerContext } : {}),
@@ -1217,7 +1233,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
             creativeDecisionOwnerWhenLive: "hermes_cmo",
             ...creativeConversationIntentMetadata,
             ...creativeMutationIntentMetadata,
-            ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
+            capabilities: hermesCapabilities,
           }
         : {}),
       ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),
@@ -1265,7 +1281,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       allowed_agents: creativeAllowedAgents,
       allowed_surf_modes: ["surf.default", "surf.x", "surf.trend", "surf.pulse"],
       delegations_mode: HERMES_CMO_PROPOSALS_ONLY,
-      ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
+      capabilities: hermesCapabilities,
       allowSubAgentExecution: false,
       allowSurfExecution: false,
       allowEchoExecution: false,
@@ -1359,7 +1375,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       todo_allowed: true,
       memory_read_allowed: true,
       delegation_allowed: true,
-      ...(creativeCapabilities ? { capabilities: creativeCapabilities } : {}),
+      capabilities: hermesCapabilities,
       ...(creativeExecutionIntent
         ? {
             creative_execution_may_be_requested_by_cmo: true,

@@ -1,3 +1,5 @@
+import type { LensCapabilityContext, LensMeasurementResult } from "@/lib/cmo/lens-measurement-result";
+
 export type VaultNoteType = "app-note" | "daily-note" | "raw-capture";
 export type CmoAuthMode = "supabase" | "legacy";
 export type CMOContextQuality = "missing" | "placeholder" | "draft" | "confirmed";
@@ -1330,6 +1332,7 @@ export interface CMOContextPackage {
   sourceAnswerContext?: CmoSourceAnswerContext;
   lensReadoutContext?: Record<string, unknown>;
   lensReadoutContextWarning?: string;
+  lensRequestContext?: LensCapabilityContext;
   sessionLocalSources?: CmoSessionLocalSource[];
   sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
   activeSourceId?: string;
@@ -1355,6 +1358,7 @@ export interface CMOContextPackage {
   graphHints?: ContextGraphHint[];
   graphHintCount?: number;
   graphStatus?: ContextGraphStatus;
+  lensMeasurementResult?: LensMeasurementResult;
   contextQualitySummary: CMOContextQualitySummary;
   instructions: {
     role: "strategic CMO";

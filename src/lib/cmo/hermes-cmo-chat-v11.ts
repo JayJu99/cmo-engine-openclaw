@@ -12,6 +12,7 @@ import {
 } from "./hermes-cmo-chat-mapper";
 import { redactSensitiveText } from "./creative-agent";
 import { HERMES_CMO_CHAT_V11_ENDPOINT } from "./hermes-cmo-chat-router";
+import { createLensCapabilityContext, type LensCapabilityContext } from "./lens-measurement-result";
 import {
   OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
   buildOutboundHermesTraceSafeRequest,
@@ -109,6 +110,11 @@ export interface HermesCmoChatV11Request {
     session_summary: HermesCmoChatV11SessionSummary | null;
     artifacts_in: Record<string, unknown>[];
     vault_context: unknown;
+    lens_request_context: LensCapabilityContext;
+  };
+  capabilities: {
+    lens: LensCapabilityContext;
+    [key: string]: unknown;
   };
   options: {
     mode: "cmo.normal_chat";
@@ -963,6 +969,12 @@ export function normalizeHermesCmoChatV11Response(payload: unknown, request: Her
 export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput): HermesCmoChatV11Request {
   const legacyRequest = mapCmoChatToHermesCmoRequest(input);
   const runtimeUser = normalizeCmoRuntimeUserIdentity(input.userIdentity);
+  const lensCapabilityContext = createLensCapabilityContext({
+    tenantId: tenantId(input),
+    workspaceId: input.request.workspaceId,
+    appId: input.request.appId,
+    rangeKey: input.request.rangeKey,
+  });
   const artifactsIn = sanitizeHermesCmoChatV11Records([
     ...(Array.isArray(legacyRequest.context_pack.artifacts_in) ? legacyRequest.context_pack.artifacts_in : []),
     ...(input.sessionArtifacts ?? []),
@@ -1001,6 +1013,10 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
       session_summary: structuredSessionSummary(sessionSummaryText),
       artifacts_in: artifactsIn,
       vault_context: input.vaultContext ?? null,
+      lens_request_context: lensCapabilityContext,
+    },
+    capabilities: {
+      lens: lensCapabilityContext,
     },
     options: {
       mode: "cmo.normal_chat",

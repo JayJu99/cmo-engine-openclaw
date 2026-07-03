@@ -17,6 +17,7 @@ import type {
 } from "@/lib/cmo/app-workspace-types";
 import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs } from "@/lib/cmo/config";
 import { normalizeCmoActivityEvents } from "@/lib/cmo/activity-events";
+import { createLensCapabilityContext, type LensCapabilityContext } from "@/lib/cmo/lens-measurement-result";
 import {
   OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
   buildOutboundHermesTraceSafeRequest,
@@ -95,7 +96,12 @@ export interface HermesFirstCmoChatRequest {
     selected_context: Record<string, unknown>[];
     artifacts_in: Record<string, unknown>[];
     vault_context: unknown;
+    lens_request_context: LensCapabilityContext;
     lens_readout_context?: Record<string, unknown>;
+  };
+  capabilities: {
+    lens: LensCapabilityContext;
+    [key: string]: unknown;
   };
   attachments: Record<string, unknown>[];
   tool_policy: {
@@ -646,6 +652,12 @@ export function assertNoProductSemanticFields(value: unknown): void {
 export function buildHermesFirstCmoChatRequest(input: HermesFirstCmoChatRequestInput): HermesFirstCmoChatRequest {
   const runtimeUser = normalizeCmoRuntimeUserIdentity(input.userIdentity);
   const tenantId = input.request.tenantId ?? "holdstation";
+  const lensCapabilityContext = createLensCapabilityContext({
+    tenantId,
+    workspaceId: input.request.workspaceId,
+    appId: input.request.appId,
+    rangeKey: input.request.rangeKey,
+  });
   const requestBody: HermesFirstCmoChatRequest = {
     schema_version: HERMES_FIRST_CMO_CHAT_REQUEST_SCHEMA,
     request_id: `req_hf_cmo_chat_${input.userMessageId}`,
@@ -672,7 +684,11 @@ export function buildHermesFirstCmoChatRequest(input: HermesFirstCmoChatRequestI
       selected_context: selectedContextFromContextPack(input.contextPack),
       artifacts_in: artifactInputs(input),
       vault_context: input.vaultContext ?? null,
+      lens_request_context: lensCapabilityContext,
       ...(isRecord(input.contextPackage.lensReadoutContext) ? { lens_readout_context: input.contextPackage.lensReadoutContext } : {}),
+    },
+    capabilities: {
+      lens: lensCapabilityContext,
     },
     attachments: safeRecordList(input.inputMaterialAttachments, 20),
     tool_policy: {
@@ -936,6 +952,12 @@ export async function runHermesFirstCmoChat(input: HermesFirstCmoChatRequestInpu
   try {
     request = buildHermesFirstCmoChatRequest(input);
   } catch (error) {
+    const fallbackLensCapabilityContext = createLensCapabilityContext({
+      tenantId: input.request.tenantId,
+      workspaceId: input.request.workspaceId,
+      appId: input.request.appId,
+      rangeKey: input.request.rangeKey,
+    });
     const fallbackRequest = {
       schema_version: HERMES_FIRST_CMO_CHAT_REQUEST_SCHEMA,
       request_id: `req_hf_cmo_chat_${input.userMessageId}`,
@@ -949,7 +971,16 @@ export async function runHermesFirstCmoChat(input: HermesFirstCmoChatRequestInpu
       user: { user_slug: "unknown_user", auth_mode: "unknown" },
       intent: { user_message: input.message },
       messages: [],
-      context_pack: { session_summary: null, selected_context: [], artifacts_in: [], vault_context: null },
+      context_pack: {
+        session_summary: null,
+        selected_context: [],
+        artifacts_in: [],
+        vault_context: null,
+        lens_request_context: fallbackLensCapabilityContext,
+      },
+      capabilities: {
+        lens: fallbackLensCapabilityContext,
+      },
       attachments: [],
       tool_policy: {
         mode: "cmo.normal_chat",

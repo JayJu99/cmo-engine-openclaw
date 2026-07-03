@@ -18,6 +18,7 @@ import {
   isCmoHermesCreativeEnabled,
   isCmoHermesUnifiedAgentEnabled,
 } from "./config";
+import type { LensCapabilityContext } from "./lens-measurement-result";
 import { CMO_CREATIVE_LIFECYCLE_STATES, hasCreativeExecutionMetadata, redactSensitiveText, redactedLocalArtifactPath } from "./creative-agent";
 import {
   executeHermesCmoDelegations,
@@ -135,7 +136,11 @@ export interface HermesCmoRuntimeRequest {
   session_id: string;
   turn_id: string;
   created_at: string;
+  tenant_id?: string;
+  workspace_id?: string;
+  app_id?: string;
   workspace: {
+    tenant_id?: string;
     workspace_id: string;
     app_id: string;
     app_name: string;
@@ -150,6 +155,10 @@ export interface HermesCmoRuntimeRequest {
     mode: "cmo.default";
     user_message: string;
     explicit_command?: string | null;
+    [key: string]: unknown;
+  };
+  capabilities?: {
+    lens?: LensCapabilityContext;
     [key: string]: unknown;
   };
   messages?: Array<{

@@ -62,15 +62,27 @@ async function loadHermesChatV11Builder() {
 
   for (const file of [
     "config",
+    "activity-events",
     "app-routing-intent",
+    "lens-measurement-result",
     "session-working-memory",
     "user-metadata",
     "hermes-cmo-chat-router",
+    "hermes-outbound-payload-sanitizer",
     "hermes-cmo-chat-mapper",
     "hermes-cmo-chat-v11",
   ]) {
     await transpile(path.join(cmoDir, `${file}.ts`), path.join(tmpDir, `${file}.js`));
   }
+  await writeFile(
+    path.join(tmpDir, "creative-agent.js"),
+    `exports.redactSensitiveText = (value) => typeof value === "string" ? value : "";
+exports.hasCreativeExecutionMetadata = () => false;
+exports.CMO_CREATIVE_LIFECYCLE_STATES = [];
+exports.redactedLocalArtifactPath = "[local_path_redacted]";
+`,
+    "utf8",
+  );
 
   const requireFromTmp = createRequire(path.join(tmpDir, "hermes-cmo-chat-v11.js"));
 
@@ -400,11 +412,8 @@ assertExcludes(contextHelperPath, /schema_version:\s*["']lens\.readout_context\.
 assertIncludes(mapperPath, "A Lens readout context may be attached under lens.readout_context.v1 in artifacts_in", "Hermes request must carry a Lens grounding rule");
 assertIncludes(chatV11Path, "context_grounding_rules", "Hermes CMO chat v1.1 request must carry context grounding rules");
 
-assertMatches(
-  mapperPath,
-  /function answerFromHermes[\s\S]{0,1800}const body = answer\.body\.trim\(\)/,
-  "Mapper must preserve Hermes answer.body as the answer source",
-);
+assertIncludes(mapperPath, "const body = canonicalAssistantText(answer.body)", "Mapper must read Hermes answer.body as canonical assistant text");
+assertIncludes(mapperPath, "return body ??", "Mapper must preserve Hermes answer.body as the first answer source");
 assertExcludes(chatStorePath, /answer\s*=\s*.*lensReadout|answer\s*=\s*.*Lens readout|mappedHermesResult\.answer\s*=/i, "CMO chat integration must not replace Hermes answer body with Lens readout text");
 assertExcludes(chatStorePath, /performance tu\u1ea7n n\u00e0y|GA4 c\u00f3 g\u00ec|t\u00ecnh h\u00ecnh tu\u1ea7n n\u00e0y/i, "Product chat path must not contain exact hardcoded metric questions");
 assertExcludes(mapperPath, /performance tu\u1ea7n n\u00e0y|GA4 c\u00f3 g\u00ec|t\u00ecnh h\u00ecnh tu\u1ea7n n\u00e0y/i, "Hermes mapper must not contain exact hardcoded metric questions");
