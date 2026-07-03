@@ -1,3 +1,5 @@
+import type { LensMetricsPack } from "@/lib/cmo/lens-metrics-pack";
+
 export const LENS_METRICS_PACK_CONTRACT = "lens.metrics_pack.v1" as const;
 export const LENS_MEASUREMENT_RESULT_CONTRACT = "lens.measurement_result.v1" as const;
 export const LENS_CAPABILITY_CONTRACTS = [
@@ -9,6 +11,7 @@ export type LensCapabilityContract = (typeof LENS_CAPABILITY_CONTRACTS)[number];
 export type LensMeasurementRangeKey = "this_week" | "last_7_days" | "last_30_days" | "this_month";
 export type LensMeasurementResultStatus = "missing_capability" | "no_data" | "completed" | "failed";
 export type LensMissingRequirementSeverity = "blocking" | "warning";
+export type LensMeasurementMetricIntentKey = "activation" | "social_traffic" | "weekly_goal_baseline" | "default";
 
 export interface LensMeasurementScope {
   tenant_id: string;
@@ -35,8 +38,22 @@ export interface LensMeasurementResult {
   contract: typeof LENS_MEASUREMENT_RESULT_CONTRACT;
   status: LensMeasurementResultStatus;
   scope: LensMeasurementScope;
+  metrics_pack?: LensMetricsPack;
+  metric_intent?: LensMeasurementMetricIntentResolution;
   missing_requirements?: LensMissingCapabilityRequirement[];
+  error?: LensMeasurementSafeError;
   safe_user_message?: string;
+}
+
+export interface LensMeasurementMetricIntentResolution {
+  resolved_key: LensMeasurementMetricIntentKey;
+  matched_metric_keys: string[];
+}
+
+export interface LensMeasurementSafeError {
+  code: string;
+  safe_message: string;
+  retryable?: boolean;
 }
 
 export interface LensCapabilityScopeInput {
@@ -48,7 +65,7 @@ export interface LensCapabilityScopeInput {
 
 export const DEFAULT_LENS_MEASUREMENT_RANGE_KEY: LensMeasurementRangeKey = "last_7_days";
 
-const UNSAFE_TEXT_PATTERN =
+export const UNSAFE_TEXT_PATTERN =
   /(?:\b(?:api[_-]?key|apiKey|authorization|bearer|cookie|headers?|refresh[_-]?token|refreshToken|secret|token)\b|raw[\s_-]?ga4|rawGa4Response|prompt|answer[\s_-]?body|file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\/(?:tmp|Users|home|var|mnt|private|Volumes)(?:\/|\b))/i;
 
 function safeId(value: string | null | undefined, fallback: string): string {
@@ -63,7 +80,7 @@ export function normalizeLensMeasurementRangeKey(value: string | null | undefine
     : DEFAULT_LENS_MEASUREMENT_RANGE_KEY;
 }
 
-function safeText(value: unknown, fallback: string): string {
+export function sanitizeLensMeasurementSafeText(value: unknown, fallback: string): string {
   const text = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
   const bounded = text ? text.slice(0, 240) : fallback;
 
@@ -94,11 +111,11 @@ export function createLensMissingCapabilityResult(input: {
 }): LensMeasurementResult {
   const missingRequirements = input.requirements
     .map((requirement): LensMissingCapabilityRequirement => ({
-      key: safeText(requirement.key, "lens.capability_missing"),
-      type: safeText(requirement.type, "configuration"),
+      key: sanitizeLensMeasurementSafeText(requirement.key, "lens.capability_missing"),
+      type: sanitizeLensMeasurementSafeText(requirement.type, "configuration"),
       severity: requirement.severity === "warning" ? "warning" : "blocking",
-      action: safeText(requirement.action, "configure_lens_capability"),
-      safe_user_message: safeText(requirement.safe_user_message, "Lens needs more setup before it can answer this measurement request."),
+      action: sanitizeLensMeasurementSafeText(requirement.action, "configure_lens_capability"),
+      safe_user_message: sanitizeLensMeasurementSafeText(requirement.safe_user_message, "Lens needs more setup before it can answer this measurement request."),
     }))
     .slice(0, 12);
 
@@ -107,6 +124,6 @@ export function createLensMissingCapabilityResult(input: {
     status: "missing_capability",
     scope: input.scope,
     missing_requirements: missingRequirements,
-    safe_user_message: safeText(input.safeUserMessage, "Lens needs more setup before it can answer this measurement request."),
+    safe_user_message: sanitizeLensMeasurementSafeText(input.safeUserMessage, "Lens needs more setup before it can answer this measurement request."),
   };
 }
