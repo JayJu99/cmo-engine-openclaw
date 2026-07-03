@@ -66,6 +66,27 @@ check("backend_persists_real_product_lifecycle_events", () => {
   assert.match(appChatStore, /status:\s*"cancelled"/);
 });
 
+check("successful_sync_hermes_cmo_empty_events_get_minimal_completed_lifecycle", () => {
+  const helper = section(appChatStore, "function ensureSuccessfulSyncHermesCmoLifecycleEvent", "function normalizeHermesCmoDelegationSummary");
+  const callsite = section(appChatStore, "const lifecycleActivityEvents = ensureSuccessfulSyncHermesCmoLifecycleEvent", "const vaultContextUsage");
+
+  assert.match(helper, /input\.status !== "completed"/);
+  assert.match(helper, /input\.runtimeStatus !== "live"/);
+  assert.match(helper, /input\.productRenderSource !== "hermes_cmo"/);
+  assert.match(helper, /hasUserVisibleEvent/);
+  assert.match(helper, /isExplicitCompletedChatRunLifecycleEvent/);
+  assert.match(helper, /createProductChatRunLifecycleEvent/);
+  assert.match(helper, /status:\s*"completed"/);
+  assert.match(helper, /title:\s*"CMO completed"/);
+  assert.match(activityEvents, /source_agent:\s*"product"/);
+  assert.doesNotMatch(helper, /safeMetadata|message:\s*|answer|content|prompt|request\.message|file_path|local_path|authorization|headers|token|secret/);
+  assert.match(callsite, /activityEvents,/);
+  assert.match(callsite, /turnId:\s*messageId/);
+  assert.match(callsite, /requestId:\s*messageId/);
+  assert.match(callsite, /activityEventsCount:\s*lifecycleActivityEvents\.length/);
+  assert.match(callsite, /activityEvents:\s*lifecycleActivityEvents/);
+});
+
 check("activity_panel_prefers_real_lifecycle_events_over_loading_fallback", () => {
   assert.match(activityPanel, /function lifecycleRows/);
   assert.match(activityPanel, /startsWith\("product\.chat_run\."\)/);

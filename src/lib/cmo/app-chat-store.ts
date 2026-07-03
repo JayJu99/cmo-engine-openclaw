@@ -2157,6 +2157,58 @@ function normalizeHermesCmoActivityEvents(
   return normalizeCmoActivityEvents(value, context) as HermesCmoActivityEventSummary[];
 }
 
+function isExplicitCompletedChatRunLifecycleEvent(event: HermesCmoActivityEventSummary): boolean {
+  return (
+    event.status === "completed" &&
+    (
+      event.type === "product.chat_run.completed" ||
+      event.type === "run.completed" ||
+      event.type === "cmo.run.completed"
+    )
+  );
+}
+
+function ensureSuccessfulSyncHermesCmoLifecycleEvent(input: {
+  status: CMOChatSession["status"];
+  runtimeStatus: CMORuntimeStatus;
+  productRenderSource: CmoProductRenderSource | undefined;
+  activityEvents: HermesCmoActivityEventSummary[] | undefined;
+  sessionId: string;
+  turnId: string;
+  requestId: string;
+  createdAt: string;
+}): HermesCmoActivityEventSummary[] | undefined {
+  if (input.status !== "completed" || input.runtimeStatus !== "live" || input.productRenderSource !== "hermes_cmo") {
+    return input.activityEvents;
+  }
+
+  const context: NormalizeCmoActivityEventContext = {
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    requestId: input.requestId,
+    createdAt: input.createdAt,
+  };
+  const existingEvents = normalizeCmoActivityEvents(input.activityEvents, context) as HermesCmoActivityEventSummary[];
+  const hasUserVisibleEvent = existingEvents.some((event) => event.user_visible === true || event.userVisible === true);
+
+  if (hasUserVisibleEvent || existingEvents.some(isExplicitCompletedChatRunLifecycleEvent)) {
+    return existingEvents;
+  }
+
+  return mergeCmoActivityEvents(
+    existingEvents,
+    [
+      createProductChatRunLifecycleEvent({
+        ...context,
+        status: "completed",
+        seq: existingEvents.length + 1,
+        title: "CMO completed",
+      }),
+    ],
+    context,
+  ) as HermesCmoActivityEventSummary[];
+}
+
 function normalizeHermesCmoDelegationSummary(value: unknown): HermesCmoDelegationSummaryItem[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -6807,6 +6859,29 @@ export async function createAppChatSession(
       }),
     };
   }
+  const lifecycleActivityEvents = ensureSuccessfulSyncHermesCmoLifecycleEvent({
+    status,
+    runtimeStatus,
+    productRenderSource,
+    activityEvents,
+    sessionId,
+    turnId: messageId,
+    requestId: messageId,
+    createdAt: now,
+  });
+
+  if (lifecycleActivityEvents !== activityEvents) {
+    activityEvents = lifecycleActivityEvents;
+
+    if (hermesCmoMetadata && lifecycleActivityEvents) {
+      hermesCmoMetadata = {
+        ...hermesCmoMetadata,
+        activityEventsCount: lifecycleActivityEvents.length,
+        activityEvents: lifecycleActivityEvents,
+      };
+    }
+  }
+
   const vaultContextUsage = vaultContextUsageFromMetadata(hermesCmoMetadata);
 
   let session: CMOChatSession = {
