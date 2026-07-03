@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import fs from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import ts from "typescript";
 
 const root = process.cwd();
 
@@ -36,6 +40,98 @@ function sourceSection(relativePath, startNeedle, endNeedle) {
   assert.ok(end > start, `${relativePath} missing section end: ${endNeedle}`);
 
   return text.slice(start, end);
+}
+
+async function transpileTsModule(sourcePath, outputPath) {
+  const output = ts.transpileModule(fs.readFileSync(sourcePath, "utf8"), {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.CommonJS,
+      esModuleInterop: true,
+      importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
+    },
+    fileName: sourcePath,
+  }).outputText
+    .replace(/require\("server-only"\);?\n?/g, "");
+
+  await writeFile(outputPath, output, "utf8");
+}
+
+async function loadOutboundSanitizerHarness() {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "cmo-outbound-sanitizer-"));
+  const sanitizerOut = path.join(tmpDir, "hermes-outbound-payload-sanitizer.js");
+
+  await transpileTsModule(repoPath("src", "lib", "cmo", "hermes-outbound-payload-sanitizer.ts"), sanitizerOut);
+
+  return {
+    tmpDir,
+    sanitizer: createRequire(sanitizerOut)(sanitizerOut),
+  };
+}
+
+function assertNoForbiddenOutboundLiterals(text, message) {
+  for (const forbidden of ["/home/", "/Users/", "/tmp/", "file:", ".png", "hermes_local_artifact_path_redacted"]) {
+    assert.equal(text.includes(forbidden), false, `${message}: leaked ${forbidden}`);
+  }
+}
+
+async function assertOutboundSanitizerBehavior() {
+  const { tmpDir, sanitizer } = await loadOutboundSanitizerHarness();
+
+  try {
+    const partialRedaction = sanitizer.sanitizeOutboundHermesPayload({
+      request_id: "req_partial_redaction",
+      context_pack: {
+        selected_context: [
+          {
+            role: "assistant",
+            content: "Use file:/tmp/hermes-last30days-sandbox/source.txt and leave campaign.png in copy.",
+          },
+        ],
+      },
+    });
+    const partialJson = JSON.stringify(partialRedaction.payload);
+
+    assert.equal(partialRedaction.diagnostics.outbound_hermes_payload_sanitized, true);
+    assert.equal(partialRedaction.diagnostics.outbound_hermes_payload_path_like_blocked, false);
+    assert.equal(
+      partialRedaction.payload.context_pack.selected_context[0].content,
+      "Creative asset was generated or updated. Use active asset metadata and reference_assets for visual context.",
+      "Partially sanitized unsafe assistant content must fall back to role-safe placeholder",
+    );
+    assert.equal(sanitizer.outboundHermesStringHasForbiddenArtifactText(partialJson), false);
+    assertNoForbiddenOutboundLiterals(partialJson, "partial redaction final JSON");
+
+    const localPathResult = sanitizer.sanitizeOutboundHermesPayload({
+      request_id: "req_local_path_payload",
+      messages: [
+        {
+          role: "user",
+          content: "Paths: /home/ju/.openclaw/openclaw.json and /Users/jay/Documents/CMO Engine Vault/source.md",
+        },
+      ],
+      context_pack: {
+        selected_context: [
+          {
+            title: "sandbox",
+            content: "Sandbox artifact at /tmp/hermes-last30days-sandbox",
+          },
+        ],
+      },
+    });
+    const localPathJson = JSON.stringify(localPathResult.payload);
+    const callsiteInspect = sanitizer.inspectOutboundHermesCallsiteBlock("fetch_body", localPathJson);
+
+    assert.equal(localPathResult.diagnostics.outbound_hermes_payload_sanitized, true);
+    assert.equal(localPathResult.diagnostics.outbound_hermes_payload_path_like_blocked, false);
+    assert.equal(sanitizer.outboundHermesStringHasForbiddenArtifactText(localPathJson), false);
+    assertNoForbiddenOutboundLiterals(localPathJson, "local path final JSON");
+    assert.deepEqual(callsiteInspect.literals, []);
+    assert.deepEqual(callsiteInspect.paths, []);
+    assert.deepEqual(callsiteInspect.snippets, []);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 }
 
 const appStorePath = "src/lib/cmo/app-chat-store.ts";
@@ -160,6 +256,10 @@ assertIncludes(outboundSanitizerPath, ".replace(/file:", "Outbound sanitizer mus
 assertIncludes(outboundSanitizerPath, ".replace(/[A-Za-z]:", "Outbound sanitizer must redact absolute Windows paths");
 assertIncludes(outboundSanitizerPath, "creative-agent-images|cmo-creative-execute|conversion_h_|Creative_image_asset_Refine", "Outbound sanitizer must redact known local artifact literals");
 assertIncludes(outboundSanitizerPath, "sanitizeOutboundHermesContextText(value)", "Outbound sanitizer must run targeted context redaction before final guard replacement");
+assertMatches(outboundSanitizerPath, /sanitizeOutboundHermesContextText\(value\)[\s\S]{0,220}!outboundHermesStringHasForbiddenArtifactText\(sanitizedContextText\)/, "Sanitizer must re-check targeted context redaction before returning changed text");
+assertMatches(outboundSanitizerPath, /const blockedFields = collectBlockedFields\(sanitizedPayload\);/, "Sanitizer must compute blocked fields from sanitizedPayload before diagnostics are attached");
+assertMatches(outboundSanitizerPath, /const serializedPayloadBlocked = outboundHermesStringHasForbiddenArtifactText\(JSON\.stringify\(sanitizedPayload\)\);/, "Sanitizer must compute serialized block status from sanitizedPayload before diagnostics are attached");
+assertExcludes(outboundSanitizerPath, /const provisionalPayload = addDiagnostics\(sanitizedPayload, provisionalDiagnostics\);/, "Sanitizer must not inspect a diagnostics-attached provisional payload for block status");
 assertExcludes(outboundSanitizerPath, /12 Knowledge|13 Sources|Apps\/Holdstation Mini App/, "Outbound sanitizer must not target logical Vault/project paths");
 assert.doesNotMatch(sourceSection(outboundSanitizerPath, "const sanitizedSnippetAroundLiteral", "const collectCallsiteBlockedStringFields"), /file:\[local_path_redacted\]|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/\[local_path_redacted\]/, "Outbound diagnostics snippets must not preserve forbidden local path prefixes");
 
@@ -168,5 +268,7 @@ assert.doesNotMatch(sourceSection(resultPath, "function safeMetricsSummary", "ex
 assertExcludes(mapperPath, /lens_measurement_result[\s\S]{0,260}\b(access_token|refresh_token|encrypted_refresh_token|authorization|headers|cookie|rawGa4Response|raw_ga4_response|answer_body|prompt)\b/i, "Mapper Lens measurement path must not expose secrets/raw GA4/prompt/answer");
 assertExcludes(firstPath, /lens_measurement_result[\s\S]{0,260}\b(access_token|refresh_token|encrypted_refresh_token|authorization|headers|cookie|rawGa4Response|raw_ga4_response|answer_body|prompt)\b/i, "Hermes-first Lens measurement path must not expose secrets/raw GA4/prompt/answer");
 assertExcludes(v11Path, /lens_measurement_result[\s\S]{0,260}\b(access_token|refresh_token|encrypted_refresh_token|authorization|headers|cookie|rawGa4Response|raw_ga4_response|answer_body|prompt)\b/i, "Hermes v1.1 Lens measurement path must not expose secrets/raw GA4/prompt/answer");
+
+await assertOutboundSanitizerBehavior();
 
 console.log("CMO Lens CMO consumption check passed.");

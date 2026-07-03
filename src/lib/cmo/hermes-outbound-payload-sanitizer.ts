@@ -392,13 +392,12 @@ function sanitizeValue(
 ): unknown {
   if (typeof value === "string") {
     const sanitizedContextText = sanitizeOutboundHermesContextText(value);
-    if (sanitizedContextText !== value) {
-      sanitizedFields.push(fieldPathPreview(path));
-      return sanitizedContextText;
-    }
-
     if (!outboundHermesStringHasForbiddenArtifactText(sanitizedContextText)) {
-      return value;
+      if (sanitizedContextText !== value) {
+        sanitizedFields.push(fieldPathPreview(path));
+      }
+
+      return sanitizedContextText;
     }
 
     sanitizedFields.push(fieldPathPreview(path));
@@ -505,9 +504,8 @@ export function sanitizeOutboundHermesPayload<T>(
     outbound_sanitized_fields_preview: uniqueSanitizedFields.slice(0, MAX_FIELD_PREVIEW_COUNT),
     ...(options.creativeRoute ? { workspace_fallback_suppressed_for_creative: true } : {}),
   };
-  const provisionalPayload = addDiagnostics(sanitizedPayload, provisionalDiagnostics);
-  const blockedFields = collectBlockedFields(provisionalPayload);
-  const serializedPayloadBlocked = outboundHermesStringHasForbiddenArtifactText(JSON.stringify(provisionalPayload));
+  const blockedFields = collectBlockedFields(sanitizedPayload);
+  const serializedPayloadBlocked = outboundHermesStringHasForbiddenArtifactText(JSON.stringify(sanitizedPayload));
   const diagnostics: OutboundHermesPayloadSanitizerDiagnostics = {
     ...provisionalDiagnostics,
     outbound_hermes_payload_path_like_blocked: blockedFields.length > 0 || serializedPayloadBlocked,
