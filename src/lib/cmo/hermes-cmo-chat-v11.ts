@@ -6,6 +6,8 @@ import type { CMOAppChatResponse, CMOChatMessage, HermesCmoChatMetadata } from "
 import {
   LENS_READOUT_CONTEXT_ARTIFACT_KIND,
   LENS_READOUT_CONTEXT_CONTRACT,
+  LENS_MEASUREMENT_GROUNDING_RULE,
+  LENS_MEASUREMENT_RESULT_ARTIFACT_KIND,
   LENS_READOUT_GROUNDING_RULE,
   mapCmoChatToHermesCmoRequest,
   type HermesCmoChatRequestInput,
@@ -111,6 +113,7 @@ export interface HermesCmoChatV11Request {
     artifacts_in: Record<string, unknown>[];
     vault_context: unknown;
     lens_request_context: LensCapabilityContext;
+    lens_measurement_result?: Record<string, unknown>;
   };
   capabilities: {
     lens: LensCapabilityContext;
@@ -983,6 +986,10 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
     artifact.contract === LENS_READOUT_CONTEXT_CONTRACT &&
     artifact.kind === LENS_READOUT_CONTEXT_ARTIFACT_KIND,
   );
+  const hasLensMeasurementArtifact = artifactsIn.some((artifact) =>
+    artifact.contract === "lens.measurement_result.v1" &&
+    artifact.kind === LENS_MEASUREMENT_RESULT_ARTIFACT_KIND,
+  );
   const sessionSummaryText = input.sessionSummary?.trim()
     ? compactMultilineText(input.sessionSummary, MAX_SESSION_SUMMARY_CHARS)
     : typeof legacyRequest.context_pack.recent_session_summary === "string"
@@ -1014,6 +1021,7 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
       artifacts_in: artifactsIn,
       vault_context: input.vaultContext ?? null,
       lens_request_context: lensCapabilityContext,
+      ...(input.contextPackage.lensMeasurementResult ? { lens_measurement_result: input.contextPackage.lensMeasurementResult as unknown as Record<string, unknown> } : {}),
     },
     capabilities: {
       lens: lensCapabilityContext,
@@ -1028,7 +1036,10 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
       allow_surf_delegation: false,
       read_web_allowed: true,
       read_browser_allowed: true,
-      context_grounding_rules: hasLensReadoutArtifact ? [LENS_READOUT_GROUNDING_RULE] : [],
+      context_grounding_rules: [
+        ...(hasLensReadoutArtifact ? [LENS_READOUT_GROUNDING_RULE] : []),
+        ...(hasLensMeasurementArtifact ? [LENS_MEASUREMENT_GROUNDING_RULE] : []),
+      ],
     },
   };
 }

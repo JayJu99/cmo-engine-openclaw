@@ -419,7 +419,8 @@ assertMatches(
   /isCmoLensDirectContextEnabled\(\)[\s\S]{0,180}getLensReadoutContextForAppSafe[\s\S]{0,180}:\s*\{\s*context:\s*null,\s*warning:\s*undefined\s*\}/,
   "CMO chat store must skip Lens context when direct flag is absent/false",
 );
-assertIncludes(mapperPath, "const contextGroundingRules = lensReadoutArtifact ? [LENS_READOUT_GROUNDING_RULE] : []", "Legacy Hermes mapper must only send Lens grounding rules with Lens artifact");
+assertIncludes(mapperPath, "...(lensReadoutArtifact ? [LENS_READOUT_GROUNDING_RULE] : [])", "Legacy Hermes mapper must only send Lens readout grounding rules with Lens readout artifact");
+assertIncludes(mapperPath, "...(lensMeasurementArtifact ? [LENS_MEASUREMENT_GROUNDING_RULE] : [])", "Legacy Hermes mapper must only send Lens measurement grounding rules with Lens measurement artifact");
 assertIncludes(chatV11Path, "hasLensReadoutArtifact ? [LENS_READOUT_GROUNDING_RULE] : []", "Hermes chat v1.1 must only send Lens grounding rules with Lens artifact");
 assertIncludes(mapperPath, "const body = canonicalAssistantText(answer.body)", "Product must read Hermes answer.body as canonical assistant text");
 assertIncludes(mapperPath, "return body ??", "Product must prioritize Hermes answer.body before fallback answer fields");

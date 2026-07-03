@@ -11,7 +11,13 @@ export type LensCapabilityContract = (typeof LENS_CAPABILITY_CONTRACTS)[number];
 export type LensMeasurementRangeKey = "this_week" | "last_7_days" | "last_30_days" | "this_month";
 export type LensMeasurementResultStatus = "missing_capability" | "no_data" | "completed" | "failed";
 export type LensMissingRequirementSeverity = "blocking" | "warning";
-export type LensMeasurementMetricIntentKey = "activation" | "social_traffic" | "weekly_goal_baseline" | "default";
+export type LensMeasurementMetricIntentKey =
+  | "activation"
+  | "social_traffic"
+  | "conversion"
+  | "retention"
+  | "weekly_goal_baseline"
+  | "default";
 
 export interface LensMeasurementScope {
   tenant_id: string;

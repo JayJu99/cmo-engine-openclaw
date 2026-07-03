@@ -124,6 +124,16 @@ import {
 import { indexChatMessages, indexChatSession, type CmoIndexResult } from "@/lib/cmo/supabase-indexing";
 import { applyIndexedContextSupplement, buildIndexedContextSupplement } from "@/lib/cmo/indexed-context-canary";
 import { getLensReadoutContextForAppSafe, isCmoLensDirectContextEnabled } from "@/lib/cmo/lens-readout-context";
+import {
+  runLensMeasurementRequest,
+  shouldRunLensMeasurementForMessage,
+} from "@/lib/cmo/lens-measurement-runner";
+import {
+  LENS_MEASUREMENT_RESULT_CONTRACT,
+  normalizeLensMeasurementRangeKey,
+  sanitizeLensMeasurementSafeText,
+  type LensMeasurementResult,
+} from "@/lib/cmo/lens-measurement-result";
 import { legacyUserIdentity, normalizeCmoRuntimeUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 import { requireWorkspaceRegistryEntry } from "@/lib/cmo/workspace-registry";
 import { buildRuntimeContext, buildSourceReviewContextFromMessage } from "@/lib/cmo/source-acquisition";
@@ -311,6 +321,57 @@ function lensReadoutMetadata(input: {
   }
 
   return metadata;
+}
+
+function normalizeLensMeasurementResult(value: unknown): LensMeasurementResult | undefined {
+  if (!isRecord(value) || value.contract !== LENS_MEASUREMENT_RESULT_CONTRACT) {
+    return undefined;
+  }
+
+  const status = value.status === "completed" ||
+    value.status === "missing_capability" ||
+    value.status === "no_data" ||
+    value.status === "failed"
+    ? value.status
+    : undefined;
+  const scope = isRecord(value.scope) ? value.scope : null;
+  const tenantId = stringValue(scope?.tenant_id);
+  const workspaceId = stringValue(scope?.workspace_id);
+  const appId = stringValue(scope?.app_id);
+
+  if (!status || !scope || !tenantId || !workspaceId || !appId) {
+    return undefined;
+  }
+
+  const metricsPack = isRecord(value.metrics_pack)
+    ? sanitizeHermesCmoChatV11Records([value.metrics_pack], 1)[0]
+    : undefined;
+  const metricIntent = isRecord(value.metric_intent)
+    ? sanitizeHermesCmoChatV11Records([value.metric_intent], 1)[0]
+    : undefined;
+  const missingRequirements = Array.isArray(value.missing_requirements)
+    ? sanitizeHermesCmoChatV11Records(value.missing_requirements, 12)
+    : undefined;
+  const error = isRecord(value.error)
+    ? sanitizeHermesCmoChatV11Records([value.error], 1)[0]
+    : undefined;
+  const safeUserMessage = sanitizeLensMeasurementSafeText(value.safe_user_message, "");
+
+  return {
+    contract: LENS_MEASUREMENT_RESULT_CONTRACT,
+    status,
+    scope: {
+      tenant_id: tenantId,
+      workspace_id: workspaceId,
+      app_id: appId,
+      range_key: normalizeLensMeasurementRangeKey(stringValue(scope.range_key)),
+    },
+    ...(metricsPack ? { metrics_pack: metricsPack as unknown as LensMeasurementResult["metrics_pack"] } : {}),
+    ...(metricIntent ? { metric_intent: metricIntent as unknown as LensMeasurementResult["metric_intent"] } : {}),
+    ...(missingRequirements?.length ? { missing_requirements: missingRequirements as unknown as LensMeasurementResult["missing_requirements"] } : {}),
+    ...(error ? { error: error as unknown as LensMeasurementResult["error"] } : {}),
+    ...(safeUserMessage ? { safe_user_message: safeUserMessage } : {}),
+  };
 }
 
 function sourceReviewUserId(identity: CmoServerUserIdentity): string {
@@ -3917,6 +3978,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
             hermesCmoCounters: normalizeHermesCmoCounters(message.hermesCmoCounters),
             hermesCmoMetadata: messageHermesCmoMetadata,
             ...(messageVaultContextUsage !== undefined ? { vault_context_usage: messageVaultContextUsage } : {}),
+            ...(normalizeLensMeasurementResult(message.lensMeasurementResult) ? { lensMeasurementResult: normalizeLensMeasurementResult(message.lensMeasurementResult) } : {}),
             strategyMode: normalizeStrategyMode(message.strategyMode),
             mainBottleneck: normalizeOptionalString(message.mainBottleneck),
             decisionLabel: normalizeDecisionLabel(message.decisionLabel),
@@ -4103,6 +4165,7 @@ function normalizeSession(value: unknown): CMOChatSession | null {
     hermesCmoCounters: normalizeHermesCmoCounters(value.hermesCmoCounters),
     hermesCmoMetadata: sessionHermesCmoMetadata,
     ...(sessionVaultContextUsage !== undefined ? { vault_context_usage: sessionVaultContextUsage } : {}),
+    ...(normalizeLensMeasurementResult(value.lensMeasurementResult) ? { lensMeasurementResult: normalizeLensMeasurementResult(value.lensMeasurementResult) } : {}),
     strategyMode: normalizeStrategyMode(value.strategyMode),
     mainBottleneck: normalizeOptionalString(value.mainBottleneck),
     decisionLabel: normalizeDecisionLabel(value.decisionLabel),
@@ -4445,6 +4508,16 @@ export async function createAppChatSession(
     : { context: null, warning: undefined };
   const lensReadoutContext = lensReadoutContextResult.context;
   const lensReadoutContextWarning = lensReadoutContextResult.warning?.code;
+  const lensMeasurementResult = shouldRunLensMeasurementForMessage(request.message)
+    ? await runLensMeasurementRequest({
+        tenantId: request.tenantId,
+        workspaceId: request.workspaceId,
+        appId: request.appId,
+        rangeKey: request.rangeKey ?? "last_7_days",
+        metricIntent: request.message,
+        requestId: messageId,
+      })
+    : undefined;
   contextPackage = {
     ...contextPackage,
     runtimeContext,
@@ -4452,6 +4525,7 @@ export async function createAppChatSession(
     ...(sourceAnswerContext ? { sourceAnswerContext } : {}),
     ...(lensReadoutContext ? { lensReadoutContext: lensReadoutContext as unknown as Record<string, unknown> } : {}),
     ...(lensReadoutContextWarning ? { lensReadoutContextWarning } : {}),
+    ...(lensMeasurementResult ? { lensMeasurementResult } : {}),
     sessionLocalSources,
     sessionLocalResearchResults,
     ...(sessionAttachments.length ? { attachments: sessionAttachments } : {}),
@@ -4637,6 +4711,7 @@ export async function createAppChatSession(
       hermesCmoCounters: completedMetadata.counters,
       hermesCmoMetadata: completedMetadata,
       ...(completedVaultContextUsage !== undefined ? { vault_context_usage: completedVaultContextUsage } : {}),
+      ...(lensMeasurementResult ? { lensMeasurementResult } : {}),
       activityEvents: completedMetadata.activityEvents,
       delegationSummary: completedMetadata.delegationSummary,
       agentsUsed: completedMetadata.agentsUsed,
@@ -4709,6 +4784,7 @@ export async function createAppChatSession(
           hermesCmoCounters: completedMetadata.counters,
           hermesCmoMetadata: completedMetadata,
           ...(completedVaultContextUsage !== undefined ? { vault_context_usage: completedVaultContextUsage } : {}),
+          ...(lensMeasurementResult ? { lensMeasurementResult } : {}),
           activityEvents: completedMetadata.activityEvents,
           delegationSummary: completedMetadata.delegationSummary,
           agentsUsed: completedMetadata.agentsUsed,
@@ -4780,6 +4856,7 @@ export async function createAppChatSession(
       hermesCmoCounters: completedMetadata.counters,
       hermesCmoMetadata: completedMetadata,
       ...(completedVaultContextUsage !== undefined ? { vault_context_usage: completedVaultContextUsage } : {}),
+      ...(lensMeasurementResult ? { lensMeasurementResult } : {}),
       activityEvents: completedMetadata.activityEvents,
       delegationSummary: completedMetadata.delegationSummary,
       agentsUsed: completedMetadata.agentsUsed,
@@ -6926,6 +7003,7 @@ export async function createAppChatSession(
     ...(hermesCmoCounters ? { hermesCmoCounters } : {}),
     ...(hermesCmoMetadata ? { hermesCmoMetadata } : {}),
     ...(vaultContextUsage !== undefined ? { vault_context_usage: vaultContextUsage } : {}),
+    ...(lensMeasurementResult ? { lensMeasurementResult } : {}),
     ...(strategyMode ? { strategyMode } : {}),
     ...(mainBottleneck ? { mainBottleneck } : {}),
     ...(decisionLabel ? { decisionLabel } : {}),
@@ -7007,6 +7085,7 @@ export async function createAppChatSession(
         ...(hermesCmoCounters ? { hermesCmoCounters } : {}),
         ...(hermesCmoMetadata ? { hermesCmoMetadata } : {}),
         ...(vaultContextUsage !== undefined ? { vault_context_usage: vaultContextUsage } : {}),
+        ...(lensMeasurementResult ? { lensMeasurementResult } : {}),
         ...(strategyMode ? { strategyMode } : {}),
         ...(mainBottleneck ? { mainBottleneck } : {}),
         ...(decisionLabel ? { decisionLabel } : {}),
@@ -7272,6 +7351,7 @@ export async function createAppChatSession(
     ...(hermesCmoCounters ? { hermesCmoCounters } : {}),
     ...(hermesCmoMetadata ? { hermesCmoMetadata } : {}),
     ...(responseVaultContextUsage !== undefined ? { vault_context_usage: responseVaultContextUsage } : {}),
+    ...(lensMeasurementResult ? { lensMeasurementResult } : {}),
     ...(strategyMode ? { strategyMode } : {}),
     ...(mainBottleneck ? { mainBottleneck } : {}),
     ...(decisionLabel ? { decisionLabel } : {}),

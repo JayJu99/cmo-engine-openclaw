@@ -25,7 +25,7 @@ import {
   cmoActivityEventSourceMode,
   normalizeCmoActivityEvents,
 } from "@/lib/cmo/activity-events";
-import { createLensCapabilityContext } from "@/lib/cmo/lens-measurement-result";
+import { createLensCapabilityContext, LENS_MEASUREMENT_RESULT_CONTRACT } from "@/lib/cmo/lens-measurement-result";
 import {
   isExplicitCreativeExecutionIntent,
 } from "./app-routing-intent";
@@ -40,6 +40,9 @@ export const LENS_READOUT_CONTEXT_CONTRACT = "lens.readout_context.v1" as const;
 export const LENS_READOUT_CONTEXT_ARTIFACT_KIND = "lens_readout_context" as const;
 export const LENS_READOUT_GROUNDING_RULE =
   "A Lens readout context may be attached under lens.readout_context.v1 in artifacts_in. Use it as evidence for app performance questions. Do not invent activation or retention metrics when the readout marks them as definition_needed. Do not treat Active Users as Activated Users. Do not treat Engagement Rate as Activation Rate. If the requested range has missing_snapshot, state that cached GA4 metrics need syncing." as const;
+export const LENS_MEASUREMENT_RESULT_ARTIFACT_KIND = "lens_measurement_result" as const;
+export const LENS_MEASUREMENT_GROUNDING_RULE =
+  "A Lens measurement result may be attached under lens.measurement_result.v1. Use its status, safe_user_message, metrics_pack, and missing_requirements as measurement truth. If status is missing_capability, no_data, or failed, explain the limitation and do not invent metrics." as const;
 
 export const HERMES_CMO_FORBIDDEN_ZERO_COUNTERS = [
   "vaultAgentCalls",
@@ -780,6 +783,18 @@ function lensReadoutContextArtifact(context: Record<string, unknown> | null): Re
   };
 }
 
+function lensMeasurementResultArtifact(result: unknown): Record<string, unknown> | null {
+  if (!isRecord(result) || result.contract !== LENS_MEASUREMENT_RESULT_CONTRACT) {
+    return null;
+  }
+
+  return {
+    contract: LENS_MEASUREMENT_RESULT_CONTRACT,
+    kind: LENS_MEASUREMENT_RESULT_ARTIFACT_KIND,
+    result,
+  };
+}
+
 function isMissingAcceptedProjectContextItem(item: ContextItem): boolean {
   return item.kind === "project_context" && item.exists === false;
 }
@@ -992,13 +1007,18 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const sourceAnswerContext = sourceAnswerContextArtifact(input);
   const lensReadoutContext = isRecord(input.contextPackage.lensReadoutContext) ? input.contextPackage.lensReadoutContext : null;
   const lensReadoutArtifact = lensReadoutContextArtifact(lensReadoutContext);
+  const lensMeasurementResult = input.contextPackage.lensMeasurementResult;
+  const lensMeasurementArtifact = lensMeasurementResultArtifact(lensMeasurementResult);
   const lensCapabilityContext = createLensCapabilityContext({
     tenantId: input.request.tenantId,
     workspaceId: input.request.workspaceId,
     appId: input.request.appId,
     rangeKey: input.request.rangeKey,
   });
-  const contextGroundingRules = lensReadoutArtifact ? [LENS_READOUT_GROUNDING_RULE] : [];
+  const contextGroundingRules = [
+    ...(lensReadoutArtifact ? [LENS_READOUT_GROUNDING_RULE] : []),
+    ...(lensMeasurementArtifact ? [LENS_MEASUREMENT_GROUNDING_RULE] : []),
+  ];
   const sessionLocalSources = sessionLocalSourceArtifacts(input);
   const sessionWorkingMemoryResolution = resolveSessionWorkingMemory({
     scope: {
@@ -1217,12 +1237,13 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       selected_context: [...input.contextPackage.selectedContext.map(noteSnapshot), ...recentChatContext(input.history)],
       recent_session_summary: recentSessionSummary(input.history),
       indexed_context_supplement: indexedContextSupplement,
-      artifacts_in: [vaultContextPack, ...sessionLocalSources, ...sessionLocalResearchResults, sourceAnswerContext, lensReadoutArtifact].filter((artifact): artifact is Record<string, unknown> => Boolean(artifact)),
+      artifacts_in: [vaultContextPack, ...sessionLocalSources, ...sessionLocalResearchResults, sourceAnswerContext, lensReadoutArtifact, lensMeasurementArtifact].filter((artifact): artifact is Record<string, unknown> => Boolean(artifact)),
       lens_request_context: lensCapabilityContext,
       ...(input.contextPackage.activeSourceId ? { active_source_id: input.contextPackage.activeSourceId } : {}),
       ...(sourceReviewContext ? { source_review_context: sourceReviewContext } : {}),
       ...(sourceAnswerContext ? { source_answer_context: sourceAnswerContext } : {}),
       ...(lensReadoutContext ? { lens_readout_context: lensReadoutContext } : {}),
+      ...(lensMeasurementResult ? { lens_measurement_result: lensMeasurementResult } : {}),
       ...(creativeWorkingStateForHermes ? { creative_working_state: creativeWorkingStateForHermes } : {}),
       ...(creativeWorkingStateCamelCase ? { creativeWorkingState: creativeWorkingStateCamelCase } : {}),
       ...(creativeReferenceAssets.length ? { reference_assets: creativeReferenceAssets, referenceAssets: creativeReferenceAssets } : {}),

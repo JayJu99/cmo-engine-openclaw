@@ -48,6 +48,34 @@ interface LensMissingCapabilityRequirementInput {
 const DEFAULT_SAFE_ERROR_MESSAGE = "Lens could not complete this measurement request safely.";
 const NO_DATA_MESSAGE = "Lens found a configured GA4 source, but no cached metrics snapshot exists for this range. Sync GA4 metrics before asking Lens to measure it.";
 
+function normalizedIntentText(value: string | null | undefined): string {
+  return typeof value === "string"
+    ? value
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/đ/g, "d")
+      .replace(/\s+/g, " ")
+      .trim()
+    : "";
+}
+
+export function shouldRunLensMeasurementForMessage(message: string): boolean {
+  const normalized = normalizedIntentText(message);
+
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\b(?:metric|metrics|measurement|measure|measuring|kpi|analytics|ga4|baseline|target|activation|retention|conversion|funnel|dropoff)\b/.test(normalized) ||
+    /\b(?:do|so lieu)\b/.test(normalized) && /\b(?:traffic|activation|retention|conversion|funnel|metric|kpi|ga4)\b/.test(normalized) ||
+    /\b(?:social traffic|traffic social)\b/.test(normalized) ||
+    /\b(?:increase|grow|growth|tang)\s+(?:\w+\s+){0,3}traffic\b/.test(normalized) ||
+    /\btraffic\b/.test(normalized) && /\b(?:week|weekly|this week|tuan|baseline|target|goal|muc tieu|do|so lieu|metric|kpi)\b/.test(normalized)
+  );
+}
+
 function scopeFromInput(input: RunLensMeasurementRequestInput): LensMeasurementScope {
   return createLensCapabilityContext({
     tenantId: input.tenantId,
@@ -132,10 +160,18 @@ function missingRequirementForMapping(mapping: WorkspaceGa4MetricSourceMapping |
 }
 
 function normalizeIntentKey(metricIntent: string | null | undefined): LensMeasurementMetricIntentKey {
-  const normalized = typeof metricIntent === "string" ? metricIntent.toLowerCase() : "";
+  const normalized = normalizedIntentText(metricIntent);
 
   if (/\b(?:activation|activate|activated|onboard|onboarding)\b/.test(normalized)) {
     return "activation";
+  }
+
+  if (/\b(?:retention|retain|cohort|d1|d7)\b/.test(normalized)) {
+    return "retention";
+  }
+
+  if (/\b(?:conversion|funnel|dropoff|drop off|drop-off|convert)\b/.test(normalized)) {
+    return "conversion";
   }
 
   if (/\b(?:social|channel|traffic|acquisition|utm|referral|source)\b/.test(normalized)) {
@@ -156,6 +192,14 @@ function metricMatchesIntent(metric: LensMetricsPackMetric, intent: LensMeasurem
 
   if (intent === "social_traffic") {
     return metric.semanticRole === "acquisition" || metric.semanticRole === "traffic";
+  }
+
+  if (intent === "conversion") {
+    return metric.semanticRole === "engagement" || metric.semanticRole === "traffic";
+  }
+
+  if (intent === "retention") {
+    return metric.semanticRole === "retention";
   }
 
   if (intent === "weekly_goal_baseline") {

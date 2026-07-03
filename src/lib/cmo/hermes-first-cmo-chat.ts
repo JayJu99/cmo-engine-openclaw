@@ -17,7 +17,11 @@ import type {
 } from "@/lib/cmo/app-workspace-types";
 import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs } from "@/lib/cmo/config";
 import { normalizeCmoActivityEvents } from "@/lib/cmo/activity-events";
-import { createLensCapabilityContext, type LensCapabilityContext } from "@/lib/cmo/lens-measurement-result";
+import {
+  createLensCapabilityContext,
+  LENS_MEASUREMENT_RESULT_CONTRACT,
+  type LensCapabilityContext,
+} from "@/lib/cmo/lens-measurement-result";
 import {
   OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
   buildOutboundHermesTraceSafeRequest,
@@ -31,6 +35,9 @@ import { normalizeCmoRuntimeUserIdentity, type CmoServerUserIdentity } from "@/l
 export const HERMES_FIRST_CMO_CHAT_ENDPOINT = "/agents/cmo/chat" as const;
 export const HERMES_FIRST_CMO_CHAT_REQUEST_SCHEMA = "hermes.cmo.chat.request.v1_1" as const;
 export const HERMES_FIRST_CMO_CHAT_RESPONSE_SCHEMA = "hermes.cmo.chat.response.v1_1" as const;
+const LENS_MEASUREMENT_RESULT_ARTIFACT_KIND = "lens_measurement_result" as const;
+const LENS_MEASUREMENT_GROUNDING_RULE =
+  "A Lens measurement result may be attached under lens.measurement_result.v1. Use its status, safe_user_message, metrics_pack, and missing_requirements as measurement truth. If status is missing_capability, no_data, or failed, explain the limitation and do not invent metrics." as const;
 
 type HermesFirstCmoChatStatus = "completed" | "needs_user_input" | "failed";
 type HermesFirstBoundaryFailureType =
@@ -98,6 +105,7 @@ export interface HermesFirstCmoChatRequest {
     vault_context: unknown;
     lens_request_context: LensCapabilityContext;
     lens_readout_context?: Record<string, unknown>;
+    lens_measurement_result?: Record<string, unknown>;
   };
   capabilities: {
     lens: LensCapabilityContext;
@@ -558,6 +566,15 @@ function artifactInputs(input: HermesFirstCmoChatRequestInput): Record<string, u
           context: safeRecord(input.contextPackage.lensReadoutContext, MAX_RECORD_JSON_CHARS),
         }]
       : []),
+    ...(isRecord(input.contextPackage.lensMeasurementResult)
+      ? [{
+          schema_version: "cmo.lens_measurement_result_ref.v1",
+          contract: LENS_MEASUREMENT_RESULT_CONTRACT,
+          kind: LENS_MEASUREMENT_RESULT_ARTIFACT_KIND,
+          artifact_id: `lens_measurement_${input.request.appId}_${input.request.rangeKey ?? "last_7_days"}`,
+          result: safeRecord(input.contextPackage.lensMeasurementResult, MAX_RECORD_JSON_CHARS),
+        }]
+      : []),
     ...safeRecordList(input.inputMaterialAttachments, 20),
   ].slice(0, MAX_RECORDS);
 }
@@ -686,6 +703,7 @@ export function buildHermesFirstCmoChatRequest(input: HermesFirstCmoChatRequestI
       vault_context: input.vaultContext ?? null,
       lens_request_context: lensCapabilityContext,
       ...(isRecord(input.contextPackage.lensReadoutContext) ? { lens_readout_context: input.contextPackage.lensReadoutContext } : {}),
+      ...(isRecord(input.contextPackage.lensMeasurementResult) ? { lens_measurement_result: input.contextPackage.lensMeasurementResult } : {}),
     },
     capabilities: {
       lens: lensCapabilityContext,
@@ -704,6 +722,7 @@ export function buildHermesFirstCmoChatRequest(input: HermesFirstCmoChatRequestI
         "Use provided context as grounding when relevant.",
         "Treat suggested Vault updates as draft-only unless Product later approves them.",
         "Do not perform durable writes, paid generation, or publishing in this turn.",
+        ...(isRecord(input.contextPackage.lensMeasurementResult) ? [LENS_MEASUREMENT_GROUNDING_RULE] : []),
       ],
     },
     persistence_policy: {

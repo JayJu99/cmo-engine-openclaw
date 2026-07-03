@@ -1452,6 +1452,7 @@ export interface CMOChatMessage {
   hermesCmoCounters?: HermesCmoSafetyCounters;
   hermesCmoMetadata?: HermesCmoChatMetadata;
   vault_context_usage?: unknown;
+  lensMeasurementResult?: LensMeasurementResult;
   strategyMode?: CmoStrategyMode;
   mainBottleneck?: string;
   decisionLabel?: CmoDecisionLabel;
@@ -1634,6 +1635,7 @@ export interface CMOChatSession {
   hermesCmoCounters?: HermesCmoSafetyCounters;
   hermesCmoMetadata?: HermesCmoChatMetadata;
   vault_context_usage?: unknown;
+  lensMeasurementResult?: LensMeasurementResult;
   strategyMode?: CmoStrategyMode;
   mainBottleneck?: string;
   decisionLabel?: CmoDecisionLabel;
@@ -1773,6 +1775,7 @@ export interface CMOAppChatResponse {
   hermesCmoCounters?: HermesCmoSafetyCounters;
   hermesCmoMetadata?: HermesCmoChatMetadata;
   vault_context_usage?: unknown;
+  lensMeasurementResult?: LensMeasurementResult;
   strategyMode?: CmoStrategyMode;
   mainBottleneck?: string;
   decisionLabel?: CmoDecisionLabel;

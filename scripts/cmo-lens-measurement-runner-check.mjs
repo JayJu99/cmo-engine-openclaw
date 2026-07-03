@@ -203,6 +203,14 @@ async function assertRunnerBehavior() {
       requestId: "req_safe",
     };
 
+    assert.equal(runner.shouldRunLensMeasurementForMessage("tuần này muốn tăng traffic social"), true);
+    assert.equal(runner.shouldRunLensMeasurementForMessage("activation metric nên xem gì?"), true);
+    assert.equal(runner.shouldRunLensMeasurementForMessage("đo số liệu traffic tuần này"), true);
+    assert.equal(runner.shouldRunLensMeasurementForMessage("Which activation metric should Lens look at first, and why?"), true);
+    assert.equal(runner.shouldRunLensMeasurementForMessage("Viết giúp 3 bài social để tăng awareness tuần này"), false);
+    assert.equal(runner.resolveLensMeasurementMetricIntent({ metricIntent: "conversion funnel dropoff" }).resolved_key, "conversion");
+    assert.equal(runner.resolveLensMeasurementMetricIntent({ metricIntent: "retention cohort d7" }).resolved_key, "retention");
+
     sources.__setMapping(null);
     snapshots.__setSnapshot(null);
     let result = await runner.runLensMeasurementRequest(baseInput);
