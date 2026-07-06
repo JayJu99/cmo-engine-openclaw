@@ -18,6 +18,11 @@ import type {
 import { getCmoHermesApiKey, getCmoHermesBaseUrl, getCmoHermesTimeoutMs } from "@/lib/cmo/config";
 import { normalizeCmoActivityEvents } from "@/lib/cmo/activity-events";
 import {
+  CURRENT_TURN_RESPONSE_INSTRUCTION,
+  createCurrentTurnResponseContract,
+  type CurrentTurnResponseContract,
+} from "@/lib/cmo/current-turn-response-contract";
+import {
   compactLensMeasurementResultForHermesContext,
   createLensCapabilityContext,
   LENS_MEASUREMENT_RESULT_CONTRACT,
@@ -40,7 +45,7 @@ const LENS_MEASUREMENT_RESULT_ARTIFACT_KIND = "lens_measurement_result" as const
 const LENS_MEASUREMENT_GROUNDING_RULE =
   "A Lens measurement result may be attached under lens.measurement_result.v1. Use its status, safe_user_message, metrics_summary, and missing_requirements as measurement truth. If status is missing_capability, no_data, or failed, explain the limitation and do not invent metrics." as const;
 const LATEST_USER_MESSAGE_PRIMACY_RULE =
-  "Always answer the latest user request in intent.user_message. Conversation history and prior assistant messages are supporting context only; do not continue, optimize, or reframe a prior assistant answer unless the latest user explicitly asks to continue it. If intent.user_message asks for drafts, posts, copy, scripts, or content, return the requested content/drafts instead of measurement advice." as const;
+  "Always answer the latest user request in intent.user_message. Conversation history, session summary, Lens context, metric context, and prior assistant messages are background or enrichment only; do not let previous topics replace the current-turn deliverable unless the latest user explicitly asks to continue them." as const;
 
 type HermesFirstCmoChatStatus = "completed" | "needs_user_input" | "failed";
 type HermesFirstBoundaryFailureType =
@@ -93,6 +98,9 @@ export interface HermesFirstCmoChatRequest {
   };
   intent: {
     user_message: string;
+    latest_user_message_primacy: string;
+    current_turn_instruction: string;
+    current_turn_response_contract: CurrentTurnResponseContract;
   };
   messages: Array<{
     id: string;
@@ -681,6 +689,7 @@ export function buildHermesFirstCmoChatRequest(input: HermesFirstCmoChatRequestI
     rangeKey: input.request.rangeKey,
   });
   const lensMeasurementResult = compactLensMeasurementResultForHermesContext(input.contextPackage.lensMeasurementResult);
+  const currentTurnResponseContract = createCurrentTurnResponseContract();
   const requestBody: HermesFirstCmoChatRequest = {
     schema_version: HERMES_FIRST_CMO_CHAT_REQUEST_SCHEMA,
     request_id: `req_hf_cmo_chat_${input.userMessageId}`,
@@ -700,6 +709,9 @@ export function buildHermesFirstCmoChatRequest(input: HermesFirstCmoChatRequestI
     },
     intent: {
       user_message: input.message,
+      latest_user_message_primacy: LATEST_USER_MESSAGE_PRIMACY_RULE,
+      current_turn_instruction: CURRENT_TURN_RESPONSE_INSTRUCTION,
+      current_turn_response_contract: currentTurnResponseContract,
     },
     messages: buildSafeHistory(input.history),
     context_pack: {
@@ -984,6 +996,7 @@ export async function runHermesFirstCmoChat(input: HermesFirstCmoChatRequestInpu
       appId: input.request.appId,
       rangeKey: input.request.rangeKey,
     });
+    const fallbackCurrentTurnResponseContract = createCurrentTurnResponseContract();
     const fallbackRequest = {
       schema_version: HERMES_FIRST_CMO_CHAT_REQUEST_SCHEMA,
       request_id: `req_hf_cmo_chat_${input.userMessageId}`,
@@ -995,7 +1008,12 @@ export async function runHermesFirstCmoChat(input: HermesFirstCmoChatRequestInpu
       app_id: input.request.appId,
       app_name: input.request.appName,
       user: { user_slug: "unknown_user", auth_mode: "unknown" },
-      intent: { user_message: input.message },
+      intent: {
+        user_message: input.message,
+        latest_user_message_primacy: LATEST_USER_MESSAGE_PRIMACY_RULE,
+        current_turn_instruction: CURRENT_TURN_RESPONSE_INSTRUCTION,
+        current_turn_response_contract: fallbackCurrentTurnResponseContract,
+      },
       messages: [],
       context_pack: {
         session_summary: null,

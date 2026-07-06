@@ -15,6 +15,11 @@ import {
 } from "./hermes-cmo-chat-mapper";
 import { redactSensitiveText } from "./creative-agent";
 import { HERMES_CMO_CHAT_V11_ENDPOINT } from "./hermes-cmo-chat-router";
+import {
+  CURRENT_TURN_RESPONSE_INSTRUCTION,
+  createCurrentTurnResponseContract,
+  type CurrentTurnResponseContract,
+} from "./current-turn-response-contract";
 import { compactLensMeasurementResultForHermesContext, createLensCapabilityContext, type LensCapabilityContext } from "./lens-measurement-result";
 import {
   OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
@@ -107,6 +112,9 @@ export interface HermesCmoChatV11Request {
   email?: string;
   intent: {
     user_message: string;
+    latest_user_message_primacy: string;
+    current_turn_instruction: string;
+    current_turn_response_contract: CurrentTurnResponseContract;
   };
   messages: HermesCmoChatV11Message[];
   context_pack: {
@@ -980,6 +988,7 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
     rangeKey: input.request.rangeKey,
   });
   const lensMeasurementResult = compactLensMeasurementResultForHermesContext(input.contextPackage.lensMeasurementResult);
+  const currentTurnResponseContract = createCurrentTurnResponseContract();
   const artifactsIn = sanitizeHermesCmoChatV11Records([
     ...(Array.isArray(legacyRequest.context_pack.artifacts_in) ? legacyRequest.context_pack.artifacts_in : []),
     ...(input.sessionArtifacts ?? []),
@@ -1012,6 +1021,9 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
     ...(runtimeUser.email ? { email: runtimeUser.email } : {}),
     intent: {
       user_message: input.message,
+      latest_user_message_primacy: LATEST_USER_MESSAGE_PRIMACY_RULE,
+      current_turn_instruction: CURRENT_TURN_RESPONSE_INSTRUCTION,
+      current_turn_response_contract: currentTurnResponseContract,
     },
     messages: sanitizedMessages(input.history, {
       id: input.userMessageId,

@@ -29,6 +29,11 @@ import { compactLensMeasurementResultForHermesContext, createLensCapabilityConte
 import {
   isExplicitCreativeExecutionIntent,
 } from "./app-routing-intent";
+import {
+  CURRENT_TURN_RESPONSE_INSTRUCTION,
+  createCurrentTurnResponseContract,
+} from "./current-turn-response-contract";
+import type { CurrentTurnResponseContract } from "./current-turn-response-contract";
 import type { CmoRuntimeTurnInput } from "@/lib/cmo/runtime";
 import {
   resolveSessionWorkingMemory,
@@ -44,7 +49,7 @@ export const LENS_MEASUREMENT_RESULT_ARTIFACT_KIND = "lens_measurement_result" a
 export const LENS_MEASUREMENT_GROUNDING_RULE =
   "A Lens measurement result may be attached under lens.measurement_result.v1. Use its status, safe_user_message, metrics_summary, and missing_requirements as measurement truth. If status is missing_capability, no_data, or failed, explain the limitation and do not invent metrics." as const;
 export const LATEST_USER_MESSAGE_PRIMACY_RULE =
-  "Always answer the latest user request in intent.user_message. Conversation history and prior assistant messages are supporting context only; do not continue, optimize, or reframe a prior assistant answer unless the latest user explicitly asks to continue it. If intent.user_message asks for drafts, posts, copy, scripts, or content, return the requested content/drafts instead of measurement advice." as const;
+  "Always answer the latest user request in intent.user_message. Conversation history, session summary, Lens context, metric context, and prior assistant messages are background or enrichment only; do not let previous topics replace the current-turn deliverable unless the latest user explicitly asks to continue them." as const;
 
 export const HERMES_CMO_FORBIDDEN_ZERO_COUNTERS = [
   "vaultAgentCalls",
@@ -1019,6 +1024,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     appId: input.request.appId,
     rangeKey: input.request.rangeKey,
   });
+  const currentTurnResponseContract = createCurrentTurnResponseContract();
   const contextGroundingRules = [
     LATEST_USER_MESSAGE_PRIMACY_RULE,
     ...(lensReadoutArtifact ? [LENS_READOUT_GROUNDING_RULE] : []),
@@ -1155,6 +1161,9 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     intent: {
       mode: "cmo.default",
       user_message: input.message,
+      latest_user_message_primacy: LATEST_USER_MESSAGE_PRIMACY_RULE,
+      current_turn_instruction: CURRENT_TURN_RESPONSE_INSTRUCTION,
+      current_turn_response_contract: currentTurnResponseContract as CurrentTurnResponseContract,
       ...(productIntentHint ? { product_intent_hint: productIntentHint } : {}),
       ...(creativeNativeSession ? { creative_session: true } : {}),
       ...(creativeIdeationDetected ? { creative_ideation_detected: true } : {}),

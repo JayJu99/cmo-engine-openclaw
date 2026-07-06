@@ -69,9 +69,54 @@ async function loadOutboundSanitizerHarness() {
   };
 }
 
+async function loadCurrentTurnContractHarness() {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "cmo-current-turn-contract-"));
+  const contractOut = path.join(tmpDir, "current-turn-response-contract.js");
+
+  await transpileTsModule(repoPath("src", "lib", "cmo", "current-turn-response-contract.ts"), contractOut);
+
+  return {
+    tmpDir,
+    contract: createRequire(contractOut)(contractOut),
+  };
+}
+
 function assertNoForbiddenOutboundLiterals(text, message) {
   for (const forbidden of ["/home/", "/Users/", "/tmp/", "file:", ".png", "hermes_local_artifact_path_redacted"]) {
     assert.equal(text.includes(forbidden), false, `${message}: leaked ${forbidden}`);
+  }
+}
+
+async function assertCurrentTurnContractBehavior() {
+  const { tmpDir, contract } = await loadCurrentTurnContractHarness();
+
+  try {
+    const responseContract = contract.createCurrentTurnResponseContract();
+
+    assert.equal(responseContract.schema_version, "cmo.current_turn_response_contract.v1");
+    assert.equal(responseContract.source, "latest_user_message");
+    assert.equal(responseContract.interpretation_owner, "hermes_cmo");
+    assert.equal(responseContract.semantic_task_inference, "infer_from_latest_user_message");
+    assert.equal(responseContract.must_answer_latest_user_message, true);
+    assert.equal(responseContract.latest_user_message_is_deliverable_authority, true);
+    assert.equal(responseContract.context_role, "enrich_only");
+    assert.equal(responseContract.history_role, "background_only");
+    assert.equal(responseContract.session_summary_role, "background_only");
+    assert.equal(responseContract.conflict_resolution.if_latest_message_requests_new_deliverable, "latest_user_message_wins");
+    assert.equal(responseContract.conflict_resolution.previous_topic_must_not_replace_current_deliverable, true);
+    assert.equal(responseContract.conflict_resolution.lens_or_metric_context_must_not_replace_non_metric_deliverable, true);
+    assert.equal(responseContract.deliverable_policy.infer_requested_output_type_semantically, true);
+    assert.equal(responseContract.deliverable_policy.honor_explicit_count_if_present, true);
+    assert.equal(responseContract.deliverable_policy.return_user_visible_artifact_when_requested, true);
+    assert.equal(responseContract.deliverable_policy.ask_clarification_only_if_blocked, true);
+    assert.equal(responseContract.side_effect_policy.no_publish_without_explicit_execution_approval, true);
+    assert.equal(responseContract.side_effect_policy.no_vault_write_without_explicit_save_approval, true);
+    assert.equal(responseContract.side_effect_policy.no_paid_generation_without_explicit_approval, true);
+    assert.match(contract.CURRENT_TURN_RESPONSE_INSTRUCTION, /Infer the requested output semantically from intent\.user_message/);
+    assert.match(contract.CURRENT_TURN_RESPONSE_INSTRUCTION, /Lens or metric context/);
+    assert.match(contract.CURRENT_TURN_RESPONSE_INSTRUCTION, /Ask clarification only when blocked/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
   }
 }
 
@@ -138,6 +183,7 @@ const appStorePath = "src/lib/cmo/app-chat-store.ts";
 const typesPath = "src/lib/cmo/app-workspace-types.ts";
 const runnerPath = "src/lib/cmo/lens-measurement-runner.ts";
 const resultPath = "src/lib/cmo/lens-measurement-result.ts";
+const currentTurnContractPath = "src/lib/cmo/current-turn-response-contract.ts";
 const mapperPath = "src/lib/cmo/hermes-cmo-chat-mapper.ts";
 const firstPath = "src/lib/cmo/hermes-first-cmo-chat.ts";
 const v11Path = "src/lib/cmo/hermes-cmo-chat-v11.ts";
@@ -145,8 +191,17 @@ const runtimePath = "src/lib/cmo/hermes-cmo-runtime.ts";
 const outboundSanitizerPath = "src/lib/cmo/hermes-outbound-payload-sanitizer.ts";
 const runnerCheckPath = "scripts/cmo-lens-measurement-runner-check.mjs";
 
-for (const file of [appStorePath, typesPath, runnerPath, resultPath, mapperPath, firstPath, v11Path, runtimePath, outboundSanitizerPath, runnerCheckPath]) {
+for (const file of [appStorePath, typesPath, runnerPath, resultPath, currentTurnContractPath, mapperPath, firstPath, v11Path, runtimePath, outboundSanitizerPath, runnerCheckPath]) {
   assertFileExists(file, `${file} is missing`);
+}
+
+function assertCurrentTurnIntentContractPlacement(relativePath, message) {
+  assertIncludes(relativePath, "createCurrentTurnResponseContract()", `${message}: must attach generic current-turn contract`);
+  assertMatches(
+    relativePath,
+    /intent:\s*\{[\s\S]{0,180}user_message:\s*input\.message,[\s\S]{0,240}latest_user_message_primacy:\s*LATEST_USER_MESSAGE_PRIMACY_RULE,[\s\S]{0,240}current_turn_instruction:\s*CURRENT_TURN_RESPONSE_INSTRUCTION,[\s\S]{0,240}current_turn_response_contract:\s*currentTurnResponseContract/,
+    `${message}: current-turn response contract must be placed directly near intent.user_message`,
+  );
 }
 
 function assertLatestUserMessagePrimacyUse(relativePath, message) {
@@ -169,16 +224,31 @@ function assertLatestUserMessagePrimacyDefinition(relativePath, message) {
     text.includes("intent.user_message") &&
       text.includes("Conversation history") &&
       text.includes("prior assistant messages") &&
-      text.includes("latest user explicitly asks to continue") &&
-      text.includes("drafts, posts, copy, scripts, or content") &&
-      text.includes("requested content/drafts instead of measurement advice"),
-    `${message}: primacy rule must make latest intent.user_message source of truth and protect content drafting turns`,
+      text.includes("session summary") &&
+      text.includes("Lens context") &&
+      text.includes("current-turn deliverable"),
+    `${message}: primacy rule must make latest intent.user_message source of truth and keep context as enrichment`,
   );
 }
 
 assertLatestUserMessagePrimacyDefinition(mapperPath, "Legacy Hermes mapper");
 assertLatestUserMessagePrimacyDefinition(firstPath, "Hermes-first request");
 assertLatestUserMessagePrimacyUse(v11Path, "Hermes v1.1 request");
+assertCurrentTurnIntentContractPlacement(mapperPath, "Legacy Hermes mapper");
+assertCurrentTurnIntentContractPlacement(firstPath, "Hermes-first request");
+assertCurrentTurnIntentContractPlacement(v11Path, "Hermes v1.1 request");
+assertMatches(
+  firstPath,
+  /fallbackCurrentTurnResponseContract[\s\S]*?intent:\s*\{[\s\S]{0,180}user_message:\s*input\.message,[\s\S]{0,320}current_turn_response_contract:\s*fallbackCurrentTurnResponseContract/,
+  "Hermes-first fallback request must also preserve the current-turn response contract",
+);
+assertIncludes(currentTurnContractPath, "CURRENT_TURN_RESPONSE_CONTRACT_SCHEMA", "Current-turn response contract must have a stable schema");
+assertIncludes(currentTurnContractPath, 'interpretation_owner: "hermes_cmo"', "Current-turn contract must keep semantic interpretation with Hermes CMO");
+assertIncludes(currentTurnContractPath, 'semantic_task_inference: "infer_from_latest_user_message"', "Current-turn contract must require semantic task inference from latest user message");
+assertIncludes(currentTurnContractPath, 'if_latest_message_requests_new_deliverable: "latest_user_message_wins"', "Current-turn contract must make latest user message win for new deliverables");
+assertIncludes(currentTurnContractPath, "lens_or_metric_context_must_not_replace_non_metric_deliverable", "Current-turn contract must stop Lens/metric context from replacing non-metric deliverables");
+assertIncludes(currentTurnContractPath, "honor_explicit_count_if_present", "Current-turn contract must require Hermes to honor explicit counts");
+assertExcludes(currentTurnContractPath, /content_drafting|required_count|bai social|social post|caption|drafting verbs/i, "Current-turn contract must not contain Product-side task hardcodes");
 assertIncludes(
   runnerCheckPath,
   'runner.shouldRunLensMeasurementForMessage("Viết giúp 3 bài social để tăng awareness tuần này"), false',
@@ -269,6 +339,7 @@ assertExcludes(mapperPath, /lens_measurement_result[\s\S]{0,260}\b(access_token|
 assertExcludes(firstPath, /lens_measurement_result[\s\S]{0,260}\b(access_token|refresh_token|encrypted_refresh_token|authorization|headers|cookie|rawGa4Response|raw_ga4_response|answer_body|prompt)\b/i, "Hermes-first Lens measurement path must not expose secrets/raw GA4/prompt/answer");
 assertExcludes(v11Path, /lens_measurement_result[\s\S]{0,260}\b(access_token|refresh_token|encrypted_refresh_token|authorization|headers|cookie|rawGa4Response|raw_ga4_response|answer_body|prompt)\b/i, "Hermes v1.1 Lens measurement path must not expose secrets/raw GA4/prompt/answer");
 
+await assertCurrentTurnContractBehavior();
 await assertOutboundSanitizerBehavior();
 
 console.log("CMO Lens CMO consumption check passed.");
