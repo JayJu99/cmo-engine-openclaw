@@ -29,6 +29,7 @@ import {
   sanitizeOutboundHermesPayload,
   withOutboundHermesPayloadGuardDiagnostics,
 } from "./hermes-outbound-payload-sanitizer";
+import { activeGoalStateForHermesContext } from "./goal-state-transport";
 import { normalizeCmoRuntimeUserIdentity } from "./user-metadata";
 
 const CHAT_REQUEST_SCHEMA = "hermes.cmo.chat.request.v1_1" as const;
@@ -122,6 +123,7 @@ export interface HermesCmoChatV11Request {
     artifacts_in: Record<string, unknown>[];
     vault_context: unknown;
     lens_request_context: LensCapabilityContext;
+    active_goal_state?: Record<string, unknown>;
     lens_measurement_result?: Record<string, unknown>;
   };
   capabilities: {
@@ -988,6 +990,7 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
     rangeKey: input.request.rangeKey,
   });
   const lensMeasurementResult = compactLensMeasurementResultForHermesContext(input.contextPackage.lensMeasurementResult);
+  const activeGoalState = activeGoalStateForHermesContext(input.contextPackage.activeGoalState);
   const currentTurnResponseContract = createCurrentTurnResponseContract();
   const artifactsIn = sanitizeHermesCmoChatV11Records([
     ...(Array.isArray(legacyRequest.context_pack.artifacts_in) ? legacyRequest.context_pack.artifacts_in : []),
@@ -1035,6 +1038,7 @@ export function buildHermesCmoChatV11Request(input: HermesCmoChatV11RequestInput
       artifacts_in: artifactsIn,
       vault_context: input.vaultContext ?? null,
       lens_request_context: lensCapabilityContext,
+      ...(activeGoalState ? { active_goal_state: activeGoalState } : {}),
       ...(lensMeasurementResult ? { lens_measurement_result: lensMeasurementResult as unknown as Record<string, unknown> } : {}),
     },
     capabilities: {

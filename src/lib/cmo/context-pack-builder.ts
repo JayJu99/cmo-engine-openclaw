@@ -1393,6 +1393,7 @@ export async function buildContextPack(options: BuildContextPackOptions): Promis
       ...(runtimeWorkspaceId ? { runtimeWorkspaceId } : {}),
       mode: "app_context",
       contextPack,
+      activeGoalState: null,
       app: {
         id: app.id,
         name: app.name,

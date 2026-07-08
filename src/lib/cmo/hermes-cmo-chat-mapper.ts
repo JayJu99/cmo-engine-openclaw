@@ -38,6 +38,7 @@ import type { CmoRuntimeTurnInput } from "@/lib/cmo/runtime";
 import {
   resolveSessionWorkingMemory,
 } from "./session-working-memory";
+import { activeGoalStateForHermesContext } from "./goal-state-transport";
 
 export const HERMES_CMO_PROPOSALS_ONLY = "proposals_only" as const;
 export const HERMES_CMO_BOUNDED_DELEGATIONS = "echo_surf_bounded" as const;
@@ -1018,6 +1019,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
   const lensReadoutArtifact = lensReadoutContextArtifact(lensReadoutContext);
   const lensMeasurementResult = compactLensMeasurementResultForHermesContext(input.contextPackage.lensMeasurementResult);
   const lensMeasurementArtifact = lensMeasurementResultArtifact(input.contextPackage.lensMeasurementResult);
+  const activeGoalState = activeGoalStateForHermesContext(input.contextPackage.activeGoalState);
   const lensCapabilityContext = createLensCapabilityContext({
     tenantId: input.request.tenantId,
     workspaceId: input.request.workspaceId,
@@ -1253,6 +1255,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       indexed_context_supplement: indexedContextSupplement,
       artifacts_in: [vaultContextPack, ...sessionLocalSources, ...sessionLocalResearchResults, sourceAnswerContext, lensReadoutArtifact, lensMeasurementArtifact].filter((artifact): artifact is Record<string, unknown> => Boolean(artifact)),
       lens_request_context: lensCapabilityContext,
+      ...(activeGoalState ? { active_goal_state: activeGoalState } : {}),
       ...(input.contextPackage.activeSourceId ? { active_source_id: input.contextPackage.activeSourceId } : {}),
       ...(sourceReviewContext ? { source_review_context: sourceReviewContext } : {}),
       ...(sourceAnswerContext ? { source_answer_context: sourceAnswerContext } : {}),

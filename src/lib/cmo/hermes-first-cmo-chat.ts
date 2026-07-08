@@ -36,6 +36,7 @@ import {
   sanitizeOutboundHermesPayload,
   withOutboundHermesPayloadGuardDiagnostics,
 } from "@/lib/cmo/hermes-outbound-payload-sanitizer";
+import { activeGoalStateForHermesContext } from "@/lib/cmo/goal-state-transport";
 import { normalizeCmoRuntimeUserIdentity, type CmoServerUserIdentity } from "@/lib/cmo/user-metadata";
 
 export const HERMES_FIRST_CMO_CHAT_ENDPOINT = "/agents/cmo/chat" as const;
@@ -115,6 +116,7 @@ export interface HermesFirstCmoChatRequest {
     artifacts_in: Record<string, unknown>[];
     vault_context: unknown;
     lens_request_context: LensCapabilityContext;
+    active_goal_state?: Record<string, unknown>;
     lens_readout_context?: Record<string, unknown>;
     lens_measurement_result?: Record<string, unknown>;
   };
@@ -689,6 +691,7 @@ export function buildHermesFirstCmoChatRequest(input: HermesFirstCmoChatRequestI
     rangeKey: input.request.rangeKey,
   });
   const lensMeasurementResult = compactLensMeasurementResultForHermesContext(input.contextPackage.lensMeasurementResult);
+  const activeGoalState = activeGoalStateForHermesContext(input.contextPackage.activeGoalState);
   const currentTurnResponseContract = createCurrentTurnResponseContract();
   const requestBody: HermesFirstCmoChatRequest = {
     schema_version: HERMES_FIRST_CMO_CHAT_REQUEST_SCHEMA,
@@ -720,6 +723,7 @@ export function buildHermesFirstCmoChatRequest(input: HermesFirstCmoChatRequestI
       artifacts_in: artifactInputs(input),
       vault_context: input.vaultContext ?? null,
       lens_request_context: lensCapabilityContext,
+      ...(activeGoalState ? { active_goal_state: activeGoalState } : {}),
       ...(isRecord(input.contextPackage.lensReadoutContext) ? { lens_readout_context: input.contextPackage.lensReadoutContext } : {}),
       ...(lensMeasurementResult ? { lens_measurement_result: lensMeasurementResult as unknown as Record<string, unknown> } : {}),
     },

@@ -1,4 +1,5 @@
 import type { LensCapabilityContext, LensMeasurementResult } from "@/lib/cmo/lens-measurement-result";
+import type { CmoGoalV1 } from "@/lib/cmo/goal-state";
 
 export type VaultNoteType = "app-note" | "daily-note" | "raw-capture";
 export type CmoAuthMode = "supabase" | "legacy";
@@ -1333,6 +1334,7 @@ export interface CMOContextPackage {
   lensReadoutContext?: Record<string, unknown>;
   lensReadoutContextWarning?: string;
   lensRequestContext?: LensCapabilityContext;
+  activeGoalState?: CmoGoalV1 | null;
   sessionLocalSources?: CmoSessionLocalSource[];
   sessionLocalResearchResults?: CmoSessionLocalResearchResult[];
   activeSourceId?: string;
