@@ -110,8 +110,10 @@ import {
   sanitizeHermesCmoChatV11Records,
   writeHermesCmoChatV11FallbackTrace,
 } from "@/lib/cmo/hermes-cmo-chat-v11";
+import { maybeCreateCmoGoalWorkflowSmokeResponse } from "@/lib/cmo/goal-workflow-smoke";
 import { OUTBOUND_HERMES_CALLSITE_GUARD_VERSION } from "@/lib/cmo/hermes-outbound-payload-sanitizer";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
+import type { CmoScopedApprovalV1 } from "@/lib/cmo/scoped-approval";
 import { FallbackRuntime, getRuntimeRegistry, type CmoRuntime } from "@/lib/cmo/runtime";
 import {
   getCmoHermesApiKey,
@@ -4300,6 +4302,31 @@ export async function createAppChatSession(
   const assistantId = `msg_${randomUUID().slice(0, 12)}`;
   const cmoRunId = `run_${randomUUID().slice(0, 12)}`;
   const sessionId = continuedSession?.id ?? `session_${safeId(request.workspaceId)}_${now.replace(/[-:.TZ]/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
+  const activeGoalState = continuedSession?.sessionArtifacts?.find((artifact) =>
+    isRecord(artifact) && artifact.contract === "cmo.goal.v1",
+  ) ?? null;
+  const scopedApprovalRequests = (continuedSession?.approvalRequests ?? [])
+    .filter((approval) => isRecord(approval) && approval.contract === "cmo.scoped_approval.v1") as unknown as CmoScopedApprovalV1[];
+  const goalWorkflowSmokeResponse = maybeCreateCmoGoalWorkflowSmokeResponse({
+    message: request.message,
+    workspaceId: request.workspaceId,
+    appId: request.appId,
+    sessionId,
+    userId: sourceReviewUserId(userIdentity),
+    now,
+    activeGoalState,
+    approvals: scopedApprovalRequests.length ? scopedApprovalRequests : null,
+  });
+
+  if (goalWorkflowSmokeResponse) {
+    return {
+      messageId: assistantId,
+      contextUsed: [],
+      missingContext: [],
+      ...goalWorkflowSmokeResponse,
+    };
+  }
+
   const turnAttachments = bindCmoAttachmentsToTurn({
     attachments: request.attachments ?? [],
     sessionId,
