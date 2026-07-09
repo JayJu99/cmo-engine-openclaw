@@ -14,6 +14,8 @@ import {
 import { assembleCmoWeeklyGoalPlan } from "@/lib/cmo/weekly-goal-plan";
 
 export type CmoGoalWorkflowSmokeKind = "weekly_goal_plan" | "publisher_preflight";
+export const CMO_GOAL_WORKFLOW_SMOKE_METADATA_CONTRACT =
+  "cmo.goal_workflow_smoke_metadata.v1" as const;
 
 export interface CmoGoalWorkflowSmokeInput {
   message: string;
@@ -47,6 +49,7 @@ const DEFAULT_SESSION_ID = "session_smoke";
 const DEFAULT_USER_ID = "user_smoke";
 const DEFAULT_NOW = "2026-07-08T00:00:00.000Z";
 const SMOKE_RUNTIME_LABEL = "CMO goal workflow smoke";
+const GOAL_WORKFLOW_TRIGGER = "/goal";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -88,6 +91,18 @@ function normalizeMessage(message: string): string {
     .replace(/[^a-z0-9%]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function cmoGoalWorkflowSmokeCommandText(message: string): string | null {
+  const trimmed = message.trim();
+
+  if (!/^\/goal(?:\s|$)/i.test(trimmed)) {
+    return null;
+  }
+
+  const commandText = trimmed.replace(/^\/goal(?:\s+|$)/i, "").trim();
+
+  return commandText || null;
 }
 
 function hasWord(normalized: string, word: string): boolean {
@@ -138,7 +153,13 @@ function isCmoGoal(value: unknown): value is CmoGoalV1 {
 }
 
 export function isCmoGoalWorkflowSmokeRequest(message: string): boolean {
-  const normalized = normalizeMessage(message);
+  const commandText = cmoGoalWorkflowSmokeCommandText(message);
+
+  if (!commandText) {
+    return false;
+  }
+
+  const normalized = normalizeMessage(commandText);
   const hasWeeklyWindow = normalized.includes("this week") ||
     normalized.includes("weekly") ||
     normalized.includes("tuan nay");
@@ -156,7 +177,13 @@ export function isCmoGoalWorkflowSmokeRequest(message: string): boolean {
 export function publisherPreflightSmokeActionType(
   message: string,
 ): CmoPublisherExecutionPreflightActionTypeV1 | null {
-  const normalized = normalizeMessage(message);
+  const commandText = cmoGoalWorkflowSmokeCommandText(message);
+
+  if (!commandText) {
+    return null;
+  }
+
+  const normalized = normalizeMessage(commandText);
   const tokenCount = normalized ? normalized.split(" ").length : 0;
 
   if (!normalized || tokenCount > 8) {
@@ -294,11 +321,34 @@ function approvalRequestForUi(artifacts: CmoGoalWorkflowSmokeArtifacts): Record<
   };
 }
 
+function smokeMetadataArtifact(input: {
+  kind: CmoGoalWorkflowSmokeKind;
+  commandText: string;
+}): Record<string, unknown> {
+  return {
+    contract: CMO_GOAL_WORKFLOW_SMOKE_METADATA_CONTRACT,
+    goal_workflow_smoke: true,
+    goal_workflow_trigger: GOAL_WORKFLOW_TRIGGER,
+    smoke_kind: input.kind,
+    command_text: input.commandText,
+    native_cmo_chat_for_non_goal_messages: true,
+    no_external_api_calls: true,
+    no_connector_calls: true,
+    no_publisher_calls: true,
+    no_execution: true,
+    no_publish: true,
+    no_schedule: true,
+    no_separate_goal_state_save: true,
+  };
+}
+
 export function createCmoGoalWorkflowSmokeMarkdown(artifacts: CmoGoalWorkflowSmokeArtifacts): string {
   const baselineLabel = baselineVisibilityLabel(artifacts.baselineTarget);
 
   return [
     `# ${artifacts.weeklyPlan.plan_summary.user_visible_title}`,
+    "",
+    "This is the `/goal` weekly campaign workflow. Native CMO chat remains available by sending normal messages without `/goal`.",
     "",
     artifacts.weeklyPlan.plan_summary.user_visible_body,
     "",
@@ -308,6 +358,7 @@ export function createCmoGoalWorkflowSmokeMarkdown(artifacts: CmoGoalWorkflowSmo
     "- Artifact: `cmo.goal_baseline_target.v1`",
     "- Artifact: `cmo.weekly_goal_plan.v1`",
     "- Approval request: `cmo.scoped_approval.v1` with `plan` scope",
+    "- Scope: plan/draft/preflight only.",
     `- Baseline label: ${baselineLabel}. No real baseline is claimed unless the baseline artifact marks a real measurement.`,
     "- Approval boundary: plan approval is separate from execution, publish, schedule, and paid generation approval.",
     "- Side effects: no publish, schedule, execution, connector, database, file, or external API call is performed by this smoke path.",
@@ -336,6 +387,7 @@ function baseSmokeResponse(input: CmoGoalWorkflowSmokeInput): Omit<
 
 function createWeeklyGoalSmokeResponse(input: CmoGoalWorkflowSmokeInput): CmoGoalWorkflowSmokeResponse {
   const artifacts = createCmoGoalWorkflowSmokeArtifacts(input);
+  const commandText = cmoGoalWorkflowSmokeCommandText(input.message) ?? input.message;
 
   return {
     ...baseSmokeResponse(input),
@@ -353,6 +405,7 @@ function createWeeklyGoalSmokeResponse(input: CmoGoalWorkflowSmokeInput): CmoGoa
       artifacts.weeklyPlan as unknown as Record<string, unknown>,
       artifacts.planApproval as unknown as Record<string, unknown>,
       artifacts.approvalMetadata as unknown as Record<string, unknown>,
+      smokeMetadataArtifact({ kind: "weekly_goal_plan", commandText }),
     ],
     approvalRequests: [approvalRequestForUi(artifacts)],
   };
@@ -363,6 +416,7 @@ function createPublisherPreflightSmokeResponse(
   actionType: CmoPublisherExecutionPreflightActionTypeV1,
 ): CmoGoalWorkflowSmokeResponse {
   const activeGoal = isCmoGoal(input.activeGoalState) ? input.activeGoalState : null;
+  const commandText = cmoGoalWorkflowSmokeCommandText(input.message) ?? input.message;
   const workspaceId = safeString(input.workspaceId ?? activeGoal?.workspace_id, DEFAULT_WORKSPACE_ID, 120);
   const appId = safeString(input.appId ?? activeGoal?.app_id, DEFAULT_APP_ID, 120);
   const sessionId = safeString(input.sessionId ?? activeGoal?.session_id, DEFAULT_SESSION_ID, 140);
@@ -401,6 +455,8 @@ function createPublisherPreflightSmokeResponse(
       "",
       `Missing scopes: ${missingScopes}.`,
       "",
+      "This is the `/goal` publisher preflight smoke path. Native CMO chat remains available by sending normal messages without `/goal`.",
+      "",
       "This is dry-run only. Product did not publish, schedule, execute, call Publisher, call connectors, write a runtime database row, write a runtime file, or create an executable job object.",
       "",
       "Artifact: `cmo.publisher_execution_preflight.v1`.",
@@ -411,7 +467,10 @@ function createPublisherPreflightSmokeResponse(
         label: "Request explicit scoped approval before publisher action.",
       },
     ],
-    sessionArtifacts: [preflight as unknown as Record<string, unknown>],
+    sessionArtifacts: [
+      preflight as unknown as Record<string, unknown>,
+      smokeMetadataArtifact({ kind: "publisher_preflight", commandText }),
+    ],
     approvalRequests: [],
   };
 }
@@ -419,14 +478,25 @@ function createPublisherPreflightSmokeResponse(
 export function maybeCreateCmoGoalWorkflowSmokeResponse(
   input: CmoGoalWorkflowSmokeInput,
 ): CmoGoalWorkflowSmokeResponse | null {
+  const commandText = cmoGoalWorkflowSmokeCommandText(input.message);
+
+  if (!commandText) {
+    return null;
+  }
+
+  const commandInput = {
+    ...input,
+    message: commandText,
+  };
+
   if (isCmoGoalWorkflowSmokeRequest(input.message)) {
-    return createWeeklyGoalSmokeResponse(input);
+    return createWeeklyGoalSmokeResponse(commandInput);
   }
 
   const actionType = publisherPreflightSmokeActionType(input.message);
 
   if (actionType) {
-    return createPublisherPreflightSmokeResponse(input, actionType);
+    return createPublisherPreflightSmokeResponse(commandInput, actionType);
   }
 
   return null;

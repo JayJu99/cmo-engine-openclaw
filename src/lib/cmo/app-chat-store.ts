@@ -4319,11 +4319,93 @@ export async function createAppChatSession(
   });
 
   if (goalWorkflowSmokeResponse) {
+    const smokeTotalDurationMs = Date.now() - requestStartedMs;
+    const smokeTimingMetadata = {
+      requestReceivedAt,
+      ...(typeof timing.authDurationMs === "number" ? { authDurationMs: Math.max(0, Math.floor(timing.authDurationMs)) } : {}),
+      sessionResolutionDurationMs,
+      totalDurationMs: smokeTotalDurationMs,
+    };
+    const smokeSessionArtifacts = goalWorkflowSmokeResponse.sessionArtifacts ?? [];
+    const smokeApprovalRequests = goalWorkflowSmokeResponse.approvalRequests ?? [];
+    const smokeUserMessage: CMOChatMessage = {
+      id: messageId,
+      role: "user",
+      content: request.message,
+      createdAt: now,
+      ...messageUserMetadata(userIdentity),
+      ...(smokeSessionArtifacts.length ? { sessionArtifacts: smokeSessionArtifacts } : {}),
+      ...(smokeApprovalRequests.length ? { approvalRequests: smokeApprovalRequests } : {}),
+      ...smokeTimingMetadata,
+    };
+    const smokeAssistantMessage: CMOChatMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: goalWorkflowSmokeResponse.answer,
+      createdAt: now,
+      ...assistantSourceMetadata(userIdentity, messageId),
+      runtimeMode: goalWorkflowSmokeResponse.runtimeMode,
+      runtimeStatus: goalWorkflowSmokeResponse.runtimeStatus,
+      runtimeProvider: goalWorkflowSmokeResponse.runtimeProvider,
+      runtimeAgent: goalWorkflowSmokeResponse.runtimeAgent,
+      runtimeContext: undefined,
+      hermesRequestSent: false,
+      calledHermesCmo: false,
+      contextUsedCount: 0,
+      ...(smokeSessionArtifacts.length ? { sessionArtifacts: smokeSessionArtifacts } : {}),
+      ...(smokeApprovalRequests.length ? { approvalRequests: smokeApprovalRequests } : {}),
+      ...smokeTimingMetadata,
+    };
+    const smokeSession: CMOChatSession = {
+      id: sessionId,
+      appId: request.appId,
+      app_id: request.appId,
+      workspaceId: request.workspaceId,
+      workspace_id: request.workspaceId,
+      appName: request.appName,
+      topic: continuedSession?.topic || request.topic || request.message.slice(0, 96),
+      authMode: continuedSession?.authMode ?? userIdentity.authMode,
+      userId: continuedSession?.userId ?? userIdentity.userId,
+      userEmail: continuedSession?.userEmail ?? userIdentity.userEmail,
+      userDisplayName: continuedSession?.userDisplayName ?? userIdentity.userDisplayName,
+      userSlug: continuedSession?.userSlug ?? userIdentity.userSlug,
+      organizationId: continuedSession?.organizationId ?? userIdentity.organizationId,
+      createdByUserId: continuedSession?.createdByUserId ?? userIdentity.createdByUserId,
+      createdByEmail: continuedSession?.createdByEmail ?? userIdentity.createdByEmail,
+      messages: [
+        ...(continuedSession?.messages ?? []),
+        smokeUserMessage,
+        smokeAssistantMessage,
+      ],
+      contextUsed: continuedSession?.contextUsed ?? [],
+      missingContext: continuedSession?.missingContext ?? [],
+      status: "completed",
+      createdAt: continuedSession?.createdAt ?? now,
+      updatedAt: now,
+      assumptions: goalWorkflowSmokeResponse.assumptions,
+      suggestedActions: goalWorkflowSmokeResponse.suggestedActions,
+      isDevelopmentFallback: goalWorkflowSmokeResponse.isDevelopmentFallback,
+      isRuntimeFallback: goalWorkflowSmokeResponse.isRuntimeFallback,
+      runtimeStatus: goalWorkflowSmokeResponse.runtimeStatus,
+      runtimeMode: goalWorkflowSmokeResponse.runtimeMode,
+      runtimeLabel: goalWorkflowSmokeResponse.runtimeLabel,
+      runtimeProvider: goalWorkflowSmokeResponse.runtimeProvider,
+      runtimeAgent: goalWorkflowSmokeResponse.runtimeAgent,
+      hermesRequestSent: false,
+      calledHermesCmo: false,
+      ...(smokeSessionArtifacts.length ? { sessionArtifacts: smokeSessionArtifacts } : {}),
+      ...(smokeApprovalRequests.length ? { approvalRequests: smokeApprovalRequests } : {}),
+      ...smokeTimingMetadata,
+    };
+
+    await writeJsonFile(sessionPath(sessionId), smokeSession);
+
     return {
       messageId: assistantId,
-      contextUsed: [],
-      missingContext: [],
+      contextUsed: smokeSession.contextUsed,
+      missingContext: smokeSession.missingContext ?? [],
       ...goalWorkflowSmokeResponse,
+      ...smokeTimingMetadata,
     };
   }
 

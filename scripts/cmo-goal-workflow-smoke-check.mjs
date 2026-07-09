@@ -141,6 +141,11 @@ assertIncludes(
 );
 assertIncludes(
   "src/lib/cmo/goal-workflow-smoke.ts",
+  "export function cmoGoalWorkflowSmokeCommandText",
+  "Smoke helper must export /goal command text parser",
+);
+assertIncludes(
+  "src/lib/cmo/goal-workflow-smoke.ts",
   "export function isCmoGoalWorkflowSmokeRequest",
   "Smoke helper must export weekly goal detector",
 );
@@ -156,7 +161,10 @@ assertExcludes("src/lib/cmo/goal-workflow-smoke.ts", /\bPublisher\b.*\(/, "Smoke
 
 const appChatSource = source("src/lib/cmo/app-chat-store.ts");
 const smokeCallIndex = appChatSource.indexOf("maybeCreateCmoGoalWorkflowSmokeResponse({");
+const smokeWriteIndex = appChatSource.indexOf("await writeJsonFile(sessionPath(sessionId), smokeSession);");
 assert.notEqual(smokeCallIndex, -1, "createAppChatSession must call smoke helper");
+assert.notEqual(smokeWriteIndex, -1, "Smoke branch must persist through app-chat session store");
+assert.ok(smokeCallIndex < smokeWriteIndex, "Smoke branch should create response before writing smoke session");
 for (const marker of [
   "const turnAttachments = bindCmoAttachmentsToTurn",
   "await buildContextPack({",
@@ -170,12 +178,22 @@ for (const marker of [
   const index = appChatSource.indexOf(marker);
   assert.ok(index === -1 || smokeCallIndex < index, `Smoke helper must run before ${marker}`);
 }
+assert.ok(
+  smokeWriteIndex < appChatSource.indexOf("const turnAttachments = bindCmoAttachmentsToTurn"),
+  "Smoke session write must happen before attachment/context/runtime work",
+);
+assert.ok(
+  appChatSource.indexOf("const smokeAssistantMessage: CMOChatMessage") !== -1 &&
+    appChatSource.indexOf("content: goalWorkflowSmokeResponse.answer") !== -1 &&
+    appChatSource.indexOf("sessionArtifacts: smokeSessionArtifacts") !== -1,
+  "Smoke branch must persist assistant body and artifacts in message shape",
+);
 
 const { tmpDir, smoke } = await loadHarness();
 
 try {
   const input = {
-    message: "increase social traffic this week",
+    message: "/goal increase social traffic this week",
     workspaceId: "workspace_1",
     appId: "app_1",
     sessionId: "session_1",
@@ -186,16 +204,26 @@ try {
   const weeklyAgain = smoke.maybeCreateCmoGoalWorkflowSmokeResponse(input);
   const vietnameseWeekly = smoke.maybeCreateCmoGoalWorkflowSmokeResponse({
     ...input,
+    message: "/goal Tu\u1ea7n n\u00e0y t\u0103ng traffic social 30%",
+  });
+  const unprefixedWeekly = smoke.maybeCreateCmoGoalWorkflowSmokeResponse({
+    ...input,
     message: "Tu\u1ea7n n\u00e0y t\u0103ng traffic social 30%",
   });
 
   assert.ok(weekly, "Weekly smoke request should return a response");
   assert.ok(vietnameseWeekly, "Vietnamese weekly goal smoke phrase should return a response");
   assert.equal(vietnameseWeekly.smokeKind, "weekly_goal_plan", "Vietnamese weekly goal phrase should use weekly smoke kind");
+  assert.equal(unprefixedWeekly, null, "Unprefixed weekly goal-like text must not trigger smoke helper");
   assert.deepEqual(weeklyAgain, weekly, "Smoke output should be deterministic when inputs are supplied");
   assert.equal(weekly.status, "completed", "Weekly smoke should complete synchronously");
   assert.equal(weekly.smokeKind, "weekly_goal_plan", "Weekly smoke kind should be explicit");
+  assert.equal(weekly.runtimeProvider, "product", "Smoke response should use product runtime provider");
+  assert.equal(weekly.runtimeAgent, "goal-workflow-smoke", "Smoke response should use goal-workflow-smoke agent");
+  assert.equal(typeof weekly.answer, "string", "Smoke response should expose assistant markdown answer");
   assert.match(weekly.answer, /weekly plan/i, "Weekly body should include a plan summary");
+  assert.match(weekly.answer, /`?\/goal`? weekly campaign workflow/i, "Weekly body should identify /goal workflow");
+  assert.match(weekly.answer, /Native CMO chat remains available/i, "Weekly body should state native chat remains available without /goal");
   assert.match(weekly.answer, /plan approval is separate from execution, publish, schedule, and paid generation/i, "Weekly body should state scoped approval separation");
   assert.match(weekly.answer, /Baseline label: (missing|manual|estimated|real)/i, "Weekly body should include visible baseline label");
   assert.match(weekly.answer, /No real baseline is claimed/i, "Weekly body should state no real baseline is claimed");
@@ -205,13 +233,18 @@ try {
   assert.ok(weeklyContracts.has("cmo.goal_baseline_target.v1"), "Expected cmo.goal_baseline_target.v1 artifact");
   assert.ok(weeklyContracts.has("cmo.weekly_goal_plan.v1"), "Expected cmo.weekly_goal_plan.v1 artifact");
   assert.ok(weeklyContracts.has("cmo.scoped_approval.v1"), "Expected cmo.scoped_approval.v1 artifact");
+  assert.ok(weeklyContracts.has("cmo.goal_workflow_smoke_metadata.v1"), "Expected smoke metadata artifact");
+  assert.ok(
+    weekly.sessionArtifacts.some((item) => item.goal_workflow_smoke === true && item.goal_workflow_trigger === "/goal"),
+    "Expected persisted metadata for goal_workflow_smoke and /goal trigger",
+  );
   assert.ok(weekly.approvalRequests?.some((request) => request.contract === "cmo.scoped_approval.v1" && request.kind === "plan"), "Expected UI-compatible plan approval request");
   assert.match(String(weekly.approvalRequests?.[0]?.side_effect_if_approved ?? ""), /does not permit execution, publish, schedule, paid generation/i, "Approval request should state limited scope");
   assertNoRealBaselineFabricated(weekly);
   assertNoExecutableJobFields(weekly, "weekly");
 
   const publish = smoke.maybeCreateCmoGoalWorkflowSmokeResponse({
-    message: "publish",
+    message: "/goal publish luon",
     workspaceId: "workspace_1",
     appId: "app_1",
     sessionId: "session_1",
@@ -236,14 +269,22 @@ try {
 
   const vietnamesePublish = smoke.maybeCreateCmoGoalWorkflowSmokeResponse({
     ...input,
-    message: "\u0111\u0103ng lu\u00f4n",
+    message: "/goal \u0111\u0103ng lu\u00f4n",
   });
   const vietnamesePublishPreflight = artifact(vietnamesePublish, "cmo.publisher_execution_preflight.v1");
   assert.deepEqual(vietnamesePublishPreflight.approval_check?.missing_scopes, ["execution", "publish"], "Vietnamese publish smoke should require execution and publish scopes");
+  assert.equal(smoke.maybeCreateCmoGoalWorkflowSmokeResponse({
+    ...input,
+    message: "publish luon",
+  }), null, "Unprefixed publish must not trigger smoke preflight");
+  assert.equal(smoke.maybeCreateCmoGoalWorkflowSmokeResponse({
+    ...input,
+    message: "\u0111\u0103ng lu\u00f4n",
+  }), null, "Unprefixed Vietnamese publish must not trigger smoke preflight");
 
   const schedule = smoke.maybeCreateCmoGoalWorkflowSmokeResponse({
     ...input,
-    message: "len lich",
+    message: "/goal schedule",
   });
   const schedulePreflight = artifact(schedule, "cmo.publisher_execution_preflight.v1");
   assert.deepEqual(schedulePreflight.approval_check?.missing_scopes, ["execution", "schedule"], "Schedule smoke should require execution and schedule scopes");
@@ -253,6 +294,14 @@ try {
     message: "hello, what should this app focus on?",
   });
   assert.equal(normal, null, "Normal unrelated chat should not trigger smoke helper");
+  assert.equal(smoke.maybeCreateCmoGoalWorkflowSmokeResponse({
+    ...input,
+    message: "Hi",
+  }), null, "Hi should not trigger smoke helper");
+  assert.equal(smoke.maybeCreateCmoGoalWorkflowSmokeResponse({
+    ...input,
+    message: "Vi\u1ebft gi\u00fap m\u00ecnh 3 caption ng\u1eafn cho campaign n\u00e0y",
+  }), null, "Native creative caption request should not trigger smoke helper");
 
   console.log(JSON.stringify({
     ok: true,
