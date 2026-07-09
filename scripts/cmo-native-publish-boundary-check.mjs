@@ -73,6 +73,150 @@ async function loadHarness() {
   };
 }
 
+function contextPack(unsafeContext = false) {
+  return {
+    items: [
+      {
+        exists: true,
+        kind: "note",
+        title: "Campaign context",
+        content: unsafeContext
+          ? "Creative artifact path file:/home/admin/campaigns/publish-now.png_redact and token sk-proj-testunsafe123456789012345 should not leave Product."
+          : "Safe campaign context for native CMO.",
+        source: {
+          sourceId: "source_campaign",
+          type: "vault_note",
+          label: "Campaign context",
+        },
+        contextQuality: "context_hint",
+        inclusionReason: "test_context",
+        truncated: false,
+      },
+    ],
+  };
+}
+
+function inputFor(message, options = {}) {
+  const pack = contextPack(options.unsafeContext === true);
+
+  return {
+    contextPack: pack,
+    contextPackage: {
+      contextPack: pack,
+      lensMeasurementResult: null,
+      lensReadoutContext: null,
+      activeGoalState: null,
+    },
+    message,
+    history: [],
+    request: {
+      tenantId: "tenant_test",
+      workspaceId: "workspace_test",
+      appId: "app_test",
+      appName: "OpenClaw",
+      message,
+      rangeKey: "this_week",
+    },
+    contextUsed: [],
+    missingContext: [],
+    sessionId: "session_test",
+    userMessageId: `msg_${options.id ?? "native"}`,
+    createdAt: "2026-07-09T00:00:00.000Z",
+    userIdentity: {
+      authMode: "legacy",
+      userId: "user_test",
+      userSlug: "user-test",
+    },
+  };
+}
+
+function hermesResponseFor(request, answerBody) {
+  return {
+    schema_version: "hermes.cmo.chat.response.v1_1",
+    request_id: request.request_id,
+    session_id: request.session_id,
+    turn_id: request.turn_id,
+    mode: "cmo.chat",
+    status: "completed",
+    answer: {
+      body: answerBody,
+      format: "markdown",
+    },
+    activity_events: [
+      {
+        event_id: `${request.request_id}_completed`,
+        type: "run.completed",
+        status: "completed",
+        message: "Native CMO answered.",
+        user_visible: false,
+        source_agent: "cmo",
+        sourceMode: "cmo.default",
+      },
+    ],
+    delegation_summary: [],
+    agents_used: ["cmo"],
+    artifacts_out: [],
+    approval_requests: [],
+    suggested_vault_updates: [],
+    side_effects: {
+      publish: false,
+      schedule: false,
+      execute: false,
+      paid_generation: false,
+    },
+    metadata: {
+      agents_used: ["cmo"],
+      delegations_mode: "proposals_only",
+    },
+  };
+}
+
+async function runWithMockHermes(hermesFirst, input, answerBody) {
+  const calls = [];
+  const previousFetch = globalThis.fetch;
+  const previousBaseUrl = process.env.CMO_HERMES_BASE_URL;
+  const previousApiKey = process.env.CMO_HERMES_API_KEY;
+  const previousTimeout = process.env.CMO_HERMES_TIMEOUT_MS;
+
+  process.env.CMO_HERMES_BASE_URL = "https://hermes.invalid";
+  process.env.CMO_HERMES_API_KEY = "test_api_key";
+  process.env.CMO_HERMES_TIMEOUT_MS = "30000";
+
+  globalThis.fetch = async (url, init) => {
+    const bodyText = String(init?.body ?? "");
+    const body = JSON.parse(bodyText);
+    calls.push({ url: String(url), bodyText, body });
+
+    return new Response(JSON.stringify(hermesResponseFor(body, answerBody)), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  try {
+    const run = await hermesFirst.runHermesFirstCmoChat(input);
+    assert.equal(run.ok, true, `${input.message}: expected native Hermes CMO request to succeed`);
+    assert.equal(calls.length, 1, `${input.message}: expected exactly one Hermes fetch`);
+
+    const mapped = hermesFirst.mapHermesFirstCmoChatToAppChat({
+      request: run.request,
+      response: run.response,
+      liveAttemptStartedAt: run.liveAttemptStartedAt,
+      liveAttemptDurationMs: run.liveAttemptDurationMs,
+    });
+
+    return { calls, run, mapped };
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousBaseUrl === undefined) delete process.env.CMO_HERMES_BASE_URL;
+    else process.env.CMO_HERMES_BASE_URL = previousBaseUrl;
+    if (previousApiKey === undefined) delete process.env.CMO_HERMES_API_KEY;
+    else process.env.CMO_HERMES_API_KEY = previousApiKey;
+    if (previousTimeout === undefined) delete process.env.CMO_HERMES_TIMEOUT_MS;
+    else process.env.CMO_HERMES_TIMEOUT_MS = previousTimeout;
+  }
+}
+
 function requestFor(message) {
   return {
     request_id: "req_hf_cmo_chat_msg_publish",
@@ -101,57 +245,91 @@ function blockedFailure(message) {
   };
 }
 
+function assertNoProductPublishPreflight(value, label) {
+  assert.doesNotMatch(JSON.stringify(value), /cmo\.publisher_execution_preflight\.v1/, `${label}: must not emit publisher preflight`);
+}
+
+function assertNoUnsafeLeak(value, label) {
+  assert.doesNotMatch(String(value), /file:|\/home\/|\.png_redact|sk-proj-/i, `${label}: must not leak local path, raw artifact suffix, or secret shape`);
+}
+
+function assertNativeMappedResponse(mapped, expectedAnswer, label) {
+  assert.equal(mapped.status, "completed", `${label}: expected completed native CMO response`);
+  assert.equal(mapped.answer, expectedAnswer, `${label}: Product must render Hermes CMO answer verbatim`);
+  assert.equal(mapped.runtimeProvider, "hermes", `${label}: response must be Hermes-owned`);
+  assert.equal(mapped.runtimeAgent, "cmo", `${label}: response must be CMO-owned`);
+  assert.equal(mapped.productRenderSource, "hermes_cmo", `${label}: response must render as native Hermes CMO`);
+  assert.equal(mapped.calledHermesCmo, true, `${label}: must call native CMO`);
+  assert.equal(mapped.hermesRequestSent, true, `${label}: must send Hermes request`);
+  assertNoProductPublishPreflight(mapped, label);
+}
+
 const { tmpDir, hermesFirst } = await loadHarness();
 
 try {
-  const nativePublish = hermesFirst.hermesFirstBoundaryFailureResponse({
+  const nativePublish = await runWithMockHermes(
+    hermesFirst,
+    inputFor("publish luon", { unsafeContext: true, id: "publish" }),
+    "Native CMO handled the publish request without Product-authored publish clarification.",
+  );
+  assertNativeMappedResponse(nativePublish.mapped, "Native CMO handled the publish request without Product-authored publish clarification.", "normal publish");
+  assert.equal(nativePublish.calls[0].body.intent.user_message, "publish luon", "normal publish: user message must reach Hermes intent");
+  assert.equal(nativePublish.calls[0].body.outbound_hermes_payload_guard.outbound_hermes_payload_sanitized, true, "normal publish: unsafe context should be scrubbed");
+  assert.equal(nativePublish.calls[0].body.outbound_hermes_payload_guard.outbound_hermes_payload_path_like_blocked, false, "normal publish: scrubbed context must not block request");
+  assertNoUnsafeLeak(nativePublish.calls[0].bodyText, "normal publish outbound body");
+  assertNoUnsafeLeak(nativePublish.mapped.answer, "normal publish user answer");
+
+  const vietnamesePublish = await runWithMockHermes(
+    hermesFirst,
+    inputFor("\u0111\u0103ng lu\u00f4n", { unsafeContext: true, id: "publish_vn" }),
+    "Native CMO handled the Vietnamese publish request.",
+  );
+  assertNativeMappedResponse(vietnamesePublish.mapped, "Native CMO handled the Vietnamese publish request.", "normal Vietnamese publish");
+  assert.equal(vietnamesePublish.calls[0].body.intent.user_message, "\u0111\u0103ng lu\u00f4n", "normal Vietnamese publish: user message must reach Hermes intent");
+  assertNoUnsafeLeak(vietnamesePublish.calls[0].bodyText, "normal Vietnamese publish outbound body");
+
+  const traffic = await runWithMockHermes(
+    hermesFirst,
+    inputFor("Tu\u1ea7n n\u00e0y n\u00ean l\u00e0m g\u00ec \u0111\u1ec3 t\u0103ng traffic?", { id: "traffic" }),
+    "Native CMO handled the traffic strategy request.",
+  );
+  assertNativeMappedResponse(traffic.mapped, "Native CMO handled the traffic strategy request.", "normal traffic");
+  assert.doesNotMatch(traffic.mapped.answer, /GA4\/UTM|weekly plan|No real baseline is claimed/i, "normal traffic: Product must not return weekly traffic smoke advice");
+
+  const caption = await runWithMockHermes(
+    hermesFirst,
+    inputFor("Cho m\u00ecnh 3 caption ng\u1eafn cho campaign n\u00e0y", { id: "caption" }),
+    "Native CMO handled the caption request.",
+  );
+  assertNativeMappedResponse(caption.mapped, "Native CMO handled the caption request.", "normal caption");
+  assert.doesNotMatch(caption.mapped.answer, /caption 1|caption 2|caption 3|Echo was not called/i, "normal caption: Product must not return canned copy");
+
+  const boundaryPublish = hermesFirst.hermesFirstBoundaryFailureResponse({
     failure: blockedFailure("publish luon"),
   });
-
-  assert.equal(nativePublish.status, "completed", "Native publish boundary should return a normal assistant answer");
-  assert.equal(nativePublish.runtimeProvider, "product", "Native publish boundary should be Product-owned");
-  assert.equal(nativePublish.runtimeAgent, "cmo", "Native publish boundary should stay in CMO UX");
-  assert.equal(nativePublish.productRenderSource, "local_runtime_fallback", "Native publish boundary should not render as Hermes boundary failure");
-  assert.equal(nativePublish.calledHermesCmo, false, "Native publish boundary must not claim Hermes was called");
-  assert.equal(nativePublish.hermesRequestSent, false, "Native publish boundary must not claim a Hermes request was sent");
-  assert.match(nativePublish.answer, /cannot publish/i, "Native publish answer should block publish side effects");
-  assert.match(nativePublish.answer, /asset|draft/i, "Native publish answer should ask for asset or draft");
-  assert.match(nativePublish.answer, /channel|account/i, "Native publish answer should ask for channel/account");
-  assert.match(nativePublish.answer, /approval/i, "Native publish answer should require explicit approval");
-  assert.match(nativePublish.answer, /No publish, schedule, execution/i, "Native publish answer should state no side effects occurred");
-  assert.doesNotMatch(nativePublish.answer, /Boundary failure|No Product fallback answer/i, "Native publish answer must not expose boundary failure copy");
-  assert.doesNotMatch(JSON.stringify(nativePublish), /cmo\.publisher_execution_preflight\.v1/, "Native publish boundary must not emit /goal preflight artifact");
-  assert.equal(nativePublish.approvalRequests.length, 0, "Native publish boundary should defer approval request until scope is known");
-  assert.deepEqual(nativePublish.hermesCmoMetadata.outbound_blocked_literal_labels, ["/home/", "file:"], "Unsafe labels should be preserved in metadata");
-  assert.deepEqual(nativePublish.hermesCmoMetadata.outbound_blocked_paths, ["context_pack.artifacts_in.0.context.channel_metrics_sync_status.lensOutputPath"], "Unsafe paths should be preserved in metadata");
-
-  const vietnamesePublish = hermesFirst.hermesFirstBoundaryFailureResponse({
-    failure: blockedFailure("\u0111\u0103ng lu\u00f4n"),
-  });
-
-  assert.equal(vietnamesePublish.status, "completed", "Vietnamese native publish boundary should return safe clarification");
-  assert.equal(vietnamesePublish.hermesRequestSent, false, "Vietnamese native publish boundary must not send Hermes");
+  assert.equal(boundaryPublish.status, "failed", "blocked publish: generic transport failure should stay failed");
+  assert.equal(boundaryPublish.runtimeProvider, "hermes", "blocked publish: Product must not own a publish clarification");
+  assert.equal(boundaryPublish.productRenderSource, "hermes_cmo_boundary_failure", "blocked publish: must render as Hermes boundary failure");
+  assert.match(boundaryPublish.answer, /No Product fallback answer was generated/i, "blocked publish: must not return Product-authored publish strategy");
+  assert.doesNotMatch(boundaryPublish.answer, /exact asset or draft|target channel\/account|I cannot publish from this turn yet/i, "blocked publish: must not contain old Product publish clarification");
+  assertNoProductPublishPreflight(boundaryPublish, "blocked publish");
 
   const goalPublish = hermesFirst.hermesFirstBoundaryFailureResponse({
     failure: blockedFailure("/goal publish luon"),
   });
-
-  assert.equal(goalPublish.status, "failed", "/goal publish boundary should not use native publish clarification");
-  assert.match(goalPublish.answer, /No Product fallback answer was generated/i, "/goal publish boundary should keep generic boundary mapping here");
-
-  const normalChat = hermesFirst.hermesFirstBoundaryFailureResponse({
-    failure: blockedFailure("Hi"),
-  });
-
-  assert.equal(normalChat.status, "failed", "Normal blocked non-publish chat should keep generic boundary failure");
-  assert.match(normalChat.answer, /Boundary failure/i, "Normal blocked non-publish chat should expose generic boundary copy");
+  assert.equal(goalPublish.status, "failed", "/goal publish boundary: generic boundary mapping should remain");
+  assert.match(goalPublish.answer, /No Product fallback answer was generated/i, "/goal publish boundary: should keep generic boundary mapping");
 
   console.log(JSON.stringify({
     ok: true,
-    nativePublishStatus: nativePublish.status,
-    nativePublishProvider: nativePublish.runtimeProvider,
-    unsafeLabels: nativePublish.hermesCmoMetadata.outbound_blocked_literal_labels,
-    unsafePaths: nativePublish.hermesCmoMetadata.outbound_blocked_paths,
+    nativeMessagesSent: [
+      nativePublish.calls[0].body.intent.user_message,
+      vietnamesePublish.calls[0].body.intent.user_message,
+      traffic.calls[0].body.intent.user_message,
+      caption.calls[0].body.intent.user_message,
+    ],
+    scrubbedUnsafeContext: nativePublish.calls[0].body.outbound_hermes_payload_guard.outbound_hermes_payload_sanitized,
+    boundaryPublishStatus: boundaryPublish.status,
   }, null, 2));
 } finally {
   await rm(tmpDir, { recursive: true, force: true });
