@@ -5063,6 +5063,8 @@ export async function createAppChatSession(
     hermesCmoErrorReason = mappedChat.hermesCmoErrorReason;
     hermesCmoCounters = mappedChat.hermesCmoCounters;
     hermesCmoMetadata = mappedChat.hermesCmoMetadata;
+    hermesRequestSent = mappedChat.hermesRequestSent === true;
+    calledHermesCmo = mappedChat.calledHermesCmo === true;
     activityEvents = mappedChat.activityEvents;
     delegationSummary = mappedChat.delegationSummary;
     agentsUsed = mappedChat.agentsUsed;

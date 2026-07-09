@@ -185,8 +185,10 @@ assert.ok(
 assert.ok(
   appChatSource.indexOf("const smokeAssistantMessage: CMOChatMessage") !== -1 &&
     appChatSource.indexOf("content: goalWorkflowSmokeResponse.answer") !== -1 &&
+    appChatSource.indexOf("...(continuedSession?.messages ?? [])") !== -1 &&
+    appChatSource.indexOf("smokeUserMessage") < appChatSource.indexOf("smokeAssistantMessage") &&
     appChatSource.indexOf("sessionArtifacts: smokeSessionArtifacts") !== -1,
-  "Smoke branch must persist assistant body and artifacts in message shape",
+  "Smoke branch must persist continued history, user message, assistant body, and artifacts in message shape",
 );
 
 const { tmpDir, smoke } = await loadHarness();

@@ -957,9 +957,9 @@ export interface CmoEvidenceSourceDisplay {
 export interface HermesCmoChatMetadata {
   runtimeMode: "hermes_cmo";
   runtimeStatus: "live" | "fallback" | "runtime_error";
-  calledHermesCmo: true;
-  hermesRequestSent?: true;
-  productRenderSource?: "hermes_cmo" | "fallback_after_hermes_failure" | "hermes_cmo_boundary_failure";
+  calledHermesCmo: boolean;
+  hermesRequestSent?: boolean;
+  productRenderSource?: CmoProductRenderSource;
   selectedHermesEndpoint?: string;
   hermesEndpointKind?: "execute" | "tool_execute" | "agent_chat" | "cmo_agent";
   endpoint_kind?: "execute" | "tool_execute" | "agent_chat" | "cmo_agent";

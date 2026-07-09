@@ -205,6 +205,11 @@ export interface HermesFirstBoundaryFailure {
   outerTimeoutMs?: number;
   responsePreview?: string;
   detail?: string;
+  outboundBlockedLiterals?: string[];
+  outboundBlockedSources?: string[];
+  outboundBlockedSnippets?: string[];
+  outboundBlockedPaths?: string[];
+  outboundBlockedFieldsPreview?: string[];
 }
 
 export type HermesFirstCmoChatRun =
@@ -233,15 +238,15 @@ export interface HermesFirstMappedAppChat {
   runtimeStatus: CMOAppChatResponse["runtimeStatus"];
   runtimeMode: "live";
   attemptedRuntimeMode: "live";
-  runtimeLabel: "Hermes CMO chat v1.1";
-  runtimeProvider: "hermes";
-  runtimeAgent: "cmo";
+  runtimeLabel: string;
+  runtimeProvider: string;
+  runtimeAgent: string;
   runtimeError?: string;
   runtimeErrorReason?: CMOAppChatResponse["runtimeErrorReason"];
-  productRenderSource: "hermes_cmo" | "hermes_cmo_boundary_failure";
-  calledHermesCmo: true;
-  hermesRequestSent: true;
-  hermesCmoStatus: "live" | "failed_boundary";
+  productRenderSource: NonNullable<CMOAppChatResponse["productRenderSource"]>;
+  calledHermesCmo: boolean;
+  hermesRequestSent?: boolean;
+  hermesCmoStatus: NonNullable<CMOAppChatResponse["hermesCmoStatus"]>;
   hermesCmoErrorReason?: string;
   hermesCmoCounters: HermesCmoSafetyCounters;
   hermesCmoMetadata: HermesCmoChatMetadata;
@@ -1110,6 +1115,11 @@ export async function runHermesFirstCmoChat(input: HermesFirstCmoChatRequestInpu
         "Product blocked Hermes-first request because the final outbound body still contained unsafe local path, secret, or artifact text after scrub",
         {
           detail: fetchBodyBlockInspection.literals.join(", ") || outboundSanitizer.blockedFieldsPreview.join(", "),
+          outboundBlockedLiterals: fetchBodyBlockInspection.literals,
+          outboundBlockedSources: fetchBodyBlockInspection.sources,
+          outboundBlockedSnippets: fetchBodyBlockInspection.snippets,
+          outboundBlockedPaths: fetchBodyBlockInspection.paths,
+          outboundBlockedFieldsPreview: outboundSanitizer.blockedFieldsPreview,
         },
       ),
     };
@@ -1265,8 +1275,10 @@ function forbiddenCounters(): HermesCmoForbiddenCounters {
 function baseMetadata(input: {
   requestId: string;
   responseStatus: string;
-  productRenderSource: "hermes_cmo" | "hermes_cmo_boundary_failure";
+  productRenderSource: NonNullable<CMOAppChatResponse["productRenderSource"]>;
   fallbackUsed: boolean;
+  calledHermesCmo?: boolean;
+  hermesRequestSent?: boolean;
   activityEvents: HermesCmoActivityEventSummary[];
   delegationSummary: HermesCmoDelegationSummaryItem[];
   agentsUsed?: HermesCmoAgentUsed[];
@@ -1278,8 +1290,8 @@ function baseMetadata(input: {
   return {
     runtimeMode: "hermes_cmo",
     runtimeStatus: input.productRenderSource === "hermes_cmo_boundary_failure" ? "runtime_error" : "live",
-    calledHermesCmo: true,
-    hermesRequestSent: true,
+    calledHermesCmo: input.calledHermesCmo ?? true,
+    ...(input.hermesRequestSent === false ? {} : { hermesRequestSent: true }),
     productRenderSource: input.productRenderSource,
     selectedHermesEndpoint: HERMES_FIRST_CMO_CHAT_ENDPOINT,
     hermesEndpointKind: "agent_chat",
@@ -1380,6 +1392,140 @@ export function mapHermesFirstCmoChatToAppChat(input: {
   };
 }
 
+function normalizedIntentText(value: string | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\u0111/gi, "d")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isNativePublishBoundaryIntent(message: string | undefined): boolean {
+  const trimmed = message?.trim() ?? "";
+
+  if (!trimmed || /^\/goal(?:\s|$)/i.test(trimmed)) {
+    return false;
+  }
+
+  const normalized = normalizedIntentText(trimmed);
+  const tokenCount = normalized ? normalized.split(" ").length : 0;
+
+  if (!normalized || tokenCount > 8) {
+    return false;
+  }
+
+  return /\bpublish\b/.test(normalized) ||
+    /\bexecute\b/.test(normalized) ||
+    /\bschedule\b/.test(normalized) ||
+    /\bpost\s+(?:now|ngay|luon)\b/.test(normalized) ||
+    /\bdang\s+(?:luon|ngay|bai|post)\b/.test(normalized) ||
+    /\blen\s+lich\b/.test(normalized);
+}
+
+function blockedPublishClarificationAnswer(): string {
+  return [
+    "I cannot publish from this turn yet.",
+    "",
+    "Before any publish action, I need the exact asset or draft, the target channel/account, the publish timing, and explicit execution/publish approval.",
+    "",
+    "No publish, schedule, execution, paid generation, connector call, or external API call was performed.",
+  ].join("\n");
+}
+
+function hermesFirstBlockedPublishClarificationResponse(input: {
+  failure: HermesFirstBoundaryFailure;
+  counters: HermesCmoSafetyCounters;
+  forbidden: HermesCmoForbiddenCounters;
+  liveAttemptStartedAt?: string;
+  liveAttemptDurationMs?: number;
+}): HermesFirstMappedAppChat {
+  const activityEvents = normalizeCmoActivityEvents([
+    {
+      event_id: `${input.failure.requestId}_publish_boundary_clarification`,
+      type: "run.completed",
+      status: "completed",
+      message: "Publish request needs asset, channel, timing, and scoped approval before any side effect.",
+      user_visible: true,
+      source_agent: "product",
+      sourceMode: "cmo.default",
+    },
+  ], {
+    requestId: input.failure.requestId,
+    createdAt: new Date(0).toISOString(),
+  }) as HermesCmoActivityEventSummary[];
+  const metadata = baseMetadata({
+    requestId: input.failure.requestId,
+    responseStatus: "completed",
+    productRenderSource: "local_runtime_fallback",
+    fallbackUsed: false,
+    calledHermesCmo: false,
+    hermesRequestSent: false,
+    activityEvents,
+    delegationSummary: [],
+    agentsUsed: ["cmo"],
+    counters: input.counters,
+    forbidden: input.forbidden,
+    sideEffects: {},
+    extra: {
+      boundary_safe_publish_clarification: true,
+      boundary_failure_type: input.failure.type,
+      productRenderSource: "local_runtime_fallback",
+      original_boundary_public_reason: input.failure.publicReason,
+      outbound_blocked_literal_labels: input.failure.outboundBlockedLiterals ?? [],
+      outbound_blocked_sources: input.failure.outboundBlockedSources ?? [],
+      outbound_blocked_snippets: input.failure.outboundBlockedSnippets ?? [],
+      outbound_blocked_paths: input.failure.outboundBlockedPaths ?? [],
+      outbound_blocked_fields_preview: input.failure.outboundBlockedFieldsPreview ?? [],
+      ...(input.failure.detail ? { detail: input.failure.detail } : {}),
+    },
+  });
+
+  return {
+    answer: blockedPublishClarificationAnswer(),
+    status: "completed",
+    assumptions: [],
+    suggestedActions: [
+      {
+        type: "select_publish_asset",
+        label: "Choose the asset or draft to publish",
+      },
+      {
+        type: "confirm_publish_scope",
+        label: "Confirm channel, timing, and approval scope",
+      },
+    ],
+    isDevelopmentFallback: false,
+    isRuntimeFallback: false,
+    runtimeStatus: "live",
+    runtimeMode: "live",
+    attemptedRuntimeMode: "live",
+    runtimeLabel: "Product publish approval boundary",
+    runtimeProvider: "product",
+    runtimeAgent: "cmo",
+    productRenderSource: "local_runtime_fallback",
+    calledHermesCmo: false,
+    hermesRequestSent: false,
+    hermesCmoStatus: "interrupted",
+    hermesCmoCounters: input.counters,
+    hermesCmoMetadata: metadata,
+    activityEvents,
+    delegationSummary: [],
+    agentsUsed: ["cmo"],
+    surfCalls: 0,
+    echoCalls: 0,
+    forbiddenCounters: input.forbidden,
+    delegationsMode: "proposals_only",
+    sessionArtifacts: [],
+    suggestedVaultUpdates: [],
+    approvalRequests: [],
+    liveAttemptStartedAt: input.liveAttemptStartedAt,
+    liveAttemptDurationMs: input.liveAttemptDurationMs,
+  };
+}
+
 export function hermesFirstBoundaryFailureResponse(input: {
   failure: HermesFirstBoundaryFailure;
   liveAttemptStartedAt?: string;
@@ -1408,6 +1554,20 @@ export function hermesFirstBoundaryFailureResponse(input: {
     requestId: input.failure.requestId,
     createdAt: new Date(0).toISOString(),
   }) as HermesCmoActivityEventSummary[];
+
+  if (
+    input.failure.type === "request_payload_blocked" &&
+    isNativePublishBoundaryIntent(input.failure.request?.intent.user_message)
+  ) {
+    return hermesFirstBlockedPublishClarificationResponse({
+      failure: input.failure,
+      counters,
+      forbidden,
+      liveAttemptStartedAt: input.liveAttemptStartedAt,
+      liveAttemptDurationMs: input.liveAttemptDurationMs,
+    });
+  }
+
   const metadata = baseMetadata({
     requestId: input.failure.requestId,
     responseStatus: "failed",
@@ -1428,6 +1588,11 @@ export function hermesFirstBoundaryFailureResponse(input: {
       ...(typeof input.failure.retryable === "boolean" ? { retryable: input.failure.retryable } : {}),
       ...(input.failure.responsePreview ? { response_preview: input.failure.responsePreview } : {}),
       ...(input.failure.detail ? { detail: input.failure.detail } : {}),
+      outbound_blocked_literal_labels: input.failure.outboundBlockedLiterals ?? [],
+      outbound_blocked_sources: input.failure.outboundBlockedSources ?? [],
+      outbound_blocked_snippets: input.failure.outboundBlockedSnippets ?? [],
+      outbound_blocked_paths: input.failure.outboundBlockedPaths ?? [],
+      outbound_blocked_fields_preview: input.failure.outboundBlockedFieldsPreview ?? [],
     },
   });
 
