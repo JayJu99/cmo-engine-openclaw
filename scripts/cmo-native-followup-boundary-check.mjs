@@ -16,6 +16,7 @@ const files = {
   goalStateTransport: path.join(root, "src", "lib", "cmo", "goal-state-transport.ts"),
   userMetadata: path.join(root, "src", "lib", "cmo", "user-metadata.ts"),
   hermesFirst: path.join(root, "src", "lib", "cmo", "hermes-first-cmo-chat.ts"),
+  hermesCmoChatV11: path.join(root, "src", "lib", "cmo", "hermes-cmo-chat-v11.ts"),
 };
 
 const unsafePattern = /file:|\/home\/|[A-Za-z]:[\\/]|\.png(?:_redact)?\b|sk-proj-|Bearer\s+[A-Za-z0-9._-]{20,}|raw_artifact_payload/i;
@@ -53,6 +54,15 @@ async function loadHarness() {
     ["@/lib/cmo/hermes-outbound-payload-sanitizer", "./sanitizer.cjs"],
     ["@/lib/cmo/goal-state-transport", "./goal-state-transport.cjs"],
     ["@/lib/cmo/user-metadata", "./user-metadata.cjs"],
+    ["./config", "./config.cjs"],
+    ["./creative-agent", "./creative-agent.cjs"],
+    ["./current-turn-response-contract", "./current-turn-response-contract.cjs"],
+    ["./goal-state-transport", "./goal-state-transport.cjs"],
+    ["./hermes-cmo-chat-mapper", "./hermes-cmo-chat-mapper.cjs"],
+    ["./hermes-cmo-chat-router", "./hermes-cmo-chat-router.cjs"],
+    ["./hermes-outbound-payload-sanitizer", "./sanitizer.cjs"],
+    ["./lens-measurement-result", "./lens-measurement-result.cjs"],
+    ["./user-metadata", "./user-metadata.cjs"],
   ];
   const outputs = [
     ["config.cjs", files.config],
@@ -63,15 +73,39 @@ async function loadHarness() {
     ["goal-state-transport.cjs", files.goalStateTransport],
     ["user-metadata.cjs", files.userMetadata],
     ["hermes-first.cjs", files.hermesFirst],
+    ["hermes-cmo-chat-v11.cjs", files.hermesCmoChatV11],
   ];
 
   for (const [name, filePath] of outputs) {
     await writeFile(path.join(tmpDir, name), replaceRequires(transpileTs(filePath), replacements), "utf8");
   }
+  await writeFile(path.join(tmpDir, "creative-agent.cjs"), `
+exports.redactSensitiveText = function redactSensitiveText(value) {
+  return String(value ?? "")
+    .replace(/Bearer\\s+[A-Za-z0-9._~+/=-]{12,}/gi, "Bearer [secret_redacted]")
+    .replace(/sk-proj-[A-Za-z0-9_-]{12,}/g, "[secret_redacted]")
+    .replace(/sk-[A-Za-z0-9_-]{12,}/g, "[secret_redacted]");
+};
+`, "utf8");
+  await writeFile(path.join(tmpDir, "hermes-cmo-chat-mapper.cjs"), `
+exports.LENS_READOUT_CONTEXT_ARTIFACT_KIND = "lens_readout_context";
+exports.LENS_READOUT_CONTEXT_CONTRACT = "cmo.lens_readout_context.v1";
+exports.LENS_MEASUREMENT_GROUNDING_RULE = "Lens measurement context is background only.";
+exports.LENS_MEASUREMENT_RESULT_ARTIFACT_KIND = "lens_measurement_result";
+exports.LENS_READOUT_GROUNDING_RULE = "Lens readout context is background only.";
+exports.LATEST_USER_MESSAGE_PRIMACY_RULE = "Latest user message has primacy.";
+exports.mapCmoChatToHermesCmoRequest = function mapCmoChatToHermesCmoRequest() {
+  throw new Error("not used by this focused boundary harness");
+};
+`, "utf8");
+  await writeFile(path.join(tmpDir, "hermes-cmo-chat-router.cjs"), `
+exports.HERMES_CMO_CHAT_V11_ENDPOINT = "/agents/cmo/chat";
+`, "utf8");
 
   return {
     tmpDir,
     hermesFirst: createRequire(import.meta.url)(path.join(tmpDir, "hermes-first.cjs")),
+    hermesCmoChatV11: createRequire(import.meta.url)(path.join(tmpDir, "hermes-cmo-chat-v11.cjs")),
   };
 }
 
@@ -229,7 +263,7 @@ function userMessage(id, content) {
   };
 }
 
-function assistantMessage(id, content, mapped) {
+function assistantMessage(id, content, mapped, persisted = {}) {
   return {
     id,
     role: "assistant",
@@ -242,7 +276,8 @@ function assistantMessage(id, content, mapped) {
     calledHermesCmo: mapped.calledHermesCmo,
     hermesCmoStatus: mapped.hermesCmoStatus,
     hermesCmoMetadata: mapped.hermesCmoMetadata,
-    sessionArtifacts: mapped.sessionArtifacts,
+    ...(persisted.sessionSummary ? { sessionSummary: persisted.sessionSummary } : {}),
+    ...(persisted.sessionArtifacts?.length ? { sessionArtifacts: persisted.sessionArtifacts } : {}),
   };
 }
 
@@ -266,7 +301,7 @@ function assertNoGoalOrPreflight(value, label) {
   assert.doesNotMatch(serialized, /cmo\.publisher_execution_preflight\.v1/, `${label}: must not emit publisher preflight without /goal publish`);
 }
 
-const { tmpDir, hermesFirst } = await loadHarness();
+const { tmpDir, hermesFirst, hermesCmoChatV11 } = await loadHarness();
 
 try {
   const turn1 = await runWithMockHermes(
@@ -319,18 +354,56 @@ try {
   assertNoUnsafeLeak(turn2.mapped, "turn 2 mapped response");
   assertNoGoalOrPreflight(turn2.mapped, "turn 2 mapped response");
 
+  const persistedTurn2SessionArtifacts = hermesCmoChatV11.mergeHermesCmoChatV11Artifacts([], [
+    ...turn2.mapped.sessionArtifacts,
+    {
+      contract: "cmo.live_runtime_debug.v1",
+      title: "Live runtime raw artifact payload",
+      rawArtifactPayload: "file:/home/admin/openclaw/output/traffic-plan.png",
+      localPath: "C:\\Users\\ADMIN\\OpenClaw\\traffic-plan.png",
+      nested: {
+        raw_contract_json: "{\"path\":\"/home/admin/openclaw/output/traffic-plan.png\"}",
+      },
+    },
+  ]);
+  const persistedTurn2SessionSummary = hermesCmoChatV11.mergeHermesCmoChatV11SessionSummary(
+    undefined,
+    {
+      summary_delta: turn2.mapped.suggestedSessionSummaryUpdate,
+      artifact_refs: [
+        "file:/home/admin/openclaw/output/traffic-plan.png",
+        "raw_artifact_payload",
+      ],
+      open_questions: ["Confirm easiest weekly social traffic direction."],
+    },
+  );
+  const persistedTurn2Session = {
+    id: "session_followup",
+    sessionSummary: persistedTurn2SessionSummary,
+    sessionArtifacts: persistedTurn2SessionArtifacts,
+    messages: [
+      ...historyAfterTurn1,
+      userMessage("user_2", "Tu\u1ea7n n\u00e0y n\u00ean l\u00e0m g\u00ec \u0111\u1ec3 t\u0103ng traffic social?"),
+      assistantMessage("assistant_2", turn2.mapped.answer, turn2.mapped, {
+        sessionSummary: persistedTurn2SessionSummary,
+        sessionArtifacts: persistedTurn2SessionArtifacts,
+      }),
+    ],
+  };
+  assertNoUnsafeLeak(persistedTurn2Session, "route-like persisted turn 2 session");
+  assert.match(String(persistedTurn2Session.sessionSummary ?? ""), /Confirm easiest weekly social traffic direction/i, "route-like session summary should preserve safe native context");
+  assert.doesNotMatch(JSON.stringify(persistedTurn2Session), /rawArtifactPayload|raw_contract_json|localPath|local_path/i, "route-like persisted session must not retain unsafe diagnostic keys");
+
   const historyAfterTurn2 = [
-    ...historyAfterTurn1,
-    userMessage("user_2", "Tu\u1ea7n n\u00e0y n\u00ean l\u00e0m g\u00ec \u0111\u1ec3 t\u0103ng traffic social?"),
-    assistantMessage("assistant_2", turn2.mapped.answer, turn2.mapped),
+    ...persistedTurn2Session.messages,
   ];
   const turn3 = await runWithMockHermes(
     hermesFirst,
     inputFor("Ok ch\u1ecdn h\u01b0\u1edbng d\u1ec5 l\u00e0m nh\u1ea5t cho tu\u1ea7n n\u00e0y", {
       id: "followup",
       history: historyAfterTurn2,
-      sessionArtifacts: turn2.mapped.sessionArtifacts,
-      sessionSummary: String(turn2.mapped.suggestedSessionSummaryUpdate ?? ""),
+      sessionArtifacts: persistedTurn2Session.sessionArtifacts,
+      sessionSummary: persistedTurn2Session.sessionSummary,
     }),
     {
       answerBody: "Ch\u1ecdn h\u01b0\u1edbng d\u1ec5 l\u00e0m nh\u1ea5t: \u01b0u ti\u00ean 1 offer social c\u00f3 th\u1ec3 l\u00e0m ngay trong tu\u1ea7n n\u00e0y.",
@@ -353,6 +426,7 @@ try {
       turn3.calls[0].body.intent.user_message,
     ],
     turn2SafeAnswerPreserved: /gom 1 offer social/i.test(turn2.mapped.answer),
+    routeLikeSessionSafe: !unsafePattern.test(JSON.stringify(persistedTurn2Session)),
     turn3Status: turn3.mapped.status,
     turn3HermesRequestSent: turn3.mapped.hermesRequestSent,
   }, null, 2));

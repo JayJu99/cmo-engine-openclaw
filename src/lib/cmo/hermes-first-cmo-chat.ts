@@ -212,6 +212,7 @@ export interface HermesFirstBoundaryFailure {
   outboundBlockedSnippets?: string[];
   outboundBlockedPaths?: string[];
   outboundBlockedFieldsPreview?: string[];
+  outboundBlockedClasses?: string[];
 }
 
 export type HermesFirstCmoChatRun =
@@ -547,6 +548,32 @@ function safeHermesFirstErrorsList(value: unknown): Record<string, unknown>[] {
       return message ? { code: `error_${index + 1}`, message } : undefined;
     })
     .filter((item): item is Record<string, unknown> => Boolean(item));
+}
+
+function outboundBlockedClassesFromLabels(labels: string[]): string[] {
+  const classes = new Set<string>();
+
+  for (const label of labels) {
+    if (/raw[_-]?artifact|raw[_-]?contract/i.test(label)) {
+      classes.add("raw_artifact");
+    } else if (/authorization|bearer|sk-|secret|token/i.test(label)) {
+      classes.add("secret_like");
+    } else if (/file:/i.test(label)) {
+      classes.add("file_uri");
+    } else if (/\/home\//i.test(label)) {
+      classes.add("home_path");
+    } else if (/[A-Za-z]:[\\/]/.test(label)) {
+      classes.add("absolute_path");
+    } else if (/\.(?:png|jpe?g|webp|mp4|webm)|creative|conversion|local[_-]?path/i.test(label)) {
+      classes.add("media_path");
+    } else if (/\/(?:tmp|Users|var|mnt|private|Volumes)\//i.test(label)) {
+      classes.add("absolute_path");
+    } else {
+      classes.add("other_unsafe_marker");
+    }
+  }
+
+  return Array.from(classes).slice(0, 12);
 }
 
 function normalizeSourceAgent(value: unknown): HermesCmoAgentUsed | undefined {
@@ -1226,6 +1253,7 @@ export async function runHermesFirstCmoChat(input: HermesFirstCmoChatRequestInpu
           outboundBlockedSnippets: fetchBodyBlockInspection.snippets,
           outboundBlockedPaths: fetchBodyBlockInspection.paths,
           outboundBlockedFieldsPreview: outboundSanitizer.blockedFieldsPreview,
+          outboundBlockedClasses: outboundBlockedClassesFromLabels(fetchBodyBlockInspection.literals),
         },
       ),
     };
@@ -1503,6 +1531,10 @@ export function hermesFirstBoundaryFailureResponse(input: {
   liveAttemptStartedAt?: string;
   liveAttemptDurationMs?: number;
 }): HermesFirstMappedAppChat {
+  const requestReachedHermes = Boolean(input.liveAttemptStartedAt) &&
+    input.failure.type !== "request_payload_blocked" &&
+    input.failure.type !== "request_contract_violation" &&
+    input.failure.type !== "configuration_error";
   const counters: HermesCmoSafetyCounters = {
     surfCalls: 0,
     echoCalls: 0,
@@ -1551,6 +1583,7 @@ export function hermesFirstBoundaryFailureResponse(input: {
       outbound_blocked_sources: input.failure.outboundBlockedSources ?? [],
       outbound_blocked_snippets: input.failure.outboundBlockedSnippets ?? [],
       outbound_blocked_paths: input.failure.outboundBlockedPaths ?? [],
+      outbound_blocked_classes: input.failure.outboundBlockedClasses ?? [],
       outbound_blocked_fields_preview: input.failure.outboundBlockedFieldsPreview ?? [],
     },
   });
@@ -1582,8 +1615,8 @@ export function hermesFirstBoundaryFailureResponse(input: {
     runtimeError: input.failure.runtimeError,
     runtimeErrorReason: input.failure.runtimeErrorReason,
     productRenderSource: "hermes_cmo_boundary_failure",
-    calledHermesCmo: true,
-    hermesRequestSent: true,
+    calledHermesCmo: requestReachedHermes,
+    hermesRequestSent: requestReachedHermes,
     hermesCmoStatus: "failed_boundary",
     hermesCmoErrorReason: input.failure.type,
     hermesCmoCounters: counters,

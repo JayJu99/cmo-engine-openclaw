@@ -26,6 +26,8 @@ import {
   buildOutboundHermesTraceSafeRequest,
   inspectOutboundHermesCallsiteBlock,
   mergeOutboundHermesCallsiteBlockInspections,
+  outboundHermesStringHasForbiddenArtifactText,
+  sanitizeOutboundHermesContextText,
   sanitizeOutboundHermesPayload,
   withOutboundHermesPayloadGuardDiagnostics,
 } from "./hermes-outbound-payload-sanitizer";
@@ -45,7 +47,7 @@ const MAX_CONTRACT_WARNING_CHARS = 240;
 const MAX_SESSION_SUMMARY_LINES = 80;
 const MAX_SESSION_SUMMARY_LIST_ITEMS = 12;
 const UNSAFE_ARTIFACT_KEYS =
-  /^(api_key|authorization|body|content|cookie|cookies|credential|credentials|env|file_body|file_content|full_content|full_source|full_text|headers|html|markdown|password|private_key|raw|raw_.*|secret|secrets|source_text.*|text|token|tool_args|tool_result)$/i;
+  /^(api_key|apiKey|authorization|body|content|cookie|cookies|credential|credentials|env|file_body|fileBody|file_content|fileContent|full_content|fullContent|full_source|fullSource|full_text|fullText|headers|html|local_path|localPath|markdown|password|private_key|privateKey|raw|raw_.*|raw[A-Z].*|secret|secrets|source_local_path|sourceLocalPath|source_text.*|sourceText.*|text|token|tool_args|toolArgs|tool_result|toolResult)$/i;
 const SIDE_EFFECT_KEYS = [
   "executed_echo",
   "executed_surf",
@@ -206,16 +208,21 @@ const chatTracePrefixes = new Map<string, string>();
 
 function compactText(value: string, maxChars: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
-  const redacted = redactSensitiveText(compact, Math.max(maxChars, 1200));
+  const redacted = sanitizeOutboundHermesContextText(redactSensitiveText(compact, Math.max(maxChars, 1200))).trim();
+
+  if (!redacted || outboundHermesStringHasForbiddenArtifactText(redacted)) {
+    return "";
+  }
 
   return redacted.length > maxChars ? `${redacted.slice(0, maxChars - 3).trimEnd()}...` : redacted;
 }
 
 function compactMultilineText(value: string, maxChars: number): string {
-  const compact = value
+  const compact = sanitizeOutboundHermesContextText(value)
     .split(/\r?\n/)
     .map((line) => line.replace(/[^\S\r\n]+/g, " ").trim())
     .filter(Boolean)
+    .filter((line) => !outboundHermesStringHasForbiddenArtifactText(line))
     .join("\n");
 
   return compact.length > maxChars ? `${compact.slice(0, maxChars - 3).trimEnd()}...` : compact;
@@ -573,7 +580,10 @@ function safeRecord(
   for (const [key, nested] of Object.entries(value)) {
     if (UNSAFE_ARTIFACT_KEYS.test(key)) {
       if (options.allowTopLevelContent && depth === 0 && key === "content" && typeof nested === "string" && nested.trim()) {
-        safe[key] = compactText(nested, 4_000);
+        const content = compactText(nested, 4_000);
+        if (content) {
+          safe[key] = content;
+        }
       } else if (options.allowTopLevelContent && isLensReadoutArtifact && key === "content" && isRecord(nested)) {
         const lensContent = safeRecord(nested, 8_000, options, depth + 1);
         if (lensContent) {
@@ -585,14 +595,17 @@ function safeRecord(
     }
 
     if (typeof nested === "string") {
-      safe[key] = compactText(nested, 1_200);
+      const text = compactText(nested, 1_200);
+      if (text) {
+        safe[key] = text;
+      }
     } else if (typeof nested === "number" || typeof nested === "boolean" || nested === null) {
       safe[key] = nested;
     } else if (Array.isArray(nested)) {
       safe[key] = nested
         .slice(0, 12)
         .map((item) => typeof item === "string" ? compactText(item, 500) : isRecord(item) ? safeRecord(item, 2_000, options, depth + 1) : item)
-        .filter((item) => item !== undefined && item !== null);
+        .filter((item) => item !== undefined && item !== null && item !== "");
     } else if (isRecord(nested)) {
       const nestedSafe = safeRecord(nested, 2_000, options, depth + 1);
       if (nestedSafe) {
@@ -681,7 +694,13 @@ export function mergeHermesCmoChatV11Artifacts(
 ): Record<string, unknown>[] {
   const byKey = new Map<string, Record<string, unknown>>();
 
-  for (const artifact of [...(existing ?? []), ...next]) {
+  const safeArtifacts = sanitizeHermesCmoChatV11Records(
+    [...(existing ?? []), ...next],
+    MAX_ARTIFACTS * 2,
+    { allowTopLevelContent: true },
+  );
+
+  for (const artifact of safeArtifacts) {
     const key = typeof artifact.artifact_id === "string"
       ? artifact.artifact_id
       : typeof artifact.id === "string"

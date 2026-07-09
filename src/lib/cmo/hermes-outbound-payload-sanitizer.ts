@@ -1,5 +1,5 @@
 const OUTBOUND_FORBIDDEN_TEXT_PATTERN =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|Volumes)\/|\/private(?:\/|\b)|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$)|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9._-]{20,})/i;
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|Volumes)\/|\/private(?:\/|\b)|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$)|(?:raw[_-]?artifact[_-]?payload|rawArtifactPayload|raw[_-]?contract[_-]?json|rawContractJson|local[_-]?path|localPath|source[_-]?local[_-]?path|sourceLocalPath)|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9._-]{20,})/i;
 export const OUTBOUND_HERMES_CALLSITE_GUARD_VERSION = "context-sanitizer-v2" as const;
 const OUTBOUND_CALLSITE_FORBIDDEN_LITERALS = [
   { literal: "[hermes_local_artifact_path_redacted]", label: "hermes_local_artifact_path_redacted" },
@@ -17,6 +17,14 @@ const OUTBOUND_CALLSITE_FORBIDDEN_LITERALS = [
   { literal: "creative-agent-images", label: "creative-agent-images" },
   { literal: "cmo-creative-execute", label: "cmo-creative-execute" },
   { literal: "Creative_image_asset_Refine", label: "Creative_image_asset_Refine" },
+  { literal: "raw_artifact_payload", label: "raw_artifact_payload" },
+  { literal: "rawArtifactPayload", label: "raw_artifact_payload" },
+  { literal: "raw_contract_json", label: "raw_contract_json" },
+  { literal: "rawContractJson", label: "raw_contract_json" },
+  { literal: "local_path", label: "local_path" },
+  { literal: "localPath", label: "local_path" },
+  { literal: "source_local_path", label: "local_path" },
+  { literal: "sourceLocalPath", label: "local_path" },
 ] as const;
 
 const TEXT_PLACEHOLDER =
@@ -132,6 +140,8 @@ export function sanitizeOutboundHermesContextText(value: string): string {
     .replace(/\/(?:tmp|Users|home|var|mnt|private|Volumes)\/[^\r\n"',})\]]*/g, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
     .replace(/\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$)/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
     .replace(/\b(?:creative-agent-images|cmo-creative-execute|conversion_h_|Creative_image_asset_Refine)\b/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
+    .replace(/\b(?:raw[_-]?artifact[_-]?payload|rawArtifactPayload|raw[_-]?contract[_-]?json|rawContractJson)\b/g, "[raw_artifact_redacted]")
+    .replace(/\b(?:local[_-]?path|localPath|source[_-]?local[_-]?path|sourceLocalPath)\b/g, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
     .replace(/sk-proj-[A-Za-z0-9_-]{20,}/g, "[secret_redacted]")
     .replace(/sk-[A-Za-z0-9_-]{20,}/g, "[secret_redacted]")
     .replace(/Bearer\s+[A-Za-z0-9._-]{20,}/gi, "Bearer [secret_redacted]");
