@@ -33,6 +33,8 @@ import {
   buildOutboundHermesTraceSafeRequest,
   inspectOutboundHermesCallsiteBlock,
   mergeOutboundHermesCallsiteBlockInspections,
+  outboundHermesStringHasForbiddenArtifactText,
+  sanitizeOutboundHermesContextText,
   sanitizeOutboundHermesPayload,
   withOutboundHermesPayloadGuardDiagnostics,
 } from "@/lib/cmo/hermes-outbound-payload-sanitizer";
@@ -359,6 +361,9 @@ const SAFE_CONTEXT_NAMESPACES = new Set([
   "attachments",
 ]);
 
+const HERMES_FIRST_UNSAFE_RESPONSE_RECORD_KEYS =
+  /^(?:api[_-]?key|authorization|body|content|cookie|cookies|credential|credentials|env|file_body|file_content|full_content|full_source|full_text|headers|html|local[_-]?path|markdown|password|private[_-]?key|raw|raw_.*|secret|secrets|source_text.*|token|tool_args|tool_result)$/i;
+
 const FORBIDDEN_SIDE_EFFECT_KEYS = new Set([
   "vault_write_performed",
   "memory_mutation_performed",
@@ -419,18 +424,113 @@ function safeRecordList(value: unknown, maxRecords = MAX_RECORDS): Record<string
     .filter((item): item is Record<string, unknown> => Boolean(item));
 }
 
-function stringList(value: unknown, maxItems = 20): string[] {
+function sanitizeHermesFirstSafeString(value: string, maxChars = 0): string | undefined {
+  const sanitized = sanitizeOutboundHermesContextText(value).trim();
+
+  if (!sanitized || outboundHermesStringHasForbiddenArtifactText(sanitized)) {
+    return undefined;
+  }
+
+  if (maxChars > 0 && sanitized.length > maxChars) {
+    return `${sanitized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+  }
+
+  return sanitized;
+}
+
+function sanitizeHermesFirstUserVisibleText(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .map((line) => {
+      const sanitized = sanitizeHermesFirstSafeString(line);
+
+      if (!sanitized) {
+        return "";
+      }
+
+      if (
+        /\[(?:local_path|secret)_redacted\]/i.test(sanitized) &&
+        /\b(?:authorization|credential|diagnostic|file|internal\s+trace|local\s+path|raw\s+artifact|secret|token|trace)\b/i.test(sanitized)
+      ) {
+        return "";
+      }
+
+      return sanitized;
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function sanitizeHermesFirstSafeValue(value: unknown, depth = 0): unknown {
+  if (depth > 8) {
+    return undefined;
+  }
+
+  if (typeof value === "string") {
+    return sanitizeHermesFirstSafeString(value, MAX_RECORD_JSON_CHARS);
+  }
+
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, MAX_RECORDS)
+      .map((item) => sanitizeHermesFirstSafeValue(item, depth + 1))
+      .filter((item) => item !== undefined);
+
+    return items.length ? items : undefined;
+  }
+
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
+      .filter(([key]) => !HERMES_FIRST_UNSAFE_RESPONSE_RECORD_KEYS.test(key))
+      .filter(([key]) => !outboundHermesStringHasForbiddenArtifactText(key))
+      .map(([key, item]) => [key, sanitizeHermesFirstSafeValue(item, depth + 1)] as const)
+      .filter(([, item]) => item !== undefined);
+
+    return entries.length ? Object.fromEntries(entries) : undefined;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  if (typeof value === "boolean" || value === null) {
+    return value;
+  }
+
+  return undefined;
+}
+
+function safeHermesFirstRecord(value: unknown, maxJsonChars = MAX_RECORD_JSON_CHARS): Record<string, unknown> | undefined {
+  const record = safeRecord(value, maxJsonChars);
+  const sanitized = sanitizeHermesFirstSafeValue(record);
+
+  return isRecord(sanitized) ? sanitized : undefined;
+}
+
+function safeHermesFirstRecordList(value: unknown, maxRecords = MAX_RECORDS): Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .slice(0, maxRecords)
+    .map((item) => safeHermesFirstRecord(item))
+    .filter((item): item is Record<string, unknown> => Boolean(item));
+}
+
+function safeHermesFirstStringList(value: unknown, maxItems = 20): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
 
   return value
     .slice(0, maxItems)
-    .map((item) => compactString(item, MAX_WARNING_CHARS))
-    .filter(Boolean);
+    .map((item) => typeof item === "string" ? sanitizeHermesFirstSafeString(item, MAX_WARNING_CHARS) : undefined)
+    .filter((item): item is string => Boolean(item));
 }
 
-function errorsList(value: unknown): Record<string, unknown>[] {
+function safeHermesFirstErrorsList(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -439,10 +539,10 @@ function errorsList(value: unknown): Record<string, unknown>[] {
     .slice(0, 20)
     .map((item, index) => {
       if (isRecord(item)) {
-        return safeRecord(item, 2_000);
+        return safeHermesFirstRecord(item, 2_000);
       }
 
-      const message = compactString(item, MAX_WARNING_CHARS);
+      const message = typeof item === "string" ? sanitizeHermesFirstSafeString(item, MAX_WARNING_CHARS) : undefined;
 
       return message ? { code: `error_${index + 1}`, message } : undefined;
     })
@@ -900,8 +1000,14 @@ export function normalizeHermesFirstCmoChatResponse(
   }
 
   const answer = payload.answer as Record<string, unknown>;
+  const safeAnswerBody = sanitizeHermesFirstUserVisibleText(typeof answer.body === "string" ? answer.body : "");
+
+  if (!safeAnswerBody) {
+    return { failure: boundaryFailure("missing_answer_body", request, "Hermes CMO chat answer.body did not contain safe user-visible text") };
+  }
+
   const status = payload.status === "needs_user_input" || payload.status === "failed" ? payload.status : "completed";
-  const metadata = safeRecord(payload.metadata, 8_000) ?? {};
+  const metadata = safeHermesFirstRecord(payload.metadata, 8_000) ?? {};
 
   return {
     schema_version: HERMES_FIRST_CMO_CHAT_RESPONSE_SCHEMA,
@@ -911,30 +1017,30 @@ export function normalizeHermesFirstCmoChatResponse(
     mode: "cmo.chat",
     status,
     answer: {
-      ...answer,
-      body: typeof answer.body === "string" ? answer.body.trim() : "",
+      ...(safeHermesFirstRecord(answer, 4_000) ?? {}),
+      body: safeAnswerBody,
       format: compactString(answer.format) || "markdown",
     },
-    ...(safeRecord(payload.intent_decision, 4_000) ? { intent_decision: safeRecord(payload.intent_decision, 4_000) } : {}),
-    ...(safeRecord(payload.route_decision, 4_000) ? { route_decision: safeRecord(payload.route_decision, 4_000) } : {}),
-    ...(safeRecord(payload.answer_basis, 4_000) ? { answer_basis: safeRecord(payload.answer_basis, 4_000) } : {}),
-    activity_events: normalizeActivityEvents(payload.activity_events, {
+    ...(safeHermesFirstRecord(payload.intent_decision, 4_000) ? { intent_decision: safeHermesFirstRecord(payload.intent_decision, 4_000) } : {}),
+    ...(safeHermesFirstRecord(payload.route_decision, 4_000) ? { route_decision: safeHermesFirstRecord(payload.route_decision, 4_000) } : {}),
+    ...(safeHermesFirstRecord(payload.answer_basis, 4_000) ? { answer_basis: safeHermesFirstRecord(payload.answer_basis, 4_000) } : {}),
+    activity_events: normalizeActivityEvents(sanitizeHermesFirstSafeValue(payload.activity_events), {
       sessionId: compactString(payload.session_id, 160) || request.session_id,
       turnId: compactString(payload.turn_id, 160) || request.turn_id,
       requestId: compactString(payload.request_id, 160) || request.request_id,
       createdAt: request.created_at,
     }),
-    delegation_summary: normalizeDelegationSummary(payload.delegation_summary),
+    delegation_summary: normalizeDelegationSummary(sanitizeHermesFirstSafeValue(payload.delegation_summary)),
     agents_used: normalizeAgentsUsed(payload.agents_used ?? metadata.agents_used),
-    artifacts_out: safeRecordList(payload.artifacts_out, 40),
-    approval_requests: safeRecordList(payload.approval_requests, 40),
-    suggested_vault_updates: safeRecordList(payload.suggested_vault_updates, 40),
-    ...(payload.vault_context_usage !== undefined ? { vault_context_usage: payload.vault_context_usage } : {}),
-    suggested_session_summary_update: payload.suggested_session_summary_update,
-    ...(safeRecord(payload.state_updates, 4_000) ? { state_updates: safeRecord(payload.state_updates, 4_000) } : {}),
-    warnings: stringList(payload.warnings ?? payload.contract_warnings, 20),
-    errors: errorsList(payload.errors),
-    side_effects: payload.side_effects,
+    artifacts_out: safeHermesFirstRecordList(payload.artifacts_out, 40),
+    approval_requests: safeHermesFirstRecordList(payload.approval_requests, 40),
+    suggested_vault_updates: safeHermesFirstRecordList(payload.suggested_vault_updates, 40),
+    ...(sanitizeHermesFirstSafeValue(payload.vault_context_usage) !== undefined ? { vault_context_usage: sanitizeHermesFirstSafeValue(payload.vault_context_usage) } : {}),
+    suggested_session_summary_update: sanitizeHermesFirstSafeValue(payload.suggested_session_summary_update),
+    ...(safeHermesFirstRecord(payload.state_updates, 4_000) ? { state_updates: safeHermesFirstRecord(payload.state_updates, 4_000) } : {}),
+    warnings: safeHermesFirstStringList(payload.warnings ?? payload.contract_warnings, 20),
+    errors: safeHermesFirstErrorsList(payload.errors),
+    side_effects: safeHermesFirstRecord(payload.side_effects, 4_000) ?? {},
     metadata,
   };
 }

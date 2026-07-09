@@ -130,8 +130,11 @@ export function sanitizeOutboundHermesContextText(value: string): string {
     .replace(/file:[^\s"',})\]]+/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
     .replace(/[A-Za-z]:[\\/][^\s"',})\]]+/g, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
     .replace(/\/(?:tmp|Users|home|var|mnt|private|Volumes)\/[^\r\n"',})\]]*/g, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
-    .replace(/\.png_redact\b/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
-    .replace(/\b(?:creative-agent-images|cmo-creative-execute|conversion_h_|Creative_image_asset_Refine)\b/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION);
+    .replace(/\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$)/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
+    .replace(/\b(?:creative-agent-images|cmo-creative-execute|conversion_h_|Creative_image_asset_Refine)\b/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
+    .replace(/sk-proj-[A-Za-z0-9_-]{20,}/g, "[secret_redacted]")
+    .replace(/sk-[A-Za-z0-9_-]{20,}/g, "[secret_redacted]")
+    .replace(/Bearer\s+[A-Za-z0-9._-]{20,}/gi, "Bearer [secret_redacted]");
 }
 
 const sanitizedSnippetAroundLiteral = (value: string, literal: string): string => {

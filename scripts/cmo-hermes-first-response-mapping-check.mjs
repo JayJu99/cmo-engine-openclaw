@@ -31,15 +31,16 @@ function section(source, start, end) {
 const normalizer = section(hermesFirst, "export function normalizeHermesFirstCmoChatResponse", "function responsePreview");
 const mapper = section(hermesFirst, "export function mapHermesFirstCmoChatToAppChat", "export function hermesFirstBoundaryFailureResponse");
 
-check("maps_answer_body_to_assistant_content_without_rewrite", normalizer.includes("answer.body") && normalizer.includes("answer.body.trim()") && mapper.includes("answer: input.response.answer.body.trim()"));
+check("maps_answer_body_to_assistant_content_with_safety_scrub", normalizer.includes("sanitizeHermesFirstUserVisibleText") && normalizer.includes("body: safeAnswerBody") && mapper.includes("answer: input.response.answer.body.trim()"));
 check("rejects_answer_content_without_answer_body", normalizer.includes("missing_answer_body") && !normalizer.includes("answer.content"));
 check("maps_activity_events_to_activity_events", normalizer.includes("activity_events: normalizeActivityEvents") && mapper.includes("activityEvents: input.response.activity_events"));
 check("maps_delegation_summary_to_delegation_summary", normalizer.includes("delegation_summary: normalizeDelegationSummary") && mapper.includes("delegationSummary: input.response.delegation_summary"));
-check("maps_artifacts_out_to_session_artifacts", normalizer.includes("artifacts_out: safeRecordList") && mapper.includes("sessionArtifacts: input.response.artifacts_out"));
+check("maps_artifacts_out_to_session_artifacts_after_safety_scrub", normalizer.includes("artifacts_out: safeHermesFirstRecordList") && mapper.includes("sessionArtifacts: input.response.artifacts_out"));
 check("maps_creative_artifacts_without_dropping_original_artifact", appStore.includes("mergeHermesCmoChatV11Artifacts(sessionArtifacts, mappedChat.sessionArtifacts)"));
-check("maps_approval_requests_to_approval_requests", normalizer.includes("approval_requests: safeRecordList") && mapper.includes("approvalRequests: input.response.approval_requests") && types.includes("approvalRequests?: Record<string, unknown>[]"));
-check("maps_suggested_vault_updates_to_draft_review_candidates", normalizer.includes("suggested_vault_updates: safeRecordList") && appStore.includes("mergeSuggestedVaultUpdates(suggestedVaultUpdates, mappedChat.suggestedVaultUpdates)"));
-check("maps_warnings_and_errors_to_metadata", normalizer.includes("warnings: stringList") && normalizer.includes("errors: errorsList") && mapper.includes("contract_warnings") && mapper.includes("errors: input.response.errors"));
+check("maps_approval_requests_to_approval_requests_after_safety_scrub", normalizer.includes("approval_requests: safeHermesFirstRecordList") && mapper.includes("approvalRequests: input.response.approval_requests") && types.includes("approvalRequests?: Record<string, unknown>[]"));
+check("maps_suggested_vault_updates_to_draft_review_candidates_after_safety_scrub", normalizer.includes("suggested_vault_updates: safeHermesFirstRecordList") && appStore.includes("mergeSuggestedVaultUpdates(suggestedVaultUpdates, mappedChat.suggestedVaultUpdates)"));
+check("maps_warnings_and_errors_to_metadata_after_safety_scrub", normalizer.includes("warnings: safeHermesFirstStringList") && normalizer.includes("errors: safeHermesFirstErrorsList") && mapper.includes("contract_warnings") && mapper.includes("errors: input.response.errors"));
+check("response_mapping_scrubs_unsafe_native_fragments_without_product_strategy", hermesFirst.includes("sanitizeOutboundHermesContextText") && hermesFirst.includes("HERMES_FIRST_UNSAFE_RESPONSE_RECORD_KEYS") && !normalizer.includes("traffic social") && !normalizer.includes("publish luon"));
 check("does_not_generate_assumptions_or_suggested_actions_unless_hermes_sent_them", mapper.includes("assumptions: []") && mapper.includes("suggestedActions: []"));
 check("needs_user_input_maps_to_completed_turn", normalizer.includes('payload.status === "needs_user_input"') && mapper.includes('input.response.status === "failed" ? "failed" : "completed"'));
 check("validates_response_ids_before_mapping", normalizer.includes("responseContractFailure") && hermesFirst.includes("responseFieldMismatch") && hermesFirst.includes("Hermes CMO chat response identifiers did not match the request"));
