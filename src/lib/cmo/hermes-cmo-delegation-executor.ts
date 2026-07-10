@@ -4,10 +4,6 @@ import {
   type HermesEchoBrief,
   type HermesSurfBrief,
 } from "./hermes-client";
-import {
-  runLensMeasurementRequest,
-} from "./lens-measurement-runner";
-import type { LensMeasurementResult } from "./lens-measurement-result";
 
 export type HermesCmoExecutableAgent = "echo" | "surf" | "lens";
 export type HermesCmoExecutableMode = "echo.default" | "echo.source_translate" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse" | "lens.measurement";
@@ -101,6 +97,52 @@ interface ExecutorInput {
   delegations: Record<string, unknown>[];
   maxDelegations: number;
 }
+
+interface LensMeasurementDelegateResult {
+  contract: "lens.measurement_result.v1";
+  status: "completed" | "missing_capability" | "no_data" | "failed";
+  scope: {
+    tenant_id: string;
+    workspace_id: string;
+    app_id: string;
+    range_key: string;
+  };
+  safe_user_message?: string;
+  missing_requirements?: Array<{ safe_user_message: string }>;
+  error?: { safe_message?: string };
+  metrics_pack?: {
+    contract: string;
+    appId: string;
+    generatedAt: string;
+    range: Record<string, unknown> & { key: string };
+    quality: { status: string; isStale: boolean };
+    metrics: unknown[];
+  };
+}
+
+const loadLensMeasurementRunner = async (): Promise<{
+  runLensMeasurementRequest: (input: {
+    tenantId?: string;
+    workspaceId: string;
+    appId: string;
+    rangeKey: string;
+    metricIntent: string;
+    requestId: string;
+  }) => Promise<LensMeasurementDelegateResult>;
+}> => {
+  const modulePath = "./lens-measurement-runner";
+
+  return await import(modulePath) as {
+    runLensMeasurementRequest: (input: {
+      tenantId?: string;
+      workspaceId: string;
+      appId: string;
+      rangeKey: string;
+      metricIntent: string;
+      requestId: string;
+    }) => Promise<LensMeasurementDelegateResult>;
+  };
+};
 
 const SURF_MODES = new Set(["surf.default", "surf.x", "surf.trend", "surf.pulse"]);
 
@@ -427,7 +469,7 @@ function lensRangeKey(delegation: NormalizedDelegation): string {
   return value || "this_week";
 }
 
-function lensArtifact(result: LensMeasurementResult): Record<string, unknown> {
+function lensArtifact(result: LensMeasurementDelegateResult): Record<string, unknown> {
   const status = result.status === "completed" ? "completed" : result.status === "failed" ? "failed" : "unavailable";
   const pack = result.status === "completed" ? result.metrics_pack : undefined;
   const caveats = [
@@ -744,6 +786,7 @@ async function executeOne(
   }
 
   if (delegation.targetAgent === "lens") {
+    const { runLensMeasurementRequest } = await loadLensMeasurementRunner();
     const result = await runLensMeasurementRequest({
       tenantId: input.tenantId,
       workspaceId: input.workspaceId ?? input.workspaceSlug,

@@ -2103,10 +2103,9 @@ const requestIsExternalResearch = (request: HermesCmoRuntimeRequest): boolean =>
 const requestIsWeeklyCampaignWorkflow = (request: HermesCmoRuntimeRequest): boolean =>
   request.intent.mode === "cmo.weekly_campaign_plan" &&
   request.intent.explicit_command === "/goal" &&
-  isRecord(request.workflow) &&
+  request.workflow !== undefined &&
   request.workflow.contract === "cmo.weekly_campaign_workflow.v1" &&
-  request.workflow.trigger === "explicit_goal_command" &&
-  request.workflow.plan_only === true;
+  isWeeklyCampaignWorkflowEnvelope(request);
 
 const requestIsSourceBackedOrSeeking = (request: HermesCmoRuntimeRequest): boolean => {
   const sourceAcquisition = isRecord(request.source_acquisition) ? request.source_acquisition : {};
@@ -3625,6 +3624,25 @@ const hermesHttpFailureReason = async (response: Response, agentLabel: string): 
   return detail ? `${base}${category} Detail: ${detail}` : `${base}${category}`;
 };
 
+const isWeeklyCampaignWorkflowEnvelope = (request: Record<string, unknown>): boolean => {
+  const workflow = isRecord(request.workflow) ? request.workflow : null;
+
+  return Boolean(
+    workflow &&
+    workflow.contract === "cmo.weekly_campaign_workflow.v1" &&
+    workflow.trigger === "explicit_goal_command" &&
+    workflow.plan_only === true &&
+    Array.isArray(workflow.stages) &&
+    workflow.stages.join("|") === "lens|surf|echo|cmo_synthesis" &&
+    Array.isArray(workflow.required_artifacts) &&
+    workflow.required_artifacts.join("|") === "lens.measurement_result.v1|hermes.surf.response.v1|hermes.echo.response.v1|cmo.weekly_campaign_pack.v1" &&
+    isRecord(workflow.specialist_policy) &&
+    workflow.specialist_policy.lens === "required_if_available" &&
+    workflow.specialist_policy.surf === "required_if_available" &&
+    workflow.specialist_policy.echo === "required_if_available",
+  );
+};
+
 export const validateHermesCmoRuntimeRequest = (request: unknown): request is HermesCmoRuntimeRequest => {
   if (!isRecord(request)) {
     return false;
@@ -3650,13 +3668,18 @@ export const validateHermesCmoRuntimeRequest = (request: unknown): request is He
     return false;
   }
 
+  const weeklyCampaignWorkflow = request.intent.mode === "cmo.weekly_campaign_plan";
+  const weeklyWorkflowEnvelope = isWeeklyCampaignWorkflowEnvelope(request);
+
   if (
     !isNonEmptyString(request.workspace.workspace_id) ||
     !isNonEmptyString(request.workspace.app_id) ||
     !isNonEmptyString(request.workspace.app_name) ||
     !isNonEmptyString(request.user.user_id) ||
     !isStringOrNull(request.user.display_name ?? null) ||
-    request.intent.mode !== "cmo.default" ||
+    (request.intent.mode !== "cmo.default" && !weeklyCampaignWorkflow) ||
+    (weeklyCampaignWorkflow && !weeklyWorkflowEnvelope) ||
+    (request.intent.mode === "cmo.default" && weeklyWorkflowEnvelope) ||
     !isNonEmptyString(request.intent.user_message) ||
     !isStringOrNull(request.intent.explicit_command ?? null)
   ) {
@@ -3732,7 +3755,13 @@ const buildHermesCmoLiveRequest = (
     ...(creativeAgentAllowed ? ["creative"] as const : []),
   ];
   const allowedSurfModesForRequest: HermesSurfMode[] = boundedDelegationAllowed ? ["surf.default", "surf.x", "surf.trend", "surf.pulse"] : [];
-  const delegationsMode = boundedDelegationAllowed ? "echo_surf_bounded" : echoRetryAllowed ? "echo_retry_bounded" : "proposals_only";
+  const delegationsMode = boundedDelegationAllowed
+    ? weeklyCampaignWorkflow
+      ? "weekly_campaign_lens_surf_echo_bounded"
+      : "echo_surf_bounded"
+    : echoRetryAllowed
+      ? "echo_retry_bounded"
+      : "proposals_only";
   const delegationResultsArtifact = options.delegationResults?.length
     ? {
         type: "cmo_engine_delegation_results",
@@ -3773,6 +3802,7 @@ const buildHermesCmoLiveRequest = (
       allowed_surf_modes: allowedSurfModesForRequest,
       delegations_mode: delegationsMode,
       allowSubAgentExecution: specialistExecutionAllowed,
+      ...(weeklyCampaignWorkflow ? { allowLensExecution: boundedDelegationAllowed } : {}),
       allowSurfExecution: boundedDelegationAllowed,
       allowEchoExecution: echoExecutionAllowed,
       ...(creativeExecutionRequested ? { allowCreativeExecution: true } : {}),
@@ -3869,7 +3899,13 @@ const buildHermesCmoLiveRequest = (
         live_only: true,
         call_only: "hermes_cmo_agent",
         sub_agent_execution_allowed: specialistExecutionAllowed,
-        delegation_policy: boundedDelegationAllowed ? "echo_surf_only_bounded" : echoRetryAllowed ? "echo_retry_bounded" : "disabled",
+        delegation_policy: boundedDelegationAllowed
+          ? weeklyCampaignWorkflow
+            ? "weekly_campaign_lens_surf_echo_bounded"
+            : "echo_surf_only_bounded"
+          : echoRetryAllowed
+            ? "echo_retry_bounded"
+            : "disabled",
         allowed_agents: allowedAgentsForRequest,
         allowed_surf_modes: allowedSurfModesForRequest,
         creative_profile: creativeAgentAllowed ? getCmoHermesCreativeProfile() : null,
@@ -3888,6 +3924,7 @@ const buildHermesCmoLiveRequest = (
       },
       execution_boundary: {
         sub_agent_execution_allowed: specialistExecutionAllowed,
+        ...(weeklyCampaignWorkflow ? { lens_execution_allowed: boundedDelegationAllowed } : {}),
         surf_execution_allowed: boundedDelegationAllowed,
         echo_execution_allowed: echoExecutionAllowed,
         ...(creativeExecutionRequested ? { creative_execution_allowed: true } : {}),

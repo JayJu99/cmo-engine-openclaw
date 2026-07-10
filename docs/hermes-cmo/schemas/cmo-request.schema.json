@@ -133,10 +133,32 @@
           ]
         },
         "required_artifacts": {
-          "type": "array"
+          "const": [
+            "lens.measurement_result.v1",
+            "hermes.surf.response.v1",
+            "hermes.echo.response.v1",
+            "cmo.weekly_campaign_pack.v1"
+          ]
         },
         "specialist_policy": {
-          "type": "object"
+          "type": "object",
+          "required": [
+            "lens",
+            "surf",
+            "echo"
+          ],
+          "properties": {
+            "lens": {
+              "const": "required_if_available"
+            },
+            "surf": {
+              "const": "required_if_available"
+            },
+            "echo": {
+              "const": "required_if_available"
+            }
+          },
+          "additionalProperties": true
         }
       },
       "additionalProperties": true
@@ -247,6 +269,66 @@
       "additionalProperties": true
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "intent": {
+            "properties": {
+              "mode": {
+                "const": "cmo.weekly_campaign_plan"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "workflow"
+        ],
+        "properties": {
+          "intent": {
+            "properties": {
+              "explicit_command": {
+                "const": "/goal"
+              }
+            },
+            "required": [
+              "explicit_command"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "workflow"
+        ]
+      },
+      "then": {
+        "properties": {
+          "intent": {
+            "properties": {
+              "mode": {
+                "const": "cmo.weekly_campaign_plan"
+              },
+              "explicit_command": {
+                "const": "/goal"
+              }
+            },
+            "required": [
+              "mode",
+              "explicit_command"
+            ]
+          }
+        }
+      }
+    }
+  ],
   "not": {
     "anyOf": [
       {

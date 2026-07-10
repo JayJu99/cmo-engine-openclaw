@@ -162,11 +162,15 @@ assertExcludes("src/lib/cmo/goal-workflow-smoke.ts", /\bPublisher\b.*\(/, "Smoke
 const appChatSource = source("src/lib/cmo/app-chat-store.ts");
 const smokeCallIndex = appChatSource.indexOf("maybeCreateCmoGoalWorkflowSmokeResponse({");
 const smokeWriteIndex = appChatSource.indexOf("await writeJsonFile(sessionPath(sessionId), smokeSession);");
-const hermesFirstRouteIndex = appChatSource.indexOf("const hermesFirstNormalChatRequested = isHermesFirstNormalChatTurn({");
+const weeklyWorkflowGateIndex = appChatSource.indexOf("const weeklyCampaignWorkflowRequested = isCmoGoalWorkflowSmokeRequest(request.message);");
+const hermesFirstRouteIndex = appChatSource.indexOf("const hermesFirstNormalChatRequested = !weeklyCampaignWorkflowRequested && isHermesFirstNormalChatTurn({");
 assert.notEqual(smokeCallIndex, -1, "createAppChatSession must call smoke helper");
 assert.notEqual(smokeWriteIndex, -1, "Smoke branch must persist through app-chat session store");
+assert.notEqual(weeklyWorkflowGateIndex, -1, "App chat must explicitly detect qualifying weekly /goal workflow requests");
 assert.ok(smokeCallIndex < smokeWriteIndex, "Smoke branch should create response before writing smoke session");
-assert.ok(smokeCallIndex < hermesFirstRouteIndex, "/goal smoke gate must run before native Hermes normal-chat routing");
+assert.ok(weeklyWorkflowGateIndex < hermesFirstRouteIndex, "Weekly /goal workflow gate must run before native Hermes normal-chat routing");
+assert.match(appChatSource, /weeklyCampaignWorkflowRequested\s*\?\s*null\s*:\s*maybeCreateCmoGoalWorkflowSmokeResponse/, "Qualifying weekly /goal must bypass the deterministic smoke response");
+assert.match(appChatSource, /weeklyCampaignWorkflow:\s*\{ commandText: weeklyCampaignCommandText \}/, "Qualifying weekly /goal must transport only its command text into the Hermes workflow request");
 for (const marker of [
   "const turnAttachments = bindCmoAttachmentsToTurn",
   "await buildContextPack({",
