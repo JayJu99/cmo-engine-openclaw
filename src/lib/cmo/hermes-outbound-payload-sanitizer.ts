@@ -1,31 +1,4 @@
-const OUTBOUND_FORBIDDEN_TEXT_PATTERN =
-  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|Volumes)\/|\/private(?:\/|\b)|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$)|(?:raw[_-]?artifact[_-]?payload|rawArtifactPayload|raw[_-]?contract[_-]?json|rawContractJson|local[_-]?path|localPath|source[_-]?local[_-]?path|sourceLocalPath)|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9._-]{20,})/i;
 export const OUTBOUND_HERMES_CALLSITE_GUARD_VERSION = "context-sanitizer-v2" as const;
-const OUTBOUND_CALLSITE_FORBIDDEN_LITERALS = [
-  { literal: "[hermes_local_artifact_path_redacted]", label: "hermes_local_artifact_path_redacted" },
-  { literal: "hermes_local_artifact_path_redacted", label: "hermes_local_artifact_path_redacted" },
-  { literal: ".png_redact", label: ".png_redact" },
-  { literal: "/tmp/", label: "/tmp/" },
-  { literal: "/Users/", label: "/Users/" },
-  { literal: "/home/", label: "/home/" },
-  { literal: "/var/", label: "/var/" },
-  { literal: "/mnt/", label: "/mnt/" },
-  { literal: "/private", label: "/private" },
-  { literal: "/Volumes/", label: "/Volumes/" },
-  { literal: "file:", label: "file:" },
-  { literal: "conversion_h_", label: "conversion_h_" },
-  { literal: "creative-agent-images", label: "creative-agent-images" },
-  { literal: "cmo-creative-execute", label: "cmo-creative-execute" },
-  { literal: "Creative_image_asset_Refine", label: "Creative_image_asset_Refine" },
-  { literal: "raw_artifact_payload", label: "raw_artifact_payload" },
-  { literal: "rawArtifactPayload", label: "raw_artifact_payload" },
-  { literal: "raw_contract_json", label: "raw_contract_json" },
-  { literal: "rawContractJson", label: "raw_contract_json" },
-  { literal: "local_path", label: "local_path" },
-  { literal: "localPath", label: "local_path" },
-  { literal: "source_local_path", label: "local_path" },
-  { literal: "sourceLocalPath", label: "local_path" },
-] as const;
 
 const TEXT_PLACEHOLDER =
   "Creative artifact text was redacted by Product before sending this turn to Hermes. Use canonical chat text and Product reference asset metadata for context.";
@@ -68,9 +41,39 @@ export type OutboundHermesBlockedClass =
   | "raw_artifact"
   | "serialized_payload_string_match";
 
+interface OutboundHermesUnsafeTextRule {
+  class: Exclude<OutboundHermesBlockedClass, "serialized_payload_string_match">;
+  label: string;
+  redactionToken: string;
+  pattern: RegExp;
+}
+
+export interface OutboundHermesForbiddenMatch {
+  class: Exclude<OutboundHermesBlockedClass, "serialized_payload_string_match">;
+  label: string;
+  redactionToken: string;
+}
+
+const OUTBOUND_HERMES_UNSAFE_TEXT_RULES: readonly OutboundHermesUnsafeTextRule[] = [
+  { class: "artifact_text", label: "artifact_path_marker", redactionToken: OUTBOUND_HERMES_ARTIFACT_TEXT_REDACTION, pattern: /\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted/gi },
+  { class: "file_uri", label: "file_uri", redactionToken: OUTBOUND_HERMES_FILE_URI_REDACTION, pattern: /file:[^\s"',})\]]+/gi },
+  { class: "home_path", label: "home_path", redactionToken: OUTBOUND_HERMES_LOCAL_PATH_REDACTION, pattern: /\/home\/[^\r\n"',})\]]*/gi },
+  { class: "local_path", label: "local_path_root", redactionToken: OUTBOUND_HERMES_LOCAL_PATH_REDACTION, pattern: /\/(?:tmp|Users|var|mnt|Volumes)\/[^\r\n"',})\]]*/gi },
+  { class: "local_path", label: "private_path", redactionToken: OUTBOUND_HERMES_LOCAL_PATH_REDACTION, pattern: /\/private(?:\/[^\r\n"',})\]]*)?/gi },
+  { class: "absolute_path", label: "windows_absolute_path", redactionToken: OUTBOUND_HERMES_LOCAL_PATH_REDACTION, pattern: /[A-Za-z]:[\\/][^\s"',})\]]+/g },
+  { class: "artifact_text", label: "artifact_extension", redactionToken: OUTBOUND_HERMES_ARTIFACT_TEXT_REDACTION, pattern: /\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$)/gi },
+  { class: "artifact_text", label: "artifact_runtime_label", redactionToken: OUTBOUND_HERMES_ARTIFACT_TEXT_REDACTION, pattern: /(?:creative-agent-images|cmo-creative-execute|conversion_h_|Creative[_\s-]*image[_\s-]*asset[_\s-]*Refine)/gi },
+  { class: "raw_artifact", label: "raw_artifact", redactionToken: OUTBOUND_HERMES_ARTIFACT_TEXT_REDACTION, pattern: /\b(?:raw[_-]?artifact[_-]?payload|rawArtifactPayload|raw[_-]?contract[_-]?json|rawContractJson)\b/gi },
+  { class: "local_path", label: "local_path", redactionToken: OUTBOUND_HERMES_LOCAL_PATH_REDACTION, pattern: /\b(?:source[_-]?local[_-]?path|sourceLocalPath|local[_-]?path|localPath)\b/gi },
+  { class: "secret_like", label: "secret_sk_proj", redactionToken: OUTBOUND_HERMES_SECRET_REDACTION, pattern: /sk-proj-[A-Za-z0-9_-]{20,}/gi },
+  { class: "secret_like", label: "secret_sk", redactionToken: OUTBOUND_HERMES_SECRET_REDACTION, pattern: /sk-(?!proj-)[A-Za-z0-9_-]{20,}/gi },
+  { class: "secret_like", label: "secret_bearer", redactionToken: OUTBOUND_HERMES_SECRET_REDACTION, pattern: /Bearer\s+[A-Za-z0-9._-]{20,}/gi },
+];
+
 export interface OutboundHermesBlockedDiagnostic {
   path: string;
   class: OutboundHermesBlockedClass;
+  label: string;
   sample: string;
 }
 
@@ -116,12 +119,45 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const withoutSafeOutboundRedactionTokens = (value: string): string =>
   value.replace(SAFE_OUTBOUND_REDACTION_TOKEN_PATTERN, "");
 
+const outboundHermesUnsafeTextMatchesWithLiterals = (
+  value: string,
+): Array<{ rule: OutboundHermesUnsafeTextRule; literal: string }> => {
+  const rawValue = withoutSafeOutboundRedactionTokens(value);
+
+  return OUTBOUND_HERMES_UNSAFE_TEXT_RULES.flatMap((rule) =>
+    Array.from(rawValue.matchAll(rule.pattern)).map((match) => ({
+      rule,
+      literal: match[0],
+    })));
+};
+
+export const outboundHermesStringForbiddenMatches = (value: string): OutboundHermesForbiddenMatch[] => {
+  const seen = new Set<string>();
+
+  return outboundHermesUnsafeTextMatchesWithLiterals(value).flatMap(({ rule }) => {
+    const key = `${rule.class}:${rule.label}`;
+
+    if (seen.has(key)) {
+      return [];
+    }
+
+    seen.add(key);
+    return [{
+      class: rule.class,
+      label: rule.label,
+      redactionToken: rule.redactionToken,
+    }];
+  });
+};
+
 export const outboundHermesStringHasForbiddenArtifactText = (value: string): boolean =>
-  OUTBOUND_FORBIDDEN_TEXT_PATTERN.test(withoutSafeOutboundRedactionTokens(value));
+  outboundHermesStringForbiddenMatches(value).length > 0;
 
 export const outboundHermesCallsiteBlockedLiteralLabels = (outboundPayloadJson: string): string[] =>
-  OUTBOUND_CALLSITE_FORBIDDEN_LITERALS
-    .flatMap(({ literal, label }) => withoutSafeOutboundRedactionTokens(outboundPayloadJson).includes(literal) ? [label] : []);
+  uniqueLimited(
+    outboundHermesStringForbiddenMatches(outboundPayloadJson).map((match) => match.label),
+    OUTBOUND_HERMES_UNSAFE_TEXT_RULES.length,
+  );
 
 export interface OutboundHermesCallsiteBlockInspection {
   literals: string[];
@@ -177,7 +213,7 @@ const uniqueBlockedDiagnostics = (
   const seen = new Set<string>();
 
   return values.filter((value) => {
-    const key = `${value.path}:${value.class}`;
+    const key = `${value.path}:${value.class}:${value.label}`;
 
     if (seen.has(key) || seen.size >= limit) {
       return false;
@@ -188,62 +224,20 @@ const uniqueBlockedDiagnostics = (
   });
 };
 
-const blockedClassForString = (value: string): OutboundHermesBlockedClass | null => {
-  if (!outboundHermesStringHasForbiddenArtifactText(value)) {
-    return null;
-  }
-
-  if (/sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9._-]{20,}/i.test(value)) {
-    return "secret_like";
-  }
-
-  if (/raw[_-]?artifact[_-]?payload|rawArtifactPayload|raw[_-]?contract[_-]?json|rawContractJson/i.test(value)) {
-    return "raw_artifact";
-  }
-
-  if (/file:/i.test(value)) {
-    return "file_uri";
-  }
-
-  if (/\/(?:home)\//i.test(value)) {
-    return "home_path";
-  }
-
-  if (/(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]/.test(value)) {
-    return "absolute_path";
-  }
-
-  if (/\/(?:tmp|Users|var|mnt|private|Volumes)(?:\/|\b)/i.test(value)) {
-    return "local_path";
-  }
-
-  if (/conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$)/i.test(value)) {
-    return "artifact_text";
-  }
-
-  return "serialized_payload_string_match";
-};
-
 const blockedSample = (blockedClass: OutboundHermesBlockedClass): string =>
   `[redacted:${blockedClass}]`;
 
 const literalEntriesForString = (value: string): Array<{ literal: string; label: string }> =>
-  OUTBOUND_CALLSITE_FORBIDDEN_LITERALS.filter(({ literal }) =>
-    withoutSafeOutboundRedactionTokens(value).includes(literal));
+  outboundHermesUnsafeTextMatchesWithLiterals(value).map(({ rule, literal }) => ({
+    literal,
+    label: rule.label,
+  }));
 
 export function sanitizeOutboundHermesContextText(value: string): string {
-  return value
-    .replace(/\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted/gi, OUTBOUND_HERMES_ARTIFACT_TEXT_REDACTION)
-    .replace(/file:[^\s"',})\]]+/gi, OUTBOUND_HERMES_FILE_URI_REDACTION)
-    .replace(/[A-Za-z]:[\\/][^\s"',})\]]+/g, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
-    .replace(/\/(?:tmp|Users|home|var|mnt|private|Volumes)\/[^\r\n"',})\]]*/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
-    .replace(/\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$)/gi, OUTBOUND_HERMES_ARTIFACT_TEXT_REDACTION)
-    .replace(/(?:creative-agent-images|cmo-creative-execute|conversion_h_|Creative[_\s-]*image[_\s-]*asset[_\s-]*Refine)/gi, OUTBOUND_HERMES_ARTIFACT_TEXT_REDACTION)
-    .replace(/\b(?:raw[_-]?artifact[_-]?payload|rawArtifactPayload|raw[_-]?contract[_-]?json|rawContractJson)\b/gi, OUTBOUND_HERMES_ARTIFACT_TEXT_REDACTION)
-    .replace(/\b(?:local[_-]?path|localPath|source[_-]?local[_-]?path|sourceLocalPath)\b/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
-    .replace(/sk-proj-[A-Za-z0-9_-]{20,}/gi, OUTBOUND_HERMES_SECRET_REDACTION)
-    .replace(/sk-[A-Za-z0-9_-]{20,}/gi, OUTBOUND_HERMES_SECRET_REDACTION)
-    .replace(/Bearer\s+[A-Za-z0-9._-]{20,}/gi, `Bearer ${OUTBOUND_HERMES_SECRET_REDACTION}`);
+  return OUTBOUND_HERMES_UNSAFE_TEXT_RULES.reduce(
+    (redactedValue, rule) => redactedValue.replace(rule.pattern, rule.redactionToken),
+    value,
+  );
 }
 
 const sanitizedSnippetAroundLiteral = (value: string, literal: string): string => {
@@ -254,11 +248,7 @@ const sanitizedSnippetAroundLiteral = (value: string, literal: string): string =
 
   const start = Math.max(0, index - 32);
   const end = Math.min(value.length, index + literal.length + 32);
-  const snippet = value.slice(start, end)
-    .replace(/\s+/g, " ")
-    .replace(/[A-Za-z]:[\\/][^"',\s}]+/g, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
-    .replace(/file:[^"',\s}]+/gi, OUTBOUND_HERMES_LOCAL_PATH_REDACTION)
-    .replace(/\/(?:tmp|Users|home|var|mnt|private|Volumes)\/[^"',\s}]+/g, OUTBOUND_HERMES_LOCAL_PATH_REDACTION);
+  const snippet = sanitizeOutboundHermesContextText(value.slice(start, end).replace(/\s+/g, " "));
 
   return `${start > 0 ? "..." : ""}${snippet}${end < value.length ? "..." : ""}`.slice(0, 240);
 };
@@ -339,7 +329,7 @@ export const inspectOutboundHermesCallsiteBlock = (
   }
 
   return {
-    literals: uniqueLimited(result.literals, OUTBOUND_CALLSITE_FORBIDDEN_LITERALS.length),
+    literals: uniqueLimited(result.literals, OUTBOUND_HERMES_UNSAFE_TEXT_RULES.length),
     sources: result.literals.length ? [source] : [],
     snippets: uniqueLimited(result.snippets, MAX_CALLSITE_SNIPPETS),
     paths: uniqueLimited(result.paths, MAX_CALLSITE_PATHS),
@@ -349,7 +339,7 @@ export const inspectOutboundHermesCallsiteBlock = (
 export const mergeOutboundHermesCallsiteBlockInspections = (
   inspections: OutboundHermesCallsiteBlockInspection[],
 ): OutboundHermesCallsiteBlockInspection => ({
-  literals: uniqueLimited(inspections.flatMap((inspection) => inspection.literals), OUTBOUND_CALLSITE_FORBIDDEN_LITERALS.length),
+  literals: uniqueLimited(inspections.flatMap((inspection) => inspection.literals), OUTBOUND_HERMES_UNSAFE_TEXT_RULES.length),
   sources: Array.from(new Set(inspections.flatMap((inspection) => inspection.sources))),
   snippets: uniqueLimited(inspections.flatMap((inspection) => inspection.snippets), MAX_CALLSITE_SNIPPETS),
   paths: uniqueLimited(inspections.flatMap((inspection) => inspection.paths), MAX_CALLSITE_PATHS),
@@ -607,13 +597,12 @@ export const collectOutboundHermesBlockedDiagnostics = (
   diagnostics: OutboundHermesBlockedDiagnostic[] = [],
 ): OutboundHermesBlockedDiagnostic[] => {
   if (typeof value === "string") {
-    const blockedClass = blockedClassForString(value);
-
-    if (blockedClass) {
+    for (const match of outboundHermesStringForbiddenMatches(value)) {
       diagnostics.push({
         path: jsonPath(path),
-        class: blockedClass,
-        sample: blockedSample(blockedClass),
+        class: match.class,
+        label: match.label,
+        sample: blockedSample(match.class),
       });
     }
 
@@ -631,13 +620,12 @@ export const collectOutboundHermesBlockedDiagnostics = (
 
   Object.entries(value).forEach(([key, item]) => {
     const keyPath = [...path, key];
-    const blockedClass = blockedClassForString(key);
-
-    if (blockedClass) {
+    for (const match of outboundHermesStringForbiddenMatches(key)) {
       diagnostics.push({
         path: jsonPath(keyPath),
-        class: blockedClass,
-        sample: blockedSample(blockedClass),
+        class: match.class,
+        label: match.label,
+        sample: blockedSample(match.class),
       });
     }
 
@@ -711,13 +699,33 @@ export function sanitizeOutboundHermesPayload<T>(
     ...(options.creativeRoute ? { workspace_fallback_suppressed_for_creative: true } : {}),
   };
   const blockedFields = collectBlockedFields(finalOutboundPayload);
-  const serializedPayloadBlocked = outboundHermesStringHasForbiddenArtifactText(JSON.stringify(finalOutboundPayload));
+  const serializedPayload = JSON.stringify(finalOutboundPayload);
+  const serializedForbiddenMatches = outboundHermesStringForbiddenMatches(serializedPayload);
+  const serializedPayloadBlocked = serializedForbiddenMatches.length > 0;
   const blockedDiagnostics = uniqueBlockedDiagnostics(collectOutboundHermesBlockedDiagnostics(finalOutboundPayload));
+  const diagnosticRuleKeys = new Set(blockedDiagnostics.map((diagnostic) => `${diagnostic.class}:${diagnostic.label}`));
+
+  for (const match of serializedForbiddenMatches) {
+    const key = `${match.class}:${match.label}`;
+
+    if (diagnosticRuleKeys.has(key)) {
+      continue;
+    }
+
+    blockedDiagnostics.push({
+      path: "$",
+      class: match.class,
+      label: match.label,
+      sample: blockedSample(match.class),
+    });
+    diagnosticRuleKeys.add(key);
+  }
 
   if (serializedPayloadBlocked && blockedDiagnostics.length === 0) {
     blockedDiagnostics.push({
       path: "$",
       class: "serialized_payload_string_match",
+      label: "serialized_payload_string_match",
       sample: blockedSample("serialized_payload_string_match"),
     });
   }
@@ -726,6 +734,7 @@ export function sanitizeOutboundHermesPayload<T>(
     blockedDiagnostics.map((diagnostic) => diagnostic.path),
     MAX_FIELD_PREVIEW_COUNT,
   );
+  const blockedLiteralLabels = Array.from(new Set(blockedDiagnostics.map((diagnostic) => diagnostic.label)));
   const blockedClasses = Array.from(new Set(blockedDiagnostics.map((diagnostic) => diagnostic.class)));
   const diagnostics: OutboundHermesPayloadSanitizerDiagnostics = {
     ...provisionalDiagnostics,
@@ -736,7 +745,7 @@ export function sanitizeOutboundHermesPayload<T>(
     payload: addDiagnostics(finalOutboundPayload, diagnostics),
     diagnostics,
     blockedFieldsPreview,
-    blockedLiteralLabels: blockedClasses,
+    blockedLiteralLabels,
     blockedClasses,
     blockedDiagnostics,
   };

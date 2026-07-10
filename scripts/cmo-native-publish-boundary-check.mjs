@@ -236,12 +236,13 @@ function blockedFailure(message) {
     runtimeErrorReason: "invalid_response",
     requestId: "req_hf_cmo_chat_msg_publish",
     request: requestFor(message),
-    detail: "/home/, file:",
-    outboundBlockedLiterals: ["/home/", "file:"],
+    detail: "home_path, file_uri",
+    outboundBlockedLiterals: ["home_path", "file_uri"],
     outboundBlockedSources: ["fetch_body"],
     outboundBlockedSnippets: ["...lensOutputPath\":\"[local_path_redacted]..."],
     outboundBlockedPaths: ["context_pack.artifacts_in.0.context.channel_metrics_sync_status.lensOutputPath"],
     outboundBlockedFieldsPreview: ["context_pack.artifacts_in.0.context.channel_metrics_sync_status.lensOutputPath"],
+    outboundBlockedClasses: ["home_path", "file_uri"],
   };
 }
 
@@ -313,6 +314,45 @@ try {
   assert.match(boundaryPublish.answer, /No Product fallback answer was generated/i, "blocked publish: must not return Product-authored publish strategy");
   assert.doesNotMatch(boundaryPublish.answer, /exact asset or draft|target channel\/account|I cannot publish from this turn yet/i, "blocked publish: must not contain old Product publish clarification");
   assertNoProductPublishPreflight(boundaryPublish, "blocked publish");
+  assert.deepEqual(
+    boundaryPublish.hermesCmoMetadata?.outbound_blocked_paths,
+    ["context_pack.artifacts_in.0.context.channel_metrics_sync_status.lensOutputPath"],
+    "blocked publish: boundary metadata must preserve sanitized outbound paths",
+  );
+  assert.deepEqual(
+    boundaryPublish.hermesCmoMetadata?.outbound_blocked_literal_labels,
+    ["home_path", "file_uri"],
+    "blocked publish: boundary metadata must preserve blocked labels",
+  );
+  assert.deepEqual(
+    boundaryPublish.hermesCmoMetadata?.outbound_blocked_classes,
+    ["home_path", "file_uri"],
+    "blocked publish: boundary metadata must preserve blocked classes",
+  );
+  assert.ok(
+    [
+      boundaryPublish.hermesCmoMetadata?.outbound_blocked_paths,
+      boundaryPublish.hermesCmoMetadata?.outbound_blocked_fields_preview,
+      boundaryPublish.hermesCmoMetadata?.outbound_blocked_literal_labels,
+      boundaryPublish.hermesCmoMetadata?.outbound_blocked_classes,
+    ].some((value) => Array.isArray(value) && value.length > 0),
+    "blocked publish: persisted outbound diagnostics must not all be empty",
+  );
+
+  const rootOnlyBoundary = hermesFirst.hermesFirstBoundaryFailureResponse({
+    failure: {
+      ...blockedFailure("serialized outbound value"),
+      requestId: "req_hf_cmo_chat_msg_root_only",
+      detail: "file_uri",
+      outboundBlockedLiterals: ["file_uri"],
+      outboundBlockedPaths: ["$"],
+      outboundBlockedFieldsPreview: ["$"],
+      outboundBlockedClasses: ["file_uri"],
+    },
+  });
+  assert.deepEqual(rootOnlyBoundary.hermesCmoMetadata?.outbound_blocked_fields_preview, ["$"]);
+  assert.deepEqual(rootOnlyBoundary.hermesCmoMetadata?.outbound_blocked_literal_labels, ["file_uri"]);
+  assert.deepEqual(rootOnlyBoundary.hermesCmoMetadata?.outbound_blocked_classes, ["file_uri"]);
 
   const goalPublish = hermesFirst.hermesFirstBoundaryFailureResponse({
     failure: blockedFailure("/goal publish luon"),

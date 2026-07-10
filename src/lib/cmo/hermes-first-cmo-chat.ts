@@ -1234,6 +1234,18 @@ export async function runHermesFirstCmoChat(input: HermesFirstCmoChatRequestInpu
     inspectOutboundHermesCallsiteBlock("fetch_body", finalOutboundBody),
     inspectOutboundHermesCallsiteBlock("fetch_body", finalOutboundRequest),
   ]);
+  const outboundBlockedPaths = Array.from(new Set([
+    ...fetchBodyBlockInspection.paths,
+    ...outboundSanitizer.blockedFieldsPreview,
+  ]));
+  const outboundBlockedLiteralLabels = Array.from(new Set([
+    ...fetchBodyBlockInspection.literals,
+    ...outboundSanitizer.blockedLiteralLabels,
+  ]));
+  const outboundBlockedClasses = Array.from(new Set([
+    ...outboundSanitizer.blockedClasses,
+    ...outboundBlockedClassesFromLabels(fetchBodyBlockInspection.literals),
+  ]));
 
   if (
     outboundSanitizer.diagnostics.outbound_hermes_payload_path_like_blocked ||
@@ -1247,13 +1259,13 @@ export async function runHermesFirstCmoChat(input: HermesFirstCmoChatRequestInpu
         finalOutboundRequest,
         "Product blocked Hermes-first request because the final outbound body still contained unsafe local path, secret, or artifact text after scrub",
         {
-          detail: fetchBodyBlockInspection.literals.join(", ") || outboundSanitizer.blockedFieldsPreview.join(", "),
-          outboundBlockedLiterals: fetchBodyBlockInspection.literals,
+          detail: outboundBlockedLiteralLabels.join(", ") || outboundBlockedPaths.join(", "),
+          outboundBlockedLiterals: outboundBlockedLiteralLabels,
           outboundBlockedSources: fetchBodyBlockInspection.sources,
           outboundBlockedSnippets: fetchBodyBlockInspection.snippets,
-          outboundBlockedPaths: fetchBodyBlockInspection.paths,
+          outboundBlockedPaths,
           outboundBlockedFieldsPreview: outboundSanitizer.blockedFieldsPreview,
-          outboundBlockedClasses: outboundBlockedClassesFromLabels(fetchBodyBlockInspection.literals),
+          outboundBlockedClasses,
         },
       ),
     };

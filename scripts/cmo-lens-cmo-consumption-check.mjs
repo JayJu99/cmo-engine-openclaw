@@ -251,6 +251,7 @@ async function assertOutboundSanitizerBehavior() {
       {
         path: "$.context_pack.latestSessions[0].summary",
         class: "home_path",
+        label: "home_path",
         sample: "[redacted:home_path]",
       },
     ]);
@@ -264,6 +265,7 @@ async function assertOutboundSanitizerBehavior() {
       {
         path: '$["[redacted_key]"]',
         class: "home_path",
+        label: "home_path",
         sample: "[redacted:home_path]",
       },
     ]);
@@ -282,15 +284,18 @@ async function assertOutboundSanitizerBehavior() {
 
     assert.equal(serializedOnlyResult.diagnostics.outbound_hermes_payload_path_like_blocked, true);
     assert.deepEqual(serializedOnlyResult.blockedFieldsPreview, ["$"]);
-    assert.deepEqual(serializedOnlyResult.blockedLiteralLabels, ["serialized_payload_string_match"]);
-    assert.deepEqual(serializedOnlyResult.blockedClasses, ["serialized_payload_string_match"]);
-    assert.deepEqual(serializedOnlyResult.blockedDiagnostics, [
-      {
-        path: "$",
-        class: "serialized_payload_string_match",
-        sample: "[redacted:serialized_payload_string_match]",
-      },
-    ]);
+    assert.ok(serializedOnlyResult.blockedLiteralLabels.length > 0, "root-only serialized blocks must include a rule label");
+    assert.ok(serializedOnlyResult.blockedClasses.length > 0, "root-only serialized blocks must include a rule class");
+    assert.ok(
+      serializedOnlyResult.blockedDiagnostics.every((diagnostic) =>
+        diagnostic.path === "$" && diagnostic.label && diagnostic.class !== "serialized_payload_string_match"),
+      "root-only serialized blocks must be classified by the same rule as the final guard",
+    );
+    assert.ok(
+      sanitizer.outboundHermesStringForbiddenMatches("file:/Users/[redacted]/serialized-only.json")
+        .some((match) => match.class === "file_uri" && match.label === "file_uri" && match.redactionToken === "[file_uri_redacted]"),
+      "final guard match details must expose the shared file URI rule",
+    );
     assertNoForbiddenOutboundLiterals(JSON.stringify(serializedOnlyResult.blockedDiagnostics), "serialized-only blocked diagnostics");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
@@ -439,9 +444,12 @@ assert.doesNotMatch(sourceSection(v11Path, "function sanitizedMessages", "functi
 assert.doesNotMatch(sourceSection(mapperPath, "function replayableChatHistory", "function recentSessionSummary"), /lensMeasurementResult|lens_measurement_result|metrics_pack/i, "Legacy Hermes history must not serialize previous Lens measurement payloads");
 assertIncludes(outboundSanitizerPath, "export function sanitizeOutboundHermesContextText", "Outbound sanitizer must expose targeted context text redaction");
 assertIncludes(outboundSanitizerPath, "OUTBOUND_HERMES_LOCAL_PATH_REDACTION", "Outbound sanitizer must use stable local path redaction marker");
-assertIncludes(outboundSanitizerPath, "tmp|Users|home|var|mnt|private|Volumes", "Outbound sanitizer must keep these local path roots guarded");
-assertIncludes(outboundSanitizerPath, ".replace(/file:", "Outbound sanitizer must redact file URLs");
-assertIncludes(outboundSanitizerPath, ".replace(/[A-Za-z]:", "Outbound sanitizer must redact absolute Windows paths");
+assertIncludes(outboundSanitizerPath, "label: \"home_path\"", "Outbound sanitizer must keep home paths guarded");
+assertIncludes(outboundSanitizerPath, "tmp|Users|var|mnt|Volumes", "Outbound sanitizer must keep non-home local path roots guarded");
+assertIncludes(outboundSanitizerPath, "private_path", "Outbound sanitizer must keep private local paths guarded");
+assertIncludes(outboundSanitizerPath, "OUTBOUND_HERMES_UNSAFE_TEXT_RULES", "Outbound sanitizer must define one shared unsafe-text rule list");
+assertIncludes(outboundSanitizerPath, "redactionToken", "Each outbound guard rule must define a redaction token");
+assertIncludes(outboundSanitizerPath, "outboundHermesStringForbiddenMatches", "Final guard and diagnostics must expose shared match details");
 assertIncludes(outboundSanitizerPath, "OUTBOUND_HERMES_ARTIFACT_TEXT_REDACTION", "Outbound sanitizer must redact known local artifact literals");
 assertIncludes(outboundSanitizerPath, "OUTBOUND_HERMES_FILE_URI_REDACTION", "Outbound sanitizer must preserve a safe file URI redaction marker");
 assertIncludes(outboundSanitizerPath, "sanitizeOutboundHermesContextText(value)", "Outbound sanitizer must run targeted context redaction before final guard replacement");
@@ -449,7 +457,9 @@ assertMatches(outboundSanitizerPath, /sanitizeOutboundHermesContextText\(value\)
 assertIncludes(outboundSanitizerPath, "redactFinalOutboundPayloadStrings", "Sanitizer must recursively redact the final outbound payload copy");
 assertIncludes(outboundSanitizerPath, "const finalOutboundPayload = redactFinalOutboundPayloadStrings(", "Sanitizer must build a final redacted payload copy");
 assertIncludes(outboundSanitizerPath, "const blockedFields = collectBlockedFields(finalOutboundPayload);", "Sanitizer must inspect the final redacted payload before diagnostics are attached");
-assertMatches(outboundSanitizerPath, /const serializedPayloadBlocked = outboundHermesStringHasForbiddenArtifactText\(JSON\.stringify\(finalOutboundPayload\)\);/, "Sanitizer must re-run serialized block status against the final redacted payload");
+assertIncludes(outboundSanitizerPath, "const serializedForbiddenMatches = outboundHermesStringForbiddenMatches(serializedPayload);", "Sanitizer must classify final serialized guard matches using the shared rules");
+assertIncludes(outboundSanitizerPath, "const serializedPayloadBlocked = serializedForbiddenMatches.length > 0;", "Sanitizer must re-run serialized block status against the final redacted payload");
+assertIncludes(outboundSanitizerPath, "label: match.label", "Serialized guard diagnostics must preserve the matched rule label");
 assertExcludes(outboundSanitizerPath, /const provisionalPayload = addDiagnostics\(sanitizedPayload, provisionalDiagnostics\);/, "Sanitizer must not inspect a diagnostics-attached provisional payload for block status");
 assertExcludes(outboundSanitizerPath, /12 Knowledge|13 Sources|Apps\/Holdstation Mini App/, "Outbound sanitizer must not target logical Vault/project paths");
 assert.doesNotMatch(sourceSection(outboundSanitizerPath, "const sanitizedSnippetAroundLiteral", "const collectCallsiteBlockedStringFields"), /file:\[local_path_redacted\]|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/\[local_path_redacted\]/, "Outbound diagnostics snippets must not preserve forbidden local path prefixes");
