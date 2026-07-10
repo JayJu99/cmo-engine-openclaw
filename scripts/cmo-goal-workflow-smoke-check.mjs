@@ -162,9 +162,11 @@ assertExcludes("src/lib/cmo/goal-workflow-smoke.ts", /\bPublisher\b.*\(/, "Smoke
 const appChatSource = source("src/lib/cmo/app-chat-store.ts");
 const smokeCallIndex = appChatSource.indexOf("maybeCreateCmoGoalWorkflowSmokeResponse({");
 const smokeWriteIndex = appChatSource.indexOf("await writeJsonFile(sessionPath(sessionId), smokeSession);");
+const hermesFirstRouteIndex = appChatSource.indexOf("const hermesFirstNormalChatRequested = isHermesFirstNormalChatTurn({");
 assert.notEqual(smokeCallIndex, -1, "createAppChatSession must call smoke helper");
 assert.notEqual(smokeWriteIndex, -1, "Smoke branch must persist through app-chat session store");
 assert.ok(smokeCallIndex < smokeWriteIndex, "Smoke branch should create response before writing smoke session");
+assert.ok(smokeCallIndex < hermesFirstRouteIndex, "/goal smoke gate must run before native Hermes normal-chat routing");
 for (const marker of [
   "const turnAttachments = bindCmoAttachmentsToTurn",
   "await buildContextPack({",
@@ -212,11 +214,21 @@ try {
     ...input,
     message: "Tu\u1ea7n n\u00e0y t\u0103ng traffic social 30%",
   });
+  const referralStrategy = smoke.maybeCreateCmoGoalWorkflowSmokeResponse({
+    ...input,
+    message: "How should we improve referral conversion this week?",
+  });
+  const generalStrategy = smoke.maybeCreateCmoGoalWorkflowSmokeResponse({
+    ...input,
+    message: "Create a CMO strategy for our next acquisition push.",
+  });
 
   assert.ok(weekly, "Weekly smoke request should return a response");
   assert.ok(vietnameseWeekly, "Vietnamese weekly goal smoke phrase should return a response");
   assert.equal(vietnameseWeekly.smokeKind, "weekly_goal_plan", "Vietnamese weekly goal phrase should use weekly smoke kind");
   assert.equal(unprefixedWeekly, null, "Unprefixed weekly goal-like text must not trigger smoke helper");
+  assert.equal(referralStrategy, null, "Normal referral strategy chat must remain on the native Hermes path");
+  assert.equal(generalStrategy, null, "Normal CMO strategy chat must remain on the native Hermes path");
   assert.deepEqual(weeklyAgain, weekly, "Smoke output should be deterministic when inputs are supplied");
   assert.equal(weekly.status, "completed", "Weekly smoke should complete synchronously");
   assert.equal(weekly.smokeKind, "weekly_goal_plan", "Weekly smoke kind should be explicit");

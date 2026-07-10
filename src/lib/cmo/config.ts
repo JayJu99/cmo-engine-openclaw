@@ -106,14 +106,6 @@ export function getCmoHermesCmoCanaryApps(): string[] {
   return commaSeparatedEnv("CMO_HERMES_CMO_CANARY_APPS");
 }
 
-export function isCmoHermesFirstCmoChatEnabled(): boolean {
-  return booleanEnv("CMO_HERMES_FIRST_CMO_CHAT_ENABLED", false);
-}
-
-export function getCmoHermesFirstCmoChatCanaryApps(): string[] {
-  return commaSeparatedEnv("CMO_HERMES_FIRST_CMO_CHAT_CANARY_APPS");
-}
-
 export function isCmoHermesFirstCmoChatTraceEnabled(): boolean {
   return booleanEnv("CMO_HERMES_FIRST_CMO_CHAT_TRACE_ENABLED", false);
 }

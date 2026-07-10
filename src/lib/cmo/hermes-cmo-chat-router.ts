@@ -4,14 +4,12 @@ import {
   getCmoHermesCmoCanaryApps,
   getCmoHermesCmoChatV11CanaryApps,
   getCmoHermesCmoToolChatCanaryApps,
-  getCmoHermesFirstCmoChatCanaryApps,
   getCmoHermesUnifiedAgentCanaryApps,
   getCmoHermesUnifiedAgentEndpoint,
   isCmoHermesCmoChatEnabled,
   isCmoHermesCmoChatV11Enabled,
   isCmoHermesCmoChatV11FallbackEnabled,
   isCmoHermesCmoToolChatEnabled,
-  isCmoHermesFirstCmoChatEnabled,
   isCmoHermesUnifiedAgentEnabled,
 } from "@/lib/cmo/config";
 
@@ -76,17 +74,12 @@ export function shouldUseHermesCmoChatV11(appId: string): boolean {
   return isCmoHermesCmoChatV11Enabled() && appIsCanary(appId, getCmoHermesCmoChatV11CanaryApps());
 }
 
-export function shouldUseHermesFirstCmoChat(appId: string): boolean {
-  return isCmoHermesFirstCmoChatEnabled() && appIsCanary(appId, getCmoHermesFirstCmoChatCanaryApps());
-}
-
 export function isHermesFirstLegacyDirectCommand(message: string): boolean {
   return /^\s*(?:(?:\/surf|@surf)(?:\s+x)?\b|\/trend\b|\/pulse\b|\/x\b|(?:\/echo|@echo)\b)/i.test(message);
 }
 
 export function isHermesFirstNormalChatTurn(input: HermesFirstNormalChatTurnInput): boolean {
-  return shouldUseHermesFirstCmoChat(input.appId) &&
-    input.forceFallback !== true &&
+  return Boolean(input.appId.trim()) &&
     !input.localCommand &&
     !isHermesFirstLegacyDirectCommand(input.message);
 }

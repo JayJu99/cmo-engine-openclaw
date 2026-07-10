@@ -1,5 +1,11 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+
 const baseUrl = (process.env.CMO_SMOKE_BASE_URL || "http://127.0.0.1:3002").replace(/\/+$/, "");
 const endpoint = `${baseUrl}/api/cmo/chat`;
+const createdAt = new Date().toISOString();
+const artifactDir = path.resolve(process.env.CMO_SMOKE_ARTIFACT_DIR || "data/runs");
+const artifactPath = path.join(artifactDir, `run_cmo_app_turn_live_smoke_${createdAt.replace(/[:.]/g, "-")}.json`);
 
 function assert(condition, message, detail) {
   if (!condition) {
@@ -37,24 +43,50 @@ function isDashboardJsonText(value) {
 }
 
 const auth = authorizationHeader();
-const response = await fetch(endpoint, {
+const requestBody = {
+  workspaceId: "holdstation",
+  appId: "holdstation-mini-app",
+  appName: "Holdstation Mini App",
+  message: "hi, introduce yourself as the CMO for this workspace",
+  topic: "Phase 1.87 live app-turn smoke",
+  context: {
+    selectedNotes: [],
+    mode: "app_context",
+  },
+};
+
+async function persistSmokeArtifact(value) {
+  await mkdir(artifactDir, { recursive: true });
+  await writeFile(artifactPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+const smokeArtifact = {
+  schema_version: "cmo.app_turn_live_smoke.v1",
+  created_at: createdAt,
+  endpoint,
+  request: requestBody,
+};
+
+await persistSmokeArtifact(smokeArtifact);
+
+let response;
+
+try {
+  response = await fetch(endpoint, {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
     ...(auth ? { Authorization: auth } : {}),
   },
-  body: JSON.stringify({
-    workspaceId: "holdstation",
-    appId: "holdstation-mini-app",
-    appName: "Holdstation Mini App",
-    message: "hi, introduce yourself as the CMO for this workspace",
-    topic: "Phase 1.87 live app-turn smoke",
-    context: {
-      selectedNotes: [],
-      mode: "app_context",
-    },
-  }),
-});
+    body: JSON.stringify(requestBody),
+  });
+} catch (error) {
+  await persistSmokeArtifact({
+    ...smokeArtifact,
+    response: { transport_error: error instanceof Error ? error.message : String(error) },
+  });
+  throw error;
+}
 const contentType = response.headers.get("content-type") || "";
 const rawBody = await response.text();
 const data = contentType.toLowerCase().includes("json")
@@ -66,6 +98,17 @@ const data = contentType.toLowerCase().includes("json")
       }
     })()
   : null;
+
+await persistSmokeArtifact({
+  ...smokeArtifact,
+  response: {
+    status: response.status,
+    status_text: response.statusText,
+    content_type: contentType,
+    raw_body: rawBody,
+    parsed_body: data,
+  },
+});
 
 assert(response.ok, `Expected HTTP 2xx from ${endpoint}`, {
   status: response.status,
@@ -92,6 +135,7 @@ console.log(
       runtimeMode: data.runtimeMode,
       runtimeStatus: data.runtimeStatus,
       answerPreview: data.answer.slice(0, 260),
+      artifactPath,
     },
     null,
     2,

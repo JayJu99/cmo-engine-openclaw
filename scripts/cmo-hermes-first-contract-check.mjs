@@ -4,10 +4,11 @@ import { fileURLToPath } from "url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relativePath) => readFileSync(path.join(root, relativePath), "utf8");
-const config = read("src/lib/cmo/config.ts");
 const router = read("src/lib/cmo/hermes-cmo-chat-router.ts");
 const hermesFirst = read("src/lib/cmo/hermes-first-cmo-chat.ts");
 const appStore = read("src/lib/cmo/app-chat-store.ts");
+const liveSmoke = read("scripts/cmo-app-turn-live-smoke.mjs");
+const nativeSmoke = read("scripts/cmo-app-chat-fallback-smoke.mjs");
 
 const checks = [];
 
@@ -37,6 +38,11 @@ const createAppChatPrefix = section(
   appStore,
   "export async function createAppChatSession",
   "const contextPackBuildStartedMs",
+);
+const normalTurnHelper = section(
+  router,
+  "export function isHermesFirstNormalChatTurn",
+  "export function shouldUseHermesCmoToolChat",
 );
 const importLines = hermesFirst
   .split(/\r?\n/)
@@ -69,14 +75,26 @@ check("normal_chat_request_forbids_creative_semantic_flags", ![
 check("normal_chat_request_forbids_allowed_agents_and_allowed_surf_modes", !requestBuilder.includes("allowed_agents") && !requestBuilder.includes("allowed_surf_modes"));
 check("normal_chat_request_forbids_legacy_cmo_request_v1", !requestBuilder.includes("mapCmoChatToHermesCmoRequest"));
 check("forbidden_checks_are_scoped_away_from_user_content", hermesFirst.includes('SAFE_CONTEXT_NAMESPACES') && hermesFirst.includes('"messages"') && hermesFirst.includes('"context_pack"') && hermesFirst.includes('"attachments"') && hermesFirst.includes('path.join(".") === "intent.user_message"'));
-check("flags_default_disabled_and_canary_empty", config.includes('CMO_HERMES_FIRST_CMO_CHAT_ENABLED", false') && config.includes('CMO_HERMES_FIRST_CMO_CHAT_CANARY_APPS'));
+check("ordinary_chat_is_native_hermes_default_without_flag_or_canary", normalTurnHelper.includes("Boolean(input.appId.trim())") && !normalTurnHelper.includes("forceFallback") && !router.includes("shouldUseHermesFirstCmoChat") && !router.includes("CMO_HERMES_FIRST_CMO_CHAT"));
+check("normal_referral_and_strategy_prompts_use_native_hermes_path", [
+  "How should we improve referral conversion this week?",
+  "Create a CMO strategy for our next acquisition push.",
+].every((message) => !/^\s*(?:(?:\/surf|@surf)(?:\s+x)?\b|\/trend\b|\/pulse\b|\/x\b|(?:\/echo|@echo)\b)/i.test(message)) && normalTurnHelper.includes("!isHermesFirstLegacyDirectCommand(input.message)"));
 check("direct_surf_command_stays_on_legacy_path", router.includes("/surf") && router.includes("@surf") && router.includes("isHermesFirstLegacyDirectCommand"));
 check("direct_trend_command_stays_on_legacy_path", router.includes("/trend"));
 check("direct_pulse_command_stays_on_legacy_path", router.includes("/pulse"));
 check("direct_x_command_stays_on_legacy_path", router.includes("/x"));
 check("direct_echo_command_stays_on_legacy_path", router.includes("/echo") && router.includes("@echo"));
 check("local_decision_review_command_stays_product_local", createAppChatPrefix.indexOf("parseLocalChatCommand") >= 0 && createAppChatPrefix.indexOf("parseLocalChatCommand") < createAppChatPrefix.indexOf("isHermesFirstNormalChatTurn"));
-check("force_fallback_bypasses_hermes_first", router.includes("input.forceFallback !== true"));
+check("force_fallback_does_not_bypass_native_normal_chat", !normalTurnHelper.includes("forceFallback"));
+check("normal_chat_smokes_persist_request_and_response_before_assertions", [liveSmoke, nativeSmoke].every((source) => {
+  const requestArtifact = source.indexOf("await persist");
+  const fetchCall = source.indexOf("await fetch(");
+  const responseArtifact = source.lastIndexOf("await persist");
+  const firstAssertion = source.indexOf("assert(response.ok");
+  return requestArtifact >= 0 && requestArtifact < fetchCall && responseArtifact > fetchCall && responseArtifact < firstAssertion;
+}));
+check("native_smoke_has_no_product_strategy_fallback", !nativeSmoke.includes("forceFallback") && nativeSmoke.includes("assert(!/Runtime Note/i.test(data.answer)"));
 check("hermes_first_module_has_no_forbidden_imports", ![
   "app-routing-intent",
   "cmo-surf-orchestrator",
