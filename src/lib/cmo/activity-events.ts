@@ -63,6 +63,8 @@ const MAX_EVENTS = 120;
 const MAX_SAFE_METADATA_KEYS = 20;
 const MAX_SAFE_METADATA_STRING_CHARS = 240;
 const MAX_SAFE_METADATA_JSON_CHARS = 4_000;
+const UNSAFE_ACTIVITY_TEXT_PATTERN =
+  /(\[hermes_local_artifact_path_redacted\]|hermes_local_artifact_path_redacted|file:|\/(?:tmp|Users|home|var|mnt|Volumes)(?:\/|\b)|\/private(?:\/|\b)|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|conversion_h_|creative-agent-images|cmo-creative-execute|creative[_\s-]*image[_\s-]*asset[_\s-]*refine|\.(?:png_redact|png|jpe?g|webp|mp4|webm)(?:\b|_|$)|(?:raw[_-]?artifact[_-]?payload|rawArtifactPayload|raw[_-]?contract[_-]?json|rawContractJson|local[_-]?path|localPath|source[_-]?local[_-]?path|sourceLocalPath)|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9._-]{20,})/i;
 const BLOCKED_SAFE_METADATA_KEYS = new Set([
   "raw",
   "payload",
@@ -104,6 +106,27 @@ function stringValue(value: unknown, maxChars = 0): string | undefined {
   return maxChars > 0 && trimmed.length > maxChars ? trimmed.slice(0, maxChars) : trimmed;
 }
 
+function safeActivityText(value: unknown, maxChars: number): string | undefined {
+  const text = stringValue(value);
+
+  if (!text) {
+    return undefined;
+  }
+
+  const safeLines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !UNSAFE_ACTIVITY_TEXT_PATTERN.test(line));
+  const safe = safeLines.join("\n").trim();
+
+  if (!safe) {
+    return undefined;
+  }
+
+  return safe.length > maxChars ? safe.slice(0, maxChars) : safe;
+}
+
 function positiveInteger(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
@@ -138,7 +161,7 @@ function isBlockedSafeMetadataKey(key: string): boolean {
 
 function sanitizeSafeMetadataValue(value: unknown, depth = 0): unknown {
   if (typeof value === "string") {
-    return stringValue(value, MAX_SAFE_METADATA_STRING_CHARS);
+    return safeActivityText(value, MAX_SAFE_METADATA_STRING_CHARS);
   }
 
   if (typeof value === "number") {
@@ -377,8 +400,8 @@ export function normalizeCmoActivityEvent(
     sourceAgent,
   });
   const createdAt = stringValue(value.created_at ?? value.createdAt ?? context.createdAt, 80) ?? DEFAULT_CREATED_AT;
-  const title = stringValue(value.title, 180);
-  const message = stringValue(value.message, 1_000);
+  const title = safeActivityText(value.title, 180);
+  const message = safeActivityText(value.message, 1_000);
   const safeMetadata = buildSafeMetadata(value);
 
   return {
@@ -419,6 +442,8 @@ export function createProductChatRunLifecycleEvent(input: ProductChatRunLifecycl
   const status = normalizeCmoActivityEventStatus(input.status);
   const type = `product.chat_run.${status}`;
   const seq = Math.max(1, Math.floor(input.seq ?? input.startSeq ?? 1));
+  const title = safeActivityText(input.title, 180);
+  const message = safeActivityText(input.message, 1_000);
 
   return {
     schema_version: CMO_ACTIVITY_EVENT_SCHEMA_VERSION,
@@ -439,8 +464,8 @@ export function createProductChatRunLifecycleEvent(input: ProductChatRunLifecycl
     source_agent: "product",
     type,
     status,
-    ...(input.title ? { title: input.title } : {}),
-    ...(input.message ? { message: input.message } : {}),
+    ...(title ? { title } : {}),
+    ...(message ? { message } : {}),
     user_visible: true,
     ...(input.safeMetadata ? { safe_metadata: sanitizeSafeMetadataRecord(input.safeMetadata) } : {}),
   };

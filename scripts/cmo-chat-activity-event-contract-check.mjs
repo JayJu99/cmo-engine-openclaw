@@ -226,6 +226,53 @@ check("safe_metadata_is_sanitized_and_bounded", () => {
   assert.ok(JSON.stringify(metadata).length <= 4000);
 });
 
+check("unsafe_activity_text_is_removed_before_persistence_or_render", () => {
+  const [event] = activity.normalizeCmoActivityEvents([
+    {
+      event_id: "evt_unsafe_text",
+      type: "delegation.completed",
+      status: "failed",
+      source_agent: "surf",
+      user_visible: true,
+      title: "Artifact at /Users/[redacted]/project/file.txt",
+      message: "Safe failure summary.\nInternal detail: /home/[redacted]/tmp/artifact.json",
+      safe_metadata: {
+        diagnostic_note: "See /tmp/[redacted]/cmo-debug.log",
+        nested: {
+          detail: "file:/Users/[redacted]/something",
+          safe_status: "failed",
+        },
+      },
+    },
+  ]);
+
+  assert.equal(event.title, undefined);
+  assert.equal(event.message, "Safe failure summary.");
+  assert.equal(event.safe_metadata?.diagnostic_note, undefined);
+  assert.equal(event.safe_metadata?.nested?.detail, undefined);
+  assert.equal(event.safe_metadata?.nested?.safe_status, "failed");
+  assert.doesNotMatch(JSON.stringify(event), /file:|\/(?:tmp|Users|home)\//i);
+});
+
+check("product_lifecycle_events_apply_the_same_text_boundary", () => {
+  const event = activity.createProductChatRunLifecycleEvent({
+    status: "timed_out",
+    title: "Timed out at C:\\Users\\[redacted]\\artifact.json",
+    message: "Timed out safely.\nRaw trace: file:/Users/[redacted]/trace.log",
+    safeMetadata: {
+      diagnostic_note: "Bearer abcdefghijklmnopqrstuvwxyz123456",
+      timeout_ms: 30_000,
+    },
+  });
+
+  assert.equal(event.status, "timed_out");
+  assert.equal(event.title, undefined);
+  assert.equal(event.message, "Timed out safely.");
+  assert.equal(event.safe_metadata?.diagnostic_note, undefined);
+  assert.equal(event.safe_metadata?.timeout_ms, 30_000);
+  assert.doesNotMatch(JSON.stringify(event), /file:|[A-Za-z]:[\\/]|Bearer\s+[A-Za-z0-9._-]{20,}/i);
+});
+
 check("session_and_message_persistence_use_canonical_events", () => {
   assert.match(appStore, /activityEvents:\s*queuedActivityEvents/);
   assert.match(appStore, /schema_version/);
