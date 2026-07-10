@@ -42,6 +42,7 @@ import { activeGoalStateForHermesContext } from "./goal-state-transport";
 
 export const HERMES_CMO_PROPOSALS_ONLY = "proposals_only" as const;
 export const HERMES_CMO_BOUNDED_DELEGATIONS = "echo_surf_bounded" as const;
+export const HERMES_CMO_WEEKLY_CAMPAIGN_DELEGATIONS = "weekly_campaign_lens_surf_echo_bounded" as const;
 export const CMO_WEEKLY_CAMPAIGN_WORKFLOW_CONTRACT = "cmo.weekly_campaign_workflow.v1" as const;
 export const LENS_READOUT_CONTEXT_CONTRACT = "lens.readout_context.v1" as const;
 export const LENS_READOUT_CONTEXT_ARTIFACT_KIND = "lens_readout_context" as const;
@@ -136,7 +137,10 @@ export interface HermesCmoMappedChatResult {
   isRuntimeFallback: false;
   calledHermesCmo: true;
   hermesCmoStatus: "live";
-  delegationsMode: typeof HERMES_CMO_PROPOSALS_ONLY | typeof HERMES_CMO_BOUNDED_DELEGATIONS;
+  delegationsMode:
+    | typeof HERMES_CMO_PROPOSALS_ONLY
+    | typeof HERMES_CMO_BOUNDED_DELEGATIONS
+    | typeof HERMES_CMO_WEEKLY_CAMPAIGN_DELEGATIONS;
   hermesCmoCounters: HermesCmoSafetyCounters;
   hermesCmoMetadata: HermesCmoChatMetadata;
   sessionArtifacts?: Record<string, unknown>[];
@@ -177,6 +181,23 @@ function weeklyCampaignArtifactsFromHermes(response: HermesCmoRuntimeResponse): 
     .map((artifact) => safeWorkflowArtifactValue(artifact))
     .filter(isRecord)
     .slice(0, 3);
+}
+
+function runtimeRequestIsWeeklyCampaignWorkflow(request: HermesCmoRuntimeRequest): boolean {
+  return request.intent.mode === "cmo.weekly_campaign_plan" &&
+    request.intent.explicit_command === "/goal" &&
+    request.workflow?.contract === CMO_WEEKLY_CAMPAIGN_WORKFLOW_CONTRACT;
+}
+
+function delegationModeFromRuntimeResult(
+  result: HermesCmoRuntimeResult,
+  delegationSummary: HermesCmoDelegationSummaryItem[],
+): HermesCmoMappedChatResult["delegationsMode"] {
+  return runtimeRequestIsWeeklyCampaignWorkflow(result.request)
+    ? HERMES_CMO_WEEKLY_CAMPAIGN_DELEGATIONS
+    : delegationSummary.length > 0
+      ? HERMES_CMO_BOUNDED_DELEGATIONS
+      : HERMES_CMO_PROPOSALS_ONLY;
 }
 
 function suggestedUpdatesFromWeeklyCampaign(response: HermesCmoRuntimeResponse, campaignArtifacts: Record<string, unknown>[]): Record<string, unknown>[] {
@@ -1210,6 +1231,9 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
     : cmoOwnedCreativeDecisionEnvelope
       ? ["echo", "surf", "vault_agent", "creative"]
       : ["echo", "surf"];
+  const requestedDelegationsMode = weeklyCampaignWorkflow
+    ? HERMES_CMO_WEEKLY_CAMPAIGN_DELEGATIONS
+    : HERMES_CMO_PROPOSALS_ONLY;
   const omittedCreativeMissingContext = creativeExecutionIntent
     ? input.missingContext.filter(isMissingAcceptedProjectContextRef)
     : [];
@@ -1404,19 +1428,19 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       demo_mode: true,
       allowed_agents: creativeAllowedAgents,
       allowed_surf_modes: ["surf.default", "surf.x", "surf.trend", "surf.pulse"],
-      delegations_mode: HERMES_CMO_PROPOSALS_ONLY,
+      delegations_mode: requestedDelegationsMode,
       capabilities: hermesCapabilities,
-      allowSubAgentExecution: false,
+      allowSubAgentExecution: weeklyCampaignWorkflow,
       ...(weeklyCampaignWorkflow
         ? {
             weekly_campaign_workflow: true,
             workflow_plan_only: true,
             specialist_policy: weeklyCampaignWorkflow.specialist_policy,
-            allowLensExecution: false,
+            allowLensExecution: true,
           }
         : {}),
-      allowSurfExecution: false,
-      allowEchoExecution: false,
+      allowSurfExecution: weeklyCampaignWorkflow,
+      allowEchoExecution: weeklyCampaignWorkflow,
       allowVaultAgentExecution: false,
       allowVaultWrites: false,
       allowSupabaseWrites: false,
@@ -1427,9 +1451,10 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       no_direct_session_write: true,
       no_direct_raw_capture_write: true,
       execution_boundary: {
-        sub_agent_execution_allowed: false,
-        surf_execution_allowed: false,
-        echo_execution_allowed: false,
+        sub_agent_execution_allowed: weeklyCampaignWorkflow,
+        ...(weeklyCampaignWorkflow ? { lens_execution_allowed: true } : {}),
+        surf_execution_allowed: weeklyCampaignWorkflow,
+        echo_execution_allowed: weeklyCampaignWorkflow,
         vault_agent_execution_allowed: false,
         vault_writes_allowed: false,
         supabase_writes_allowed: false,
@@ -1494,7 +1519,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       role: "product_shell_context_provider",
       allowed_agents: creativeAllowedAgents,
       allowed_surf_modes: ["surf.default", "surf.x", "surf.trend", "surf.pulse"],
-      delegations_mode: HERMES_CMO_PROPOSALS_ONLY,
+      delegations_mode: requestedDelegationsMode,
       read_web_allowed: true,
       read_browser_allowed: true,
       read_file_allowed: true,
@@ -2345,7 +2370,7 @@ function metadataFromHermes(
     hermesToolEndpointEnabled: result.hermesCmoToolEndpointEnabled,
     ...(result.hermesCmoEndpointKind === "tool_execute" ? { tool_capable_cmo: true } : {}),
     ...(result.sideEffects !== undefined ? { sideEffects: result.sideEffects } : {}),
-    delegationsMode: delegationSummary.length > 0 ? HERMES_CMO_BOUNDED_DELEGATIONS : HERMES_CMO_PROPOSALS_ONLY,
+    delegationsMode: delegationModeFromRuntimeResult(result, delegationSummary),
     counters,
     forbiddenCounters,
     requestId: result.response.request_id,
@@ -2398,7 +2423,7 @@ export function sanitizeHermesCmoMappedChatResult(result: HermesCmoMappedChatRes
   return {
     ...result,
     answer: canonicalAssistantText(result.answer) ?? "",
-    delegationsMode: delegationSummary.length > 0 ? HERMES_CMO_BOUNDED_DELEGATIONS : HERMES_CMO_PROPOSALS_ONLY,
+    delegationsMode: result.delegationsMode,
     hermesCmoCounters: counters,
     hermesCmoMetadata: metadata,
   };
@@ -2437,7 +2462,7 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
     isRuntimeFallback: false,
     calledHermesCmo: true,
     hermesCmoStatus: "live",
-    delegationsMode: delegationSummary.length > 0 ? HERMES_CMO_BOUNDED_DELEGATIONS : HERMES_CMO_PROPOSALS_ONLY,
+    delegationsMode: delegationModeFromRuntimeResult(result, delegationSummary),
     hermesCmoCounters: counters,
     hermesCmoMetadata: metadataFromHermes(result, counters, forbiddenCounters),
     ...(campaignArtifacts.length ? { sessionArtifacts: campaignArtifacts } : {}),

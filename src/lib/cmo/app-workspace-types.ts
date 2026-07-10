@@ -611,7 +611,7 @@ export type CmoRuntimeErrorReason =
   | "empty_answer"
   | "execution_error";
 export type HermesCmoChatStatus = "live" | "failed_then_existing_fallback" | "guardrail_violation_then_existing_fallback" | "interrupted" | "failed_boundary";
-export type HermesCmoDelegationsMode = "proposals_only" | "echo_surf_bounded";
+export type HermesCmoDelegationsMode = "proposals_only" | "echo_surf_bounded" | "weekly_campaign_lens_surf_echo_bounded";
 export type CmoLensReadoutRangeKey = "this_week" | "last_7_days" | "last_30_days" | "this_month";
 export type CmoProductRenderSource =
   | "hermes_cmo"

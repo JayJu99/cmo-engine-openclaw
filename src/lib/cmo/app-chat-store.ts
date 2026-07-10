@@ -88,6 +88,7 @@ import { executeMixedCmoEcho, isMixedCmoEchoRequest, mixedEchoNeedsClarification
 import { buildCmoEvidenceRuntimeMessage, executeCmoSurfEvidence } from "@/lib/cmo/cmo-surf-orchestrator";
 import {
   HERMES_CMO_PROPOSALS_ONLY,
+  HERMES_CMO_WEEKLY_CAMPAIGN_DELEGATIONS,
   mapCmoChatToHermesCmoRequest,
   mapHermesCmoResponseToChatResult,
   sanitizeHermesCmoMappedChatResult,
@@ -2156,7 +2157,11 @@ function normalizeHermesCmoChatStatus(value: unknown): HermesCmoChatStatus | und
 }
 
 function normalizeHermesCmoDelegationsMode(value: unknown): HermesCmoDelegationsMode | undefined {
-  return value === HERMES_CMO_PROPOSALS_ONLY || value === "echo_surf_bounded" ? value : undefined;
+  return value === HERMES_CMO_PROPOSALS_ONLY ||
+    value === "echo_surf_bounded" ||
+    value === HERMES_CMO_WEEKLY_CAMPAIGN_DELEGATIONS
+    ? value
+    : undefined;
 }
 
 function normalizeHermesCmoCounters(value: unknown): HermesCmoSafetyCounters | undefined {

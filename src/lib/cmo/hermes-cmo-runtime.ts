@@ -2107,6 +2107,85 @@ const requestIsWeeklyCampaignWorkflow = (request: HermesCmoRuntimeRequest): bool
   request.workflow.contract === "cmo.weekly_campaign_workflow.v1" &&
   isWeeklyCampaignWorkflowEnvelope(request);
 
+const requiredWeeklyCampaignDelegations = (
+  request: HermesCmoRuntimeRequest,
+  completedOrAttempted: HermesCmoDelegationExecution[],
+): Record<string, unknown>[] => {
+  const attemptedKeys = new Set(completedOrAttempted.map((execution) => execution.delegationKey));
+  const objective = request.intent.user_message;
+  const requiredStages: Record<string, unknown>[] = [
+    {
+      delegation_id: "del_weekly_campaign_lens",
+      target: { agent: "lens", mode: "lens.measurement" },
+      task: { task_type: "cmo_weekly_campaign_measurement", objective },
+      input: { range_key: "this_week", workflow_contract: "cmo.weekly_campaign_workflow.v1" },
+      output_contract: "lens.measurement_result.v1",
+    },
+    {
+      delegation_id: "del_weekly_campaign_surf",
+      target: { agent: "surf", mode: "surf.default" },
+      task: { task_type: "cmo_weekly_campaign_evidence", objective },
+      input: { workflow_contract: "cmo.weekly_campaign_workflow.v1" },
+      output_contract: "hermes.surf.response.v1",
+    },
+    {
+      delegation_id: "del_weekly_campaign_echo",
+      target: { agent: "echo", mode: "echo.default" },
+      task: { task_type: "cmo_weekly_campaign_content", objective },
+      input: { workflow_contract: "cmo.weekly_campaign_workflow.v1" },
+      output_contract: "hermes.echo.response.v1",
+    },
+  ];
+
+  return requiredStages.filter((delegation) => !attemptedKeys.has(stableDelegationKey(delegation)));
+};
+
+const responseWithWeeklyCampaignWorkflowArtifact = (
+  response: HermesCmoRuntimeResponse,
+  request: HermesCmoRuntimeRequest,
+  delegationResult: HermesCmoDelegationExecutionResult,
+): HermesCmoRuntimeResponse => {
+  const hasCampaignPack = response.artifacts.some(
+    (artifact) => isRecord(artifact) && artifact.contract === "cmo.weekly_campaign_pack.v1",
+  );
+
+  if (hasCampaignPack) {
+    return response;
+  }
+
+  const specialistStatuses = ["lens", "surf", "echo"].map((agent) => {
+    const execution = delegationResult.executions.find((candidate) => candidate.targetAgent === agent);
+    const resultArtifact = isRecord(execution?.response) ? execution.response : null;
+
+    return {
+      agent,
+      status: execution?.status ?? "unavailable",
+      ...(typeof resultArtifact?.status === "string" ? { artifact_status: resultArtifact.status } : {}),
+      ...(execution?.failureReason ? { reason: execution.failureReason } : {}),
+    };
+  });
+
+  return {
+    ...response,
+    artifacts: [
+      ...response.artifacts,
+      {
+        artifact_id: `weekly_campaign_pack_incomplete_${request.request_id}`,
+        contract: "cmo.weekly_campaign_pack.v1",
+        status: "incomplete",
+        workflow_contract: "cmo.weekly_campaign_workflow.v1",
+        reason: "Required weekly specialist results were recorded, but Hermes CMO did not return a campaign-pack artifact.",
+        specialist_statuses: specialistStatuses,
+        provenance: {
+          source: "cmo_engine_m1_workflow_boundary",
+          generated_from: "delegation_status_only",
+          no_product_authored_strategy_or_copy: true,
+        },
+      },
+    ],
+  };
+};
+
 const requestIsSourceBackedOrSeeking = (request: HermesCmoRuntimeRequest): boolean => {
   const sourceAcquisition = isRecord(request.source_acquisition) ? request.source_acquisition : {};
   const sourceAnswerContext = isRecord(request.context_pack.source_answer_context) ? request.context_pack.source_answer_context : {};
@@ -2483,6 +2562,7 @@ const selectedHermesCmoConfig = (request: HermesCmoRuntimeRequest, options: Herm
   const creativeLongRunningTurn = requestIsCreativeLongRunningTurn(request, routeDecision);
   const useToolEndpoint = !unifiedAgentEnabled &&
     !creativeNativeExecuteEndpoint &&
+    !requestIsWeeklyCampaignWorkflow(request) &&
     (toolChatCanaryEnabled || (toolEndpointEnabled && (externalResearch || requestIsSourceBackedOrSeeking(request))));
   const configuredToolEndpoint = getCmoHermesCmoToolEndpoint();
   const selectedEndpointConfig = unifiedAgentEnabled
@@ -5227,19 +5307,22 @@ export async function runHermesCmoRuntime(request: unknown, options: HermesCmoRu
   if (orchestrationEnabled) {
     let orchestrationRounds = 0;
 
-    while (response.status !== "needs_user_input") {
+    while (weeklyCampaignWorkflow || response.status !== "needs_user_input") {
       const retryPending = needsEchoRetry(response);
       const retryReason = retryPending ? echoRetryReason(response) : "";
-      const candidateDelegations = uniqueDelegationsByKey(retryPending
-        ? response.delegations
-            .filter((delegation) =>
-              executableDelegations([delegation], 1).some(
-                (normalized) => normalized.targetAgent === "echo" && normalized.mode === "echo.default",
-              ),
-            )
-            .map((delegation) => retryDelegationWithKey(delegation, echoRetriesUsed + 1, retryReason))
-        : response.delegations.filter((delegation) => !executedDelegationKeys.has(stableDelegationKey(delegation))));
-      const executable = executableDelegations(candidateDelegations, retryPending ? 1 : maxDelegations);
+      const candidateDelegations = weeklyCampaignWorkflow
+        ? requiredWeeklyCampaignDelegations(outboundRequest, delegationResult.executions)
+        : uniqueDelegationsByKey(retryPending
+          ? response.delegations
+              .filter((delegation) =>
+                executableDelegations([delegation], 1).some(
+                  (normalized) => normalized.targetAgent === "echo" && normalized.mode === "echo.default",
+                ),
+              )
+              .map((delegation) => retryDelegationWithKey(delegation, echoRetriesUsed + 1, retryReason))
+          : response.delegations.filter((delegation) => !executedDelegationKeys.has(stableDelegationKey(delegation))));
+      const delegationLimit = weeklyCampaignWorkflow ? 3 : retryPending ? 1 : maxDelegations;
+      const executable = executableDelegations(candidateDelegations, delegationLimit);
 
       if (retryPending && echoRetriesUsed >= MAX_M1_ECHO_RETRIES) {
         echoRetryFailureReason = echoRetryReason(response);
@@ -5281,7 +5364,7 @@ export async function runHermesCmoRuntime(request: unknown, options: HermesCmoRu
         appName: outboundRequest.workspace.app_name,
         userMessage: outboundRequest.intent.user_message,
         delegations: candidateDelegations,
-        maxDelegations: retryPending ? 1 : maxDelegations,
+        maxDelegations: delegationLimit,
       });
       orchestrationRounds += 1;
 
@@ -5342,6 +5425,9 @@ export async function runHermesCmoRuntime(request: unknown, options: HermesCmoRu
       response,
       orchestrationFailureReason ?? "Specialist execution did not complete; retry required.",
     );
+  }
+  if (weeklyCampaignWorkflow) {
+    response = responseWithWeeklyCampaignWorkflowArtifact(response, outboundRequest, delegationResult);
   }
   const safetyCounters = makeSafetyCounters(delegationResult.surfCalls, delegationResult.echoCalls);
   const forbiddenCounters = delegationResult.forbiddenCounters;
