@@ -110,7 +110,11 @@ import {
   sanitizeHermesCmoChatV11Records,
   writeHermesCmoChatV11FallbackTrace,
 } from "@/lib/cmo/hermes-cmo-chat-v11";
-import { maybeCreateCmoGoalWorkflowSmokeResponse } from "@/lib/cmo/goal-workflow-smoke";
+import {
+  cmoGoalWorkflowSmokeCommandText,
+  isCmoGoalWorkflowSmokeRequest,
+  maybeCreateCmoGoalWorkflowSmokeResponse,
+} from "@/lib/cmo/goal-workflow-smoke";
 import { OUTBOUND_HERMES_CALLSITE_GUARD_VERSION } from "@/lib/cmo/hermes-outbound-payload-sanitizer";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import type { CmoScopedApprovalV1 } from "@/lib/cmo/scoped-approval";
@@ -4307,16 +4311,24 @@ export async function createAppChatSession(
   ) ?? null;
   const scopedApprovalRequests = (continuedSession?.approvalRequests ?? [])
     .filter((approval) => isRecord(approval) && approval.contract === "cmo.scoped_approval.v1") as unknown as CmoScopedApprovalV1[];
-  const goalWorkflowSmokeResponse = maybeCreateCmoGoalWorkflowSmokeResponse({
-    message: request.message,
-    workspaceId: request.workspaceId,
-    appId: request.appId,
-    sessionId,
-    userId: sourceReviewUserId(userIdentity),
-    now,
-    activeGoalState,
-    approvals: scopedApprovalRequests.length ? scopedApprovalRequests : null,
-  });
+  const weeklyCampaignWorkflowRequested = isCmoGoalWorkflowSmokeRequest(request.message);
+  const weeklyCampaignCommandText = weeklyCampaignWorkflowRequested
+    ? cmoGoalWorkflowSmokeCommandText(request.message)
+    : null;
+  // Qualifying weekly /goal commands are no longer Product-authored smoke plans.
+  // Product transports the explicit contract later; Hermes CMO owns orchestration and synthesis.
+  const goalWorkflowSmokeResponse = weeklyCampaignWorkflowRequested
+    ? null
+    : maybeCreateCmoGoalWorkflowSmokeResponse({
+        message: request.message,
+        workspaceId: request.workspaceId,
+        appId: request.appId,
+        sessionId,
+        userId: sourceReviewUserId(userIdentity),
+        now,
+        activeGoalState,
+        approvals: scopedApprovalRequests.length ? scopedApprovalRequests : null,
+      });
 
   if (goalWorkflowSmokeResponse) {
     const smokeTotalDurationMs = Date.now() - requestStartedMs;
@@ -4426,7 +4438,7 @@ export async function createAppChatSession(
     return handleLocalChatCommand(localCommand, request, continuedSession, now, messageId, assistantId, userIdentity);
   }
 
-  const hermesFirstNormalChatRequested = isHermesFirstNormalChatTurn({
+  const hermesFirstNormalChatRequested = !weeklyCampaignWorkflowRequested && isHermesFirstNormalChatTurn({
     appId: request.appId,
     message: request.message,
     forceFallback: request.forceFallback,
@@ -4539,7 +4551,8 @@ export async function createAppChatSession(
         hasCreativeWorkingState: creativeWorkingStatePresent,
         creativeWorkingState,
       });
-  const legacyHermesCmoChatRequested = !request.forceFallback && shouldUseHermesCmoChat(request.appId);
+  const legacyHermesCmoChatRequested = weeklyCampaignWorkflowRequested ||
+    (!request.forceFallback && shouldUseHermesCmoChat(request.appId));
   const preliminaryHermesCmoChatRequested =
     hermesFirstNormalChatRequested ||
     legacyHermesCmoChatRequested ||
@@ -4569,7 +4582,22 @@ export async function createAppChatSession(
         fallbackEnabled: false,
         reason: "v11_canary_chat" as const,
       }
-    : resolveHermesCmoChatRoute({
+    : weeklyCampaignWorkflowRequested
+      ? {
+        endpoint: "/agents/cmo/execute",
+        endpointKind: "execute" as const,
+        requestedEndpoint: "/agents/cmo/execute",
+        routeIntent: "cmo_default" as const,
+        unifiedAgentEnabled: false,
+        unifiedAgentCanary: false,
+        v11Enabled: false,
+        v11Canary: false,
+        toolChatEnabled: false,
+        toolChatCanary: false,
+        fallbackEnabled: false,
+        reason: "v11_disabled_or_non_canary" as const,
+      }
+      : resolveHermesCmoChatRoute({
         appId: request.appId,
         message: request.message,
         forceFallback: request.forceFallback,
@@ -5310,6 +5338,9 @@ export async function createAppChatSession(
           creativeIdeationDetected,
           creativeSessionFollowupDetected,
           activeCreativeAssetResolutionSource: activeCreativeAssetResolution.source,
+          ...(weeklyCampaignWorkflowRequested && weeklyCampaignCommandText
+            ? { weeklyCampaignWorkflow: { commandText: weeklyCampaignCommandText } }
+            : {}),
         });
         const hermesResult = await runHermesCmoRuntime(hermesRequest, { toolTimeoutMs: asyncToolRunTimeoutMs });
         const counterValidation = validateHermesCmoChatCounters(hermesResult);
@@ -5396,7 +5427,11 @@ export async function createAppChatSession(
         };
         const completedSessionArtifacts = mergeHermesCmoChatV11Artifacts(
           sessionArtifacts,
-          completedCreativeArtifacts,
+          [...completedCreativeArtifacts, ...(mappedHermesResult.sessionArtifacts ?? [])],
+        );
+        const completedSuggestedVaultUpdates = mergeSuggestedVaultUpdates(
+          pendingSession.suggestedVaultUpdates,
+          mappedHermesResult.suggestedVaultUpdates,
         );
         const completedAnswer = creativeContractViolation ? PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE : mappedHermesResult.answer;
         const completedDecisionLayer = buildDecisionLayer({
@@ -5454,6 +5489,7 @@ export async function createAppChatSession(
           creativeWorkingState: completedCreativeWorkingState,
           creativeDecision: completedCreativeDecision,
           ...(completedSessionArtifacts.length ? { sessionArtifacts: completedSessionArtifacts } : {}),
+          ...(completedSuggestedVaultUpdates.length ? { suggestedVaultUpdates: completedSuggestedVaultUpdates } : {}),
           sessionLocalResearchResults: completedResearchResults,
           decisionLayer: completedDecisionLayer,
           rawCaptureStatus: "pending",
@@ -5468,6 +5504,7 @@ export async function createAppChatSession(
             hermesCmoStatus: mappedHermesResult.hermesCmoStatus,
             hermesCmoCounters: mappedHermesResult.hermesCmoCounters,
             hermesCmoMetadata: mappedHermesResult.hermesCmoMetadata,
+            ...(completedSuggestedVaultUpdates.length ? { suggestedVaultUpdates: completedSuggestedVaultUpdates } : {}),
             strategyMode: mappedHermesResult.hermesCmoMetadata.strategyMode,
             mainBottleneck: mappedHermesResult.hermesCmoMetadata.mainBottleneck,
             decisionLabel: mappedHermesResult.hermesCmoMetadata.decisionLabel,
@@ -5770,6 +5807,9 @@ export async function createAppChatSession(
           creativeIdeationDetected,
           creativeSessionFollowupDetected,
           activeCreativeAssetResolutionSource: activeCreativeAssetResolution.source,
+          ...(weeklyCampaignWorkflowRequested && weeklyCampaignCommandText
+            ? { weeklyCampaignWorkflow: { commandText: weeklyCampaignCommandText } }
+            : {}),
         });
         const hermesFallbackResult = await runHermesCmoRuntime(hermesFallbackRequest);
         sessionLocalResearchResults = mergeSessionLocalResearchResults(
@@ -5972,6 +6012,9 @@ export async function createAppChatSession(
         creativeIdeationDetected,
         creativeSessionFollowupDetected,
         activeCreativeAssetResolutionSource: activeCreativeAssetResolution.source,
+        ...(weeklyCampaignWorkflowRequested && weeklyCampaignCommandText
+          ? { weeklyCampaignWorkflow: { commandText: weeklyCampaignCommandText } }
+          : {}),
       });
       hermesRequestSent = true;
       const hermesResult = await runHermesCmoRuntime(hermesRequest);
@@ -6051,7 +6094,11 @@ export async function createAppChatSession(
       creativeWorkingState = applyCreativeAssetStateUpdate(creativeWorkingState, creativeArtifacts);
       sessionArtifacts = mergeHermesCmoChatV11Artifacts(
         sessionArtifacts,
-        creativeArtifacts,
+        [...creativeArtifacts, ...(mappedHermesResult.sessionArtifacts ?? [])],
+      );
+      suggestedVaultUpdates = mergeSuggestedVaultUpdates(
+        suggestedVaultUpdates,
+        mappedHermesResult.suggestedVaultUpdates,
       );
       answer = creativeContractViolation ? PRODUCT_CREATIVE_CONTRACT_VIOLATION_MESSAGE : mappedHermesResult.answer;
       const unifiedCurrentTurnTextAnswer = !creativeContractViolation && hermesUnifiedCmoAgentCurrentTurnTextAnswer({

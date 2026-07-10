@@ -87,7 +87,8 @@
       "properties": {
         "mode": {
           "enum": [
-            "cmo.default"
+            "cmo.default",
+            "cmo.weekly_campaign_plan"
           ]
         },
         "user_message": {
@@ -99,6 +100,43 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "workflow": {
+      "type": "object",
+      "required": [
+        "contract",
+        "trigger",
+        "plan_only",
+        "stages",
+        "required_artifacts",
+        "specialist_policy"
+      ],
+      "properties": {
+        "contract": {
+          "const": "cmo.weekly_campaign_workflow.v1"
+        },
+        "trigger": {
+          "const": "explicit_goal_command"
+        },
+        "plan_only": {
+          "const": true
+        },
+        "stages": {
+          "const": [
+            "lens",
+            "surf",
+            "echo",
+            "cmo_synthesis"
+          ]
+        },
+        "required_artifacts": {
+          "type": "array"
+        },
+        "specialist_policy": {
+          "type": "object"
         }
       },
       "additionalProperties": true
@@ -171,6 +209,7 @@
             "enum": [
               "echo",
               "surf",
+              "lens",
               "vault_agent"
             ]
           },
@@ -234,4 +273,3 @@
   },
   "additionalProperties": true
 }
-

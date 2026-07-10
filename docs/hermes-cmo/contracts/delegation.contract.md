@@ -6,7 +6,7 @@ Runtime status: spec only, not runnable yet
 
 ## Purpose
 
-The common delegation contract describes how CMO requests bounded work from execution agents. It is the generic envelope used before mapping to Echo, Surf, or Vault Agent specific contracts.
+The common delegation contract describes how CMO requests bounded work from execution agents. It is the generic envelope used before mapping to Lens, Echo, Surf, or Vault Agent specific contracts.
 
 CMO delegates work only when a bounded execution agent is better suited than direct strategic response.
 
@@ -15,6 +15,7 @@ CMO delegates work only when a bounded execution agent is better suited than dir
 ```txt
 echo
 surf
+lens (only `cmo.weekly_campaign_workflow.v1`)
 vault_agent
 ```
 
@@ -83,6 +84,7 @@ Trend, Pulse, and Surf X are modes under Surf, not separate agents.
 | Trend scan | Surf with `mode: "surf.trend"`. |
 | Pulse analysis | Surf with `mode: "surf.pulse"`. |
 | Content or final copy | Echo. |
+| Weekly workflow measurement/baseline | Lens with `mode: "lens.measurement"`; read-only safe artifact only. |
 | Research then content | Surf, then CMO synthesis, then Echo. |
 | Explicit save intent | Vault Agent with `mode: "vault.write"`. |
 
@@ -93,4 +95,3 @@ Trend, Pulse, and Surf X are modes under Surf, not separate agents.
 - Delegated agents do not write Vault except Vault Agent in `vault.write` mode.
 - Vault Agent delegation requires explicit save intent.
 - Delegations must be represented in the CMO response and Activity Stream.
-

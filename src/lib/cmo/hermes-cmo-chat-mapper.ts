@@ -42,6 +42,7 @@ import { activeGoalStateForHermesContext } from "./goal-state-transport";
 
 export const HERMES_CMO_PROPOSALS_ONLY = "proposals_only" as const;
 export const HERMES_CMO_BOUNDED_DELEGATIONS = "echo_surf_bounded" as const;
+export const CMO_WEEKLY_CAMPAIGN_WORKFLOW_CONTRACT = "cmo.weekly_campaign_workflow.v1" as const;
 export const LENS_READOUT_CONTEXT_CONTRACT = "lens.readout_context.v1" as const;
 export const LENS_READOUT_CONTEXT_ARTIFACT_KIND = "lens_readout_context" as const;
 export const LENS_READOUT_GROUNDING_RULE =
@@ -70,6 +71,9 @@ export interface HermesCmoChatRequestInput extends CmoRuntimeTurnInput {
   creativeIdeationDetected?: boolean;
   creativeSessionFollowupDetected?: boolean;
   activeCreativeAssetResolutionSource?: "creativeWorkingState" | "sessionArtifacts" | "messageCreativeAssets" | "none";
+  weeklyCampaignWorkflow?: {
+    commandText: string;
+  };
   userIdentity?: {
     userId?: string;
     userEmail?: string;
@@ -88,6 +92,27 @@ interface HermesCmoReplayMessage {
   content: string;
   message_id: string;
   created_at: string;
+}
+
+export function createWeeklyCampaignWorkflowContract(commandText: string): NonNullable<HermesCmoRuntimeRequest["workflow"]> {
+  return {
+    contract: CMO_WEEKLY_CAMPAIGN_WORKFLOW_CONTRACT,
+    trigger: "explicit_goal_command",
+    plan_only: true,
+    stages: ["lens", "surf", "echo", "cmo_synthesis"],
+    required_artifacts: [
+      "lens.measurement_result.v1",
+      "hermes.surf.response.v1",
+      "hermes.echo.response.v1",
+      "cmo.weekly_campaign_pack.v1",
+    ],
+    specialist_policy: {
+      lens: "required_if_available",
+      surf: "required_if_available",
+      echo: "required_if_available",
+    },
+    command_text: commandText,
+  };
 }
 
 type ReplayableCmoChatMessage = CMOChatMessage & { role: "user" | "assistant" };
@@ -114,10 +139,63 @@ export interface HermesCmoMappedChatResult {
   delegationsMode: typeof HERMES_CMO_PROPOSALS_ONLY | typeof HERMES_CMO_BOUNDED_DELEGATIONS;
   hermesCmoCounters: HermesCmoSafetyCounters;
   hermesCmoMetadata: HermesCmoChatMetadata;
+  sessionArtifacts?: Record<string, unknown>[];
+  suggestedVaultUpdates?: Record<string, unknown>[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const UNSAFE_WORKFLOW_ARTIFACT_KEY = /^(?:api_?key|authorization|cookie|credential|env|file(?:_path|_content|_body)?|headers|local_?path|password|private_?key|raw(?:_|$)|secret|token|tool_?(?:args|result))$/i;
+const UNSAFE_WORKFLOW_ARTIFACT_TEXT = /(?:\b(?:file:|[a-z]:[\\/])|\/(?:tmp|home|users|var|mnt|private|volumes)\/|(?:api[_ -]?key|authorization|bearer|secret|token)\s*[:=])/i;
+
+function safeWorkflowArtifactValue(value: unknown, depth = 0): unknown {
+  if (depth > 5) return undefined;
+  if (typeof value === "string") {
+    const compact = value.replace(/\s+/g, " ").trim().slice(0, 2_000);
+    return compact && !UNSAFE_WORKFLOW_ARTIFACT_TEXT.test(compact) ? compact : undefined;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => safeWorkflowArtifactValue(item, depth + 1)).filter((item) => item !== undefined).slice(0, 24);
+  }
+  if (!isRecord(value)) return undefined;
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !UNSAFE_WORKFLOW_ARTIFACT_KEY.test(key))
+      .map(([key, nested]) => [key, safeWorkflowArtifactValue(nested, depth + 1)] as const)
+      .filter(([, nested]) => nested !== undefined),
+  );
+}
+
+function weeklyCampaignArtifactsFromHermes(response: HermesCmoRuntimeResponse): Record<string, unknown>[] {
+  return (Array.isArray(response.artifacts) ? response.artifacts : [])
+    .filter(isRecord)
+    .filter((artifact) => artifact.contract === "cmo.weekly_campaign_pack.v1")
+    .map((artifact) => safeWorkflowArtifactValue(artifact))
+    .filter(isRecord)
+    .slice(0, 3);
+}
+
+function suggestedUpdatesFromWeeklyCampaign(response: HermesCmoRuntimeResponse, campaignArtifacts: Record<string, unknown>[]): Record<string, unknown>[] {
+  const artifactIds = new Set(campaignArtifacts
+    .map((artifact) => typeof artifact.artifact_id === "string" ? artifact.artifact_id : typeof artifact.id === "string" ? artifact.id : null)
+    .filter((id): id is string => Boolean(id)));
+  const structured = isRecord(response.structured_output) ? response.structured_output : {};
+  const candidates = [response.suggested_updates, response.suggested_vault_updates, structured.suggested_updates, structured.suggested_vault_updates]
+    .flatMap((value) => Array.isArray(value) ? value : [])
+    .filter(isRecord);
+
+  return candidates
+    .filter((candidate) => {
+      const provenanceId = candidate.campaign_pack_artifact_id ?? candidate.campaignPackArtifactId ?? candidate.provenance_artifact_id;
+      return typeof provenanceId === "string" && artifactIds.has(provenanceId);
+    })
+    .map((candidate) => safeWorkflowArtifactValue(candidate))
+    .filter(isRecord)
+    .slice(0, 12);
 }
 
 function arrayValue<T = unknown>(value: unknown): T[] {
@@ -1011,6 +1089,10 @@ function displayName(input: HermesCmoChatRequestInput): string | null {
 }
 
 export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): HermesCmoRuntimeRequest {
+  const weeklyCampaignWorkflow = input.weeklyCampaignWorkflow?.commandText.trim()
+    ? createWeeklyCampaignWorkflowContract(input.weeklyCampaignWorkflow.commandText.trim())
+    : undefined;
+  const hermesUserMessage = weeklyCampaignWorkflow ? input.weeklyCampaignWorkflow!.commandText.trim() : input.message;
   const contextItems = input.contextPackage.contextPack.items;
   const vaultContextPack = vaultAgentContextPackArtifact(input);
   const sourceReviewContext = sourceReviewContextArtifact(input);
@@ -1123,9 +1205,11 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
           : "Creative capability may be relevant to this turn.",
       }
     : undefined;
-  const creativeAllowedAgents: Array<"echo" | "surf" | "vault_agent" | "creative"> = cmoOwnedCreativeDecisionEnvelope
-    ? ["echo", "surf", "vault_agent", "creative"]
-    : ["echo", "surf"];
+  const creativeAllowedAgents: Array<"echo" | "surf" | "lens" | "vault_agent" | "creative"> = weeklyCampaignWorkflow
+    ? ["lens", "echo", "surf"]
+    : cmoOwnedCreativeDecisionEnvelope
+      ? ["echo", "surf", "vault_agent", "creative"]
+      : ["echo", "surf"];
   const omittedCreativeMissingContext = creativeExecutionIntent
     ? input.missingContext.filter(isMissingAcceptedProjectContextRef)
     : [];
@@ -1161,8 +1245,9 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       display_name: displayName(input),
     },
     intent: {
-      mode: "cmo.default",
-      user_message: input.message,
+      mode: weeklyCampaignWorkflow ? "cmo.weekly_campaign_plan" : "cmo.default",
+      user_message: hermesUserMessage,
+      ...(weeklyCampaignWorkflow ? { explicit_command: "/goal" } : {}),
       latest_user_message_primacy: LATEST_USER_MESSAGE_PRIMACY_RULE,
       current_turn_instruction: CURRENT_TURN_RESPONSE_INSTRUCTION,
       current_turn_response_contract: currentTurnResponseContract as CurrentTurnResponseContract,
@@ -1173,6 +1258,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       ...creativeConversationIntentMetadata,
       ...creativeMutationIntentMetadata,
     },
+    ...(weeklyCampaignWorkflow ? { workflow: weeklyCampaignWorkflow } : {}),
     input: {
       input_material: inputMaterial,
       ...(creativeIdeationDetected
@@ -1321,6 +1407,14 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       delegations_mode: HERMES_CMO_PROPOSALS_ONLY,
       capabilities: hermesCapabilities,
       allowSubAgentExecution: false,
+      ...(weeklyCampaignWorkflow
+        ? {
+            weekly_campaign_workflow: true,
+            workflow_plan_only: true,
+            specialist_policy: weeklyCampaignWorkflow.specialist_policy,
+            allowLensExecution: false,
+          }
+        : {}),
       allowSurfExecution: false,
       allowEchoExecution: false,
       allowVaultAgentExecution: false,
@@ -1414,6 +1508,13 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       memory_read_allowed: true,
       delegation_allowed: true,
       capabilities: hermesCapabilities,
+      ...(weeklyCampaignWorkflow
+        ? {
+            weekly_campaign_workflow: true,
+            workflow_plan_only: true,
+            specialist_policy: weeklyCampaignWorkflow.specialist_policy,
+          }
+        : {}),
       ...(creativeExecutionIntent
         ? {
             creative_execution_may_be_requested_by_cmo: true,
@@ -2318,6 +2419,8 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
 
   const delegationSummary = delegationSummaryFromHermes(result);
   const counters = countersFromExecutedDelegations(validation.counters, delegationSummary);
+  const campaignArtifacts = weeklyCampaignArtifactsFromHermes(result.response);
+  const campaignSuggestedUpdates = suggestedUpdatesFromWeeklyCampaign(result.response, campaignArtifacts);
 
   return sanitizeHermesCmoMappedChatResult({
     answer: answerFromHermes(result.response, result),
@@ -2337,5 +2440,7 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
     delegationsMode: delegationSummary.length > 0 ? HERMES_CMO_BOUNDED_DELEGATIONS : HERMES_CMO_PROPOSALS_ONLY,
     hermesCmoCounters: counters,
     hermesCmoMetadata: metadataFromHermes(result, counters, forbiddenCounters),
+    ...(campaignArtifacts.length ? { sessionArtifacts: campaignArtifacts } : {}),
+    ...(campaignSuggestedUpdates.length ? { suggestedVaultUpdates: campaignSuggestedUpdates } : {}),
   });
 }

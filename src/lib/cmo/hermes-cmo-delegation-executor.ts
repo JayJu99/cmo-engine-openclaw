@@ -4,9 +4,13 @@ import {
   type HermesEchoBrief,
   type HermesSurfBrief,
 } from "./hermes-client";
+import {
+  runLensMeasurementRequest,
+} from "./lens-measurement-runner";
+import type { LensMeasurementResult } from "./lens-measurement-result";
 
-export type HermesCmoExecutableAgent = "echo" | "surf";
-export type HermesCmoExecutableMode = "echo.default" | "echo.source_translate" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse";
+export type HermesCmoExecutableAgent = "echo" | "surf" | "lens";
+export type HermesCmoExecutableMode = "echo.default" | "echo.source_translate" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse" | "lens.measurement";
 
 export interface HermesCmoForbiddenCounters {
   vaultAgentCalls: number;
@@ -51,7 +55,8 @@ export interface HermesCmoDelegationExecutionResult {
   activityEvents: HermesCmoDelegationActivityEvent[];
   surfCalls: number;
   echoCalls: number;
-  agentsUsed: Array<"surf" | "echo">;
+  lensCalls: number;
+  agentsUsed: Array<"surf" | "echo" | "lens">;
   forbiddenCounters: HermesCmoForbiddenCounters;
 }
 
@@ -88,6 +93,7 @@ interface ExecutorInput {
   sessionId: string;
   turnId: string;
   workspaceSlug: string;
+  tenantId?: string;
   workspaceId?: string;
   appId?: string;
   appName?: string;
@@ -191,7 +197,7 @@ function targetAgent(delegation: Record<string, unknown>): HermesCmoExecutableAg
   const target = isRecord(delegation.target) ? delegation.target : {};
   const value = text(target.agent ?? delegation.targetAgent ?? delegation.target_agent ?? delegation.agent).toLowerCase();
 
-  return value === "echo" || value === "surf" ? value : null;
+  return value === "echo" || value === "surf" || value === "lens" ? value : null;
 }
 
 function targetMode(delegation: Record<string, unknown>, agent: HermesCmoExecutableAgent): HermesCmoExecutableMode | null {
@@ -204,6 +210,12 @@ function targetMode(delegation: Record<string, unknown>, agent: HermesCmoExecuta
       : rawMode === "source_translate" || rawMode === "echo.source_translate"
         ? "echo.source_translate"
         : null;
+  }
+
+  if (agent === "lens") {
+    return rawMode === "lens.measurement" || rawMode === "lens.default" || rawMode === "measurement" || !rawMode
+      ? "lens.measurement"
+      : null;
   }
 
   if (SURF_MODES.has(rawMode)) {
@@ -319,7 +331,14 @@ function normalizeDelegation(delegation: Record<string, unknown>, index: number)
 
   const input = delegationInput(delegation);
   const task = isRecord(delegation.task) ? delegation.task : {};
-  const taskType = text(delegation.taskType ?? delegation.task_type ?? task.taskType ?? task.task_type ?? input.taskType ?? input.task_type, agent === "echo" ? "cmo_orchestrated_final_copy" : "cmo_orchestrated_research_pack");
+  const taskType = text(
+    delegation.taskType ?? delegation.task_type ?? task.taskType ?? task.task_type ?? input.taskType ?? input.task_type,
+    agent === "echo"
+      ? "cmo_orchestrated_final_copy"
+      : agent === "lens"
+        ? "cmo_orchestrated_measurement"
+        : "cmo_orchestrated_research_pack",
+  );
   const surface = firstText(delegation.surface, task.surface, input.surface);
   const entity = firstText(delegation.entity, task.entity, input.entity);
   const query = firstText(delegation.query, task.query, input.query);
@@ -390,6 +409,56 @@ function normalizeDelegation(delegation: Record<string, unknown>, index: number)
   return {
     ...normalizedWithoutMode,
     mode,
+  };
+}
+
+function lensRangeKey(delegation: NormalizedDelegation): string {
+  const input = isRecord(delegation.input) ? delegation.input : {};
+  const context = isRecord(delegation.context) ? delegation.context : {};
+  const value = firstText(
+    input.range_key,
+    input.rangeKey,
+    context.range_key,
+    context.rangeKey,
+    delegation.raw.range_key,
+    delegation.raw.rangeKey,
+  );
+
+  return value || "this_week";
+}
+
+function lensArtifact(result: LensMeasurementResult): Record<string, unknown> {
+  const status = result.status === "completed" ? "completed" : result.status === "failed" ? "failed" : "unavailable";
+  const pack = result.status === "completed" ? result.metrics_pack : undefined;
+  const caveats = [
+    ...(result.missing_requirements ?? []).map((requirement) => requirement.safe_user_message),
+    ...(result.error?.safe_message ? [result.error.safe_message] : []),
+    ...(result.safe_user_message ? [result.safe_user_message] : []),
+  ].filter((value, index, values) => Boolean(value) && values.indexOf(value) === index).slice(0, 12);
+
+  return {
+    contract: "lens.measurement_result.v1",
+    status,
+    source_status: result.status,
+    scope: result.scope,
+    ...(pack
+      ? {
+          metric_pack_id: `lens_metrics_${pack.appId}_${pack.range.key}_${pack.generatedAt}`,
+          measurement_window: pack.range,
+          safe_metadata: {
+            metrics_pack_contract: pack.contract,
+            quality_status: pack.quality.status,
+            is_stale: pack.quality.isStale,
+            metric_count: pack.metrics.length,
+          },
+        }
+      : {
+          measurement_window: { key: result.scope.range_key },
+          safe_metadata: {},
+        }),
+    baseline: null,
+    target: null,
+    caveats,
   };
 }
 
@@ -640,7 +709,7 @@ async function executeOne(
   input: ExecutorInput,
   delegation: NormalizedDelegation,
   previousResults: HermesCmoDelegationExecution[],
-): Promise<Pick<HermesCmoDelegationExecutionResult, "executions" | "activityEvents" | "surfCalls" | "echoCalls">> {
+): Promise<Pick<HermesCmoDelegationExecutionResult, "executions" | "activityEvents" | "surfCalls" | "echoCalls" | "lensCalls">> {
   const activityEvents = [
     event(input, delegation, "delegation.started", "running", `CMO Engine started ${delegation.mode} delegation.`, {
       delegation_id: delegation.delegationId,
@@ -671,7 +740,45 @@ async function executeOne(
       }),
     );
 
-    return { executions: [execution], activityEvents, surfCalls: 0, echoCalls: 1 };
+    return { executions: [execution], activityEvents, surfCalls: 0, echoCalls: 1, lensCalls: 0 };
+  }
+
+  if (delegation.targetAgent === "lens") {
+    const result = await runLensMeasurementRequest({
+      tenantId: input.tenantId,
+      workspaceId: input.workspaceId ?? input.workspaceSlug,
+      appId: input.appId ?? input.workspaceSlug,
+      rangeKey: lensRangeKey(delegation),
+      metricIntent: delegation.objective,
+      requestId: input.parentRequestId,
+    });
+    const artifact = lensArtifact(result);
+    const execution: HermesCmoDelegationExecution = {
+      delegationKey: stableDelegationKey(delegation.raw),
+      delegationId: delegation.delegationId,
+      targetAgent: "lens",
+      mode: "lens.measurement",
+      objective: delegation.objective,
+      status: result.status === "failed" ? "failed" : "completed",
+      summary: result.status === "completed"
+        ? "Lens returned a safe measurement artifact."
+        : result.status === "failed"
+          ? "Lens measurement failed; no metrics were invented."
+          : "Lens measurement is unavailable for this scope.",
+      response: artifact,
+      failureReason: result.status === "failed" ? result.safe_user_message : undefined,
+    };
+    activityEvents.push(
+      event(input, delegation, "delegation.completed", execution.status === "completed" ? "completed" : "failed", execution.summary, {
+        delegation_id: delegation.delegationId,
+        target_agent: "lens",
+        mode: "lens.measurement",
+        status: artifact.status,
+        artifact_contract: artifact.contract,
+      }),
+    );
+
+    return { executions: [execution], activityEvents, surfCalls: 0, echoCalls: 0, lensCalls: 1 };
   }
 
   const result =
@@ -702,7 +809,7 @@ async function executeOne(
     }),
   );
 
-  return { executions: [execution], activityEvents, surfCalls: 1, echoCalls: 0 };
+  return { executions: [execution], activityEvents, surfCalls: 1, echoCalls: 0, lensCalls: 0 };
 }
 
 export function executableDelegations(delegations: Record<string, unknown>[], maxDelegations: number): NormalizedDelegation[] {
@@ -714,7 +821,9 @@ export function executableDelegations(delegations: Record<string, unknown>[], ma
         return 0;
       }
 
-      return left.targetAgent === "surf" ? -1 : 1;
+       const order: Record<HermesCmoExecutableAgent, number> = { lens: 0, surf: 1, echo: 2 };
+
+       return order[left.targetAgent] - order[right.targetAgent];
     })
     .slice(0, Math.max(0, maxDelegations));
 }
@@ -725,6 +834,7 @@ export async function executeHermesCmoDelegations(input: ExecutorInput): Promise
   const activityEvents: HermesCmoDelegationActivityEvent[] = [];
   let surfCalls = 0;
   let echoCalls = 0;
+  let lensCalls = 0;
 
   for (const delegation of normalized) {
     const result = await executeOne(input, delegation, executions);
@@ -732,6 +842,7 @@ export async function executeHermesCmoDelegations(input: ExecutorInput): Promise
     activityEvents.push(...result.activityEvents);
     surfCalls += result.surfCalls;
     echoCalls += result.echoCalls;
+    lensCalls += result.lensCalls;
   }
 
   return {
@@ -739,6 +850,7 @@ export async function executeHermesCmoDelegations(input: ExecutorInput): Promise
     activityEvents,
     surfCalls,
     echoCalls,
+    lensCalls,
     agentsUsed: Array.from(new Set(executions.map((execution) => execution.targetAgent))),
     forbiddenCounters: {
       vaultAgentCalls: 0,
