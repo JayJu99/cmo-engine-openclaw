@@ -184,7 +184,7 @@ function weeklyCampaignArtifactsFromHermes(response: HermesCmoRuntimeResponse): 
 }
 
 function runtimeRequestIsWeeklyCampaignWorkflow(request: HermesCmoRuntimeRequest): boolean {
-  return request.intent.mode === "cmo.weekly_campaign_plan" &&
+  return request.intent.mode === "cmo.default" &&
     request.intent.explicit_command === "/goal" &&
     request.workflow?.contract === CMO_WEEKLY_CAMPAIGN_WORKFLOW_CONTRACT;
 }
@@ -1269,7 +1269,7 @@ export function mapCmoChatToHermesCmoRequest(input: HermesCmoChatRequestInput): 
       display_name: displayName(input),
     },
     intent: {
-      mode: weeklyCampaignWorkflow ? "cmo.weekly_campaign_plan" : "cmo.default",
+      mode: "cmo.default",
       user_message: hermesUserMessage,
       ...(weeklyCampaignWorkflow ? { explicit_command: "/goal" } : {}),
       latest_user_message_primacy: LATEST_USER_MESSAGE_PRIMACY_RULE,

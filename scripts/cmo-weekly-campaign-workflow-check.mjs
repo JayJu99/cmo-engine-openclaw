@@ -27,7 +27,8 @@ includes(appStore, "const hermesFirstNormalChatRequested = !weeklyCampaignWorkfl
 includes(appStore, "weeklyCampaignWorkflow: { commandText: weeklyCampaignCommandText }", "Product must transport command text rather than author campaign strategy or copy.");
 
 includes(mapper, 'CMO_WEEKLY_CAMPAIGN_WORKFLOW_CONTRACT = "cmo.weekly_campaign_workflow.v1"', "Weekly workflow contract must be stable.");
-includes(mapper, 'mode: weeklyCampaignWorkflow ? "cmo.weekly_campaign_plan" : "cmo.default"', "Weekly workflow must use a distinct CMO intent.");
+includes(mapper, 'mode: "cmo.default"', "Weekly workflow must retain the live-compatible CMO intent.");
+includes(mapper, '...(weeklyCampaignWorkflow ? { workflow: weeklyCampaignWorkflow } : {})', "Weekly workflow must be carried by the explicit workflow envelope.");
 includes(mapper, 'stages: ["lens", "surf", "echo", "cmo_synthesis"]', "Weekly workflow must declare Lens, Surf, Echo, and synthesis stages.");
 includes(mapper, 'required_artifacts: [', "Weekly workflow must declare required artifacts.");
 includes(mapper, 'weeklyCampaignArtifactsFromHermes', "Campaign packs must be safely transported from Hermes output.");

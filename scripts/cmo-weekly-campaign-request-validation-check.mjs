@@ -53,7 +53,7 @@ const ordinaryRequest = {
   created_at: "2026-07-10T00:00:00.000Z",
   workspace: { workspace_id: "workspace_1", app_id: "app_1", app_name: "App One" },
   user: { user_id: "user_1", display_name: null },
-  intent: { mode: "cmo.default", user_message: "What should we prioritize this week?", explicit_command: null },
+  intent: { mode: "cmo.default", user_message: "Create a weekly campaign plan for social traffic.", explicit_command: null },
   context_pack: {
     current_priority: [],
     selected_context: [],
@@ -78,7 +78,7 @@ const weeklyGoalRequest = {
   ...ordinaryRequest,
   request_id: "req_weekly_fixture_goal",
   intent: {
-    mode: "cmo.weekly_campaign_plan",
+    mode: "cmo.default",
     explicit_command: "/goal",
     user_message: "increase social traffic this week",
   },
@@ -127,15 +127,22 @@ try {
     "weekly intent must reject a malformed workflow contract",
   );
   assert.equal(
-    validateHermesCmoRuntimeRequest({ ...weeklyGoalRequest, intent: { ...weeklyGoalRequest.intent, mode: "cmo.default" } }),
+    validateHermesCmoRuntimeRequest({ ...weeklyGoalRequest, intent: { ...weeklyGoalRequest.intent, explicit_command: null } }),
     false,
-    "ordinary intent must not accept a weekly workflow envelope",
+    "a workflow envelope without explicit /goal must not activate or validate as weekly",
+  );
+  assert.equal(
+    validateHermesCmoRuntimeRequest({ ...ordinaryRequest, workflow: { contract: "unrelated.workflow.v1" } }),
+    false,
+    "ordinary cmo.default chat must reject random workflow fields",
   );
 
   const liveWeeklyRequest = __weeklyLiveContract.buildHermesCmoLiveRequest(weeklyGoalRequest, { orchestrationEnabled: true });
   assert.equal(liveWeeklyRequest.constraints.delegations_mode, "weekly_campaign_lens_surf_echo_bounded", "valid /goal must enable weekly bounded delegations in the live payload");
   assert.deepEqual(liveWeeklyRequest.constraints.allowed_agents, ["lens", "echo", "surf"], "live /goal must expose Lens, Echo, and Surf only for the workflow");
   assert.equal(liveWeeklyRequest.constraints.allowLensExecution, true, "live /goal must enable Lens execution");
+  const liveOrdinaryRequest = __weeklyLiveContract.buildHermesCmoLiveRequest(ordinaryRequest, { orchestrationEnabled: false });
+  assert.equal(liveOrdinaryRequest.constraints.delegations_mode, "proposals_only", "ordinary cmo.default chat without workflow must remain proposals-only");
 
   const previousEnv = {
     CMO_HERMES_EXECUTION_ENABLED: process.env.CMO_HERMES_EXECUTION_ENABLED,

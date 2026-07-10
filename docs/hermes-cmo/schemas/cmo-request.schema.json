@@ -86,10 +86,7 @@
       ],
       "properties": {
         "mode": {
-          "enum": [
-            "cmo.default",
-            "cmo.weekly_campaign_plan"
-          ]
+          "const": "cmo.default"
         },
         "user_message": {
           "type": "string",
@@ -272,39 +269,6 @@
   "allOf": [
     {
       "if": {
-        "properties": {
-          "intent": {
-            "properties": {
-              "mode": {
-                "const": "cmo.weekly_campaign_plan"
-              }
-            },
-            "required": [
-              "mode"
-            ]
-          }
-        }
-      },
-      "then": {
-        "required": [
-          "workflow"
-        ],
-        "properties": {
-          "intent": {
-            "properties": {
-              "explicit_command": {
-                "const": "/goal"
-              }
-            },
-            "required": [
-              "explicit_command"
-            ]
-          }
-        }
-      }
-    },
-    {
-      "if": {
         "required": [
           "workflow"
         ]
@@ -314,7 +278,7 @@
           "intent": {
             "properties": {
               "mode": {
-                "const": "cmo.weekly_campaign_plan"
+                "const": "cmo.default"
               },
               "explicit_command": {
                 "const": "/goal"

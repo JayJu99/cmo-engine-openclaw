@@ -109,9 +109,9 @@ CMO Engine still saves session/raw/index as current system behavior.
 
 ## Field Notes
 
-`intent.mode` is `cmo.default` for ordinary chat. `cmo.weekly_campaign_plan` is permitted only for an explicit `/goal` request and requires the `workflow` envelope described below.
+`intent.mode` is always `cmo.default` for live M1 compatibility. An explicit `/goal` weekly campaign request is identified by the exact `workflow` envelope described below, not by a separate intent mode.
 
-`workflow` is required for `cmo.weekly_campaign_plan`. Its contract is `cmo.weekly_campaign_workflow.v1`, with the fixed stages `lens`, `surf`, `echo`, and `cmo_synthesis`; it must require the Lens measurement, Surf research, Echo content, and weekly campaign-pack artifacts. Every specialist policy is `required_if_available`. A `workflow` envelope is invalid under `cmo.default`.
+`workflow` is allowed only with `intent.mode: cmo.default` and `intent.explicit_command: /goal`. Its contract is `cmo.weekly_campaign_workflow.v1`, with the fixed stages `lens`, `surf`, `echo`, and `cmo_synthesis`; it must require the Lens measurement, Surf research, Echo content, and weekly campaign-pack artifacts. Every specialist policy is `required_if_available`. Ordinary `cmo.default` chat must omit this envelope.
 
 `intent.explicit_command` captures a parsed explicit command when available. Null means CMO should infer route from the user message and context, while still following the Clarifying + Assumption Protocol.
 

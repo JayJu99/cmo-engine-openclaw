@@ -153,7 +153,7 @@ export interface HermesCmoRuntimeRequest {
     [key: string]: unknown;
   };
   intent: {
-    mode: "cmo.default" | "cmo.weekly_campaign_plan";
+    mode: "cmo.default";
     user_message: string;
     explicit_command?: string | null;
     [key: string]: unknown;
@@ -2101,7 +2101,7 @@ const requestIsExternalResearch = (request: HermesCmoRuntimeRequest): boolean =>
   requestIsResearchFollowup(request);
 
 const requestIsWeeklyCampaignWorkflow = (request: HermesCmoRuntimeRequest): boolean =>
-  request.intent.mode === "cmo.weekly_campaign_plan" &&
+  request.intent.mode === "cmo.default" &&
   request.intent.explicit_command === "/goal" &&
   request.workflow !== undefined &&
   request.workflow.contract === "cmo.weekly_campaign_workflow.v1" &&
@@ -3748,8 +3748,10 @@ export const validateHermesCmoRuntimeRequest = (request: unknown): request is He
     return false;
   }
 
-  const weeklyCampaignWorkflow = request.intent.mode === "cmo.weekly_campaign_plan";
   const weeklyWorkflowEnvelope = isWeeklyCampaignWorkflowEnvelope(request);
+  const weeklyCampaignWorkflow = request.intent.mode === "cmo.default" &&
+    request.intent.explicit_command === "/goal" &&
+    weeklyWorkflowEnvelope;
 
   if (
     !isNonEmptyString(request.workspace.workspace_id) ||
@@ -3757,9 +3759,8 @@ export const validateHermesCmoRuntimeRequest = (request: unknown): request is He
     !isNonEmptyString(request.workspace.app_name) ||
     !isNonEmptyString(request.user.user_id) ||
     !isStringOrNull(request.user.display_name ?? null) ||
-    (request.intent.mode !== "cmo.default" && !weeklyCampaignWorkflow) ||
-    (weeklyCampaignWorkflow && !weeklyWorkflowEnvelope) ||
-    (request.intent.mode === "cmo.default" && weeklyWorkflowEnvelope) ||
+    request.intent.mode !== "cmo.default" ||
+    (request.workflow !== undefined && !weeklyCampaignWorkflow) ||
     !isNonEmptyString(request.intent.user_message) ||
     !isStringOrNull(request.intent.explicit_command ?? null)
   ) {
