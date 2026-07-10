@@ -82,7 +82,7 @@ function contextPack(unsafeContext = false) {
         title: "Campaign context",
         content: unsafeContext
           ? "Creative artifact path file:/home/admin/campaigns/publish-now.png_redact and token sk-proj-testunsafe123456789012345 should not leave Product."
-          : "Safe campaign context for native CMO.",
+          : "Referral workspace context C:\n- tag: referral growth",
         source: {
           sourceId: "source_campaign",
           type: "vault_note",
@@ -305,6 +305,15 @@ try {
   assertNativeMappedResponse(caption.mapped, "Native CMO handled the caption request.", "normal caption");
   assert.doesNotMatch(caption.mapped.answer, /caption 1|caption 2|caption 3|Echo was not called/i, "normal caption: Product must not return canned copy");
 
+  const referral = await runWithMockHermes(
+    hermesFirst,
+    inputFor("How should we improve the referral prompt?", { id: "referral" }),
+    "Native CMO handled the referral first-turn request.",
+  );
+  assertNativeMappedResponse(referral.mapped, "Native CMO handled the referral first-turn request.", "normal referral first turn");
+  assert.equal(referral.calls[0].body.intent.user_message, "How should we improve the referral prompt?", "normal referral: user message must reach Hermes intent");
+  assertNoUnsafeLeak(referral.calls[0].bodyText, "normal referral outbound body");
+
   const boundaryPublish = hermesFirst.hermesFirstBoundaryFailureResponse({
     failure: blockedFailure("publish luon"),
   });
@@ -367,6 +376,7 @@ try {
       vietnamesePublish.calls[0].body.intent.user_message,
       traffic.calls[0].body.intent.user_message,
       caption.calls[0].body.intent.user_message,
+      referral.calls[0].body.intent.user_message,
     ],
     scrubbedUnsafeContext: nativePublish.calls[0].body.outbound_hermes_payload_guard.outbound_hermes_payload_sanitized,
     boundaryPublishStatus: boundaryPublish.status,

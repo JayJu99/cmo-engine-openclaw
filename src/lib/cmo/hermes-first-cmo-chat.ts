@@ -31,6 +31,7 @@ import {
 import {
   OUTBOUND_HERMES_CALLSITE_GUARD_VERSION,
   buildOutboundHermesTraceSafeRequest,
+  outboundHermesBlockedClassesForLabels,
   inspectOutboundHermesCallsiteBlock,
   mergeOutboundHermesCallsiteBlockInspections,
   outboundHermesStringHasForbiddenArtifactText,
@@ -548,32 +549,6 @@ function safeHermesFirstErrorsList(value: unknown): Record<string, unknown>[] {
       return message ? { code: `error_${index + 1}`, message } : undefined;
     })
     .filter((item): item is Record<string, unknown> => Boolean(item));
-}
-
-function outboundBlockedClassesFromLabels(labels: string[]): string[] {
-  const classes = new Set<string>();
-
-  for (const label of labels) {
-    if (/raw[_-]?artifact|raw[_-]?contract/i.test(label)) {
-      classes.add("raw_artifact");
-    } else if (/authorization|bearer|sk-|secret|token/i.test(label)) {
-      classes.add("secret_like");
-    } else if (/file:/i.test(label)) {
-      classes.add("file_uri");
-    } else if (/\/home\//i.test(label)) {
-      classes.add("home_path");
-    } else if (/[A-Za-z]:[\\/]/.test(label)) {
-      classes.add("absolute_path");
-    } else if (/\.(?:png|jpe?g|webp|mp4|webm)|creative|conversion|local[_-]?path/i.test(label)) {
-      classes.add("media_path");
-    } else if (/\/(?:tmp|Users|var|mnt|private|Volumes)\//i.test(label)) {
-      classes.add("absolute_path");
-    } else {
-      classes.add("other_unsafe_marker");
-    }
-  }
-
-  return Array.from(classes).slice(0, 12);
 }
 
 function normalizeSourceAgent(value: unknown): HermesCmoAgentUsed | undefined {
@@ -1244,7 +1219,7 @@ export async function runHermesFirstCmoChat(input: HermesFirstCmoChatRequestInpu
   ]));
   const outboundBlockedClasses = Array.from(new Set([
     ...outboundSanitizer.blockedClasses,
-    ...outboundBlockedClassesFromLabels(fetchBodyBlockInspection.literals),
+    ...outboundHermesBlockedClassesForLabels(fetchBodyBlockInspection.literals),
   ]));
 
   if (

@@ -276,11 +276,7 @@ async function assertOutboundSanitizerBehavior() {
       enumerable: true,
       value: () => "file:/Users/[redacted]/serialized-only.json",
     });
-    const serializedOnlyResult = sanitizer.sanitizeOutboundHermesPayload({
-      context_pack: {
-        serialized_only: serializedOnlyValue,
-      },
-    });
+    const serializedOnlyResult = sanitizer.sanitizeOutboundHermesPayload(serializedOnlyValue);
 
     assert.equal(serializedOnlyResult.diagnostics.outbound_hermes_payload_path_like_blocked, true);
     assert.deepEqual(serializedOnlyResult.blockedFieldsPreview, ["$"]);
@@ -296,7 +292,25 @@ async function assertOutboundSanitizerBehavior() {
         .some((match) => match.class === "file_uri" && match.label === "file_uri" && match.redactionToken === "[file_uri_redacted]"),
       "final guard match details must expose the shared file URI rule",
     );
+    assert.deepEqual(
+      sanitizer.outboundHermesBlockedClassesForLabels(["windows_absolute_path"]),
+      ["absolute_path"],
+      "Hermes-first boundary mapping must use the shared semantic label class",
+    );
     assertNoForbiddenOutboundLiterals(JSON.stringify(serializedOnlyResult.blockedDiagnostics), "serialized-only blocked diagnostics");
+
+    const workspaceContextWithColonNewline = {
+      workspace_context: {
+        summary: "Referral workspace context C:\n- tag: referral growth",
+      },
+    };
+    const escapedNewlineResult = sanitizer.sanitizeOutboundHermesPayload(workspaceContextWithColonNewline);
+    const escapedNewlineBody = JSON.stringify(escapedNewlineResult.payload);
+    const escapedNewlineCallsite = sanitizer.inspectOutboundHermesCallsiteBlock("fetch_body", escapedNewlineBody);
+
+    assert.equal(escapedNewlineResult.diagnostics.outbound_hermes_payload_path_like_blocked, false);
+    assert.deepEqual(escapedNewlineCallsite.literals, []);
+    assert.deepEqual(escapedNewlineCallsite.paths, []);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -457,8 +471,9 @@ assertMatches(outboundSanitizerPath, /sanitizeOutboundHermesContextText\(value\)
 assertIncludes(outboundSanitizerPath, "redactFinalOutboundPayloadStrings", "Sanitizer must recursively redact the final outbound payload copy");
 assertIncludes(outboundSanitizerPath, "const finalOutboundPayload = redactFinalOutboundPayloadStrings(", "Sanitizer must build a final redacted payload copy");
 assertIncludes(outboundSanitizerPath, "const blockedFields = collectBlockedFields(finalOutboundPayload);", "Sanitizer must inspect the final redacted payload before diagnostics are attached");
-assertIncludes(outboundSanitizerPath, "const serializedForbiddenMatches = outboundHermesStringForbiddenMatches(serializedPayload);", "Sanitizer must classify final serialized guard matches using the shared rules");
-assertIncludes(outboundSanitizerPath, "const serializedPayloadBlocked = serializedForbiddenMatches.length > 0;", "Sanitizer must re-run serialized block status against the final redacted payload");
+assertIncludes(outboundSanitizerPath, "const serializedPayloadValue = parseSerializedOutboundPayload(serializedPayload);", "Sanitizer must evaluate final serialized data after JSON escapes are decoded");
+assertIncludes(outboundSanitizerPath, "const serializedBlockedDiagnostics = uniqueBlockedDiagnostics(", "Sanitizer must classify final serialized guard matches using the shared rules");
+assertIncludes(outboundSanitizerPath, "const serializedPayloadBlocked = serializedBlockedDiagnostics.length > 0;", "Sanitizer must re-run serialized block status against the final redacted payload");
 assertIncludes(outboundSanitizerPath, "label: match.label", "Serialized guard diagnostics must preserve the matched rule label");
 assertExcludes(outboundSanitizerPath, /const provisionalPayload = addDiagnostics\(sanitizedPayload, provisionalDiagnostics\);/, "Sanitizer must not inspect a diagnostics-attached provisional payload for block status");
 assertExcludes(outboundSanitizerPath, /12 Knowledge|13 Sources|Apps\/Holdstation Mini App/, "Outbound sanitizer must not target logical Vault/project paths");

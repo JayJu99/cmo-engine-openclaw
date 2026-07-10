@@ -159,6 +159,14 @@ export const outboundHermesCallsiteBlockedLiteralLabels = (outboundPayloadJson: 
     OUTBOUND_HERMES_UNSAFE_TEXT_RULES.length,
   );
 
+export const outboundHermesBlockedClassesForLabels = (labels: string[]): Array<Exclude<OutboundHermesBlockedClass, "serialized_payload_string_match">> =>
+  Array.from(new Set(
+    labels.flatMap((label) =>
+      OUTBOUND_HERMES_UNSAFE_TEXT_RULES
+        .filter((rule) => rule.label === label)
+        .map((rule) => rule.class)),
+  ));
+
 export interface OutboundHermesCallsiteBlockInspection {
   literals: string[];
   sources: OutboundCallsiteBlockSource[];
@@ -304,6 +312,14 @@ const collectCallsiteBlockedStringFields = (
   });
 };
 
+const parseSerializedOutboundPayload = (value: string): unknown => {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+};
+
 export const inspectOutboundHermesCallsiteBlock = (
   source: OutboundCallsiteBlockSource,
   value: unknown,
@@ -315,12 +331,18 @@ export const inspectOutboundHermesCallsiteBlock = (
   };
 
   if (typeof value === "string") {
-    for (const match of literalEntriesForString(value)) {
-      result.literals.push(match.label);
-      if (result.snippets.length < MAX_CALLSITE_SNIPPETS) {
-        const snippet = sanitizedSnippetAroundLiteral(value, match.literal);
-        if (snippet) {
-          result.snippets.push(snippet);
+    const parsedValue = parseSerializedOutboundPayload(value);
+
+    if (parsedValue !== value) {
+      collectCallsiteBlockedStringFields(parsedValue, [], result);
+    } else {
+      for (const match of literalEntriesForString(value)) {
+        result.literals.push(match.label);
+        if (result.snippets.length < MAX_CALLSITE_SNIPPETS) {
+          const snippet = sanitizedSnippetAroundLiteral(value, match.literal);
+          if (snippet) {
+            result.snippets.push(snippet);
+          }
         }
       }
     }
@@ -700,23 +722,23 @@ export function sanitizeOutboundHermesPayload<T>(
   };
   const blockedFields = collectBlockedFields(finalOutboundPayload);
   const serializedPayload = JSON.stringify(finalOutboundPayload);
-  const serializedForbiddenMatches = outboundHermesStringForbiddenMatches(serializedPayload);
-  const serializedPayloadBlocked = serializedForbiddenMatches.length > 0;
+  const serializedPayloadValue = parseSerializedOutboundPayload(serializedPayload);
+  const serializedBlockedDiagnostics = uniqueBlockedDiagnostics(
+    collectOutboundHermesBlockedDiagnostics(serializedPayloadValue),
+  );
+  const serializedPayloadBlocked = serializedBlockedDiagnostics.length > 0;
   const blockedDiagnostics = uniqueBlockedDiagnostics(collectOutboundHermesBlockedDiagnostics(finalOutboundPayload));
   const diagnosticRuleKeys = new Set(blockedDiagnostics.map((diagnostic) => `${diagnostic.class}:${diagnostic.label}`));
 
-  for (const match of serializedForbiddenMatches) {
-    const key = `${match.class}:${match.label}`;
+  for (const diagnostic of serializedBlockedDiagnostics) {
+    const key = `${diagnostic.class}:${diagnostic.label}`;
 
     if (diagnosticRuleKeys.has(key)) {
       continue;
     }
 
     blockedDiagnostics.push({
-      path: "$",
-      class: match.class,
-      label: match.label,
-      sample: blockedSample(match.class),
+      ...diagnostic,
     });
     diagnosticRuleKeys.add(key);
   }
