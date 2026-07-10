@@ -141,8 +141,8 @@ async function assertOutboundSanitizerBehavior() {
     assert.equal(partialRedaction.diagnostics.outbound_hermes_payload_path_like_blocked, false);
     assert.equal(
       partialRedaction.payload.context_pack.selected_context[0].content,
-      "Creative asset was generated or updated. Use active asset metadata and reference_assets for visual context.",
-      "Partially sanitized unsafe assistant content must fall back to role-safe placeholder",
+      "Use [file_uri_redacted] and leave campaign[artifact_text_redacted] in copy.",
+      "Partially unsafe assistant content must retain safe context while redacting unsafe substrings",
     );
     assert.equal(sanitizer.outboundHermesStringHasForbiddenArtifactText(partialJson), false);
     assertNoForbiddenOutboundLiterals(partialJson, "partial redaction final JSON");
@@ -174,6 +174,124 @@ async function assertOutboundSanitizerBehavior() {
     assert.deepEqual(callsiteInspect.literals, []);
     assert.deepEqual(callsiteInspect.paths, []);
     assert.deepEqual(callsiteInspect.snippets, []);
+
+    const originalOutboundContext = {
+      context_pack: {
+        latest_sessions: [
+          {
+            summary: "Previous receipt: /home/ju/.openclaw/session.json",
+            preview: "Inspect file:/tmp/foo.png before the follow-up.",
+            vault_path: "12 Knowledge/Workspace Lessons/foo.md",
+            artifact_note: "creative-agent-images output is available for review.",
+            diagnostic_token: "SK-proj-12345678901234567890",
+          },
+        ],
+      },
+      messages: [
+        {
+          role: "assistant",
+          content: "Safe assistant answer body remains available for follow-up context.",
+        },
+      ],
+    };
+    const originalOutboundContextJson = JSON.stringify(originalOutboundContext);
+    const finalRedactionResult = sanitizer.sanitizeOutboundHermesPayload(originalOutboundContext);
+    const finalRedactionJson = JSON.stringify(finalRedactionResult.payload);
+
+    assert.equal(
+      finalRedactionResult.payload.context_pack.latest_sessions[0].summary,
+      "Previous receipt: [local_path_redacted]",
+      "Nested local paths must be redacted without discarding surrounding context",
+    );
+    assert.equal(
+      finalRedactionResult.payload.context_pack.latest_sessions[0].preview,
+      "Inspect [file_uri_redacted] before the follow-up.",
+      "Nested file URIs must be redacted without blocking the request",
+    );
+    assert.equal(
+      finalRedactionResult.payload.context_pack.latest_sessions[0].vault_path,
+      "12 Knowledge/Workspace Lessons/foo.md",
+      "Safe relative vault paths must remain available to Hermes",
+    );
+    assert.equal(
+      finalRedactionResult.payload.context_pack.latest_sessions[0].artifact_note,
+      "[artifact_text_redacted] output is available for review.",
+      "Known artifact text must be redacted without dropping useful surrounding context",
+    );
+    assert.equal(
+      finalRedactionResult.payload.context_pack.latest_sessions[0].diagnostic_token,
+      "[secret_redacted]",
+      "Secret-like values must be redacted before the final guard runs",
+    );
+    assert.equal(
+      finalRedactionResult.payload.messages[0].content,
+      "Safe assistant answer body remains available for follow-up context.",
+      "Safe assistant answer content must be preserved",
+    );
+    assert.equal(finalRedactionResult.diagnostics.outbound_hermes_payload_path_like_blocked, false);
+    assert.equal(sanitizer.outboundHermesStringHasForbiddenArtifactText(finalRedactionJson), false);
+    assertNoForbiddenOutboundLiterals(finalRedactionJson, "final outbound nested redaction");
+    assert.equal(
+      JSON.stringify(originalOutboundContext),
+      originalOutboundContextJson,
+      "Final outbound redaction must not mutate session or source context objects",
+    );
+
+    const nestedDiagnostics = sanitizer.collectOutboundHermesBlockedDiagnostics({
+      context_pack: {
+        latestSessions: [
+          {
+            summary: "/home/[redacted]/cmo/session.json",
+          },
+        ],
+      },
+    });
+
+    assert.deepEqual(nestedDiagnostics, [
+      {
+        path: "$.context_pack.latestSessions[0].summary",
+        class: "home_path",
+        sample: "[redacted:home_path]",
+      },
+    ]);
+    assertNoForbiddenOutboundLiterals(JSON.stringify(nestedDiagnostics), "nested blocked diagnostics");
+
+    const unsafeKeyDiagnostics = sanitizer.collectOutboundHermesBlockedDiagnostics({
+      "/home/[redacted]/cmo/session.json": "safe value",
+    });
+
+    assert.deepEqual(unsafeKeyDiagnostics, [
+      {
+        path: '$["[redacted_key]"]',
+        class: "home_path",
+        sample: "[redacted:home_path]",
+      },
+    ]);
+    assertNoForbiddenOutboundLiterals(JSON.stringify(unsafeKeyDiagnostics), "unsafe-key blocked diagnostics");
+
+    const serializedOnlyValue = {};
+    Object.defineProperty(serializedOnlyValue, "toJSON", {
+      enumerable: true,
+      value: () => "file:/Users/[redacted]/serialized-only.json",
+    });
+    const serializedOnlyResult = sanitizer.sanitizeOutboundHermesPayload({
+      context_pack: {
+        serialized_only: serializedOnlyValue,
+      },
+    });
+
+    assert.equal(serializedOnlyResult.diagnostics.outbound_hermes_payload_path_like_blocked, true);
+    assert.deepEqual(serializedOnlyResult.blockedFieldsPreview, ["$"]);
+    assert.deepEqual(serializedOnlyResult.blockedLiteralLabels, ["serialized_payload_string_match"]);
+    assert.deepEqual(serializedOnlyResult.blockedClasses, ["serialized_payload_string_match"]);
+    assert.deepEqual(serializedOnlyResult.blockedDiagnostics, [
+      {
+        path: "$",
+        class: "serialized_payload_string_match",
+        sample: "[redacted:serialized_payload_string_match]",
+      },
+    ]);
+    assertNoForbiddenOutboundLiterals(JSON.stringify(serializedOnlyResult.blockedDiagnostics), "serialized-only blocked diagnostics");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -324,11 +442,14 @@ assertIncludes(outboundSanitizerPath, "OUTBOUND_HERMES_LOCAL_PATH_REDACTION", "O
 assertIncludes(outboundSanitizerPath, "tmp|Users|home|var|mnt|private|Volumes", "Outbound sanitizer must keep these local path roots guarded");
 assertIncludes(outboundSanitizerPath, ".replace(/file:", "Outbound sanitizer must redact file URLs");
 assertIncludes(outboundSanitizerPath, ".replace(/[A-Za-z]:", "Outbound sanitizer must redact absolute Windows paths");
-assertIncludes(outboundSanitizerPath, "creative-agent-images|cmo-creative-execute|conversion_h_|Creative_image_asset_Refine", "Outbound sanitizer must redact known local artifact literals");
+assertIncludes(outboundSanitizerPath, "OUTBOUND_HERMES_ARTIFACT_TEXT_REDACTION", "Outbound sanitizer must redact known local artifact literals");
+assertIncludes(outboundSanitizerPath, "OUTBOUND_HERMES_FILE_URI_REDACTION", "Outbound sanitizer must preserve a safe file URI redaction marker");
 assertIncludes(outboundSanitizerPath, "sanitizeOutboundHermesContextText(value)", "Outbound sanitizer must run targeted context redaction before final guard replacement");
 assertMatches(outboundSanitizerPath, /sanitizeOutboundHermesContextText\(value\)[\s\S]{0,220}!outboundHermesStringHasForbiddenArtifactText\(sanitizedContextText\)/, "Sanitizer must re-check targeted context redaction before returning changed text");
-assertMatches(outboundSanitizerPath, /const blockedFields = collectBlockedFields\(sanitizedPayload\);/, "Sanitizer must compute blocked fields from sanitizedPayload before diagnostics are attached");
-assertMatches(outboundSanitizerPath, /const serializedPayloadBlocked = outboundHermesStringHasForbiddenArtifactText\(JSON\.stringify\(sanitizedPayload\)\);/, "Sanitizer must compute serialized block status from sanitizedPayload before diagnostics are attached");
+assertIncludes(outboundSanitizerPath, "redactFinalOutboundPayloadStrings", "Sanitizer must recursively redact the final outbound payload copy");
+assertIncludes(outboundSanitizerPath, "const finalOutboundPayload = redactFinalOutboundPayloadStrings(", "Sanitizer must build a final redacted payload copy");
+assertIncludes(outboundSanitizerPath, "const blockedFields = collectBlockedFields(finalOutboundPayload);", "Sanitizer must inspect the final redacted payload before diagnostics are attached");
+assertMatches(outboundSanitizerPath, /const serializedPayloadBlocked = outboundHermesStringHasForbiddenArtifactText\(JSON\.stringify\(finalOutboundPayload\)\);/, "Sanitizer must re-run serialized block status against the final redacted payload");
 assertExcludes(outboundSanitizerPath, /const provisionalPayload = addDiagnostics\(sanitizedPayload, provisionalDiagnostics\);/, "Sanitizer must not inspect a diagnostics-attached provisional payload for block status");
 assertExcludes(outboundSanitizerPath, /12 Knowledge|13 Sources|Apps\/Holdstation Mini App/, "Outbound sanitizer must not target logical Vault/project paths");
 assert.doesNotMatch(sourceSection(outboundSanitizerPath, "const sanitizedSnippetAroundLiteral", "const collectCallsiteBlockedStringFields"), /file:\[local_path_redacted\]|\/(?:tmp|Users|home|var|mnt|private|Volumes)\/\[local_path_redacted\]/, "Outbound diagnostics snippets must not preserve forbidden local path prefixes");
