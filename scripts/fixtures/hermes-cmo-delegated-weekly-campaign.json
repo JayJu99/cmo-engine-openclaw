@@ -65,6 +65,7 @@
     "session_id": "session_fixture_weekly",
     "turn_id": "turn_fixture_weekly",
     "status": "delegated",
+    "classification": "needs_surf_then_echo",
     "answer_basis": {
       "mode": "fully_grounded",
       "missing_inputs": [],
@@ -85,7 +86,7 @@
       "decision": "Run the referral activation campaign this week.",
       "body": "## Weekly Referral Activation Campaign Pack\n\n### Campaign\nLaunch a seven-day referral activation loop across social traffic and website traffic.\n\n### Referral mechanics\nUse one clear referral CTA, tracked landing-page entry, and activation event.\n\n### Activation plan\nSequence social proof, landing-page education, and conversion reminders using the attached Lens, Surf, and Echo evidence."
     },
-    "structured_output": { "classification": "strategy_only" },
+    "structured_output": { "classification": "needs_surf_then_echo" },
     "delegations": [
       { "delegation_id": "del_lens", "target": { "agent": "lens", "mode": "lens.query" }, "objective": "Establish the activation baseline" },
       { "delegation_id": "del_surf", "target": { "agent": "surf", "mode": "surf.default" }, "objective": "Research referral activation evidence" },

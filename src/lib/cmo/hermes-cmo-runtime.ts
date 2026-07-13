@@ -84,7 +84,12 @@ export type HermesCmoClassification =
   | "save_to_vault"
   | "clarify"
   | "needs_surf"
-  | "needs_echo_retry";
+  | "needs_echo_retry"
+  | "needs_surf_then_echo"
+  | "needs_echo"
+  | "assumption_based_strategy"
+  | "needs_vault_agent"
+  | "needs_clarification";
 export type HermesActivityStatus = "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled";
 export type HermesActivityType =
   | "run.started"
@@ -486,6 +491,11 @@ const classifications = new Set<HermesCmoClassification>([
   "clarify",
   "needs_surf",
   "needs_echo_retry",
+  "needs_surf_then_echo",
+  "needs_echo",
+  "assumption_based_strategy",
+  "needs_vault_agent",
+  "needs_clarification",
 ]);
 const activityTypes = new Set<HermesActivityType>([
   "run.started",
