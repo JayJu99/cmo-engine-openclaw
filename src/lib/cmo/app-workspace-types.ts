@@ -634,6 +634,8 @@ export type HermesCmoExecutableMode =
   | "surf.x"
   | "surf.trend"
   | "surf.pulse"
+  | "lens.query"
+  | "lens.measurement"
   | "creative"
   | "creative.default"
   | "creative.generate_image"
@@ -936,13 +938,7 @@ export interface CmoActivityStepDisplay {
 
 export interface CmoEvidenceSourceDisplay {
   key: string;
-  sourceLabel:
-    | "Lens / GA4 ad-hoc query"
-    | "Lens / Product metric-definition snapshot"
-    | "Lens / Dune business metrics"
-    | "Lens / Facebook channel metrics"
-    | "Vault / Lens Daily Report"
-    | "Lens / GA4 cached snapshot";
+  sourceLabel: string;
   summary?: string;
   confidence?: string;
   rows: Array<{

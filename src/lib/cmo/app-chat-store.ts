@@ -3846,7 +3846,7 @@ function parseCreativeRejectedSideEffectType(reason: string): string | undefined
 }
 
 function safeCmoRunToolsUsed(agentsUsed: HermesCmoAgentUsed[] | undefined): HermesCmoAgentUsed[] | undefined {
-  return agentsUsed?.filter((agent) => agent === "cmo" || agent === "surf" || agent === "echo" || agent === "creative");
+  return agentsUsed?.filter((agent) => agent === "cmo" || agent === "lens" || agent === "surf" || agent === "echo" || agent === "creative");
 }
 
 function messageUserMetadata(identity: CmoServerUserIdentity): Pick<CMOChatMessage, "authMode" | "userId" | "userEmail" | "userDisplayName" | "userSlug"> {
@@ -4759,6 +4759,7 @@ export async function createAppChatSession(
   let sessionSummary = continuedSession?.sessionSummary;
   let sessionArtifacts = continuedSession?.sessionArtifacts ?? [];
   let turnCreativeArtifacts: Record<string, unknown>[] = [];
+  let turnHermesArtifacts: Record<string, unknown>[] = [];
   let approvalRequests = continuedSession?.approvalRequests ?? [];
   let suggestedVaultUpdates = continuedSession?.suggestedVaultUpdates ?? [];
   const vaultUpdateApprovalEvents = continuedSession?.vaultUpdateApprovalEvents ?? [];
@@ -5105,7 +5106,8 @@ export async function createAppChatSession(
     echoCalls = mappedChat.echoCalls;
     forbiddenCounters = mappedChat.forbiddenCounters;
     delegationsMode = mappedChat.delegationsMode;
-    sessionArtifacts = mergeHermesCmoChatV11Artifacts(sessionArtifacts, mappedChat.sessionArtifacts);
+    turnHermesArtifacts = mappedChat.sessionArtifacts ?? [];
+    sessionArtifacts = mergeHermesCmoChatV11Artifacts(sessionArtifacts, turnHermesArtifacts);
     approvalRequests = mergeApprovalRequests(approvalRequests, mappedChat.approvalRequests);
     suggestedVaultUpdates = mergeSuggestedVaultUpdates(suggestedVaultUpdates, mappedChat.suggestedVaultUpdates);
     sessionSummary = mergeHermesCmoChatV11SessionSummary(sessionSummary, mappedChat.suggestedSessionSummaryUpdate);
@@ -5838,6 +5840,7 @@ export async function createAppChatSession(
         }
 
         const mappedHermesFallbackResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesFallbackResult));
+        turnHermesArtifacts = mappedHermesFallbackResult.sessionArtifacts ?? [];
         creativeWorkingState = applySuggestedCreativeStateUpdate(
           creativeWorkingState,
           extractSuggestedCreativeStateUpdate(hermesFallbackResult.response),
@@ -5855,7 +5858,7 @@ export async function createAppChatSession(
         creativeWorkingState = applyCreativeAssetStateUpdate(creativeWorkingState, fallbackCreativeArtifacts);
         sessionArtifacts = mergeHermesCmoChatV11Artifacts(
           sessionArtifacts,
-          fallbackCreativeArtifacts,
+          [...fallbackCreativeArtifacts, ...turnHermesArtifacts],
         );
 
         answer = mappedHermesFallbackResult.answer;
@@ -6088,6 +6091,7 @@ export async function createAppChatSession(
       }
 
       const mappedHermesResult = sanitizeHermesCmoMappedChatResult(mapHermesCmoResponseToChatResult(hermesResult));
+      turnHermesArtifacts = mappedHermesResult.sessionArtifacts ?? [];
       if (!creativeContractViolation) {
         creativeWorkingState = applySuggestedCreativeStateUpdate(
           creativeWorkingState,
@@ -6099,7 +6103,7 @@ export async function createAppChatSession(
       creativeWorkingState = applyCreativeAssetStateUpdate(creativeWorkingState, creativeArtifacts);
       sessionArtifacts = mergeHermesCmoChatV11Artifacts(
         sessionArtifacts,
-        [...creativeArtifacts, ...(mappedHermesResult.sessionArtifacts ?? [])],
+        [...creativeArtifacts, ...turnHermesArtifacts],
       );
       suggestedVaultUpdates = mergeSuggestedVaultUpdates(
         suggestedVaultUpdates,
@@ -6912,6 +6916,7 @@ export async function createAppChatSession(
   }
   creativeWorkingState = normalizeCreativeWorkingState(creativeWorkingState);
   const finalCanonicalCreativeAssetStates = sanitizeCreativeAssetStates(turnCreativeArtifacts);
+  const turnSessionArtifacts = mergeHermesCmoChatV11Artifacts(turnHermesArtifacts, turnCreativeArtifacts);
   const resolvedFinalActiveCreativeAssetId = creativeWorkingState?.active_asset_id ?? finalCanonicalCreativeAssetStates.at(-1)?.asset_id;
   if (resolvedFinalActiveCreativeAssetId && creativeWorkingState?.active_asset_id !== resolvedFinalActiveCreativeAssetId) {
     creativeWorkingState = normalizeCreativeWorkingState({
@@ -7272,7 +7277,7 @@ export async function createAppChatSession(
         ...(activeSourceId ? { activeSourceId } : {}),
         ...(sessionSummary ? { sessionSummary } : {}),
         ...(turnCreativeArtifacts.length ? { creativeAssets: turnCreativeArtifacts, creative_assets: turnCreativeArtifacts } : {}),
-        ...(turnCreativeArtifacts.length ? { sessionArtifacts: turnCreativeArtifacts } : {}),
+        ...(turnSessionArtifacts.length ? { sessionArtifacts: turnSessionArtifacts } : {}),
         ...(approvalRequests.length ? { approvalRequests } : {}),
         ...(suggestedVaultUpdates.length ? { suggestedVaultUpdates } : {}),
         ...(vaultUpdateApprovalEvents.length ? { vaultUpdateApprovalEvents } : {}),

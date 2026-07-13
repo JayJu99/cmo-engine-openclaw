@@ -1,0 +1,123 @@
+{
+  "ok": true,
+  "mode": "hermes_cmo_live",
+  "boundary": "h5_live_adapter",
+  "runtimeMode": "hermes_cmo_live",
+  "calledHermesCmo": true,
+  "hermesCmoAgentPath": "/agents/cmo/execute",
+  "hermesCmoEndpointKind": "execute",
+  "hermesCmoEndpointTimeoutMs": 240000,
+  "hermesCmoEndpointTimeoutSource": "default",
+  "hermesCmoRouteDecision": "execute",
+  "hermesCmoToolEndpointEnabled": false,
+  "creativeLongRunningTurn": false,
+  "request": {
+    "schema_version": "hermes.cmo.request.v1",
+    "request_id": "req_h6_fixture_weekly",
+    "session_id": "session_fixture_weekly",
+    "turn_id": "turn_fixture_weekly",
+    "created_at": "2026-07-13T04:08:17.197Z",
+    "workspace": {
+      "workspace_id": "holdstation-mini-app",
+      "app_id": "holdstation-mini-app",
+      "app_name": "Holdstation Mini App"
+    },
+    "user": { "user_id": "fixture_user", "display_name": null },
+    "intent": {
+      "mode": "cmo.default",
+      "explicit_command": "/goal",
+      "user_message": "/goal Create this week's referral activation campaign pack"
+    },
+    "workflow": {
+      "contract": "cmo.weekly_campaign_workflow.v1",
+      "trigger": "explicit_goal_command",
+      "plan_only": true,
+      "stages": ["lens", "surf", "echo", "cmo_synthesis"],
+      "required_artifacts": ["lens.measurement_result.v1", "hermes.surf.response.v1", "hermes.echo.response.v1", "cmo.weekly_campaign_pack.v1"],
+      "specialist_policy": {
+        "lens": "required_if_available",
+        "surf": "required_if_available",
+        "echo": "required_if_available"
+      }
+    },
+    "context_pack": {
+      "current_priority": [],
+      "selected_context": [],
+      "recent_session_summary": null,
+      "indexed_context_supplement": [],
+      "artifacts_in": []
+    },
+    "constraints": {
+      "no_direct_vault_write": true,
+      "no_direct_memory_mutation": true,
+      "vault_agent_delegation_allowed": false,
+      "vault_agent_requires_save_intent": true,
+      "kanban_enabled": false,
+      "demo_mode": false,
+      "allowed_agents": ["lens", "surf", "echo"],
+      "allowed_surf_modes": ["surf.default"]
+    },
+    "ui": { "activity_stream_required": true, "heartbeat_required": true }
+  },
+  "response": {
+    "schema_version": "hermes.cmo.response.v1",
+    "request_id": "req_h6_fixture_weekly",
+    "session_id": "session_fixture_weekly",
+    "turn_id": "turn_fixture_weekly",
+    "status": "delegated",
+    "answer_basis": {
+      "mode": "fully_grounded",
+      "missing_inputs": [],
+      "assumptions_used": [],
+      "user_can_override": true,
+      "suggested_user_inputs": []
+    },
+    "clarifying_question": {
+      "required": false,
+      "question": null,
+      "reason": null,
+      "missing_inputs": []
+    },
+    "answer": {
+      "format": "markdown",
+      "title": "Weekly referral activation campaign pack",
+      "summary": "Launch a measured referral activation loop across social and website traffic.",
+      "decision": "Run the referral activation campaign this week.",
+      "body": "## Weekly Referral Activation Campaign Pack\n\n### Campaign\nLaunch a seven-day referral activation loop across social traffic and website traffic.\n\n### Referral mechanics\nUse one clear referral CTA, tracked landing-page entry, and activation event.\n\n### Activation plan\nSequence social proof, landing-page education, and conversion reminders using the attached Lens, Surf, and Echo evidence."
+    },
+    "structured_output": { "classification": "strategy_only" },
+    "delegations": [
+      { "delegation_id": "del_lens", "target": { "agent": "lens", "mode": "lens.query" }, "objective": "Establish the activation baseline" },
+      { "delegation_id": "del_surf", "target": { "agent": "surf", "mode": "surf.default" }, "objective": "Research referral activation evidence" },
+      { "delegation_id": "del_echo", "target": { "agent": "echo", "mode": "echo.default" }, "objective": "Draft campaign and referral activation copy" }
+    ],
+    "artifacts": [
+      { "artifact_id": "artifact_lens", "contract": "lens.measurement_result.v1", "source_agent": "lens", "title": "Activation baseline", "status": "completed", "summary": "Lens metrics evidence" },
+      { "artifact_id": "artifact_surf", "contract": "hermes.surf.response.v1", "source_agent": "surf", "title": "Referral research", "status": "completed", "key_findings": ["Social proof reduces referral friction", "Landing-page clarity supports activation"] },
+      { "artifact_id": "artifact_echo", "contract": "hermes.echo.response.v1", "source_agent": "echo", "title": "Campaign draft", "status": "completed", "summary": "Weekly campaign, referral, and activation draft" },
+      { "artifact_id": "artifact_campaign", "contract": "cmo.weekly_campaign_pack.v1", "source_agent": "cmo", "title": "Weekly referral activation pack", "status": "completed", "summary": "Final Hermes campaign pack" }
+    ],
+    "memory_suggestions": [],
+    "activity_summary": { "events_count": 6, "final_state": "delegated" }
+  },
+  "activity_events": [
+    { "schema_version": "hermes.activity.event.v1", "event_id": "evt_lens_start", "request_id": "req_h6_fixture_weekly", "session_id": "session_fixture_weekly", "turn_id": "turn_fixture_weekly", "seq": 1, "created_at": "2026-07-13T04:08:18.000Z", "source": { "agent": "lens", "mode": "lens.query" }, "type": "delegation.started", "status": "running", "user_visible": true, "message": "Lens query started.", "data": { "delegation_id": "del_lens" } },
+    { "schema_version": "hermes.activity.event.v1", "event_id": "evt_lens_done", "request_id": "req_h6_fixture_weekly", "session_id": "session_fixture_weekly", "turn_id": "turn_fixture_weekly", "seq": 2, "created_at": "2026-07-13T04:08:19.000Z", "source": { "agent": "lens", "mode": "lens.query" }, "type": "delegation.completed", "status": "completed", "user_visible": true, "message": "Lens evidence completed.", "data": { "delegation_id": "del_lens" } },
+    { "schema_version": "hermes.activity.event.v1", "event_id": "evt_surf_start", "request_id": "req_h6_fixture_weekly", "session_id": "session_fixture_weekly", "turn_id": "turn_fixture_weekly", "seq": 3, "created_at": "2026-07-13T04:08:20.000Z", "source": { "agent": "surf", "mode": "surf.default" }, "type": "delegation.started", "status": "running", "user_visible": true, "message": "Surf research started.", "data": { "delegation_id": "del_surf" } },
+    { "schema_version": "hermes.activity.event.v1", "event_id": "evt_surf_done", "request_id": "req_h6_fixture_weekly", "session_id": "session_fixture_weekly", "turn_id": "turn_fixture_weekly", "seq": 4, "created_at": "2026-07-13T04:08:21.000Z", "source": { "agent": "surf", "mode": "surf.default" }, "type": "delegation.completed", "status": "completed", "user_visible": true, "message": "Surf evidence completed.", "data": { "delegation_id": "del_surf" } },
+    { "schema_version": "hermes.activity.event.v1", "event_id": "evt_echo_start", "request_id": "req_h6_fixture_weekly", "session_id": "session_fixture_weekly", "turn_id": "turn_fixture_weekly", "seq": 5, "created_at": "2026-07-13T04:08:22.000Z", "source": { "agent": "echo", "mode": "echo.default" }, "type": "delegation.started", "status": "running", "user_visible": true, "message": "Echo draft started.", "data": { "delegation_id": "del_echo" } },
+    { "schema_version": "hermes.activity.event.v1", "event_id": "evt_echo_done", "request_id": "req_h6_fixture_weekly", "session_id": "session_fixture_weekly", "turn_id": "turn_fixture_weekly", "seq": 6, "created_at": "2026-07-13T04:08:23.000Z", "source": { "agent": "echo", "mode": "echo.default" }, "type": "delegation.completed", "status": "completed", "user_visible": true, "message": "Echo campaign draft completed.", "data": { "delegation_id": "del_echo" } }
+  ],
+  "safety_counters": { "surfCalls": 1, "echoCalls": 1, "vaultAgentCalls": 0, "vaultWrites": 0, "directSupabaseMutations": 0, "openclawCalls": 0 },
+  "forbidden_counters": { "vaultAgentCalls": 0, "vaultWrites": 0, "openclawCalls": 0, "directSupabaseMutations": 0 },
+  "delegationSummary": [
+    { "delegationKey": "lens:lens.query:del_lens", "delegationId": "del_lens", "targetAgent": "lens", "mode": "lens.query", "objective": "Establish the activation baseline", "status": "completed", "summary": "Lens metrics evidence completed." },
+    { "delegationKey": "surf:surf.default:del_surf", "delegationId": "del_surf", "targetAgent": "surf", "mode": "surf.default", "objective": "Research referral activation evidence", "status": "completed", "summary": "Surf research evidence completed." },
+    { "delegationKey": "echo:echo.default:del_echo", "delegationId": "del_echo", "targetAgent": "echo", "mode": "echo.default", "objective": "Draft campaign and referral activation copy", "status": "completed", "summary": "Echo weekly campaign draft completed." }
+  ],
+  "agentsUsed": ["cmo", "lens", "surf", "echo"],
+  "surfCalls": 1,
+  "echoCalls": 1,
+  "safety_flags": { "liveOnly": true, "calledHermesCmo": true, "cmoEngineMechanicalExecutor": true, "subAgentExecutionAllowed": true, "noWrites": true, "noOpenClawCalls": true },
+  "safety": { "runtimeMode": "hermes_cmo_live", "flags": {}, "counters": {} }
+}

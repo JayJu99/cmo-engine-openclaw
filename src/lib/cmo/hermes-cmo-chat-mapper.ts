@@ -174,13 +174,12 @@ function safeWorkflowArtifactValue(value: unknown, depth = 0): unknown {
   );
 }
 
-function weeklyCampaignArtifactsFromHermes(response: HermesCmoRuntimeResponse): Record<string, unknown>[] {
+function sessionArtifactsFromHermes(response: HermesCmoRuntimeResponse): Record<string, unknown>[] {
   return (Array.isArray(response.artifacts) ? response.artifacts : [])
     .filter(isRecord)
-    .filter((artifact) => artifact.contract === "cmo.weekly_campaign_pack.v1")
     .map((artifact) => safeWorkflowArtifactValue(artifact))
     .filter(isRecord)
-    .slice(0, 3);
+    .slice(0, 24);
 }
 
 function runtimeRequestIsWeeklyCampaignWorkflow(request: HermesCmoRuntimeRequest): boolean {
@@ -1924,6 +1923,14 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
     return question ? ["## Need Clarification", "", question].join("\n") : "";
   }
 
+  const answer = response.answer;
+  const body = canonicalAssistantText(answer.body);
+  const content = canonicalAssistantText(answer.content);
+
+  if (body || content) {
+    return body ?? content ?? "";
+  }
+
   const classification = classificationFromResponse(response);
   const transformed = (classification === "source_translate" || classification === "source_transform") && result
     ? sourceTransformAnswerFromDelegations(result)
@@ -1934,9 +1941,6 @@ function answerFromHermes(response: HermesCmoRuntimeResponse, result?: HermesCmo
     return canonicalTransformed;
   }
 
-  const answer = response.answer;
-  const body = canonicalAssistantText(answer.body);
-  const content = canonicalAssistantText(answer.content);
   const summary = canonicalAssistantText(answer.summary);
   const creativeDraftNarrative = creativeDraftNarrativeFromHermesValue(response) ?? creativeDraftNarrativeFromHermesValue(result?.response);
 
@@ -2444,7 +2448,8 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
 
   const delegationSummary = delegationSummaryFromHermes(result);
   const counters = countersFromExecutedDelegations(validation.counters, delegationSummary);
-  const campaignArtifacts = weeklyCampaignArtifactsFromHermes(result.response);
+  const sessionArtifacts = sessionArtifactsFromHermes(result.response);
+  const campaignArtifacts = sessionArtifacts.filter((artifact) => artifact.contract === "cmo.weekly_campaign_pack.v1");
   const campaignSuggestedUpdates = suggestedUpdatesFromWeeklyCampaign(result.response, campaignArtifacts);
 
   return sanitizeHermesCmoMappedChatResult({
@@ -2465,7 +2470,7 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
     delegationsMode: delegationModeFromRuntimeResult(result, delegationSummary),
     hermesCmoCounters: counters,
     hermesCmoMetadata: metadataFromHermes(result, counters, forbiddenCounters),
-    ...(campaignArtifacts.length ? { sessionArtifacts: campaignArtifacts } : {}),
+    ...(sessionArtifacts.length ? { sessionArtifacts } : {}),
     ...(campaignSuggestedUpdates.length ? { suggestedVaultUpdates: campaignSuggestedUpdates } : {}),
   });
 }

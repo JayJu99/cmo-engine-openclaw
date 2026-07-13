@@ -6,7 +6,7 @@ import {
 } from "./hermes-client";
 
 export type HermesCmoExecutableAgent = "echo" | "surf" | "lens";
-export type HermesCmoExecutableMode = "echo.default" | "echo.source_translate" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse" | "lens.measurement";
+export type HermesCmoExecutableMode = "echo.default" | "echo.source_translate" | "surf.default" | "surf.x" | "surf.trend" | "surf.pulse" | "lens.query" | "lens.measurement";
 
 export interface HermesCmoForbiddenCounters {
   vaultAgentCalls: number;
@@ -255,6 +255,10 @@ function targetMode(delegation: Record<string, unknown>, agent: HermesCmoExecuta
   }
 
   if (agent === "lens") {
+    if (rawMode === "lens.query" || rawMode === "query") {
+      return "lens.query";
+    }
+
     return rawMode === "lens.measurement" || rawMode === "lens.default" || rawMode === "measurement" || !rawMode
       ? "lens.measurement"
       : null;
@@ -800,7 +804,7 @@ async function executeOne(
       delegationKey: stableDelegationKey(delegation.raw),
       delegationId: delegation.delegationId,
       targetAgent: "lens",
-      mode: "lens.measurement",
+      mode: delegation.mode,
       objective: delegation.objective,
       status: result.status === "failed" ? "failed" : "completed",
       summary: result.status === "completed"
@@ -815,7 +819,7 @@ async function executeOne(
       event(input, delegation, "delegation.completed", execution.status === "completed" ? "completed" : "failed", execution.summary, {
         delegation_id: delegation.delegationId,
         target_agent: "lens",
-        mode: "lens.measurement",
+        mode: delegation.mode,
         status: artifact.status,
         artifact_contract: artifact.contract,
       }),
@@ -859,15 +863,6 @@ export function executableDelegations(delegations: Record<string, unknown>[], ma
   return delegations
     .map(normalizeDelegation)
     .filter((delegation): delegation is NormalizedDelegation => Boolean(delegation))
-    .sort((left, right) => {
-      if (left.targetAgent === right.targetAgent) {
-        return 0;
-      }
-
-       const order: Record<HermesCmoExecutableAgent, number> = { lens: 0, surf: 1, echo: 2 };
-
-       return order[left.targetAgent] - order[right.targetAgent];
-    })
     .slice(0, Math.max(0, maxDelegations));
 }
 

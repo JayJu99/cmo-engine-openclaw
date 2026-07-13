@@ -382,7 +382,7 @@ function statusFromCmoRun(value: CMOChatMessage["cmoRunStatus"] | undefined): Ac
   return null;
 }
 
-function friendlyToolsUsed(message: CMOChatMessage | undefined): Array<"surf" | "echo" | "creative"> {
+function friendlyToolsUsed(message: CMOChatMessage | undefined): Array<"lens" | "surf" | "echo" | "creative"> {
   const rawTools = [
     ...(message?.cmoRunToolsUsed ?? []),
     ...(message?.agentsUsed ?? []),
@@ -390,7 +390,7 @@ function friendlyToolsUsed(message: CMOChatMessage | undefined): Array<"surf" | 
     ...(message?.hermesCmoMetadata?.toolsUsed ?? []),
     ...(message?.hermesCmoMetadata?.tools_used ?? []),
   ];
-  const tools = new Set<"surf" | "echo" | "creative">();
+  const tools = new Set<"lens" | "surf" | "echo" | "creative">();
 
   if (message?.hermesCmoMetadata?.cmo_call_surf_used === true) {
     tools.add("surf");
@@ -401,6 +401,10 @@ function friendlyToolsUsed(message: CMOChatMessage | undefined): Array<"surf" | 
   }
 
   rawTools.forEach((tool) => {
+    if (tool === "lens" || tool === "cmo_call_lens") {
+      tools.add("lens");
+    }
+
     if (tool === "surf" || tool === "cmo_call_surf") {
       tools.add("surf");
     }
@@ -417,7 +421,7 @@ function friendlyToolsUsed(message: CMOChatMessage | undefined): Array<"surf" | 
   return Array.from(tools);
 }
 
-function toolMetadataRows(message: CMOChatMessage | undefined, existingAgents: Set<"surf" | "echo" | "creative">): ActivityRow[] {
+function toolMetadataRows(message: CMOChatMessage | undefined, existingAgents: Set<"lens" | "surf" | "echo" | "creative">): ActivityRow[] {
   const runStatus = statusFromCmoRun(message?.cmoRunStatus);
 
   if (runStatus !== "completed" && runStatus !== "failed" && runStatus !== "timed_out") {
@@ -433,7 +437,8 @@ function toolMetadataRows(message: CMOChatMessage | undefined, existingAgents: S
     }));
 }
 
-function toolAgentFromRow(row: ActivityRow): "surf" | "echo" | "creative" | null {
+function toolAgentFromRow(row: ActivityRow): "lens" | "surf" | "echo" | "creative" | null {
+  if (row.label === "Lens") return "lens";
   if (row.label === "Surf Agent") return "surf";
   if (row.label === "Echo Agent") return "echo";
   if (row.label === "Creative Agent") return "creative";
@@ -534,7 +539,7 @@ function activityRows(message: CMOChatMessage | undefined, running: boolean): Ac
   const existingAgents = new Set(
     rows
       .map(toolAgentFromRow)
-      .filter((agent): agent is "surf" | "echo" | "creative" => Boolean(agent)),
+      .filter((agent): agent is "lens" | "surf" | "echo" | "creative" => Boolean(agent)),
   );
   rows.push(...toolMetadataRows(message, existingAgents));
 

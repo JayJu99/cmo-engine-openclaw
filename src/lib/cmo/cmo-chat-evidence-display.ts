@@ -492,6 +492,51 @@ function cachedSnapshotEvidence(message: CMOChatMessage, trace: Record<string, u
   };
 }
 
+function hermesArtifactEvidence(message: CMOChatMessage): CmoEvidenceSourceDisplay[] {
+  return (message.sessionArtifacts ?? []).flatMap((artifact, index) => {
+    if (!isRecord(artifact)) {
+      return [];
+    }
+
+    const contract = firstSafe(artifact, ["contract", "schema_version", "type"], 120);
+    const sourceAgent = firstSafe(artifact, ["source_agent", "sourceAgent", "agent"], 40)?.toLowerCase();
+    const evidenceKind = `${contract ?? ""} ${sourceAgent ?? ""}`;
+
+    if (!/(?:^|[.\s_-])(lens|surf|echo)(?:$|[.\s_-])|campaign|evidence|research|measurement/i.test(evidenceKind)) {
+      return [];
+    }
+
+    const sourceName = sourceAgent === "lens"
+      ? "Lens"
+      : sourceAgent === "surf"
+        ? "Surf"
+        : sourceAgent === "echo"
+          ? "Echo"
+          : "Hermes";
+    const title = firstSafe(artifact, ["title", "name", "source_label", "sourceLabel"], 140) ?? contract ?? "Evidence artifact";
+    const summary = firstSafe(artifact, ["summary", "description", "safe_user_message", "safeUserMessage"], 240);
+    const findings = safeObjectText(
+      artifact.key_findings ?? artifact.keyFindings ?? artifact.findings ?? artifact.evidence ?? artifact.draft,
+      600,
+    );
+    const artifactId = firstSafe(artifact, ["artifact_id", "artifactId", "id"], 120) ?? `${index}`;
+
+    return [{
+      key: `hermes-artifact-${artifactId}`,
+      sourceLabel: `${sourceName} / ${title}`,
+      summary: summary ?? undefined,
+      rows: rowsOrFallback([
+        row("Contract", contract),
+        row("Status", firstSafe(artifact, ["status", "truth_status", "truthStatus"], 80)),
+        row("Summary", summary),
+        row("Evidence", findings),
+      ], `${sourceName} / ${title}`),
+      warnings: warningRows(artifact),
+      collapsedByDefault: true,
+    }];
+  }).slice(0, 12);
+}
+
 export function buildCmoEvidenceSources(message: CMOChatMessage): CmoEvidenceSourceDisplay[] {
   if (message.role !== "assistant") {
     return [];
@@ -506,6 +551,7 @@ export function buildCmoEvidenceSources(message: CMOChatMessage): CmoEvidenceSou
     facebookChannelEvidence(trace, hints.has("facebook_channel")),
     vaultDailyReportEvidence(trace, hints.has("vault_daily_report")),
     cachedSnapshotEvidence(message, trace, hints.has("cached_snapshot")),
+    ...hermesArtifactEvidence(message),
   ].filter((item): item is CmoEvidenceSourceDisplay => Boolean(item));
   const seen = new Set<string>();
 
