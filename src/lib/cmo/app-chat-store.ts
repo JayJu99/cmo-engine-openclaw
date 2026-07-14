@@ -5432,10 +5432,11 @@ export async function createAppChatSession(
           activityEventsCount: completedActivityEvents.length,
           activityEvents: completedActivityEvents,
         };
-        const completedSessionArtifacts = mergeHermesCmoChatV11Artifacts(
-          sessionArtifacts,
+        const completedTurnSessionArtifacts = mergeHermesCmoChatV11Artifacts(
+          [],
           [...completedCreativeArtifacts, ...(mappedHermesResult.sessionArtifacts ?? [])],
         );
+        const completedSessionArtifacts = mergeHermesCmoChatV11Artifacts(sessionArtifacts, completedTurnSessionArtifacts);
         const completedSuggestedVaultUpdates = mergeSuggestedVaultUpdates(
           pendingSession.suggestedVaultUpdates,
           mappedHermesResult.suggestedVaultUpdates,
@@ -5525,7 +5526,7 @@ export async function createAppChatSession(
             delegationsMode: mappedHermesResult.delegationsMode,
             creativeWorkingState: completedCreativeWorkingState,
             creativeDecision: completedCreativeDecision,
-            ...(completedCreativeArtifacts.length ? { sessionArtifacts: completedCreativeArtifacts } : {}),
+            ...(completedTurnSessionArtifacts.length ? { sessionArtifacts: completedTurnSessionArtifacts } : {}),
             sessionLocalResearchResults: completedResearchResults,
             ...completionMetadata,
           } : message),

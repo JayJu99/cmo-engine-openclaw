@@ -519,6 +519,7 @@ function hermesArtifactEvidence(message: CMOChatMessage): CmoEvidenceSourceDispl
       artifact.key_findings ?? artifact.keyFindings ?? artifact.findings ?? artifact.evidence ?? artifact.draft,
       600,
     );
+    const outputs = safeObjectText(artifact.outputs, 2400);
     const artifactId = firstSafe(artifact, ["artifact_id", "artifactId", "id"], 120) ?? `${index}`;
 
     return [{
@@ -529,6 +530,7 @@ function hermesArtifactEvidence(message: CMOChatMessage): CmoEvidenceSourceDispl
         row("Contract", contract),
         row("Status", firstSafe(artifact, ["status", "truth_status", "truthStatus"], 80)),
         row("Summary", summary),
+        row("Outputs", outputs),
         row("Evidence", findings),
       ], `${sourceName} / ${title}`),
       warnings: warningRows(artifact),

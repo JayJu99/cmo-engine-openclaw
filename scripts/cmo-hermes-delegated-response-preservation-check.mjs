@@ -66,12 +66,15 @@ const mapper = compileModule("src/lib/cmo/hermes-cmo-chat-mapper.ts", (id) => {
 
 const mapped = mapper.mapHermesCmoResponseToChatResult(fixture);
 const expectedAnswer = fixture.response.answer.body;
+const firstEchoDraft = fixture.delegationSummary[2].response.outputs[0].copy;
 const summaryOrder = mapped.hermesCmoMetadata.delegationSummary.map((item) => `${item.targetAgent}:${item.mode}`);
 
-assert.equal(mapped.answer, expectedAnswer, "Product must render Hermes answer.body verbatim as the final answer");
+assert.ok(mapped.answer.startsWith(expectedAnswer), "Product must preserve Hermes answer.body as the start of the final answer");
 assert.match(mapped.answer, /Weekly Referral Activation Campaign Pack/);
 assert.match(mapped.answer, /Referral mechanics/);
 assert.match(mapped.answer, /Activation plan/);
+assert.ok(mapped.answer.includes(firstEchoDraft), "final user-visible answer must include actual Echo copy, not only execution status");
+assert.doesNotMatch(mapped.answer, /^Echo returned 3 output\(s\)\.$/, "Echo status text alone is not a user-visible draft");
 assert.doesNotMatch(mapped.answer, /^## Dune \/ Worldchain Business Metrics/m, "Lens evidence title must not replace the Hermes campaign answer");
 assert.deepEqual(summaryOrder, ["lens:lens.query", "surf:surf.default", "echo:echo.default"], "delegation summary order must be Lens -> Surf -> Echo");
 assert.deepEqual(mapped.hermesCmoMetadata.agentsUsed, ["cmo", "lens", "surf", "echo"], "agentsUsed must retain Lens, Surf, and Echo");
@@ -81,11 +84,16 @@ assert.deepEqual(
   ["lens", "surf", "echo"],
   "activity events must retain all three specialist sources",
 );
+const artifactContracts = mapped.sessionArtifacts.map((artifact) => artifact.contract);
 assert.deepEqual(
-  mapped.sessionArtifacts.map((artifact) => artifact.contract),
+  artifactContracts.slice(0, 4),
   ["lens.measurement_result.v1", "hermes.surf.response.v1", "hermes.echo.response.v1", "cmo.weekly_campaign_pack.v1"],
-  "all Hermes artifacts/evidence must be preserved",
+  "all CMO response artifacts/evidence must be preserved",
 );
+const persistedEchoArtifact = mapped.sessionArtifacts.find((artifact) => artifact.artifact_id === "specialist:del_echo");
+assert.ok(persistedEchoArtifact, "completed Echo execution must become a persisted session artifact");
+assert.equal(persistedEchoArtifact.source_agent, "echo");
+assert.equal(persistedEchoArtifact.outputs[0].copy, firstEchoDraft, "persisted Echo artifact must retain actual copy");
 assert.notEqual(mapped.delegationsMode, "proposals_only", "executed delegations must not be collapsed to proposals_only");
 assert.equal(mapped.isRuntimeFallback, false);
 assert.equal(mapped.hermesCmoMetadata.fallback_used, false);
@@ -112,11 +120,17 @@ const evidenceSources = evidence.buildCmoEvidenceSources({
 assert.ok(evidenceSources.some((item) => item.sourceLabel.startsWith("Lens /")), "UI evidence must render Lens artifacts");
 assert.ok(evidenceSources.some((item) => item.sourceLabel.startsWith("Surf /")), "UI evidence must render Surf artifacts");
 assert.ok(evidenceSources.some((item) => item.sourceLabel.startsWith("Echo /")), "UI evidence must render Echo artifacts");
+assert.ok(
+  evidenceSources.some((item) => item.rows.some((row) => row.label === "Outputs" && row.value.includes(firstEchoDraft))),
+  "UI Echo artifact preview must contain actual draft copy",
+);
 
 const appStoreSource = fs.readFileSync(path.join(root, "src", "lib", "cmo", "app-chat-store.ts"), "utf8");
 const runtimeSource = fs.readFileSync(path.join(root, "src", "lib", "cmo", "hermes-cmo-runtime.ts"), "utf8");
 assert.match(appStoreSource, /turnHermesArtifacts = mappedHermesResult\.sessionArtifacts \?\? \[\]/, "sync mapping must retain current-turn Hermes artifacts");
 assert.match(appStoreSource, /sessionArtifacts: turnSessionArtifacts/, "assistant persistence must attach current-turn Hermes artifacts");
+assert.match(appStoreSource, /completedTurnSessionArtifacts = mergeHermesCmoChatV11Artifacts/, "async mapping must build current-turn specialist artifacts");
+assert.match(appStoreSource, /sessionArtifacts: completedTurnSessionArtifacts/, "async assistant persistence must attach Echo artifacts to the message rendered by Product");
 assert.doesNotMatch(runtimeSource, /requiredWeeklyCampaignDelegations|weekly_campaign_pack_incomplete|cmo_engine_m1_workflow_boundary/, "Product must not synthesize weekly delegation stages or campaign artifacts");
 assert.match(runtimeSource, /HERMES_CMO_AGENT_PATH = "\/agents\/cmo\/execute"/, "Product execute transport must use /agents/cmo/execute");
 
@@ -127,5 +141,7 @@ console.log(JSON.stringify({
   agentsUsed: mapped.hermesCmoMetadata.agentsUsed,
   activityEvents: mapped.hermesCmoMetadata.activityEvents.length,
   sessionArtifacts: mapped.sessionArtifacts.length,
+  actualEchoDraftVisible: mapped.answer.includes(firstEchoDraft),
+  persistedEchoArtifactId: persistedEchoArtifact.artifact_id,
   evidenceSources: evidenceSources.map((item) => item.sourceLabel),
 }, null, 2));

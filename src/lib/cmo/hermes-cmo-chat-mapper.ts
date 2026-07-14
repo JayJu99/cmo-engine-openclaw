@@ -174,12 +174,101 @@ function safeWorkflowArtifactValue(value: unknown, depth = 0): unknown {
   );
 }
 
-function sessionArtifactsFromHermes(response: HermesCmoRuntimeResponse): Record<string, unknown>[] {
-  return (Array.isArray(response.artifacts) ? response.artifacts : [])
+function specialistArtifactFromExecution(
+  execution: HermesCmoRuntimeResult["delegationSummary"][number],
+): Record<string, unknown> | null {
+  if (execution.status !== "completed" || !isRecord(execution.response)) {
+    return null;
+  }
+
+  const safeResponse = safeWorkflowArtifactValue(execution.response);
+  if (!isRecord(safeResponse)) {
+    return null;
+  }
+
+  const contract = typeof safeResponse.contract === "string" && safeResponse.contract.trim()
+    ? safeResponse.contract.trim()
+    : typeof safeResponse.schema_version === "string" && safeResponse.schema_version.trim()
+      ? safeResponse.schema_version.trim()
+      : `${execution.targetAgent}.response.v1`;
+
+  return {
+    ...safeResponse,
+    artifact_id: `specialist:${execution.delegationId}`,
+    contract,
+    source_agent: execution.targetAgent,
+    mode: execution.mode,
+    status: execution.status,
+    handoff_id: execution.delegationId,
+    summary: execution.summary,
+  };
+}
+
+function sessionArtifactsFromHermes(result: HermesCmoRuntimeResult): Record<string, unknown>[] {
+  const responseArtifacts = (Array.isArray(result.response.artifacts) ? result.response.artifacts : [])
     .filter(isRecord)
     .map((artifact) => safeWorkflowArtifactValue(artifact))
-    .filter(isRecord)
-    .slice(0, 24);
+    .filter(isRecord);
+  const specialistArtifacts = result.delegationSummary
+    .map(specialistArtifactFromExecution)
+    .filter(isRecord);
+  const byId = new Map<string, Record<string, unknown>>();
+
+  for (const artifact of [...responseArtifacts, ...specialistArtifacts]) {
+    const id = typeof artifact.artifact_id === "string"
+      ? artifact.artifact_id
+      : typeof artifact.id === "string"
+        ? artifact.id
+        : JSON.stringify(artifact);
+    byId.set(id, artifact);
+  }
+
+  return Array.from(byId.values()).slice(-24);
+}
+
+function echoDraftsFromArtifacts(artifacts: Record<string, unknown>[]): Array<{ label: string; copy: string }> {
+  const drafts: Array<{ label: string; copy: string }> = [];
+  const seen = new Set<string>();
+
+  for (const artifact of artifacts) {
+    const sourceAgent = artifact.source_agent ?? artifact.sourceAgent ?? artifact.agent;
+    if (sourceAgent !== "echo" || !Array.isArray(artifact.outputs)) {
+      continue;
+    }
+
+    for (const [index, output] of artifact.outputs.entries()) {
+      const outputRecord = isRecord(output) ? output : null;
+      const safeCopy = safeWorkflowArtifactValue(outputRecord?.copy ?? outputRecord?.content ?? outputRecord?.text ?? output);
+      const safeLabel = safeWorkflowArtifactValue(outputRecord?.label ?? outputRecord?.title ?? `Output ${index + 1}`);
+      const copy = typeof safeCopy === "string" ? canonicalAssistantText(safeCopy) : null;
+      const label = typeof safeLabel === "string" ? canonicalAssistantText(safeLabel) : null;
+
+      if (!copy || seen.has(copy)) {
+        continue;
+      }
+
+      seen.add(copy);
+      drafts.push({ label: label || `Output ${index + 1}`, copy });
+    }
+  }
+
+  return drafts.slice(0, 24);
+}
+
+function answerWithEchoDrafts(answer: string, artifacts: Record<string, unknown>[]): string {
+  const missingDrafts = echoDraftsFromArtifacts(artifacts).filter((draft) => !answer.includes(draft.copy));
+
+  if (missingDrafts.length === 0) {
+    return answer;
+  }
+
+  const preview = [
+    "## Echo drafts",
+    "",
+    ...missingDrafts.flatMap((draft) => [`### ${draft.label}`, "", draft.copy, ""]),
+  ].join("\n").trim();
+
+  return [answer.trim(), preview].filter(Boolean).join("\n\n");
 }
 
 function runtimeRequestIsWeeklyCampaignWorkflow(request: HermesCmoRuntimeRequest): boolean {
@@ -2448,12 +2537,13 @@ export function mapHermesCmoResponseToChatResult(result: HermesCmoRuntimeResult)
 
   const delegationSummary = delegationSummaryFromHermes(result);
   const counters = countersFromExecutedDelegations(validation.counters, delegationSummary);
-  const sessionArtifacts = sessionArtifactsFromHermes(result.response);
+  const sessionArtifacts = sessionArtifactsFromHermes(result);
   const campaignArtifacts = sessionArtifacts.filter((artifact) => artifact.contract === "cmo.weekly_campaign_pack.v1");
   const campaignSuggestedUpdates = suggestedUpdatesFromWeeklyCampaign(result.response, campaignArtifacts);
+  const answer = answerWithEchoDrafts(answerFromHermes(result.response, result), sessionArtifacts);
 
   return sanitizeHermesCmoMappedChatResult({
-    answer: answerFromHermes(result.response, result),
+    answer,
     assumptions: isRecord(result.response.answer_basis) && Array.isArray(result.response.answer_basis.assumptions_used)
       ? result.response.answer_basis.assumptions_used.map(assumptionText)
       : [],

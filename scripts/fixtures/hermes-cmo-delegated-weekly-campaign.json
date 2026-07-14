@@ -114,7 +114,29 @@
   "delegationSummary": [
     { "delegationKey": "lens:lens.query:del_lens", "delegationId": "del_lens", "targetAgent": "lens", "mode": "lens.query", "objective": "Establish the activation baseline", "status": "completed", "summary": "Lens metrics evidence completed." },
     { "delegationKey": "surf:surf.default:del_surf", "delegationId": "del_surf", "targetAgent": "surf", "mode": "surf.default", "objective": "Research referral activation evidence", "status": "completed", "summary": "Surf research evidence completed." },
-    { "delegationKey": "echo:echo.default:del_echo", "delegationId": "del_echo", "targetAgent": "echo", "mode": "echo.default", "objective": "Draft campaign and referral activation copy", "status": "completed", "summary": "Echo weekly campaign draft completed." }
+    {
+      "delegationKey": "echo:echo.default:del_echo",
+      "delegationId": "del_echo",
+      "targetAgent": "echo",
+      "mode": "echo.default",
+      "objective": "Draft campaign and referral activation copy",
+      "status": "completed",
+      "summary": "Echo returned 3 output(s).",
+      "response": {
+        "schema_version": "echo.response.v1",
+        "handoff_id": "del_echo",
+        "agent": "echo",
+        "mode": "echo.default",
+        "status": "completed",
+        "outputs": [
+          { "label": "Launch post", "copy": "Your next onchain win is better with a teammate. Invite a friend, help them activate, and unlock the referral loop together." },
+          { "label": "Proof post", "copy": "The strongest growth loops start with one useful recommendation. Share Holdstation with someone who is ready to make their first move onchain." },
+          { "label": "Reminder post", "copy": "One link. One teammate. One more reason to get active this week. Start your Holdstation referral loop today." }
+        ],
+        "notes": ["Copy stays within the supplied claim boundaries."],
+        "safety": { "published": false, "vault_write": false, "supabase_mutation": false, "session_mutation": false, "raw_capture": false, "kanban": false, "openclaw_call": false }
+      }
+    }
   ],
   "agentsUsed": ["cmo", "lens", "surf", "echo"],
   "surfCalls": 1,
