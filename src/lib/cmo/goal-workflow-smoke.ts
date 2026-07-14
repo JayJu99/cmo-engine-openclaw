@@ -153,6 +153,10 @@ function isCmoGoal(value: unknown): value is CmoGoalV1 {
 }
 
 export function isCmoGoalWorkflowSmokeRequest(message: string): boolean {
+  return isCmoWeeklyCampaignWorkflowRequest(message);
+}
+
+export function isCmoWeeklyCampaignWorkflowRequest(message: string): boolean {
   const commandText = cmoGoalWorkflowSmokeCommandText(message);
 
   if (!commandText) {
@@ -162,7 +166,10 @@ export function isCmoGoalWorkflowSmokeRequest(message: string): boolean {
   const normalized = normalizeMessage(commandText);
   const hasWeeklyWindow = normalized.includes("this week") ||
     normalized.includes("weekly") ||
-    normalized.includes("tuan nay");
+    normalized.includes("tuan nay") ||
+    normalized.includes("hang tuan");
+  const hasCampaignIntent = hasWord(normalized, "campaign") ||
+    normalized.includes("chien dich");
   const hasTrafficGoal = hasWord(normalized, "traffic") &&
     (hasWord(normalized, "social") || hasWord(normalized, "website"));
   const hasIncreaseIntent = hasWord(normalized, "increase") ||
@@ -171,7 +178,7 @@ export function isCmoGoalWorkflowSmokeRequest(message: string): boolean {
     hasWord(normalized, "raise") ||
     hasWord(normalized, "tang");
 
-  return hasWeeklyWindow && hasTrafficGoal && hasIncreaseIntent;
+  return hasWeeklyWindow && (hasCampaignIntent || (hasTrafficGoal && hasIncreaseIntent));
 }
 
 export function publisherPreflightSmokeActionType(

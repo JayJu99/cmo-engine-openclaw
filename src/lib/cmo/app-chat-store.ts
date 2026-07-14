@@ -113,7 +113,7 @@ import {
 } from "@/lib/cmo/hermes-cmo-chat-v11";
 import {
   cmoGoalWorkflowSmokeCommandText,
-  isCmoGoalWorkflowSmokeRequest,
+  isCmoWeeklyCampaignWorkflowRequest,
   maybeCreateCmoGoalWorkflowSmokeResponse,
 } from "@/lib/cmo/goal-workflow-smoke";
 import { OUTBOUND_HERMES_CALLSITE_GUARD_VERSION } from "@/lib/cmo/hermes-outbound-payload-sanitizer";
@@ -4316,7 +4316,7 @@ export async function createAppChatSession(
   ) ?? null;
   const scopedApprovalRequests = (continuedSession?.approvalRequests ?? [])
     .filter((approval) => isRecord(approval) && approval.contract === "cmo.scoped_approval.v1") as unknown as CmoScopedApprovalV1[];
-  const weeklyCampaignWorkflowRequested = isCmoGoalWorkflowSmokeRequest(request.message);
+  const weeklyCampaignWorkflowRequested = isCmoWeeklyCampaignWorkflowRequest(request.message);
   const weeklyCampaignCommandText = weeklyCampaignWorkflowRequested
     ? cmoGoalWorkflowSmokeCommandText(request.message)
     : null;
@@ -4553,6 +4553,7 @@ export async function createAppChatSession(
         appId: request.appId,
         message: request.message,
         forceFallback: request.forceFallback,
+        weeklyCampaignWorkflow: weeklyCampaignWorkflowRequested,
         hasCreativeWorkingState: creativeWorkingStatePresent,
         creativeWorkingState,
       });
@@ -4587,25 +4588,11 @@ export async function createAppChatSession(
         fallbackEnabled: false,
         reason: "v11_canary_chat" as const,
       }
-    : weeklyCampaignWorkflowRequested
-      ? {
-        endpoint: "/agents/cmo/execute",
-        endpointKind: "execute" as const,
-        requestedEndpoint: "/agents/cmo/execute",
-        routeIntent: "cmo_default" as const,
-        unifiedAgentEnabled: false,
-        unifiedAgentCanary: false,
-        v11Enabled: false,
-        v11Canary: false,
-        toolChatEnabled: false,
-        toolChatCanary: false,
-        fallbackEnabled: false,
-        reason: "v11_disabled_or_non_canary" as const,
-      }
-      : resolveHermesCmoChatRoute({
+    : resolveHermesCmoChatRoute({
         appId: request.appId,
         message: request.message,
         forceFallback: request.forceFallback,
+        weeklyCampaignWorkflow: weeklyCampaignWorkflowRequested,
         hasSourceOrToolTask: sourceOrToolTask,
         hasCreativeWorkingState: creativeWorkingStatePresent,
         creativeWorkingState,

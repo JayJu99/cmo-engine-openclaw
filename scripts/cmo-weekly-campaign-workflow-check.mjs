@@ -21,17 +21,22 @@ const mapper = "src/lib/cmo/hermes-cmo-chat-mapper.ts";
 const runtime = "src/lib/cmo/hermes-cmo-runtime.ts";
 const executor = "src/lib/cmo/hermes-cmo-delegation-executor.ts";
 
-includes(appStore, "const weeklyCampaignWorkflowRequested = isCmoGoalWorkflowSmokeRequest(request.message);", "Qualifying /goal must have an explicit weekly workflow guard.");
+includes(appStore, "const weeklyCampaignWorkflowRequested = isCmoWeeklyCampaignWorkflowRequest(request.message);", "Qualifying /goal must have an explicit weekly workflow guard.");
 includes(appStore, "weeklyCampaignWorkflowRequested\n    ? null\n    : maybeCreateCmoGoalWorkflowSmokeResponse", "Qualifying /goal must bypass the deterministic smoke response.");
 includes(appStore, "const hermesFirstNormalChatRequested = !weeklyCampaignWorkflowRequested", "Ordinary Hermes-first chat must stay separate from the weekly workflow.");
+includes(appStore, "weeklyCampaignWorkflow: weeklyCampaignWorkflowRequested", "Weekly workflow intent must be passed to the shared endpoint router.");
 includes(appStore, "weeklyCampaignWorkflow: { commandText: weeklyCampaignCommandText }", "Product must transport command text rather than author campaign strategy or copy.");
+
+includes("src/lib/cmo/goal-workflow-smoke.ts", "export function isCmoWeeklyCampaignWorkflowRequest", "Weekly workflow intent detection must be explicit and reusable.");
+includes("src/lib/cmo/goal-workflow-smoke.ts", "hasCampaignIntent", "The workflow guard must recognize campaign intent without requiring specialist names.");
+includes("src/lib/cmo/hermes-cmo-chat-router.ts", 'reason: "weekly_campaign_workflow"', "Weekly workflows must select the delegation-capable execute route.");
 
 includes(mapper, 'CMO_WEEKLY_CAMPAIGN_WORKFLOW_CONTRACT = "cmo.weekly_campaign_workflow.v1"', "Weekly workflow contract must be stable.");
 includes(mapper, 'mode: "cmo.default"', "Weekly workflow must retain the live-compatible CMO intent.");
 includes(mapper, '...(weeklyCampaignWorkflow ? { workflow: weeklyCampaignWorkflow } : {})', "Weekly workflow must be carried by the explicit workflow envelope.");
 includes(mapper, 'stages: ["lens", "surf", "echo", "cmo_synthesis"]', "Weekly workflow must declare Lens, Surf, Echo, and synthesis stages.");
 includes(mapper, 'required_artifacts: [', "Weekly workflow must declare required artifacts.");
-includes(mapper, 'weeklyCampaignArtifactsFromHermes', "Campaign packs must be safely transported from Hermes output.");
+includes(mapper, 'sessionArtifactsFromHermes', "Hermes artifacts, including campaign packs, must be safely transported from Hermes output.");
 includes(mapper, 'suggestedUpdatesFromWeeklyCampaign', "Suggested updates must be provenance-gated to campaign pack artifacts.");
 includes(mapper, 'HERMES_CMO_WEEKLY_CAMPAIGN_DELEGATIONS = "weekly_campaign_lens_surf_echo_bounded"', "Weekly workflow must preserve its distinct delegation mode through response mapping.");
 includes(mapper, 'delegations_mode: requestedDelegationsMode', "Weekly workflow must not carry a conflicting proposals-only policy.");
@@ -41,13 +46,15 @@ includes(runtime, 'request.intent.explicit_command === "/goal"', "Lens delegatio
 includes(runtime, 'weeklyCampaignWorkflow || isCmoHermesCmoOrchestrationEnabled()', "Weekly workflow must activate bounded orchestration without changing ordinary-chat flags.");
 includes(runtime, 'weeklyCampaignWorkflow ? ["lens"] as const', "Lens must be added only to the workflow-specific delegation policy.");
 includes(runtime, '!requestIsWeeklyCampaignWorkflow(request)', "Weekly workflow must bypass the read-only tool_execute endpoint.");
-includes(runtime, 'requiredWeeklyCampaignDelegations', "Weekly workflow must attempt Lens, Surf, and Echo even if CMO omits delegation proposals.");
-includes(runtime, 'responseWithWeeklyCampaignWorkflowArtifact', "Weekly workflow must return an incomplete campaign artifact instead of silently omitting provenance.");
+excludes(runtime, /requiredWeeklyCampaignDelegations|weekly_campaign_pack_incomplete|cmo_engine_m1_workflow_boundary/, "Product must not manufacture specialist stages or campaign artifacts when Hermes omits them.");
+includes(runtime, 'response.delegations.filter', "The mechanical executor must act only on delegations returned by Hermes.");
 
 includes(executor, 'export type HermesCmoExecutableAgent = "echo" | "surf" | "lens"', "Executor must support Lens as a bounded delegate.");
 includes(executor, 'runLensMeasurementRequest', "Lens delegate must call the bounded measurement runner.");
 includes(executor, 'contract: "lens.measurement_result.v1"', "Lens delegate must return a structured measurement artifact.");
+includes(executor, 'rawMode === "lens.query"', "Executor must accept the live Hermes lens.query protocol mode.");
 includes(executor, 'Lens measurement is unavailable for this scope.', "Lens unavailable state must be explicit.");
+excludes(executor, /\.sort\(\(left, right\)/, "Executor must preserve Hermes delegation order.");
 excludes(executor, /executeHermesCmoDelegations[\s\S]{0,400}\bwriteFile\b/, "Lens delegation executor must not write files.");
 
-console.log("cmo-weekly-campaign-workflow-check: contract, bounded Lens delegation, artifact provenance, and ordinary-chat isolation passed");
+console.log("cmo-weekly-campaign-workflow-check: transport contract, Hermes-owned delegation order, Lens protocol, artifact provenance, and ordinary-chat isolation passed");

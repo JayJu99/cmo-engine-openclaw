@@ -162,7 +162,7 @@ assertExcludes("src/lib/cmo/goal-workflow-smoke.ts", /\bPublisher\b.*\(/, "Smoke
 const appChatSource = source("src/lib/cmo/app-chat-store.ts");
 const smokeCallIndex = appChatSource.indexOf("maybeCreateCmoGoalWorkflowSmokeResponse({");
 const smokeWriteIndex = appChatSource.indexOf("await writeJsonFile(sessionPath(sessionId), smokeSession);");
-const weeklyWorkflowGateIndex = appChatSource.indexOf("const weeklyCampaignWorkflowRequested = isCmoGoalWorkflowSmokeRequest(request.message);");
+const weeklyWorkflowGateIndex = appChatSource.indexOf("const weeklyCampaignWorkflowRequested = isCmoWeeklyCampaignWorkflowRequest(request.message);");
 const hermesFirstRouteIndex = appChatSource.indexOf("const hermesFirstNormalChatRequested = !weeklyCampaignWorkflowRequested && isHermesFirstNormalChatTurn({");
 assert.notEqual(smokeCallIndex, -1, "createAppChatSession must call smoke helper");
 assert.notEqual(smokeWriteIndex, -1, "Smoke branch must persist through app-chat session store");

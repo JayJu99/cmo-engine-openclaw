@@ -31,6 +31,53 @@ function sourceMode(event) {
   return event?.sourceMode ?? event?.source?.mode;
 }
 
+const nativeGoalPrompt = fixture.request.intent.user_message;
+const goalWorkflow = compileModule("src/lib/cmo/goal-workflow-smoke.ts");
+assert.equal(
+  goalWorkflow.isCmoWeeklyCampaignWorkflowRequest(nativeGoalPrompt),
+  true,
+  "native Vietnamese /goal campaign prompt must activate the weekly workflow without naming specialists",
+);
+assert.equal(
+  goalWorkflow.isCmoWeeklyCampaignWorkflowRequest(nativeGoalPrompt.replace(/^\/goal\s+/i, "")),
+  false,
+  "weekly campaign text without the /goal protocol must remain ordinary chat",
+);
+
+const router = compileModule("src/lib/cmo/hermes-cmo-chat-router.ts", (id) => {
+  if (id.endsWith("app-routing-intent")) {
+    return {
+      isCreativeDraftSessionIntent: () => false,
+      isCreativeSessionTransportContinuation: () => false,
+      routeIntentForMessage: () => "cmo_default",
+    };
+  }
+  if (id.endsWith("/config")) {
+    return {
+      getCmoHermesCmoCanaryApps: () => [],
+      getCmoHermesCmoChatV11CanaryApps: () => ["holdstation-mini-app"],
+      getCmoHermesCmoToolChatCanaryApps: () => [],
+      getCmoHermesUnifiedAgentCanaryApps: () => ["holdstation-mini-app"],
+      getCmoHermesUnifiedAgentEndpoint: () => "/agents/cmo/agent",
+      isCmoHermesCmoChatEnabled: () => true,
+      isCmoHermesCmoChatV11Enabled: () => true,
+      isCmoHermesCmoChatV11FallbackEnabled: () => true,
+      isCmoHermesCmoToolChatEnabled: () => true,
+      isCmoHermesUnifiedAgentEnabled: () => true,
+    };
+  }
+  throw new Error(`Unexpected router dependency: ${id}`);
+});
+const selectedRoute = router.resolveHermesCmoChatRoute({
+  appId: "holdstation-mini-app",
+  message: nativeGoalPrompt,
+  weeklyCampaignWorkflow: true,
+});
+assert.equal(selectedRoute.endpoint, "/agents/cmo/execute", "native weekly /goal must route to the delegation-capable execute endpoint");
+assert.equal(selectedRoute.endpointKind, "execute", "native weekly /goal must not select agent_chat");
+assert.equal(selectedRoute.requestedEndpoint, "/agents/cmo/execute");
+assert.equal(selectedRoute.reason, "weekly_campaign_workflow");
+
 const activityModule = {
   normalizeCmoActivityEvents(events) {
     return (Array.isArray(events) ? events : []).map((event) => ({
@@ -95,6 +142,10 @@ assert.ok(persistedEchoArtifact, "completed Echo execution must become a persist
 assert.equal(persistedEchoArtifact.source_agent, "echo");
 assert.equal(persistedEchoArtifact.outputs[0].copy, firstEchoDraft, "persisted Echo artifact must retain actual copy");
 assert.notEqual(mapped.delegationsMode, "proposals_only", "executed delegations must not be collapsed to proposals_only");
+assert.equal(mapped.hermesCmoMetadata.selectedHermesEndpoint, "/agents/cmo/execute", "persisted metadata must retain the workflow execute endpoint");
+assert.equal(mapped.hermesCmoMetadata.hermesEndpointKind, "execute", "persisted metadata must not describe the workflow as agent_chat");
+assert.ok(mapped.hermesCmoMetadata.surfCalls > 0, "native weekly workflow evidence must show Surf execution");
+assert.ok(mapped.hermesCmoMetadata.echoCalls > 0, "native weekly workflow evidence must show Echo execution");
 assert.equal(mapped.isRuntimeFallback, false);
 assert.equal(mapped.hermesCmoMetadata.fallback_used, false);
 
@@ -136,10 +187,18 @@ assert.match(runtimeSource, /HERMES_CMO_AGENT_PATH = "\/agents\/cmo\/execute"/, 
 
 console.log(JSON.stringify({
   status: "passed",
+  nativeGoalPrompt,
+  selectedEndpoint: selectedRoute.endpoint,
+  persistedSelectedEndpoint: mapped.hermesCmoMetadata.selectedHermesEndpoint,
+  endpointKind: selectedRoute.endpointKind,
+  routeReason: selectedRoute.reason,
+  delegationsMode: mapped.delegationsMode,
   answerTitle: fixture.response.answer.title,
   delegationSummary: summaryOrder,
   agentsUsed: mapped.hermesCmoMetadata.agentsUsed,
   activityEvents: mapped.hermesCmoMetadata.activityEvents.length,
+  surfCalls: mapped.hermesCmoMetadata.surfCalls,
+  echoCalls: mapped.hermesCmoMetadata.echoCalls,
   sessionArtifacts: mapped.sessionArtifacts.length,
   actualEchoDraftVisible: mapped.answer.includes(firstEchoDraft),
   persistedEchoArtifactId: persistedEchoArtifact.artifact_id,

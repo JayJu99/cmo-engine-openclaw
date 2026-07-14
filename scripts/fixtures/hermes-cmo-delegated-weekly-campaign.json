@@ -26,7 +26,7 @@
     "intent": {
       "mode": "cmo.default",
       "explicit_command": "/goal",
-      "user_message": "/goal Create this week's referral activation campaign pack"
+      "user_message": "/goal Làm giúp mình weekly campaign cho Holdstation mini app tuần này, có insight, angle, lịch đăng và draft post dùng được luôn nha."
     },
     "workflow": {
       "contract": "cmo.weekly_campaign_workflow.v1",
