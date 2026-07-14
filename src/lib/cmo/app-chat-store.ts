@@ -116,6 +116,7 @@ import {
   isCmoWeeklyCampaignWorkflowRequest,
   maybeCreateCmoGoalWorkflowSmokeResponse,
 } from "@/lib/cmo/goal-workflow-smoke";
+import { createWeeklyCampaignWorkflowFailure } from "@/lib/cmo/weekly-campaign-workflow-failure";
 import { OUTBOUND_HERMES_CALLSITE_GUARD_VERSION } from "@/lib/cmo/hermes-outbound-payload-sanitizer";
 import { maybeHandleSurfBridge } from "@/lib/cmo/surf-bridge";
 import type { CmoScopedApprovalV1 } from "@/lib/cmo/scoped-approval";
@@ -2448,7 +2449,7 @@ function normalizeHermesCmoMetadata(
   if (
     !isRecord(value) ||
     value.runtimeMode !== "hermes_cmo" ||
-    (value.runtimeStatus !== "live" && value.runtimeStatus !== "fallback") ||
+    (value.runtimeStatus !== "live" && value.runtimeStatus !== "fallback" && value.runtimeStatus !== "runtime_error") ||
     value.calledHermesCmo !== true
   ) {
     return undefined;
@@ -2502,18 +2503,23 @@ function normalizeHermesCmoMetadata(
     runtimeStatus: value.runtimeStatus,
     calledHermesCmo: true,
     ...(value.hermesRequestSent === true ? { hermesRequestSent: true } : {}),
-    ...(value.productRenderSource === "hermes_cmo" || value.productRenderSource === "fallback_after_hermes_failure"
+    ...(value.productRenderSource === "hermes_cmo" || value.productRenderSource === "hermes_cmo_boundary_failure" || value.productRenderSource === "fallback_after_hermes_failure"
       ? { productRenderSource: value.productRenderSource }
       : {}),
     ...(stringValue(value.selectedHermesEndpoint) ? { selectedHermesEndpoint: stringValue(value.selectedHermesEndpoint) } : {}),
+    ...(stringValue(value.selectedEndpoint) ? { selectedEndpoint: stringValue(value.selectedEndpoint) } : {}),
     ...(value.hermesEndpointKind === "execute" || value.hermesEndpointKind === "tool_execute" || value.hermesEndpointKind === "agent_chat" || value.hermesEndpointKind === "cmo_agent"
       ? { hermesEndpointKind: value.hermesEndpointKind }
+      : {}),
+    ...(value.endpointKind === "execute" || value.endpointKind === "tool_execute" || value.endpointKind === "agent_chat" || value.endpointKind === "cmo_agent"
+      ? { endpointKind: value.endpointKind }
       : {}),
     ...(value.endpoint_kind === "execute" || value.endpoint_kind === "tool_execute" || value.endpoint_kind === "agent_chat" || value.endpoint_kind === "cmo_agent"
       ? { endpoint_kind: value.endpoint_kind }
       : {}),
     ...(value.runtime_kind === "ai_agent" ? { runtime_kind: "ai_agent" } : {}),
     ...(stringValue(value.requested_endpoint) ? { requested_endpoint: stringValue(value.requested_endpoint) } : {}),
+    ...(stringValue(value.requestedEndpoint) ? { requestedEndpoint: stringValue(value.requestedEndpoint) } : {}),
     ...(typeof value.fallback_used === "boolean" ? { fallback_used: value.fallback_used } : {}),
     ...(stringValue(value.fallback_reason) ? { fallback_reason: stringValue(value.fallback_reason) } : {}),
     ...(stringValue(value.fallback_from) ? { fallback_from: stringValue(value.fallback_from) } : {}),
@@ -2547,6 +2553,16 @@ function normalizeHermesCmoMetadata(
     value.route_decision === "cmo_agent"
       ? { route_decision: value.route_decision }
       : {}),
+    ...(stringValue(value.routeReason) ? { routeReason: stringValue(value.routeReason) } : {}),
+    ...(stringValue(value.route_reason) ? { route_reason: stringValue(value.route_reason) } : {}),
+    ...(value.workflowKind === "weekly_campaign" ? { workflowKind: "weekly_campaign" } : {}),
+    ...(value.workflow_kind === "weekly_campaign" ? { workflow_kind: "weekly_campaign" } : {}),
+    ...(value.workflow_contract === "cmo.weekly_campaign_workflow.v1" ? { workflow_contract: value.workflow_contract } : {}),
+    ...(value.failureStage === "request_preparation" || value.failureStage === "hermes_execute" ? { failureStage: value.failureStage } : {}),
+    ...(value.failure_stage === "request_preparation" || value.failure_stage === "hermes_execute" ? { failure_stage: value.failure_stage } : {}),
+    ...(stringValue(value.safeFailureReason) ? { safeFailureReason: stringValue(value.safeFailureReason) } : {}),
+    ...(stringValue(value.safe_failure_reason) ? { safe_failure_reason: stringValue(value.safe_failure_reason) } : {}),
+    ...(value.default_channel_scope === "cross_channel" ? { default_channel_scope: "cross_channel" } : {}),
     ...(safeRoute ? { route: safeRoute, hermes_route: safeRoute } : {}),
     ...(safeIntentDecision ? { intent_decision: safeIntentDecision } : {}),
     ...(Array.isArray(safeSpecialistCalls) ? { specialist_calls: safeSpecialistCalls.filter(isRecord) } : {}),
@@ -6257,6 +6273,46 @@ export async function createAppChatSession(
         creativeMetadataPresent = undefined;
         creativeFallbackUsed = undefined;
         hermesCmoMetadata = completedUnifiedCmoAgentMetadata(hermesCmoMetadata, completedUnifiedCmoAgentPersistState);
+        hermesCmoCounters = hermesCmoMetadata.counters;
+        forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
+        activityEvents = hermesCmoMetadata.activityEvents;
+        delegationSummary = hermesCmoMetadata.delegationSummary;
+        agentsUsed = hermesCmoMetadata.agentsUsed;
+        surfCalls = hermesCmoMetadata.surfCalls;
+        echoCalls = hermesCmoMetadata.echoCalls;
+        usedHermesCmoChat = true;
+      } else if (weeklyCampaignWorkflowRequested) {
+        const workflowFailure = createWeeklyCampaignWorkflowFailure({ reason, hermesRequestSent });
+
+        answer = workflowFailure.answer;
+        status = "failed";
+        assumptions = [];
+        suggestedActions = [{ type: "retry", label: "Retry the weekly campaign workflow." }];
+        isDevelopmentFallback = false;
+        isRuntimeFallback = false;
+        runtimeStatus = "runtime_error";
+        runtimeMode = "configured_but_unreachable";
+        attemptedRuntimeMode = "live";
+        runtimeLabel = "Hermes CMO weekly campaign workflow";
+        runtimeError = workflowFailure.runtimeError;
+        runtimeErrorReason = workflowFailure.runtimeErrorReason;
+        runtimeProvider = "hermes";
+        runtimeAgent = "cmo";
+        fallbackDurationMs = undefined;
+        routeDecision = "execute";
+        hermesCmoStatus = "interrupted";
+        hermesCmoErrorReason = workflowFailure.failureReason;
+        delegationsMode = HERMES_CMO_WEEKLY_CAMPAIGN_DELEGATIONS;
+        productRenderSource = "hermes_cmo_boundary_failure";
+        productFallbackReason = undefined;
+        hermesCmoMetadata = {
+          ...failedHermesCmoChatV11Metadata(`req_cmo_weekly_campaign_${messageId}`, workflowFailure.failureReason),
+          runtimeStatus: "runtime_error",
+          productRenderSource: "hermes_cmo_boundary_failure",
+          runtime_kind: "ai_agent",
+          ...workflowFailure.metadata,
+          agentsUsed: ["cmo"],
+        };
         hermesCmoCounters = hermesCmoMetadata.counters;
         forbiddenCounters = hermesCmoMetadata.forbiddenCounters;
         activityEvents = hermesCmoMetadata.activityEvents;

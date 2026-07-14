@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 
 const root = process.cwd();
 
@@ -20,12 +21,28 @@ const appStore = "src/lib/cmo/app-chat-store.ts";
 const mapper = "src/lib/cmo/hermes-cmo-chat-mapper.ts";
 const runtime = "src/lib/cmo/hermes-cmo-runtime.ts";
 const executor = "src/lib/cmo/hermes-cmo-delegation-executor.ts";
+const failureBoundary = "src/lib/cmo/weekly-campaign-workflow-failure.ts";
+
+function compileModule(relativePath) {
+  const filename = path.join(root, relativePath);
+  const output = ts.transpileModule(source(relativePath), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    fileName: filename,
+  }).outputText;
+  const loaded = { exports: {} };
+  new Function("module", "exports", "require", output)(loaded, loaded.exports, () => ({}));
+  return loaded.exports;
+}
 
 includes(appStore, "const weeklyCampaignWorkflowRequested = isCmoWeeklyCampaignWorkflowRequest(request.message);", "Qualifying /goal must have an explicit weekly workflow guard.");
 includes(appStore, "weeklyCampaignWorkflowRequested\n    ? null\n    : maybeCreateCmoGoalWorkflowSmokeResponse", "Qualifying /goal must bypass the deterministic smoke response.");
 includes(appStore, "const hermesFirstNormalChatRequested = !weeklyCampaignWorkflowRequested", "Ordinary Hermes-first chat must stay separate from the weekly workflow.");
 includes(appStore, "weeklyCampaignWorkflow: weeklyCampaignWorkflowRequested", "Weekly workflow intent must be passed to the shared endpoint router.");
 includes(appStore, "weeklyCampaignWorkflow: { commandText: weeklyCampaignCommandText }", "Product must transport command text rather than author campaign strategy or copy.");
+includes(appStore, "} else if (weeklyCampaignWorkflowRequested) {", "Weekly workflow failure must be intercepted before legacy Product fallback.");
+includes(appStore, 'productRenderSource = "hermes_cmo_boundary_failure"', "Weekly failure must remain a Hermes boundary failure.");
+includes(appStore, "usedHermesCmoChat = true;", "Weekly failure must suppress legacy and Echo fallback paths.");
+includes(appStore, 'value.runtimeStatus !== "runtime_error"', "Persisted runtime-error metadata must survive session normalization.");
 
 includes("src/lib/cmo/goal-workflow-smoke.ts", "export function isCmoWeeklyCampaignWorkflowRequest", "Weekly workflow intent detection must be explicit and reusable.");
 includes("src/lib/cmo/goal-workflow-smoke.ts", "hasCampaignIntent", "The workflow guard must recognize campaign intent without requiring specialist names.");
@@ -57,4 +74,26 @@ includes(executor, 'Lens measurement is unavailable for this scope.', "Lens unav
 excludes(executor, /\.sort\(\(left, right\)/, "Executor must preserve Hermes delegation order.");
 excludes(executor, /executeHermesCmoDelegations[\s\S]{0,400}\bwriteFile\b/, "Lens delegation executor must not write files.");
 
-console.log("cmo-weekly-campaign-workflow-check: transport contract, Hermes-owned delegation order, Lens protocol, artifact provenance, and ordinary-chat isolation passed");
+const failure = compileModule(failureBoundary).createWeeklyCampaignWorkflowFailure({
+  reason: "Hermes CMO response did not match the required response schema.",
+  hermesRequestSent: true,
+});
+assert.doesNotMatch(failure.answer, /I need the target platform first/i, "Weekly failure must not reuse Echo platform clarification.");
+assert.doesNotMatch(failure.answer, /No Hermes Echo execution was called/i, "Weekly failure must not claim a generic Echo bridge result.");
+assert.equal(failure.metadata.selectedEndpoint, "/agents/cmo/execute");
+assert.equal(failure.metadata.requestedEndpoint, "/agents/cmo/execute");
+assert.equal(failure.metadata.endpointKind, "execute");
+assert.equal(failure.metadata.routeReason, "weekly_campaign_workflow");
+assert.equal(failure.metadata.workflowKind, "weekly_campaign");
+assert.equal(failure.metadata.failureStage, "hermes_execute");
+assert.equal(failure.metadata.safeFailureReason, "weekly_campaign_workflow_invalid_response");
+assert.equal(failure.metadata.default_channel_scope, "cross_channel");
+assert.equal(failure.metadata.fallback_used, false);
+
+console.log(JSON.stringify({
+  status: "passed",
+  failureAnswer: failure.answer,
+  failureMetadata: failure.metadata,
+  successRegression: "covered by check:cmo-hermes-delegated-response-preservation",
+  nativeChatIsolation: "non-/goal route remains Hermes-first",
+}, null, 2));
